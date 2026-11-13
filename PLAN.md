@@ -36,17 +36,17 @@ results screen. No weapons or shop yet, but nothing in the architecture may bloc
 shared/  track.ts     DONE  centerline, local-window track queries, grid, self-clearance check
          physics.ts   DONE  stepCar(car, input, stats, track), collideCars, CarStats
          protocol.ts  DONE  message types, constants, encode/decode
-server/  index.ts     TODO  http + vite middleware + ws upgrade routing + heartbeat + startServer()
-         room.ts      TODO  room registry, codes, players, phases, input queues, tick, snapshots
-         race.ts      TODO  lap/checkpoint progress as crossings, race distance
-client/  main.ts      TODO  menu / lobby / HUD flow, reconnect, fixed-step loop
-         net.ts       TODO  Transport interface + WebSocket impl + ?lag=&jitter= simulator
-         game.ts      TODO  prediction, reconciliation, interpolation, clock offset
-         render.ts    TODO  track, cars, camera, minimap
-         input.ts     TODO  keyboard (arrows / WASD)
-         style.css    TODO
-index.html            TODO
-scripts/bots.ts       TODO  headless end-to-end test
+server/  index.ts     DONE  http + vite middleware + ws upgrade routing + heartbeat + startServer()
+         room.ts      DONE  room registry, codes, players, phases, input queues, tick, snapshots
+         race.ts      DONE  lap/checkpoint progress as crossings, race distance
+client/  main.ts      DONE  menu / lobby / HUD flow, reconnect, fixed-step loop
+         net.ts       DONE  Transport interface + WebSocket impl + ?lag=&jitter= simulator
+         game.ts      DONE  prediction, reconciliation, interpolation, clock offset
+         render.ts    DONE  track, cars, camera, minimap
+         input.ts     DONE  keyboard (arrows / WASD)
+         style.css    DONE
+index.html            DONE
+scripts/bots.ts       DONE  headless end-to-end test
 ```
 
 ## Netcode (after advisor review)
@@ -132,6 +132,27 @@ Accept some rubber-banding during sustained contact in the prototype.
    - `minSelfClearance(track) > 2 * track.wall`.
 3. `npm run dev`, open two browser tabs, create + join, race; agent-browser screenshots of
    the lobby and a race in progress.
+
+## Status (2026-11-13)
+
+Prototype built and verified. Small deviations from the text above:
+- Phase timers run at the *start* of a server tick, so the first racing tick already
+  applies inputs (the plan listed them last).
+- The `room` message also carries `raceStart`, so mid-race joiners can show the race clock.
+- `?lag=` is added round-trip time (split over both directions), `?jitter=` is ± ms per
+  message per direction; delayed messages stay in order, like TCP.
+- The bot test uses 4 bots: Alpha (host), Bravo (80 ± 10 ms), Charlie (drops and rejoins),
+  Delta (joins mid-race). It also checks unknown-code and non-host-start refusals.
+- Verification step 3 used two separate browser sessions instead of two tabs of one
+  browser (headless background tabs are throttled).
+
+Verification results: `npm run check` clean; `npm run bots` 19/19 on 3 consecutive runs
+(lagged bot: median reconciliation error 0.004, max 0.48, RTT ~78 ms); dev server + browsers:
+create, join by invite link, lobby, countdown, race, reload-rejoin, mid-race spectator;
+`npm run build` + `npm start` serves dist/ and the game socket.
+
+Known gap: a race only ends after someone finishes (+ grace) or every racer has left; there
+is no overall race time limit yet.
 
 ## Later (not in the prototype)
 
