@@ -227,7 +227,9 @@ async function run(url: string, bots: Bot[]): Promise<void> {
   await waitFor("back to lobby", () => A.game.phase === "lobby", RESULTS_MS + 3000);
   const seq = A.phases.join(" -> ");
   check("phases: lobby -> countdown -> racing -> results -> lobby", seq === "lobby -> countdown -> racing -> results -> lobby", seq);
-  check("back in lobby: cars cleared", !A.game.latest?.cars.size || A.game.latest.cars.size === 0);
+  // The room message flips the phase; the next snapshot (<= 33 ms later) drops the cars.
+  const cleared = await waitFor("cars cleared", () => A.game.latest?.cars.size === 0, 1000);
+  check("back in lobby: cars cleared", cleared);
 
   // Reconciliation quality.
   for (const b of [A, B, C]) {

@@ -13,12 +13,13 @@ export class Keyboard {
   constructor(target: Window) {
     target.addEventListener("keydown", (e) => {
       if (isTyping(e.target)) return;
-      if (UP.has(e.code) || DOWN.has(e.code) || LEFT.has(e.code) || RIGHT.has(e.code)) {
+      const k = keyId(e);
+      if (UP.has(k) || DOWN.has(k) || LEFT.has(k) || RIGHT.has(k)) {
         e.preventDefault();
-        this.down.add(e.code);
+        this.down.add(k);
       }
     });
-    target.addEventListener("keyup", (e) => this.down.delete(e.code));
+    target.addEventListener("keyup", (e) => this.down.delete(keyId(e)));
     target.addEventListener("blur", () => this.down.clear());
   }
 
@@ -29,6 +30,14 @@ export class Keyboard {
       steer: (any(RIGHT) ? 1 : 0) - (any(LEFT) ? 1 : 0),
     };
   }
+}
+
+/** Physical key id; synthetic events (automation, some remappers) only carry `key`. */
+function keyId(e: KeyboardEvent): string {
+  if (e.code) return e.code;
+  if (e.key === " ") return "Space";
+  if (e.key.length === 1) return `Key${e.key.toUpperCase()}`;
+  return e.key;
 }
 
 function isTyping(t: EventTarget | null): boolean {

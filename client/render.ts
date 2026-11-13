@@ -204,6 +204,7 @@ export class Renderer {
       ctx.strokeStyle = style;
       ctx.lineWidth = half * 2;
       ctx.setLineDash(dash);
+      ctx.lineCap = dash.length ? "butt" : "round"; // round caps would merge the dashes
       ctx.stroke(this.path);
     };
     stroke(PAL.wallDark, t.wall + 7);
