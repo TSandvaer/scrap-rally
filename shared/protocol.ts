@@ -67,7 +67,13 @@ export type GameEvent =
 
 export type ServerMsg =
   | { t: "welcome"; code: string; you: string; token: string; laps: number }
-  | { t: "room"; hostId: string; phase: Phase; players: PlayerInfo[] }
+  | {
+      t: "room";
+      hostId: string;
+      phase: Phase;
+      raceStart: number; // server time the current race starts/started, 0 = no race
+      players: PlayerInfo[];
+    }
   | { t: "err"; msg: string }
   | {
       t: "snap";
