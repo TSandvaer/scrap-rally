@@ -1,0 +1,348 @@
+// Browser entry: menu / lobby / results panels, HUD text, camera and the fixed-step loop.
+
+import { pointAt } from "../shared/track";
+import type { GameEvent, ResultRow } from "../shared/protocol";
+import { Game, track, type TokenStore } from "./game";
+import { Keyboard } from "./input";
+import { connectWs } from "./net";
+import { Renderer, type CarView, type HudView } from "./render";
+
+const STEP_MS = 1000 / 60;
+const MAX_CATCH_UP = 5;
+
+const params = new URLSearchParams(location.search);
+const debug = params.get("debug") === "1";
+const lag = Number(params.get("lag")) || 0;
+const jitter = Number(params.get("jitter")) || 0;
+const wsUrl = `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`;
+
+const tokens: TokenStore = {
+  get(code) {
+    try {
+      return sessionStorage.getItem(`scrap-rally:token:${code}`);
+    } catch {
+      return null;
+    }
+  },
+  set(code, token) {
+    try {
+      sessionStorage.setItem(`scrap-rally:token:${code}`, token);
+    } catch {
+      /* private mode: reconnect after reload just won't work */
+    }
+  },
+};
+
+const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
+const ui = {
+  menu: $("menu"),
+  name: $<HTMLInputElement>("name"),
+  create: $<HTMLButtonElement>("create"),
+  code: $<HTMLInputElement>("code"),
+  join: $<HTMLButtonElement>("join"),
+  menuErr: $("menu-err"),
+  lobby: $("lobby"),
+  lobbyCode: $("lobby-code"),
+  copy: $<HTMLButtonElement>("copy"),
+  players: $("lobby-players"),
+  start: $<HTMLButtonElement>("start"),
+  wait: $("lobby-wait"),
+  leave: $<HTMLButtonElement>("leave"),
+  results: $("results"),
+  resultRows: $("results-rows"),
+  resultNext: $("results-next"),
+  toast: $("toast"),
+};
+
+const game = new Game(() => connectWs(wsUrl, { lag, jitter }), tokens);
+const keyboard = new Keyboard(window);
+const renderer = new Renderer($<HTMLCanvasElement>("view"), track);
+
+let connState: "connected" | "reconnecting" | "lost" = "connected";
+let flash = { text: "", until: 0 };
+let toastTimer = 0;
+
+// ---- menu -------------------------------------------------------------------------
+
+function storedName(): string {
+  try {
+    return localStorage.getItem("scrap-rally:name") ?? "";
+  } catch {
+    return "";
+  }
+}
+
+function driverName(): string {
+  const name = ui.name.value.trim() || "Driver";
+  try {
+    localStorage.setItem("scrap-rally:name", name);
+  } catch {
+    /* ignore */
+  }
+  return name;
+}
+
+ui.name.value = storedName();
+const roomParam = (params.get("room") ?? "").toUpperCase();
+if (roomParam) ui.code.value = roomParam;
+
+ui.create.addEventListener("click", () => {
+  ui.menuErr.textContent = "";
+  game.create(driverName());
+});
+const doJoin = () => {
+  const code = ui.code.value.trim().toUpperCase();
+  if (code.length !== 4) {
+    ui.menuErr.textContent = "Room codes have 4 characters";
+    return;
+  }
+  ui.menuErr.textContent = "";
+  game.join(code, driverName());
+};
+ui.join.addEventListener("click", doJoin);
+ui.code.addEventListener("keydown", (e) => e.key === "Enter" && doJoin());
+ui.name.addEventListener("keydown", (e) => e.key === "Enter" && (ui.code.value ? doJoin() : ui.create.click()));
+ui.start.addEventListener("click", () => game.start());
+ui.copy.addEventListener("click", async () => {
+  const link = `${location.origin}/?room=${game.code}`;
+  try {
+    await navigator.clipboard.writeText(link);
+    toast("Invite link copied");
+  } catch {
+    toast(link);
+  }
+});
+ui.leave.addEventListener("click", () => {
+  game.leave();
+  setRoomInUrl("");
+  updatePanels();
+});
+
+// A reload of a room page rejoins the same seat (token kept per tab in sessionStorage).
+if (roomParam && tokens.get(roomParam)) game.join(roomParam, storedName() || "Driver");
+
+// ---- game callbacks ---------------------------------------------------------------
+
+game.on.welcome = () => {
+  setRoomInUrl(game.code);
+  updatePanels();
+};
+game.on.room = () => updatePanels();
+game.on.results = () => updatePanels();
+game.on.error = (msg) => {
+  if (!game.you) ui.menuErr.textContent = msg;
+  else toast(msg);
+};
+game.on.connection = (state) => {
+  connState = state;
+  if (state === "lost") {
+    const wasInRoom = !!game.you;
+    game.leave();
+    ui.menuErr.textContent = wasInRoom ? "Connection lost" : "Could not reach the server";
+    updatePanels();
+  }
+};
+game.on.event = (ev: GameEvent) => {
+  const who = game.player(ev.id)?.name ?? "?";
+  const mine = ev.id === game.you;
+  if (ev.k === "lap" && mine) flashText(`LAP ${ev.lap + 1}/${game.laps}`);
+  if (ev.k === "finish") {
+    if (mine) flashText(`FINISHED ${ordinal(ev.place)}`, 3000);
+    else toast(`${who} finished ${ordinal(ev.place)} — ${formatTime(ev.timeMs)}`);
+  }
+};
+
+function setRoomInUrl(code: string): void {
+  const p = new URLSearchParams(location.search);
+  if (code) p.set("room", code);
+  else p.delete("room");
+  const qs = p.toString();
+  history.replaceState(null, "", qs ? `?${qs}` : location.pathname);
+}
+
+// ---- panels -----------------------------------------------------------------------
+
+function updatePanels(): void {
+  const inRoom = !!game.you;
+  ui.menu.classList.toggle("hidden", inRoom);
+  ui.lobby.classList.toggle("hidden", !inRoom || game.phase !== "lobby");
+  ui.results.classList.toggle("hidden", !inRoom || game.phase !== "results" || !game.results);
+  if (!inRoom) return;
+
+  ui.lobbyCode.textContent = game.code;
+  ui.players.replaceChildren(
+    ...game.players.map((p) => {
+      const li = document.createElement("li");
+      if (!p.connected) li.classList.add("offline");
+      li.append(swatch(p.color), span("name", p.name));
+      if (p.id === game.you) li.append(span("tag-pill", "you"));
+      if (p.id === game.hostId) li.append(span("tag-pill host", "host"));
+      if (!p.connected) li.append(span("tag-pill", "offline"));
+      return li;
+    }),
+  );
+  ui.start.classList.toggle("hidden", !game.isHost());
+  ui.wait.classList.toggle("hidden", game.isHost());
+  if (game.results) renderResults(game.results);
+}
+
+function renderResults(rows: ResultRow[]): void {
+  ui.resultRows.replaceChildren(
+    ...rows.map((r, i) => {
+      const li = document.createElement("li");
+      if (r.id === game.you) li.classList.add("me");
+      li.append(span("place", String(i + 1)), swatch(r.color), span("name", r.name));
+      li.append(span("time", r.timeMs ? formatTime(r.timeMs) : "DNF"));
+      return li;
+    }),
+  );
+}
+
+function span(cls: string, text: string): HTMLSpanElement {
+  const s = document.createElement("span");
+  s.className = cls;
+  s.textContent = text;
+  return s;
+}
+
+function swatch(color: string): HTMLSpanElement {
+  const s = span("swatch", "");
+  s.style.background = color;
+  return s;
+}
+
+function toast(text: string): void {
+  ui.toast.textContent = text;
+  ui.toast.classList.remove("hidden");
+  clearTimeout(toastTimer);
+  toastTimer = window.setTimeout(() => ui.toast.classList.add("hidden"), 2600);
+}
+
+function flashText(text: string, ms = 1500): void {
+  flash = { text, until: performance.now() + ms };
+}
+
+// ---- HUD --------------------------------------------------------------------------
+
+function formatTime(ms: number): string {
+  const m = Math.floor(ms / 60000);
+  const s = Math.floor((ms % 60000) / 1000);
+  const t = Math.floor((ms % 1000) / 100);
+  return `${m}:${String(s).padStart(2, "0")}.${t}`;
+}
+
+function ordinal(n: number): string {
+  const s = ["TH", "ST", "ND", "RD"];
+  const v = n % 100;
+  return n + (s[(v - 20) % 10] || s[v] || s[0]);
+}
+
+function median(xs: number[]): number {
+  if (!xs.length) return 0;
+  const s = [...xs].sort((a, b) => a - b);
+  return s[Math.floor(s.length / 2)];
+}
+
+function hudView(): HudView | null {
+  if (!game.you) return null;
+  const hud: HudView = { topLeft: [], time: "", center: "", centerSub: "", banner: "", corner: "", debug: [] };
+  const now = game.serverNow();
+  const standings = game.standings();
+  const mine = game.latest?.cars.get(game.you);
+  const racePhase = game.phase === "countdown" || game.phase === "racing" || game.phase === "results";
+
+  if (mine && racePhase) {
+    hud.topLeft.push(mine.fin ? "FINISHED" : `LAP ${Math.min(mine.lap + 1, game.laps)}/${game.laps}`);
+    hud.topLeft.push(`POS ${standings.findIndex((c) => c.id === game.you) + 1}/${standings.length}`);
+  }
+  if ((game.phase === "racing" || game.phase === "results") && game.raceStart) {
+    hud.time = formatTime(mine?.fin || Math.max(0, now - game.raceStart));
+  }
+  if (game.phase === "countdown") {
+    const left = game.phaseEnds - now;
+    hud.center = left > 0 ? String(Math.ceil(left / 1000)) : "GO!";
+    hud.centerSub = mine ? "" : "Spectating";
+  } else if (game.phase === "racing" && now - game.raceStart < 900 && mine) {
+    hud.center = "GO!";
+  }
+  if (flash.text && performance.now() < flash.until) {
+    hud.centerSub = flash.text;
+    if (!hud.center) hud.center = " ";
+  }
+
+  if (connState === "reconnecting") hud.banner = "Connection lost — reconnecting…";
+  else if (!mine && (game.phase === "countdown" || game.phase === "racing")) {
+    hud.banner = "Race in progress — you're in the next one";
+  } else if (game.phase === "racing" && game.phaseEnds) {
+    hud.banner = `Winner is in — race closes in ${Math.max(0, Math.ceil((game.phaseEnds - now) / 1000))}s`;
+  }
+  if (game.rtt) hud.corner = `${Math.round(game.rtt)} ms`;
+
+  if (debug) {
+    const errs = game.recErrors.slice(-120);
+    hud.debug = [
+      `rtt ${game.rtt.toFixed(1)} ms  lag sim ${lag}±${jitter}`,
+      `pending ${game.pending.length}  ack ${game.lastAck}  seq ${game.seq}`,
+      `rec err last ${(errs[errs.length - 1] ?? 0).toFixed(2)}  med ${median(errs).toFixed(2)}  max ${Math.max(0, ...errs).toFixed(2)}`,
+      `smooth ${Math.hypot(game.smooth.x, game.smooth.y).toFixed(2)}  snaps ${game.snaps.length}`,
+    ];
+  }
+  return hud;
+}
+
+// ---- loop -------------------------------------------------------------------------
+
+let last = performance.now();
+let acc = 0;
+let attract = 0;
+let hadTarget = false;
+
+function frame(now: number): void {
+  const elapsed = now - last;
+  last = now;
+  acc += elapsed;
+  let steps = 0;
+  while (acc >= STEP_MS && steps < MAX_CATCH_UP) {
+    game.step(keyboard.read(), STEP_MS);
+    acc -= STEP_MS;
+    steps++;
+  }
+  if (acc >= STEP_MS) acc = 0;
+  draw(acc / STEP_MS, elapsed);
+  requestAnimationFrame(frame);
+}
+
+function draw(alpha: number, elapsed: number): void {
+  const cars: CarView[] = [];
+  const view = (id: string, x: number, y: number, h: number, me: boolean): CarView => {
+    const p = game.player(id);
+    return { id, x, y, h, me, color: p?.color ?? "#888", name: p?.name ?? "?" };
+  };
+  const others = game.otherPoses();
+  for (const o of others) cars.push(view(o.id, o.x, o.y, o.h, false));
+  const own = game.ownPose(alpha);
+  if (own) cars.push(view(own.id, own.x, own.y, own.h, true));
+
+  // Camera: own car with a little look-ahead; else the leader; else a slow tour.
+  let target: { x: number; y: number } | null = null;
+  if (own && game.car) {
+    target = { x: own.x + game.car.vx * 0.28, y: own.y + game.car.vy * 0.28 };
+  } else {
+    const leader = game.standings()[0];
+    const pose = leader && others.find((o) => o.id === leader.id);
+    if (pose) target = pose;
+  }
+  if (target) {
+    renderer.follow(target.x, target.y, elapsed, !hadTarget);
+    hadTarget = true;
+  } else {
+    attract += elapsed / 1000;
+    const p = pointAt(track, attract * 90);
+    renderer.follow(p.x, p.y, elapsed, !hadTarget && attract < 0.05);
+    hadTarget = false;
+  }
+  renderer.frame(cars, hudView());
+}
+
+updatePanels();
+requestAnimationFrame(frame);

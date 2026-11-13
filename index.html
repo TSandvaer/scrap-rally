@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Scrap Rally</title>
+    <link rel="stylesheet" href="/client/style.css" />
+  </head>
+  <body>
+    <main id="stage">
+      <canvas id="view" width="640" height="360"></canvas>
+
+      <section id="menu" class="panel">
+        <h1 class="logo">SCRAP<span>RALLY</span></h1>
+        <p class="tag">Junkyard racing for 2–6 drivers</p>
+        <label class="field">
+          <span>Driver name</span>
+          <input id="name" maxlength="12" autocomplete="off" spellcheck="false" />
+        </label>
+        <button id="create" class="btn primary">Create room</button>
+        <div class="or"><span>or join a room</span></div>
+        <div class="row">
+          <input id="code" maxlength="4" placeholder="CODE" autocomplete="off" spellcheck="false" aria-label="Room code" />
+          <button id="join" class="btn">Join</button>
+        </div>
+        <p id="menu-err" class="err" role="alert"></p>
+        <p class="keys"><kbd>↑</kbd><kbd>↓</kbd><kbd>←</kbd><kbd>→</kbd> or <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> to drive</p>
+      </section>
+
+      <section id="lobby" class="panel hidden">
+        <div class="label">Room code</div>
+        <div id="lobby-code" class="code"></div>
+        <button id="copy" class="btn link">Copy invite link</button>
+        <ul id="lobby-players" class="players"></ul>
+        <button id="start" class="btn primary">Start race</button>
+        <p id="lobby-wait" class="muted">Waiting for the host to start…</p>
+        <button id="leave" class="btn link small">Leave room</button>
+      </section>
+
+      <section id="results" class="panel hidden">
+        <h2>Results</h2>
+        <ol id="results-rows" class="players results"></ol>
+        <p id="results-next" class="muted"></p>
+      </section>
+
+      <div id="toast" class="toast hidden" role="status"></div>
+    </main>
+    <script type="module" src="/client/main.ts"></script>
+  </body>
+</html>
