@@ -1,22 +1,18 @@
 # STATE — Scrap Rally coordination
 
-**Resume (2026-11-14):** Render rejected render.yaml (autoDeploy + autoDeployTrigger both set).
-QA fix in flight on run `run_c58bb5836634`: dispatch `ctx_8b442e1260de` (task task_8c2e7a0aa447),
-workspace ~/orca/workspaces/scrap-rally/render-yaml-fix, branch `TSandvaer/render-yaml-fix`, ticket 123jpnbf3m2 back to
-in progress. Author done (7c66ee1, verified); reviewer `ctx_318687421dd4` running in the main
-checkout. On APPROVE: merge, check+test, push (pre-approved, DECISIONS), tell the user to apply
-the Blueprint.
-Afterwards: dispatch 123jpnbf3m8 (review nits).
+**Resume (2026-11-14):** No workers in flight (run `run_c58bb5836634` idle). render.yaml QA fix
+merged as 4902ee6 and pushed (d2fcc9e..4902ee6); 123jpnbf3m2 back to `ready for qa test`; workspaces
+cleaned. Waiting on the user to apply the Render Blueprint and send the onrender.com URL; then
+`npm run smoke -- <url>` + a two-browser race on it, report RTT / snapshot rate, then dispatch
+123jpnbf3m8 (review nits, incl. the PLAN-HOSTING.md:74 wording).
 
 ## Branches
 
-- `main`: d2fcc9e pushed to origin; later team/ commits are local only (push only when asked).
+- `main`: 4902ee6 pushed to origin; later team/ commits are local only (push only when asked).
 
 ## In flight
 
-| Ticket | Dispatch | Workspace | Branch | Port | Started |
-| --- | --- | --- | --- | --- | --- |
-| 123jpnbf3m2 QA fix (render.yaml) | ctx_8b442e1260de (done, 7c66ee1); review ctx_318687421dd4 | ~/orca/workspaces/scrap-rally/render-yaml-fix | TSandvaer/render-yaml-fix | — | 2026-11-14 |
+None.
 
 ## Waiting on the user
 
