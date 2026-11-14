@@ -154,6 +154,10 @@ create, join by invite link, lobby, countdown, race, reload-rejoin, mid-race spe
 Known gap: a race only ends after someone finishes (+ grace) or every racer has left; there
 is no overall race time limit yet.
 
+## Milestone 2
+
+Weapons, scrap and the garage: see [PLAN-M2.md](PLAN-M2.md) (approved 2026-11-14).
+
 ## Later (not in the prototype)
 
 Weapons (projectiles, mines) as entities, between-race shop with money, more tracks,
