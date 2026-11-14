@@ -106,9 +106,11 @@ Verified on macOS with Node 24.19.0 and Docker 29.7.2 (ClickUp 123jpnbf3m2). Por
   32/32 each time, including "seat taken over" and "server restart".
 - **render.yaml**: `runtime: docker`, `plan: free`, `region: frankfurt` (the only EU region in
   Render's Blueprint spec), `healthCheckPath: /healthz`, `numInstances: 1`,
-  `autoDeployTrigger: "off"` plus the deprecated equivalent `autoDeploy: false`. Field names and
-  values checked against render.com/docs/blueprint-spec; parses as YAML. Not yet accepted by
-  Render itself (no account).
+  `autoDeployTrigger: "off"` only. Render's validator rejects a service that sets both
+  `autoDeploy` and `autoDeployTrigger` (New Blueprint screen: "services[0] autoDeploy and
+  autoDeployTrigger cannot both be set, prefer autoDeployTrigger"), so the deprecated
+  `autoDeploy: false` was removed. Field names and values checked against
+  render.com/docs/blueprint-spec; parses as YAML. Not yet accepted by Render itself.
 - **Smoke script**: `npm run smoke -- <base-url> [--race s] [--wake-timeout s] [--expect-restart s]`.
   `--expect-restart` keeps both clients connected after the race and requires the `restarting`
   notice before a 1012 close (use it during a deploy too). A dead URL exits 1.

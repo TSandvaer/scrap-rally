@@ -11,8 +11,7 @@ services:
     dockerContext: .
     healthCheckPath: /healthz
     numInstances: 1
-    # autoDeployTrigger is the current field ("off" quoted: bare off is a YAML 1.1 boolean);
-    # autoDeploy: false is its deprecated equivalent, kept for readers that predate it.
+    # "off" is quoted: bare off is a YAML 1.1 boolean. Do not add the deprecated autoDeploy
+    # field: Render's Blueprint validator rejects a service that sets both.
     autoDeployTrigger: "off"
-    autoDeploy: false
     # PORT: the server listens on $PORT (Render's default is 10000), else 3000.
