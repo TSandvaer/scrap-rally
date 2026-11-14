@@ -4,7 +4,9 @@
 `ctx_a048855f3d38` (task `task_842eab3fd0e8`) on ClickUp 123jpnbf3m2 "Finish hosting, local
 part", workspace /Users/thjo/orca/workspaces/scrap-rally/hosting-local, branch `TSandvaer/hosting-local` (from
 hosting-wip), port 3001. On worker_done: verify branch/SHA/files, start the reviewer
-(`--worktree current`), merge per .claude/skills/orca-wave. On resume: `orca orchestration
+(`--worktree current`), merge per .claude/skills/orca-wave. Progress at last check: commits
+bdbdcb0 (lag sim), f47b703 (render.yaml), 7f187e4 + 5639705 (smoke); running its 3 test runs;
+nudged once (msg_3f88f77ca3ab) to wait in the foreground instead of idling. On resume: `orca orchestration
 run-use` the run, then `worker-list --run run_c58bb5836634 --json`.
 
 ## Branches
