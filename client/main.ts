@@ -5,7 +5,7 @@ import type { GameEvent, ResultRow } from "../shared/protocol";
 import { Game, track, type TokenStore } from "./game";
 import { Keyboard } from "./input";
 import { connectWs } from "./net";
-import { Renderer, type CarView, type HudView } from "./render";
+import { Renderer, type CarView, type HudView, type WorldFx } from "./render";
 
 const STEP_MS = 1000 / 60;
 const MAX_CATCH_UP = 5;
@@ -59,6 +59,10 @@ const keyboard = new Keyboard(window);
 const renderer = new Renderer($<HTMLCanvasElement>("view"), track);
 
 let connState: "connected" | "reconnecting" | "lost" = "connected";
+// Hit sparks wait out the interpolation delay so they line up with the visible hit.
+let sparks: { id: string; start: number; x?: number; y?: number }[] = [];
+const SPARK_MS = 260;
+const INTERP_DELAY_MS = 100;
 let flash = { text: "", until: 0 };
 let toastTimer = 0;
 
@@ -149,6 +153,13 @@ game.on.event = (ev: GameEvent) => {
   if (ev.k === "finish") {
     if (mine) flashText(`FINISHED ${ordinal(ev.place)}`, 3000);
     else toast(`${who} finished ${ordinal(ev.place)} — ${formatTime(ev.timeMs)}`);
+  }
+  if (ev.k === "hit") sparks.push({ id: ev.id, start: performance.now() + (mine ? 0 : INTERP_DELAY_MS) });
+  if (ev.k === "wreck") {
+    const by = game.player(ev.by)?.name ?? "?";
+    if (mine) flashText(ev.by === ev.id ? "WRECKED YOURSELF" : `WRECKED BY ${by.toUpperCase()}`, 1500);
+    else if (ev.by === game.you) flashText(`YOU WRECKED ${who.toUpperCase()}`, 1500);
+    else toast(ev.by === ev.id ? `${who} wrecked themselves` : `${by} wrecked ${who}`);
   }
 };
 
@@ -245,7 +256,7 @@ function median(xs: number[]): number {
 
 function hudView(): HudView | null {
   if (!game.you) return null;
-  const hud: HudView = { topLeft: [], time: "", center: "", centerSub: "", banner: "", corner: "", debug: [] };
+  const hud: HudView = { topLeft: [], time: "", center: "", centerSub: "", banner: "", corner: "", debug: [], hp: null };
   const now = game.serverNow();
   const standings = game.standings();
   const mine = game.latest?.cars.get(game.you);
@@ -254,6 +265,9 @@ function hudView(): HudView | null {
   if (mine && racePhase) {
     hud.topLeft.push(mine.fin ? "FINISHED" : `LAP ${Math.min(mine.lap + 1, game.laps)}/${game.laps}`);
     hud.topLeft.push(`POS ${standings.findIndex((c) => c.id === game.you) + 1}/${standings.length}`);
+    const [rivets, mines] = game.predictedAmmo();
+    hud.topLeft.push(`RIV ${String(rivets).padStart(3)} MINE ${mines}`);
+    hud.hp = mine.maxHp ? mine.hp / mine.maxHp : null;
   }
   if ((game.phase === "racing" || game.phase === "results") && game.raceStart) {
     hud.time = formatTime(mine?.fin || Math.max(0, now - game.raceStart));
@@ -271,6 +285,7 @@ function hudView(): HudView | null {
   }
 
   if (connState === "reconnecting") hud.banner = "Connection lost — reconnecting…";
+  else if (game.car && game.car.wreck > 0) hud.banner = `WRECKED — back on track in ${(game.car.wreck / 60).toFixed(1)}s`;
   else if (!mine && (game.phase === "countdown" || game.phase === "racing")) {
     hud.banner = "Race in progress — you're in the next one";
   } else if (game.phase === "racing" && game.phaseEnds) {
@@ -316,7 +331,9 @@ function draw(alpha: number, elapsed: number): void {
   const cars: CarView[] = [];
   const view = (id: string, x: number, y: number, h: number, me: boolean): CarView => {
     const p = game.player(id);
-    return { id, x, y, h, me, color: p?.color ?? "#888", name: p?.name ?? "?" };
+    const s = game.latest?.cars.get(id);
+    const wreck = me ? (game.car?.wreck ?? 0) > 0 : !!s?.wreck;
+    return { id, x, y, h, me, color: p?.color ?? "#888", name: p?.name ?? "?", wreck, ghost: !!s?.ghost };
   };
   const others = game.otherPoses();
   for (const o of others) cars.push(view(o.id, o.x, o.y, o.h, false));
@@ -341,7 +358,24 @@ function draw(alpha: number, elapsed: number): void {
     renderer.follow(p.x, p.y, elapsed, !hadTarget && attract < 0.05);
     hadTarget = false;
   }
-  renderer.frame(cars, hudView());
+  const now = performance.now();
+  sparks = sparks.filter((s) => now < s.start + SPARK_MS);
+  const fx: WorldFx = {
+    shots: [...game.otherShots(), ...game.localShots],
+    mines: game.visibleMines(),
+    sparks: [],
+  };
+  for (const s of sparks) {
+    if (now < s.start) continue;
+    if (s.x === undefined) {
+      const pose = cars.find((c) => c.id === s.id);
+      if (!pose) continue;
+      s.x = pose.x;
+      s.y = pose.y;
+    }
+    fx.sparks.push({ x: s.x, y: s.y!, age: (now - s.start) / SPARK_MS });
+  }
+  renderer.frame(cars, fx, hudView());
 }
 
 updatePanels();

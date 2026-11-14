@@ -1,33 +1,42 @@
-// Keyboard input: arrows or WASD. Touch and gamepad come later.
+// Keyboard input: arrows or WASD to drive, Space / Z / J for the rivet gun (hold),
+// X / K to drop a mine (tap). Touch and gamepad come later.
 
-import type { Input } from "../shared/physics";
+import type { Controls } from "./game";
 
 const UP = new Set(["ArrowUp", "KeyW"]);
-const DOWN = new Set(["ArrowDown", "KeyS", "Space"]);
+const DOWN = new Set(["ArrowDown", "KeyS"]);
 const LEFT = new Set(["ArrowLeft", "KeyA"]);
 const RIGHT = new Set(["ArrowRight", "KeyD"]);
+const FIRE = new Set(["Space", "KeyZ", "KeyJ"]);
+const MINE = new Set(["KeyX", "KeyK"]);
+const ALL = [UP, DOWN, LEFT, RIGHT, FIRE, MINE];
 
 export class Keyboard {
   private readonly down = new Set<string>();
+  private minePressed = false; // latched until read, so a tap shorter than a step counts
 
   constructor(target: Window) {
     target.addEventListener("keydown", (e) => {
       if (isTyping(e.target)) return;
       const k = keyId(e);
-      if (UP.has(k) || DOWN.has(k) || LEFT.has(k) || RIGHT.has(k)) {
-        e.preventDefault();
-        this.down.add(k);
-      }
+      if (!ALL.some((set) => set.has(k))) return;
+      e.preventDefault();
+      if (MINE.has(k) && !e.repeat) this.minePressed = true;
+      this.down.add(k);
     });
     target.addEventListener("keyup", (e) => this.down.delete(keyId(e)));
     target.addEventListener("blur", () => this.down.clear());
   }
 
-  read(): Input {
+  read(): Controls {
     const any = (keys: Set<string>) => [...keys].some((k) => this.down.has(k));
+    const mine = this.minePressed;
+    this.minePressed = false;
     return {
       throttle: (any(UP) ? 1 : 0) - (any(DOWN) ? 1 : 0),
       steer: (any(RIGHT) ? 1 : 0) - (any(LEFT) ? 1 : 0),
+      fire: any(FIRE),
+      mine,
     };
   }
 }

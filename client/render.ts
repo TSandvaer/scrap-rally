@@ -17,6 +17,14 @@ export interface CarView {
   color: string;
   name: string;
   me: boolean;
+  wreck: boolean;
+  ghost: boolean;
+}
+
+export interface WorldFx {
+  shots: { x: number; y: number; vx: number; vy: number }[];
+  mines: { x: number; y: number; armed: boolean }[];
+  sparks: { x: number; y: number; age: number }[]; // age 0..1
 }
 
 export interface HudView {
@@ -27,6 +35,7 @@ export interface HudView {
   banner: string; // persistent strip at the bottom (spectating, reconnecting, ...)
   corner: string; // bottom-left small text (RTT)
   debug: string[];
+  hp: number | null; // own car health 0..1, null = no car
 }
 
 interface Decor {
@@ -173,7 +182,7 @@ export class Renderer {
     this.cam.y += (y - this.cam.y) * k;
   }
 
-  frame(cars: CarView[], hud: HudView | null): void {
+  frame(cars: CarView[], fx: WorldFx, hud: HudView | null): void {
     const ctx = this.ctx;
     const cx = Math.round(this.cam.x * ZOOM) / ZOOM;
     const cy = Math.round(this.cam.y * ZOOM) / ZOOM;
@@ -185,9 +194,13 @@ export class Renderer {
     this.drawDecor(cx, cy);
     this.drawTrack();
 
+    for (const m of fx.mines) this.mine(m.x, m.y, m.armed);
     // Cars: shadows first so no car's shadow lands on another car.
     for (const c of cars) this.carShadow(c);
     for (const c of cars) this.car(c);
+    for (const c of cars) if (c.wreck) this.smoke(c);
+    for (const s of fx.shots) this.shot(s.x, s.y, s.vx, s.vy);
+    for (const s of fx.sparks) this.spark(s.x, s.y, s.age);
 
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     for (const c of cars) if (!c.me) this.nameTag(c, cx, cy);
@@ -298,6 +311,7 @@ export class Renderer {
     const ctx = this.ctx;
     const L = CAR_LENGTH, W = CAR_WIDTH;
     ctx.save();
+    if (c.ghost) ctx.globalAlpha = Math.floor(performance.now() / 110) % 2 ? 0.35 : 0.75;
     ctx.translate(c.x, c.y);
     ctx.rotate(c.h);
     // Wheels
@@ -324,7 +338,68 @@ export class Renderer {
     ctx.fillStyle = "#ffe9a8";
     ctx.fillRect(L / 2 - 2, -W / 2 + 1, 2, 3); // lamps
     ctx.fillRect(L / 2 - 2, W / 2 - 4, 2, 3);
+    if (c.wreck) {
+      ctx.fillStyle = "rgba(24,18,12,0.62)"; // scorched
+      ctx.fillRect(-L / 2 - 1, -W / 2 - 1, L + 2, W + 2);
+    }
     ctx.restore();
+  }
+
+  private smoke(c: CarView): void {
+    const ctx = this.ctx;
+    const t = performance.now() / 1000;
+    for (let i = 0; i < 4; i++) {
+      const phase = (t * 0.9 + i / 4) % 1;
+      ctx.fillStyle = `rgba(70,66,62,${0.55 * (1 - phase)})`;
+      circle(ctx, c.x + Math.sin(i * 2.3 + t) * 4 + phase * 10, c.y - 4 - phase * 22, 4 + phase * 7);
+    }
+  }
+
+  private mine(x: number, y: number, armed: boolean): void {
+    const ctx = this.ctx;
+    ctx.fillStyle = PAL.shadow;
+    circle(ctx, x + 1.5, y + 2, 7);
+    ctx.strokeStyle = "#2a2622";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    for (let i = 0; i < 6; i++) {
+      const a = (i / 6) * Math.PI * 2;
+      ctx.moveTo(x + Math.cos(a) * 5, y + Math.sin(a) * 5);
+      ctx.lineTo(x + Math.cos(a) * 9, y + Math.sin(a) * 9);
+    }
+    ctx.stroke();
+    ctx.fillStyle = "#3d3832";
+    circle(ctx, x, y, 6);
+    const blink = armed && Math.floor(performance.now() / 250) % 2 === 0;
+    ctx.fillStyle = armed ? (blink ? "#ff3b2f" : "#7a1d16") : "#8a6d2a";
+    circle(ctx, x, y, 2.2);
+  }
+
+  private shot(x: number, y: number, vx: number, vy: number): void {
+    const ctx = this.ctx;
+    ctx.strokeStyle = "rgba(255,214,130,0.55)";
+    ctx.lineWidth = 2;
+    ctx.lineCap = "round";
+    ctx.beginPath();
+    ctx.moveTo(x - vx * 0.014, y - vy * 0.014);
+    ctx.lineTo(x, y);
+    ctx.stroke();
+    ctx.fillStyle = "#fff4cf";
+    ctx.fillRect(x - 1.5, y - 1.5, 3, 3);
+  }
+
+  private spark(x: number, y: number, age: number): void {
+    const ctx = this.ctx;
+    ctx.strokeStyle = `rgba(255,${200 - age * 120},90,${1 - age})`;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    for (let i = 0; i < 7; i++) {
+      const a = i * 0.9 + x * 0.01;
+      const r0 = 3 + age * 8, r1 = 6 + age * 16;
+      ctx.moveTo(x + Math.cos(a) * r0, y + Math.sin(a) * r0);
+      ctx.lineTo(x + Math.cos(a) * r1, y + Math.sin(a) * r1);
+    }
+    ctx.stroke();
   }
 
   private nameTag(c: CarView, cx: number, cy: number): void {
@@ -370,14 +445,22 @@ export class Renderer {
     const ctx = this.ctx;
     ctx.textBaseline = "middle";
     if (h.topLeft.length) {
+      const barH = h.hp === null ? 0 : 12;
       ctx.fillStyle = PAL.hudBg;
-      ctx.fillRect(6, 6, 92, 10 + h.topLeft.length * 14);
+      ctx.fillRect(6, 6, 118, 10 + h.topLeft.length * 14 + barH);
       ctx.font = "bold 11px ui-monospace, Menlo, monospace";
       ctx.textAlign = "left";
       h.topLeft.forEach((line, i) => {
         ctx.fillStyle = i === 0 ? PAL.accent : PAL.hudText;
         ctx.fillText(line, 12, 18 + i * 14);
       });
+      if (h.hp !== null) {
+        const y = 12 + h.topLeft.length * 14;
+        ctx.fillStyle = "#120d0a";
+        ctx.fillRect(12, y, 106, 7);
+        ctx.fillStyle = h.hp > 0.5 ? "#7bc95a" : h.hp > 0.25 ? "#e8b83a" : "#e8452d";
+        ctx.fillRect(13, y + 1, Math.round(104 * Math.max(0, Math.min(1, h.hp))), 5);
+      }
     }
     if (h.time) {
       ctx.font = "bold 13px ui-monospace, Menlo, monospace";

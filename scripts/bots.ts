@@ -2,9 +2,9 @@
 // the real client netcode (client/game.ts + client/net.ts over Node's WebSocket).
 // Run: npm run bots
 
-import { Game, track, type TokenStore } from "../client/game";
+import { Game, NO_CONTROLS, track, type Controls, type TokenStore } from "../client/game";
 import { connectWs, type LagSim } from "../client/net";
-import { angleDiff, clamp, NO_INPUT, speedOf, type Input } from "../shared/physics";
+import { angleDiff, clamp, speedOf } from "../shared/physics";
 import { CODE_ALPHABET, CODE_LENGTH, RESULTS_MS, type GameEvent, type Phase, type ResultRow } from "../shared/protocol";
 import { minSelfClearance, pointAt, queryTrackNear } from "../shared/track";
 import { startServer } from "../server/index";
@@ -76,9 +76,9 @@ class Bot {
   }
 
   /** Follow the centerline (shifted sideways by `lateral`) and brake for bends. */
-  private drive(): Input {
+  private drive(): Controls {
     const c = this.game.car;
-    if (!c) return NO_INPUT;
+    if (!c) return NO_CONTROLS;
     const q = queryTrackNear(track, c.x, c.y, c.seg);
     const v = speedOf(c);
     const t = pointAt(track, q.s + 55 + v * 0.3);
@@ -90,7 +90,7 @@ class Bot {
     const bend = Math.abs(angleDiff(near, far));
     const target = bend > 1.4 ? 200 : bend > 0.9 ? 260 : bend > 0.5 ? 330 : 1000;
     const throttle = v > target + 25 ? -1 : v > target ? 0 : 1;
-    return { throttle, steer };
+    return { throttle, steer, fire: false, mine: false };
   }
 }
 

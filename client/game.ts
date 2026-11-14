@@ -1,16 +1,8 @@
 // Client game state and netcode: own-car prediction + reconciliation, interpolation of
-// the other cars, and the server clock estimate. No DOM access, so the headless bot test
-// drives exactly this code.
+// the other cars, shots and mines, and the server clock estimate. No DOM access, so the
+// headless bot test drives exactly this code.
 
-import {
-  angleDiff,
-  BASE_STATS,
-  cloneCar,
-  NO_INPUT,
-  stepCar,
-  type CarState,
-  type Input,
-} from "../shared/physics";
+import { angleDiff, BASE_STATS, CAR_RADIUS, cloneCar, type CarState, type CarStats, type Input } from "../shared/physics";
 import {
   INPUT_REDUNDANCY,
   round,
@@ -18,12 +10,25 @@ import {
   type ClientMsg,
   type GameEvent,
   type InputTuple,
+  type MineSnap,
   type Phase,
   type PlayerInfo,
   type ResultRow,
   type ServerMsg,
+  type ShotSnap,
 } from "../shared/protocol";
+import { statsFor, type Levels } from "../shared/shop";
 import { buildTrack, RUST_BOWL } from "../shared/track";
+import {
+  BTN_RIVET,
+  makeButtons,
+  moveShot,
+  RIVET_COOLDOWN,
+  spawnShot,
+  stepRaceCar,
+  type Command,
+  type Shot,
+} from "../shared/weapons";
 import type { Transport } from "./net";
 
 export const track = buildTrack(RUST_BOWL);
@@ -45,6 +50,14 @@ export interface TokenStore {
   set(code: string, token: string): void;
 }
 
+/** What the player (or a bot) does this step. */
+export interface Controls extends Input {
+  fire: boolean; // rivet gun held
+  mine: boolean; // mine key pressed since the last step
+}
+
+export const NO_CONTROLS: Controls = { throttle: 0, steer: 0, fire: false, mine: false };
+
 export interface Pose {
   id: string;
   x: number;
@@ -55,16 +68,21 @@ export interface Pose {
 interface Snapshot {
   time: number;
   cars: Map<string, CarSnap>;
+  shots: Map<number, ShotSnap>;
+  mines: MineSnap[];
 }
 
 interface Pending {
   seq: number;
-  input: Input;
+  cmd: Command;
+  fired: boolean; // a rivet left the gun on this step (predicted)
+  mine: boolean; // a mine press was sent on this step
 }
 
 export interface GameHandlers {
   welcome(): void;
   room(): void;
+  garage(): void;
   event(ev: GameEvent): void;
   results(rows: ResultRow[]): void;
   error(msg: string): void;
@@ -86,6 +104,12 @@ export class Game {
   connected = false;
   rtt = 0;
 
+  // Garage (server-confirmed only: never updated optimistically)
+  scrap = 0;
+  levels: Levels = { engine: 0, tyres: 0, welder: 0 };
+  stats: CarStats = { ...BASE_STATS };
+  serverAmmo: [number, number] = [0, 0]; // [rivets, mines] as of the last snapshot
+
   // Own car (predicted)
   car: CarState | null = null;
   prevCar: CarState | null = null; // state before the last step, for render interpolation
@@ -95,6 +119,10 @@ export class Game {
   history = new Map<number, CarState>();
   lastAck = -1;
   readonly recErrors: number[] = [];
+  localShots: Shot[] = []; // cosmetic: our own rivets, drawn before the server confirms
+  private cooldown = 0;
+  private mineCounter = 0;
+  private localShotId = 1;
 
   // Everyone (server view)
   snaps: Snapshot[] = [];
@@ -133,6 +161,10 @@ export class Game {
     this.send({ t: "start" });
   }
 
+  buy(item: string): void {
+    this.send({ t: "buy", item });
+  }
+
   /** Drop the connection as a network failure would; the client then reconnects. */
   simulateDrop(): void {
     const tr = this.transport;
@@ -153,12 +185,18 @@ export class Game {
     this.hostId = "";
     this.phase = "lobby";
     this.results = null;
+    this.resetOwnCar();
+    this.snaps = [];
+    this.latest = null;
+  }
+
+  private resetOwnCar(): void {
     this.car = null;
     this.prevCar = null;
     this.pending = [];
     this.history.clear();
-    this.snaps = [];
-    this.latest = null;
+    this.localShots = [];
+    this.cooldown = 0;
   }
 
   private joinMsg(): ClientMsg {
@@ -236,10 +274,7 @@ export class Game {
         // Sequence numbers restart with every welcome; the server reset its queue too.
         this.seq = 0;
         this.lastAck = -1;
-        this.pending = [];
-        this.history.clear();
-        this.car = null;
-        this.prevCar = null;
+        this.resetOwnCar();
         this.intent = this.joinMsg();
         this.on.connection?.("connected");
         this.on.welcome?.();
@@ -251,6 +286,12 @@ export class Game {
         this.players = msg.players;
         if (msg.phase !== "results") this.results = null;
         this.on.room?.();
+        return;
+      case "garage":
+        this.scrap = msg.scrap;
+        this.levels = msg.levels;
+        this.stats = statsFor(msg.levels);
+        this.on.garage?.();
         return;
       case "err":
         this.on.error?.(msg.msg);
@@ -284,24 +325,33 @@ export class Game {
 
     this.phase = msg.phase;
     this.phaseEnds = msg.phaseEnds;
-    const cars = new Map<string, CarSnap>();
-    for (const e of msg.ents) if (e.k === "car") cars.set(e.id, e);
-    const snap: Snapshot = { time: msg.time, cars };
+    this.serverAmmo = msg.ammo;
+    const snap: Snapshot = { time: msg.time, cars: new Map(), shots: new Map(), mines: [] };
+    for (const e of msg.ents) {
+      if (e.k === "car") snap.cars.set(e.id, e);
+      else if (e.k === "shot") snap.shots.set(e.id, e);
+      else snap.mines.push(e);
+    }
     if (!this.latest || msg.time > this.latest.time) {
       this.snaps.push(snap);
       this.latest = snap;
     }
     while (this.snaps.length > 2 && this.snaps[0].time < msg.time - SNAP_KEEP_MS) this.snaps.shift();
 
-    const mine = cars.get(this.you);
+    const mine = snap.cars.get(this.you);
     if (!mine) {
-      this.car = null;
-      this.prevCar = null;
-      this.pending = [];
-      this.history.clear();
+      this.resetOwnCar();
       return;
     }
-    const server: CarState = { x: mine.x, y: mine.y, h: mine.h, vx: mine.vx, vy: mine.vy, seg: mine.seg, wreck: mine.wreck };
+    const server: CarState = {
+      x: mine.x,
+      y: mine.y,
+      h: mine.h,
+      vx: mine.vx,
+      vy: mine.vy,
+      seg: mine.seg,
+      wreck: mine.wreck,
+    };
     if (!this.car) {
       this.car = server;
       this.prevCar = cloneCar(server);
@@ -322,20 +372,22 @@ export class Game {
     while (this.pending.length && this.pending[0].seq <= ack) this.pending.shift();
     for (const k of this.history.keys()) if (k <= ack) this.history.delete(k);
 
-    // Rewind to the server state and replay what the server has not seen yet.
+    // Rewind to the server state and replay what the server has not seen yet. Replay goes
+    // through stepRaceCar, so a wreck freeze and the respawn jump are predicted too.
     const old = this.car!;
     const c = cloneCar(server);
     for (const p of this.pending) {
-      stepCar(c, p.input, BASE_STATS, track);
+      stepRaceCar(c, p.cmd, this.stats, track);
       this.history.set(p.seq, cloneCar(c));
     }
     this.car = c;
 
-    // Hide the jump: shift the render offset (and the interpolation start) by it.
+    // Hide the jump: shift the render offset (and the interpolation start) by it. Wreck
+    // state changes and big jumps are shown as they are.
     const dx = old.x - c.x;
     const dy = old.y - c.y;
     const dh = angleDiff(c.h, old.h);
-    if (Math.hypot(dx, dy) > SNAP_DISTANCE) {
+    if (Math.hypot(dx, dy) > SNAP_DISTANCE || old.wreck > 0 !== c.wreck > 0) {
       this.smooth.x = this.smooth.y = this.smooth.h = 0;
       this.prevCar = cloneCar(c);
       return;
@@ -357,8 +409,25 @@ export class Game {
     return this.phase === "racing" || (this.phase === "countdown" && this.serverNow() >= this.phaseEnds);
   }
 
-  /** Advance one fixed step (DT) with the raw player input. */
-  step(raw: Input, stepMs: number): void {
+  /** Our car can shoot and drop mines (not wrecked, ghosted or finished). */
+  armed(): boolean {
+    const s = this.latest?.cars.get(this.you);
+    return !!this.car && this.car.wreck === 0 && !!s && !s.ghost && this.raceOn();
+  }
+
+  /** Ammo minus what we already fired in inputs the server has not consumed yet. */
+  predictedAmmo(): [number, number] {
+    let r = this.serverAmmo[0];
+    let m = this.serverAmmo[1];
+    for (const p of this.pending) {
+      if (p.fired) r--;
+      if (p.mine) m--;
+    }
+    return [Math.max(0, r), Math.max(0, m)];
+  }
+
+  /** Advance one fixed step (DT) with the player's controls. */
+  step(ctl: Controls, stepMs: number): void {
     const k = Math.exp(-stepMs / SMOOTH_TAU_MS);
     this.smooth.x *= k;
     this.smooth.y *= k;
@@ -369,16 +438,37 @@ export class Game {
       this.lastPing = now;
       this.send({ t: "ping", c: round(now, 1) });
     }
+    this.moveLocalShots();
     if (!this.car || !this.connected) return;
 
+    const on = this.raceOn();
+    const [rivets, mines] = this.predictedAmmo();
+    const minePress = ctl.mine && this.armed() && mines > 0;
+    if (minePress) this.mineCounter = (this.mineCounter + 1) & 7;
     // Round before use so the server applies exactly what we predicted with.
-    const input: Input = this.raceOn()
-      ? { throttle: round(raw.throttle, 2), steer: round(raw.steer, 2) }
-      : NO_INPUT;
+    const cmd: Command = on
+      ? {
+          throttle: round(ctl.throttle, 2),
+          steer: round(ctl.steer, 2),
+          buttons: makeButtons(ctl.fire, this.mineCounter),
+        }
+      : { throttle: 0, steer: 0, buttons: makeButtons(false, this.mineCounter) };
+
     const seq = this.seq++;
-    this.prevCar = cloneCar(this.car);
-    stepCar(this.car, input, BASE_STATS, track);
-    this.pending.push({ seq, input });
+    const before = this.car;
+    this.prevCar = cloneCar(before);
+    if (this.cooldown > 0) this.cooldown--;
+    stepRaceCar(this.car, cmd, this.stats, track);
+    if (this.prevCar.wreck > 0 && this.car.wreck === 0) this.prevCar = cloneCar(this.car); // respawn: no slide
+
+    // Same order as the server: step, then fire from the new pose.
+    let fired = false;
+    if (cmd.buttons & BTN_RIVET && this.cooldown === 0 && rivets > 0 && this.armed()) {
+      this.localShots.push(spawnShot(this.car, this.localShotId++, this.you));
+      this.cooldown = RIVET_COOLDOWN;
+      fired = true;
+    }
+    this.pending.push({ seq, cmd, fired, mine: minePress });
     this.history.set(seq, cloneCar(this.car));
     if (this.pending.length > MAX_PENDING) {
       const dropped = this.pending.shift()!;
@@ -386,8 +476,22 @@ export class Game {
     }
     const tail: InputTuple[] = this.pending
       .slice(-INPUT_REDUNDANCY)
-      .map((p) => [p.seq, p.input.throttle, p.input.steer, 0]);
+      .map((p) => [p.seq, p.cmd.throttle, p.cmd.steer, p.cmd.buttons]);
     this.send({ t: "in", i: tail });
+  }
+
+  /** Cosmetic own rivets: fly until range, a wall, or another car they visibly touch. */
+  private moveLocalShots(): void {
+    if (!this.localShots.length) return;
+    const targets = this.otherPoses().filter((p) => {
+      const s = this.latest?.cars.get(p.id);
+      return s && !s.ghost && !s.wreck;
+    });
+    const r = CAR_RADIUS + 2;
+    this.localShots = this.localShots.filter((s) => {
+      if (!moveShot(s, track)) return false;
+      return !targets.some((t) => (t.x - s.x) ** 2 + (t.y - s.y) ** 2 <= r * r);
+    });
   }
 
   // ---- queries for rendering and HUD ------------------------------------------------
@@ -410,20 +514,25 @@ export class Game {
     };
   }
 
+  /** The two snapshots around the interpolation time, and the time itself. */
+  private bracket(): { a: Snapshot; b: Snapshot | undefined; t: number } | null {
+    if (!this.snaps.length) return null;
+    const t = this.serverNow() - INTERP_DELAY_MS;
+    let i = this.snaps.length - 1;
+    while (i > 0 && this.snaps[i].time > t) i--;
+    return { a: this.snaps[i], b: this.snaps[i + 1], t };
+  }
+
   /** Every car except our own predicted one, interpolated in the past. */
   otherPoses(): Pose[] {
     const out: Pose[] = [];
-    if (!this.snaps.length) return out;
-    const t = this.serverNow() - INTERP_DELAY_MS;
-    const snaps = this.snaps;
-    let i = snaps.length - 1;
-    while (i > 0 && snaps[i].time > t) i--;
-    const a = snaps[i];
-    const b = snaps[i + 1];
+    const br = this.bracket();
+    if (!br) return out;
+    const { a, b, t } = br;
     for (const [id, ca] of a.cars) {
       if (id === this.you && this.car) continue;
       const cb = b?.cars.get(id);
-      if (cb && b.time > a.time && t >= a.time) {
+      if (b && cb && b.time > a.time && t >= a.time) {
         const f = Math.min(1, (t - a.time) / (b.time - a.time));
         out.push({ id, x: ca.x + (cb.x - ca.x) * f, y: ca.y + (cb.y - ca.y) * f, h: ca.h + angleDiff(ca.h, cb.h) * f });
       } else if (!b) {
@@ -443,12 +552,38 @@ export class Game {
     return out;
   }
 
+  /** Other players' rivets at the interpolation time (ours are drawn from localShots). */
+  otherShots(): { x: number; y: number; vx: number; vy: number }[] {
+    const br = this.bracket();
+    if (!br) return [];
+    const { a, b, t } = br;
+    const out: { x: number; y: number; vx: number; vy: number }[] = [];
+    for (const s of a.shots.values()) {
+      if (s.o === this.you) continue;
+      // Straight-line motion: extrapolate from `a`. A shot gone by `b` hit something
+      // between the two snapshots; stop it halfway rather than draw it through a car.
+      let dt = Math.max(0, Math.min(EXTRAP_MAX_MS, t - a.time));
+      if (b && !b.shots.has(s.id)) dt = Math.min(dt, (b.time - a.time) / 2);
+      out.push({ x: s.x + (s.vx * dt) / 1000, y: s.y + (s.vy * dt) / 1000, vx: s.vx, vy: s.vy });
+    }
+    return out;
+  }
+
+  /** Mines as of the interpolation time, so they vanish when the (past) car hits them. */
+  visibleMines(): MineSnap[] {
+    return this.bracket()?.a.mines ?? [];
+  }
+
   player(id: string): PlayerInfo | undefined {
     return this.players.find((p) => p.id === id);
   }
 
   me(): PlayerInfo | undefined {
     return this.player(this.you);
+  }
+
+  ownSnap(): CarSnap | undefined {
+    return this.latest?.cars.get(this.you);
   }
 
   isHost(): boolean {
