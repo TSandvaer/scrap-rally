@@ -18,18 +18,32 @@ export interface LagSim {
 }
 
 /**
- * Delays messages like a slow link would, but keeps them in order (as TCP does): a
- * message is never delivered before the one sent ahead of it.
+ * Delays events like a slow link would, but keeps them in order (as TCP does): an event is
+ * never delivered before the one queued ahead of it. One FIFO queue and one timer, so ties
+ * in due time cannot reorder events.
  */
 class DelayLine {
+  private readonly queue: { at: number; fn: () => void }[] = [];
+  private timer: ReturnType<typeof setTimeout> | null = null;
   private last = 0;
   constructor(private readonly sim: LagSim) {}
   run(fn: () => void): void {
     const delay = this.sim.lag / 2 + (Math.random() * 2 - 1) * this.sim.jitter;
-    const at = Math.max(this.last, performance.now() + Math.max(0, delay));
-    this.last = at;
-    setTimeout(fn, at - performance.now());
+    this.last = Math.max(this.last, performance.now() + Math.max(0, delay));
+    this.queue.push({ at: this.last, fn });
+    if (!this.timer) this.arm();
   }
+  private arm(): void {
+    this.timer = setTimeout(this.flush, Math.max(0, this.queue[0].at - performance.now()));
+  }
+  private readonly flush = (): void => {
+    this.timer = null;
+    try {
+      while (this.queue.length && this.queue[0].at <= performance.now()) this.queue.shift()!.fn();
+    } finally {
+      if (this.queue.length && !this.timer) this.arm();
+    }
+  };
 }
 
 export function connectWs(url: string, sim?: LagSim): Transport {
@@ -69,10 +83,16 @@ export function connectWs(url: string, sim?: LagSim): Transport {
     if (down) down.run(deliver);
     else deliver();
   };
+  // The close travels the same delay line as the messages, so every message received
+  // before it is delivered first (a restart notice must not be overtaken by the close).
   ws.onclose = () => {
-    if (closed) return;
-    closed = true;
-    t.onClose();
+    const fire = () => {
+      if (closed) return;
+      closed = true;
+      t.onClose();
+    };
+    if (down) down.run(fire);
+    else fire();
   };
   return t;
 }

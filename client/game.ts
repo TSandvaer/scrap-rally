@@ -79,6 +79,9 @@ interface Pending {
   mine: boolean; // a mine press was sent on this step
 }
 
+/** gone/full/taken come from the server; unreachable = no answer; restarting = notice. */
+export type ConnReason = "gone" | "full" | "taken" | "unreachable" | "restarting";
+
 export interface GameHandlers {
   welcome(): void;
   room(): void;
@@ -86,7 +89,11 @@ export interface GameHandlers {
   event(ev: GameEvent): void;
   results(rows: ResultRow[]): void;
   error(msg: string): void;
-  connection(state: "connected" | "reconnecting" | "lost"): void;
+  /**
+   * reason: for "reconnecting", "restarting" when the server announced a restart; for
+   * "lost", why the seat is gone (no more reconnect attempts).
+   */
+  connection(state: "connected" | "reconnecting" | "lost", reason?: ConnReason): void;
 }
 
 export class Game {
@@ -137,6 +144,7 @@ export class Game {
   private haveOffset = false;
   private lastPing = 0;
   private reconnectTries = 0;
+  private restarting = false;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(
@@ -230,19 +238,35 @@ export class Game {
   private scheduleReconnect(): void {
     // Only rejoin a room we were welcomed into; a failed create/join is just an error.
     if (!this.you || !this.code || !this.intent) {
-      this.on.connection?.("lost");
+      this.on.connection?.("lost", "unreachable");
       return;
     }
     if (this.reconnectTries >= RECONNECT_TRIES) {
-      this.on.connection?.("lost");
+      this.on.connection?.("lost", "unreachable");
       return;
     }
-    this.on.connection?.("reconnecting");
+    this.on.connection?.("reconnecting", this.restarting ? "restarting" : undefined);
     this.reconnectTries++;
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
       this.open(this.joinMsg());
     }, RECONNECT_DELAY_MS);
+  }
+
+  /** Give up on this seat for good: no socket, no reconnect. */
+  private stop(reason: ConnReason): void {
+    this.intent = null;
+    this.cancelReconnect();
+    this.detach();
+    this.on.connection?.("lost", reason);
+  }
+
+  /** Close the current socket without triggering a reconnect. */
+  private detach(): void {
+    const tr = this.transport;
+    this.transport = null;
+    this.connected = false;
+    tr?.close();
   }
 
   private cancelReconnect(): void {
@@ -271,6 +295,7 @@ export class Game {
         this.tokens.set(msg.code, msg.token);
         this.connected = true;
         this.reconnectTries = 0;
+        this.restarting = false;
         // Sequence numbers restart with every welcome; the server reset its queue too.
         this.seq = 0;
         this.lastAck = -1;
@@ -294,6 +319,21 @@ export class Game {
         this.on.garage?.();
         return;
       case "err":
+        if (msg.code === "taken") {
+          // Another tab or window took this seat: do not take it back (no ping-pong).
+          this.stop("taken");
+          return;
+        }
+        if (msg.code === "restarting") {
+          this.restarting = true; // the server closes the socket next; we reconnect
+          return;
+        }
+        if (this.you && !this.connected && (msg.code === "gone" || msg.code === "full")) {
+          // Rejoin after a drop failed: the room is gone (server restarted) or filled up.
+          this.stop(msg.code);
+          return;
+        }
+        if (!this.you) this.detach(); // failed create/join: the socket is no longer needed
         this.on.error?.(msg.msg);
         return;
       case "ev":

@@ -17,12 +17,19 @@ export interface ServerOptions {
   laps?: number;
   host?: string;
   hp?: number; // car hit points; tests use a low value so wrecks happen quickly
+  maxRooms?: number; // default MAX_ROOMS env or 20
+  maxSockets?: number; // default MAX_SOCKETS env or 150
 }
 
 export interface RunningServer {
   port: number;
   rooms: Rooms;
+  /** Open game sockets right now. */
+  sockets(): number;
+  /** Hard stop (tests): drop every socket without notice. */
   close(): Promise<void>;
+  /** Graceful stop: tell every client the server is restarting, then close. */
+  shutdown(): Promise<void>;
 }
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -30,6 +37,18 @@ const DIST = path.join(ROOT, "dist");
 const STEP_MS = 1000 / TICK_HZ;
 const MAX_CATCH_UP = 4;
 const HEARTBEAT_MS = 10_000;
+// Guards for a public server, sized for a small instance (override with env vars).
+const DEFAULT_MAX_ROOMS = 20;
+const DEFAULT_MAX_SOCKETS = 150;
+const JOIN_TIMEOUT_MS = 10_000; // a socket that has not joined a room by then is closed
+// Inputs arrive at 60/s plus a ping every 2 s. A Wi-Fi stall can flush a burst of queued
+// messages; beyond this many per second the excess is dropped (not closed) on purpose.
+const MAX_MSGS_PER_SEC = 240;
+
+function envInt(name: string): number | undefined {
+  const v = Number(process.env[name]);
+  return Number.isInteger(v) && v > 0 ? v : undefined;
+}
 
 const MIME: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
@@ -66,9 +85,12 @@ function serveStatic(req: http.IncomingMessage, res: http.ServerResponse): void 
 
 export async function startServer(opts: ServerOptions): Promise<RunningServer> {
   const httpServer = http.createServer();
-  const rooms = new Rooms(opts.laps ?? LAPS, opts.hp);
+  const maxRooms = opts.maxRooms ?? envInt("MAX_ROOMS") ?? DEFAULT_MAX_ROOMS;
+  const maxSockets = opts.maxSockets ?? envInt("MAX_SOCKETS") ?? DEFAULT_MAX_SOCKETS;
+  const rooms = new Rooms(opts.laps ?? LAPS, opts.hp, maxRooms);
 
   let vite: { close(): Promise<void> } | null = null;
+  let viteMiddlewares: http.RequestListener | null = null;
   if (opts.vite) {
     const { createServer } = await import("vite");
     const v = await createServer({
@@ -77,16 +99,26 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
       appType: "spa",
       server: { middlewareMode: true, hmr: { server: httpServer } },
     });
-    httpServer.on("request", v.middlewares);
+    viteMiddlewares = v.middlewares;
     vite = v;
-  } else {
-    httpServer.on("request", serveStatic);
   }
+  httpServer.on("request", (req, res) => {
+    if (req.url === "/healthz") {
+      res.writeHead(200, { "content-type": "text/plain" }).end("ok");
+      return;
+    }
+    if (viteMiddlewares) viteMiddlewares(req, res);
+    else serveStatic(req, res);
+  });
 
   const wss = new WebSocketServer({ noServer: true, maxPayload: 4096 });
   httpServer.on("upgrade", (req, socket, head) => {
     const pathname = new URL(req.url ?? "/", "http://x").pathname;
     if (pathname === "/ws") {
+      if (wss.clients.size >= maxSockets) {
+        socket.end("HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\n");
+        return;
+      }
       wss.handleUpgrade(req, socket, head, (ws) => wss.emit("connection", ws, req));
     } else if (!vite) {
       socket.destroy();
@@ -106,9 +138,26 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
       room: null,
       player: null,
     };
+    // The client opens its socket only to create or join; one that never gets a seat goes.
+    const joinTimer = setTimeout(() => {
+      if (!session.room) ws.close();
+    }, JOIN_TIMEOUT_MS);
+    let windowStart = performance.now();
+    let count = 0;
     ws.on("pong", () => alive.set(ws, true));
-    ws.on("message", (data) => rooms.onMessage(session, decode<ClientMsg>(data), performance.now()));
-    ws.on("close", () => rooms.onClose(session, performance.now()));
+    ws.on("message", (data) => {
+      const now = performance.now();
+      if (now - windowStart >= 1000) {
+        windowStart = now;
+        count = 0;
+      }
+      if (++count > MAX_MSGS_PER_SEC) return; // counted before decoding; excess dropped
+      rooms.onMessage(session, decode<ClientMsg>(data), now);
+    });
+    ws.on("close", () => {
+      clearTimeout(joinTimer);
+      rooms.onClose(session, performance.now());
+    });
     ws.on("error", () => ws.terminate());
   });
 
@@ -145,17 +194,29 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
   await new Promise<void>((resolve) => httpServer.listen(opts.port, opts.host ?? "0.0.0.0", resolve));
   const port = (httpServer.address() as AddressInfo).port;
 
+  const stop = async (graceful: boolean) => {
+    clearTimeout(timer);
+    clearInterval(heartbeat);
+    for (const ws of wss.clients) {
+      if (graceful) {
+        ws.send(encode({ t: "err", code: "restarting", msg: "Server restarting" }));
+        ws.close(1012, "restarting");
+      } else {
+        ws.terminate();
+      }
+    }
+    wss.close();
+    await vite?.close();
+    httpServer.closeAllConnections();
+    await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+  };
+
   return {
     port,
     rooms,
-    async close() {
-      clearTimeout(timer);
-      clearInterval(heartbeat);
-      for (const ws of wss.clients) ws.terminate();
-      wss.close();
-      await vite?.close();
-      await new Promise<void>((resolve) => httpServer.close(() => resolve()));
-    },
+    sockets: () => wss.clients.size,
+    close: () => stop(false),
+    shutdown: () => stop(true),
   };
 }
 
@@ -164,4 +225,19 @@ if (isMain) {
   const prod = process.env.NODE_ENV === "production";
   const server = await startServer({ port: Number(process.env.PORT) || 3000, vite: !prod });
   console.log(`Scrap Rally ${prod ? "(prod)" : "(dev)"} on http://localhost:${server.port}`);
+  // Hosts stop us with SIGTERM on every deploy/restart; Ctrl+C is SIGINT. Tell players,
+  // then exit (a hard timer makes sure we do, e.g. as PID 1 in a container).
+  let stopping = false;
+  const onSignal = (sig: string) => {
+    if (stopping) return;
+    stopping = true;
+    console.log(`${sig}: telling players the server is restarting`);
+    setTimeout(() => process.exit(0), 2500).unref();
+    server.shutdown().then(
+      () => process.exit(0),
+      () => process.exit(1),
+    );
+  };
+  process.on("SIGTERM", () => onSignal("SIGTERM"));
+  process.on("SIGINT", () => onSignal("SIGINT"));
 }

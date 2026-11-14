@@ -88,6 +88,13 @@ export interface ResultRow {
   earned: number; // scrap earned this race (place + wreck bonus)
 }
 
+/**
+ * Error codes the client acts on: gone = no such room (e.g. the server restarted),
+ * full = room full, taken = this seat was taken over by another connection,
+ * restarting = the server is shutting down, busy = the server is full.
+ */
+export type ErrCode = "gone" | "full" | "taken" | "restarting" | "busy";
+
 export type GameEvent =
   | { k: "lap"; id: string; lap: number }
   | { k: "finish"; id: string; place: number; timeMs: number }
@@ -103,7 +110,7 @@ export type ServerMsg =
       raceStart: number; // server time the current race starts/started, 0 = no race
       players: PlayerInfo[];
     }
-  | { t: "err"; msg: string }
+  | { t: "err"; msg: string; code?: ErrCode }
   | {
       t: "snap";
       tick: number;
