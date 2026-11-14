@@ -1,9 +1,11 @@
 # STATE — Scrap Rally coordination
 
-**Resume (2026-11-14):** Orchestration set up (CLAUDE.md, .claude/skills/orca-wave). No workers
-in flight, no Orca run yet. Next: create the ClickUp ticket "Finish hosting, local part" from
-PLAN-HOSTING.md and start one worker with `--base-branch hosting-wip` (parked WIP, rebased on
-main), port 3001.
+**Resume (2026-11-14):** One worker in flight on Orca run `run_c58bb5836634`: dispatch
+`ctx_a048855f3d38` (task `task_842eab3fd0e8`) on ClickUp 123jpnbf3m2 "Finish hosting, local
+part", workspace /Users/thjo/orca/workspaces/scrap-rally/hosting-local, branch `TSandvaer/hosting-local` (from
+hosting-wip), port 3001. On worker_done: verify branch/SHA/files, start the reviewer
+(`--worktree current`), merge per .claude/skills/orca-wave. On resume: `orca orchestration
+run-use` the run, then `worker-list --run run_c58bb5836634 --json`.
 
 ## Branches
 
@@ -14,7 +16,9 @@ main), port 3001.
 
 ## In flight
 
-None.
+| Ticket | Dispatch | Workspace | Branch | Port | Started |
+| --- | --- | --- | --- | --- | --- |
+| 123jpnbf3m2 Finish hosting, local part | ctx_a048855f3d38 | ~/orca/workspaces/scrap-rally/hosting-local | TSandvaer/hosting-local | 3001 | 2026-11-14 |
 
 ## Waiting on the user
 
