@@ -24,7 +24,7 @@ run-use` the run, then `worker-list --run run_c58bb5836634 --json`.
 
 ## Waiting on the user
 
-- Render: user creates the account (GitHub sign-in, access to TSandvaer/scrap-rally only), then
-  New -> Blueprint from render.yaml after the push; sends the onrender.com URL for the smoke test.
+- Render: account created and GitHub connected (user, 2026-11-14). Next for the user, after the
+  push: New -> Blueprint from render.yaml, then send the onrender.com URL for the smoke test.
 - First deploy: go-ahead.
 - Custom domain at simply.com: subdomain choice and DNS record, after the onrender.com URL works.
