@@ -5,8 +5,9 @@
 `run_c58bb5836634`: dispatch `ctx_1233e1845bdd` (task task_51db36c626c4) on ClickUp 123jpnbf3m8
 (review nits), workspace ~/orca/workspaces/scrap-rally/review-nits, branch `TSandvaer/review-nits`, port 3001. Review 1
 (ctx_0f23930fa286): REQUEST_CHANGES, 1 finding (refused busy sockets count against MAX_SOCKETS while
-closing). Sent to the author as follow-up dispatch `ctx_3e36bd14bb42` (task task_8ea307f33fee). On its
-worker_done: verify, re-review (a second REQUEST_CHANGES goes to the user), then merge, check+test. Going live needs a push and a
+closing). Fixed by follow-up `ctx_3e36bd14bb42` as 7c315df (verified). Re-review `ctx_b38e1e04d542` running
+in the main checkout (a second REQUEST_CHANGES goes to the user). On APPROVE: merge, check+test,
+then ask the user about push + Manual Deploy. Going live needs a push and a
 Manual Deploy in Render: ask the user for both.
 
 ## Branches
@@ -17,7 +18,7 @@ Manual Deploy in Render: ask the user for both.
 
 | Ticket | Dispatch | Workspace | Branch | Port | Started |
 | --- | --- | --- | --- | --- | --- |
-| 123jpnbf3m8 Hosting review nits | fix round ctx_3e36bd14bb42 (after c4ca7f4, review 1 = changes) | ~/orca/workspaces/scrap-rally/review-nits | TSandvaer/review-nits | 3001 | 2026-11-14 |
+| 123jpnbf3m8 Hosting review nits | fix 7c315df (ctx_3e36bd14bb42); re-review ctx_b38e1e04d542 | ~/orca/workspaces/scrap-rally/review-nits | TSandvaer/review-nits | 3001 | 2026-11-14 |
 
 ## Waiting on the user
 
