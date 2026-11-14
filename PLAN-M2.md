@@ -139,6 +139,25 @@ during the race) instead of plain armor.
 4. Bot test extension; browser check with two sessions (screenshots: garage, a race with
    shots and a wreck). Update PLAN.md.
 
+## Status (2026-11-14): done
+
+Built in four commits (6789a15, 42e7d2e, 1d03c72, 25f60fe). One refinement over the text
+above: a mine press is read only from inputs the client actually sent (the server tracks the
+last real input's counter), so synthesized underrun repeats can never create a press.
+
+Verification:
+- `npm run check` clean, `npm run build` ok.
+- `npm run sim`: 52/52 deterministic checks. Mutation check: keeping the rivet bit on
+  underrun repeats, or replacing the swept hit test with a point test, each fails a check.
+- `npm run bots`: 29/29 on 4 consecutive runs; each run had 17-21 hits and 5-7 wrecks.
+  Wrecked bots, including the 80 +/- 10 ms one, stayed at max reconciliation error <= 6.5.
+- Browser (two sessions + scripted bots): garage purchase, phone-width lobby, rivets and
+  mines in flight, a wreck seen from the victim (banner, scorched car) and from another
+  player (toast, sparks). Not checked in a browser: the results panel's scrap column
+  (covered by the sim and bot tests).
+- Automation note: agent-browser sends Space with an empty key and code, so automated
+  runs fire with Z; real keyboards send code "Space".
+
 ## Known limitations accepted for this milestone
 
 - No lag compensation: you aim at other cars as you see them (~100 ms + one-way latency in

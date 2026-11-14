@@ -156,7 +156,7 @@ is no overall race time limit yet.
 
 ## Milestone 2
 
-Weapons, scrap and the garage: see [PLAN-M2.md](PLAN-M2.md) (approved 2026-11-14).
+Weapons, scrap and the garage: see [PLAN-M2.md](PLAN-M2.md) (approved and built 2026-11-14).
 
 ## Later (not in the prototype)
 
