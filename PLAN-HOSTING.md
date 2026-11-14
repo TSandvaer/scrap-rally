@@ -93,6 +93,44 @@ Denmark. The user picks the host; I never create accounts or enter payment detai
    first deploy. Then smoke script against the public URL, and two agent-browser sessions racing
    on it (screenshots, RTT in the HUD).
 
+## Status (2026-11-14): local part done, nothing deployed
+
+Verified on macOS with Node 24.19.0 and Docker 29.7.2 (ClickUp 123jpnbf3m2). Ports: 3001 locally
+(3000 is the user's), so the container ran as `-p 3001:3000`.
+
+- **Lag simulator ordering** (`client/net.ts`): the socket close skipped the delay line, so the
+  lagged bot lost the in-flight restart notice (bots 31/32, `Bravo:  -> gone`). The delay line
+  is now one FIFO queue with one timer, and the close travels it behind the messages. After:
+  `server restart … PASS (Alpha/Bravo/Charlie/Echo: restarting -> gone)`.
+- **Tests**: 3 consecutive runs of `npm run check` (exit 0) + `npm test`: sim 52/52 and bots
+  32/32 each time, including "seat taken over" and "server restart".
+- **render.yaml**: `runtime: docker`, `plan: free`, `region: frankfurt` (the only EU region in
+  Render's Blueprint spec), `healthCheckPath: /healthz`, `numInstances: 1`,
+  `autoDeployTrigger: "off"` plus the deprecated equivalent `autoDeploy: false`. Field names and
+  values checked against render.com/docs/blueprint-spec; parses as YAML. Not yet accepted by
+  Render itself (no account).
+- **Smoke script**: `npm run smoke -- <base-url> [--race s] [--wake-timeout s] [--expect-restart s]`.
+  `--expect-restart` keeps both clients connected after the race and requires the `restarting`
+  notice before a 1012 close (use it during a deploy too). A dead URL exits 1.
+- **Local production** (`npm run build`, `PORT=3001 npm start`,
+  `npm run smoke -- http://localhost:3001 --expect-restart 30`, then SIGTERM): `/healthz` 200 "ok",
+  `/` 200 HTML (2740 bytes); both clients 302 racing snapshots in 10.1 s = 30.0/s, 0 missed,
+  largest gap 34.7 ms arrival / 34.5 ms server clock, RTT median 0.3 ms. SIGTERM → process gone
+  in 0.032 s; both clients got `err restarting`, then close 1012 (< 1 ms later).
+- **Docker**: `docker build --no-cache` OK (build stage `npm ci --ignore-scripts`: 24 packages;
+  runtime `npm ci --omit=dev --ignore-scripts`: 1 package). Runtime `node_modules` holds only
+  `ws`; runs as user `node` with `NODE_ENV=production`; image content 81 MB. `docker run -p
+  3001:3000`: smoke PASS, 30.0 snapshots/s, 0 missed, largest gap 36.6 ms, RTT median 0.9 ms.
+  `docker stop` while two smoke clients raced: 0.135 s, container exit code 0, both clients got
+  `err restarting`, then close 1012 about 1 ms later.
+- **Not verified**: anything on Render (build there, region and free plan accepted, `PORT`
+  injection, cold start, free CPU share under load); the lost-seat messages in the browser UI
+  (covered by the bot checks only); Fly config (not written).
+
+Next, each needing the user's go-ahead: push to GitHub; create the Render service from the
+Blueprint; first deploy; then `npm run smoke -- https://<service>.onrender.com` and two browser
+sessions racing on it.
+
 ## What needs the user
 
 - Choose the host and region; create the account; connect the GitHub repo (or install the host
