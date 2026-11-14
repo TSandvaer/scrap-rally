@@ -7,6 +7,10 @@
 // host starts, and both race for --race seconds (default 10) while pinging. Prints RTT,
 // snapshots per second and the largest gap between snapshots (arrival time and server
 // clock). Exits 1 on any failure. https:// uses wss://.
+//
+// --expect-restart <s>: after the race, keep both clients connected for up to <s> seconds
+// and require a server restart (stop the server meanwhile, e.g. `docker stop`): each
+// client must get the "restarting" notice before its socket closes (code 1012).
 
 import { decode, encode, SNAPSHOT_EVERY, type ClientMsg, type ServerMsg } from "../shared/protocol";
 import { TICK_HZ } from "../shared/physics";
@@ -21,10 +25,11 @@ const RACE_S = Number(option("--race") ?? 10);
 // A sleeping free instance can take about a minute to wake: the first request waits longer.
 const WAKE_TIMEOUT_MS = Number(option("--wake-timeout") ?? 90) * 1000;
 const STEP_TIMEOUT_MS = 15_000;
+const EXPECT_RESTART_S = option("--expect-restart") === undefined ? 0 : Number(option("--expect-restart"));
 const EXPECTED_HZ = TICK_HZ / SNAPSHOT_EVERY;
 
-if (!base || !/^https?:\/\//.test(base) || !(RACE_S > 0)) {
-  console.log("Usage: npm run smoke -- <http(s)://host[:port]> [--race seconds] [--wake-timeout seconds]");
+if (!base || !/^https?:\/\//.test(base) || !(RACE_S > 0) || !(EXPECT_RESTART_S >= 0)) {
+  console.log("Usage: npm run smoke -- <http(s)://host[:port]> [--race s] [--wake-timeout s] [--expect-restart s]");
   process.exit(2);
 }
 const httpBase = base.replace(/\/+$/, "");
@@ -63,6 +68,9 @@ class Client {
   private waiters: (() => void)[] = [];
   closed = false;
   closeInfo = "";
+  closeCode = 0;
+  closedAt = 0;
+  restartNoticeAt = 0; // when the err "restarting" arrived (0 = not yet)
   you = "";
   code = "";
   phase = "";
@@ -91,6 +99,8 @@ class Client {
       } else if (msg.t === "room") {
         this.phase = msg.phase;
         this.inbox.push(msg);
+      } else if (msg.t === "err" && msg.code === "restarting") {
+        this.restartNoticeAt ||= now;
       } else {
         this.inbox.push(msg);
       }
@@ -98,6 +108,8 @@ class Client {
     };
     this.ws.onclose = (e) => {
       this.closed = true;
+      this.closedAt = performance.now();
+      this.closeCode = e.code;
       this.closeInfo = `code ${e.code}${e.reason ? ` "${e.reason}"` : ""}`;
       this.wake();
     };
@@ -256,10 +268,27 @@ async function main(): Promise<void> {
       console.log(`      ${"".padEnd(5)} RTT: n=${rtt.n} median ${ms(rtt.median)}, max ${ms(rtt.max)}`);
     }
     if (!ok) fail("a client got no racing snapshots or no pong");
+
+    if (EXPECT_RESTART_S > 0) await expectRestart(clients);
   } finally {
     clients.forEach((c) => c.close());
   }
   console.log("\nsmoke: PASS");
+}
+
+/** Clients stay in the race; the server is stopped from outside meanwhile. */
+async function expectRestart(clients: Client[]): Promise<void> {
+  console.log(`WAIT  clients stay connected up to ${EXPECT_RESTART_S} s: stop or restart the server now`);
+  const t0 = performance.now();
+  while (!clients.every((c) => c.closed) && performance.now() - t0 < EXPECT_RESTART_S * 1000) await sleep(20);
+  for (const c of clients) {
+    if (!c.closed) fail(`${c.name}: no server restart within ${EXPECT_RESTART_S} s (socket still open)`);
+    if (!c.restartNoticeAt) fail(`${c.name}: socket closed (${c.closeInfo}) without the "restarting" notice`);
+    if (c.closeCode !== 1012) fail(`${c.name}: closed with ${c.closeInfo}, expected code 1012 (restarting)`);
+    console.log(
+      `PASS  ${c.name.padEnd(5)} got err "restarting", then close ${c.closeInfo} ${ms(c.closedAt - c.restartNoticeAt)} later`,
+    );
+  }
 }
 
 main().then(
