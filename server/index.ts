@@ -113,22 +113,29 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
   });
 
   const wss = new WebSocketServer({ noServer: true, maxPayload: 4096 });
+  // Refused sockets still closing. ws adds every upgraded socket to wss.clients, so these
+  // are subtracted in the cap check: a slot a player frees must not look taken meanwhile.
+  let refused = 0;
   httpServer.on("upgrade", (req, socket, head) => {
     const pathname = new URL(req.url ?? "/", "http://x").pathname;
     if (pathname === "/ws") {
       // A browser WebSocket cannot read an HTTP 503, so over the cap the socket is accepted
       // only to say "busy" and is closed right away (1013 = try again later).
-      const full = wss.clients.size >= maxSockets;
+      const full = wss.clients.size - refused >= maxSockets;
       wss.handleUpgrade(req, socket, head, (ws) => {
         if (!full) {
           wss.emit("connection", ws, req);
           return;
         }
+        refused++;
         ws.on("error", () => ws.terminate());
         ws.send(encode({ t: "err", code: "busy", msg: "The server is full right now, try again later" }));
         ws.close(1013, "server full");
         const kill = setTimeout(() => ws.terminate(), REFUSED_CLOSE_MS); // no lingering handshake
-        ws.on("close", () => clearTimeout(kill));
+        ws.on("close", () => {
+          clearTimeout(kill);
+          refused--;
+        });
       });
     } else if (!vite) {
       socket.destroy();

@@ -2,6 +2,7 @@
 // the real client netcode (client/game.ts + client/net.ts over Node's WebSocket).
 // Two races in a row with weapons, the garage and a reverse grid. Run: npm run bots
 
+import net from "node:net";
 import { Game, lostMessage, track, type ConnReason, type TokenStore } from "../client/game";
 import { connectWs, type LagSim } from "../client/net";
 import {
@@ -66,6 +67,30 @@ function rawConnect(url: string, timeoutMs: number): Promise<{ err: string; clos
       resolve({ err, closeCode: e.code });
     };
   });
+}
+
+/**
+ * A WebSocket client that never answers the server's close frame: a refused socket that
+ * stays in its closing handshake until the server cuts it off.
+ */
+function stalledSocket(port: number): { refused: Promise<boolean>; open(): boolean; destroy(): void } {
+  const sock = net.connect(port, "127.0.0.1");
+  let open = true;
+  let buf = "";
+  sock.on("close", () => (open = false));
+  sock.on("error", () => (open = false));
+  sock.write(
+    `GET /ws HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n` +
+      "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n",
+  );
+  const refused = new Promise<boolean>((resolve) => {
+    sock.on("data", (d) => {
+      buf += d.toString("latin1");
+      if (buf.startsWith("HTTP/1.1 101") && buf.includes('"busy"')) resolve(true);
+    });
+    sock.on("close", () => resolve(false));
+  });
+  return { refused, open: () => open, destroy: () => sock.destroy() };
 }
 
 function stats(xs: number[]): { n: number; median: number; p95: number; max: number } {
@@ -492,6 +517,26 @@ async function runServerFull(bots: Bot[]): Promise<void> {
     I.game.join(G.game.code, I.name);
     await waitFor("I welcome", () => !!I.game.you, 3000);
     check("server full: once a socket frees up, a new client joins", I.game.code === G.game.code && !!I.game.you);
+
+    // A refusal still in its closing handshake must not hold a slot: G and I fill the cap,
+    // a stalled client is refused, I leaves, and H joins before the refusal has closed.
+    const stalled = stalledSocket(small.port);
+    const wasRefused = await stalled.refused;
+    const countedWhileClosing = small.sockets();
+    I.game.leave();
+    await waitFor("I socket gone", () => small.sockets() === 2, 500);
+    H.game.join(G.game.code, H.name);
+    await waitFor("H joins", () => !!H.game.you || lost.get("Hotel")!.length > 0, 500);
+    const stillClosing = stalled.open();
+    check(
+      "server full: a freed slot is usable while a refused socket is still closing",
+      wasRefused && countedWhileClosing === 3 && stillClosing && !!H.game.you && lost.get("Hotel")!.length === 0,
+      `refused ${wasRefused}, sockets while closing ${countedWhileClosing}, refusal still open at join ${stillClosing}, ` +
+        `Hotel ${H.game.you ? "joined" : `lost: ${lost.get("Hotel")!.join() || "-"}`}`,
+    );
+    await waitFor("stalled refusal cut off", () => !stalled.open(), 3000);
+    check("server full: a refused socket that never closes is cut off", !stalled.open());
+    stalled.destroy();
   } finally {
     for (const b of [G, H, I]) b.game.leave();
     await small.close();
