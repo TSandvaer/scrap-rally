@@ -2,15 +2,7 @@
 // a socket is reached only through the Conn interface, so index.ts owns `ws`.
 
 import { randomBytes, randomInt } from "node:crypto";
-import {
-  BASE_STATS,
-  collideCars,
-  NO_INPUT,
-  stepCar,
-  type CarState,
-  type CarStats,
-  type Input,
-} from "../shared/physics";
+import { BASE_STATS, collideCars, NO_INPUT, type CarStats } from "../shared/physics";
 import {
   CODE_ALPHABET,
   CODE_LENGTH,
@@ -21,15 +13,18 @@ import {
   RESULTS_MS,
   SNAPSHOT_EVERY,
   round,
-  type CarSnap,
   type ClientMsg,
+  type EntSnap,
   type GameEvent,
   type Phase,
   type PlayerInfo,
   type ResultRow,
   type ServerMsg,
 } from "../shared/protocol";
+import { buy, isItem, payouts, startingWallet, statsFor, type Wallet } from "../shared/shop";
 import { buildTrack, gridSlot, RUST_BOWL, type Track } from "../shared/track";
+import { BTN_RIVET, CAR_HP, mineCount, NO_COMMAND, stepRaceCar, type Command } from "../shared/weapons";
+import { Combat, solid, type Fighter } from "./combat";
 import { advance, compareStanding, newProgress, raceDistance, type Progress } from "./race";
 
 export interface Conn {
@@ -56,26 +51,26 @@ const COLORS = ["#e8552d", "#33a3e8", "#f2c230", "#5cc46b", "#c46ad6", "#e8e2d4"
 
 interface QueuedInput {
   seq: number;
-  input: Input;
+  cmd: Command;
 }
 
-export interface Player {
-  id: string;
+export interface Player extends Fighter {
   name: string;
   color: string;
   token: string;
   session: Session | null;
   disconnectedAt: number;
   inRace: boolean;
-  car: CarState | null;
   progress: Progress | null;
   stats: CarStats;
+  wallet: Wallet; // scrap, upgrade levels, ammo: kept across races and reconnects
   queue: QueuedInput[];
   lastQueuedSeq: number;
   ack: number;
   buffering: boolean;
-  lastInput: Input;
+  lastInput: Command;
   starved: number;
+  mineBase: number | null; // mine counter of the last real input consumed
 }
 
 const sharedTrack = buildTrack(RUST_BOWL);
@@ -91,17 +86,23 @@ function cleanName(raw: unknown): string {
 
 export class Room {
   readonly players = new Map<string, Player>();
+  readonly combat: Combat;
   hostId = "";
   phase: Phase = "lobby";
   phaseEnds = 0;
   raceStart = 0;
   private finishers = 0;
+  private tickNo = 0;
+  private lastOrder: string[] = []; // last race's standings, for the reverse grid
 
   constructor(
     readonly code: string,
     readonly track: Track,
     readonly laps: number,
-  ) {}
+    readonly hp: number = CAR_HP,
+  ) {
+    this.combat = new Combat(track, (ev) => this.event(this.tickNo, ev));
+  }
 
   get empty(): boolean {
     return this.players.size === 0;
@@ -110,6 +111,7 @@ export class Room {
   addPlayer(name: string, session: Session): Player | string {
     if (this.players.size >= MAX_PLAYERS) return "Room is full";
     const used = new Set([...this.players.values()].map((p) => p.color));
+    const wallet = startingWallet();
     const p: Player = {
       id: newId(6),
       name,
@@ -120,13 +122,22 @@ export class Room {
       inRace: false,
       car: null,
       progress: null,
+      finished: false,
+      hp: this.hp,
+      maxHp: this.hp,
+      ghost: 0,
+      cooldown: 0,
+      wallet,
+      ammo: wallet.ammo,
+      levels: wallet.levels,
       stats: { ...BASE_STATS },
       queue: [],
       lastQueuedSeq: -1,
       ack: -1,
       buffering: true,
-      lastInput: NO_INPUT,
+      lastInput: NO_COMMAND,
       starved: 0,
+      mineBase: null,
     };
     this.players.set(p.id, p);
     if (!this.hostId) this.hostId = p.id;
@@ -157,6 +168,7 @@ export class Room {
     p.ack = -1;
     resetQueue(p);
     session.conn.send({ t: "welcome", code: this.code, you: p.id, token: p.token, laps: this.laps });
+    this.sendGarage(p);
     this.broadcastRoom();
   }
 
@@ -175,56 +187,95 @@ export class Room {
     this.broadcastRoom();
   }
 
+  /** Grid order: newcomers first (join order), then the last race reversed (leader last). */
+  gridOrder(): Player[] {
+    const present = [...this.players.values()].filter((p) => p.session);
+    const raced = new Set(this.lastOrder);
+    const fresh = present.filter((p) => !raced.has(p.id));
+    const reversed = [...this.lastOrder]
+      .reverse()
+      .map((id) => this.players.get(id))
+      .filter((p): p is Player => !!p && !!p.session);
+    return [...fresh, ...reversed];
+  }
+
   start(p: Player, now: number): string | null {
     if (p.id !== this.hostId) return "Only the host can start";
     if (this.phase !== "lobby") return "A race is already running";
-    let slot = 0;
-    for (const q of this.players.values()) {
-      if (!q.session) continue; // disconnected players sit this race out
-      const g = gridSlot(this.track, slot++);
-      q.car = { x: g.x, y: g.y, h: g.h, vx: 0, vy: 0, seg: g.seg };
+    this.combat.reset();
+    this.gridOrder().forEach((q, slot) => {
+      const g = gridSlot(this.track, slot);
+      q.car = { x: g.x, y: g.y, h: g.h, vx: 0, vy: 0, seg: g.seg, wreck: 0 };
       q.progress = newProgress(this.track, q.car);
       q.inRace = true;
+      q.finished = false;
+      q.hp = q.maxHp = this.hp;
+      q.ghost = 0;
+      q.cooldown = 0;
+      q.stats = statsFor(q.wallet.levels);
       resetQueue(q);
-    }
+    });
     this.finishers = 0;
     this.raceStart = now + COUNTDOWN_MS;
     this.setPhase("countdown", this.raceStart);
     return null;
   }
 
+  /** Garage purchase; only between races. */
+  buy(p: Player, item: unknown): string | null {
+    if (this.phase !== "lobby") return "The garage is closed during a race";
+    if (!isItem(item)) return "Unknown item";
+    const e = buy(p.wallet, item);
+    if (!e) this.sendGarage(p);
+    return e;
+  }
+
   queueInputs(p: Player, tuples: unknown): void {
     if (!p.car || !Array.isArray(tuples)) return;
     for (const t of tuples.slice(-MAX_INPUTS_PER_MSG)) {
-      if (!Array.isArray(t) || t.length !== 3) continue;
-      const [seq, throttle, steer] = t;
+      if (!Array.isArray(t) || t.length < 3 || t.length > 4) continue;
+      const [seq, throttle, steer, buttons = 0] = t;
       if (!Number.isInteger(seq) || seq <= p.lastQueuedSeq) continue;
       if (!Number.isFinite(throttle) || !Number.isFinite(steer)) continue;
       p.lastQueuedSeq = seq;
       p.queue.push({
         seq,
-        input: { throttle: Math.max(-1, Math.min(1, throttle)), steer: Math.max(-1, Math.min(1, steer)) },
+        cmd: {
+          throttle: Math.max(-1, Math.min(1, throttle)),
+          steer: Math.max(-1, Math.min(1, steer)),
+          buttons: Number.isInteger(buttons) ? buttons & 15 : 0,
+        },
       });
     }
     if (p.queue.length > QUEUE_MAX) p.queue.splice(0, p.queue.length - QUEUE_TRIM);
   }
 
   tick(tick: number, now: number): void {
+    this.tickNo = tick;
     // Phase timers first, so the first racing tick already applies inputs.
     if (this.phase === "countdown" && now >= this.phaseEnds) this.setPhase("racing", 0);
     else if (this.phase === "racing" && this.phaseEnds && now >= this.phaseEnds) this.endRace(now);
     else if (this.phase === "results" && now >= this.phaseEnds) this.toLobby();
 
+    const racing = this.phase === "racing";
     const racers = [...this.players.values()].filter((p) => p.car);
+    const prev = new Map<string, { x: number; y: number }>();
     for (const p of racers) {
-      const input = consumeInput(p);
-      stepCar(p.car!, this.phase === "racing" ? input : NO_INPUT, p.stats, this.track);
+      const c = p.car!;
+      prev.set(p.id, { x: c.x, y: c.y });
+      // Consumed every tick, wrecked or not, so ack keeps moving.
+      const { cmd, minePress } = consumeInput(p);
+      stepRaceCar(c, racing ? cmd : NO_INPUT, p.stats, this.track);
+      this.combat.act(p, cmd, minePress, racing);
     }
     for (let i = 0; i < racers.length; i++) {
-      for (let j = i + 1; j < racers.length; j++) collideCars(racers[i].car!, racers[j].car!);
+      for (let j = i + 1; j < racers.length; j++) {
+        if (solid(racers[i]) && solid(racers[j])) collideCars(racers[i].car!, racers[j].car!);
+      }
     }
 
-    if (this.phase === "racing") {
+    if (racing) {
+      this.combat.step(racers, prev);
       for (const p of racers) {
         if (!advance(this.track, p.progress!, p.car!) || p.progress!.fin) continue;
         const pr = p.progress!;
@@ -233,6 +284,7 @@ export class Room {
           continue;
         }
         pr.fin = Math.max(1, Math.round(now - this.raceStart));
+        p.finished = true;
         this.finishers++;
         this.event(tick, { k: "finish", id: p.id, place: this.finishers, timeMs: pr.fin });
         if (this.finishers === 1) this.phaseEnds = now + FINISH_GRACE_MS;
@@ -249,24 +301,22 @@ export class Room {
   }
 
   private endRace(now: number): void {
-    const rows: (ResultRow & { rd: number; fin: number })[] = [];
+    const rows: { id: string; fin: number; rd: number; p: Player }[] = [];
     for (const p of this.players.values()) {
       if (!p.car || !p.progress) continue;
-      rows.push({
-        id: p.id,
-        name: p.name,
-        color: p.color,
-        timeMs: p.progress.fin,
-        fin: p.progress.fin,
-        rd: raceDistance(this.track, p.progress),
-      });
+      rows.push({ id: p.id, fin: p.progress.fin, rd: raceDistance(this.track, p.progress), p });
     }
     rows.sort(compareStanding);
-    this.setPhase("results", now + RESULTS_MS);
-    this.broadcast({
-      t: "results",
-      rows: rows.map(({ id, name, color, timeMs }) => ({ id, name, color, timeMs })),
+    const earned = payouts(rows, this.combat.wrecksCaused);
+    this.lastOrder = rows.map((r) => r.id);
+    const results: ResultRow[] = rows.map(({ id, fin, p }) => {
+      const e = earned.get(id) ?? 0;
+      p.wallet.scrap += e;
+      return { id, name: p.name, color: p.color, timeMs: fin, earned: e };
     });
+    this.setPhase("results", now + RESULTS_MS);
+    this.broadcast({ t: "results", rows: results });
+    for (const r of rows) this.sendGarage(r.p);
   }
 
   private toLobby(): void {
@@ -274,8 +324,10 @@ export class Room {
       p.car = null;
       p.progress = null;
       p.inRace = false;
+      p.finished = false;
       resetQueue(p);
     }
+    this.combat.reset();
     this.raceStart = 0;
     this.setPhase("lobby", 0);
   }
@@ -290,8 +342,12 @@ export class Room {
     this.broadcast({ t: "ev", tick, ev });
   }
 
+  private sendGarage(p: Player): void {
+    p.session?.conn.send({ t: "garage", scrap: p.wallet.scrap, levels: { ...p.wallet.levels } });
+  }
+
   private sendSnapshots(tick: number, now: number): void {
-    const ents: CarSnap[] = [];
+    const ents: EntSnap[] = [];
     for (const p of this.players.values()) {
       const c = p.car;
       if (!c || !p.progress) continue;
@@ -307,8 +363,13 @@ export class Room {
         lap: p.progress.lap,
         rd: round(raceDistance(this.track, p.progress), 1),
         fin: p.progress.fin,
+        hp: Math.ceil(p.hp),
+        maxHp: p.maxHp,
+        wreck: c.wreck,
+        ghost: p.ghost > 0 || p.finished,
       });
     }
+    ents.push(...this.combat.shotSnaps(), ...this.combat.mineSnaps());
     const time = round(now, 1);
     for (const p of this.players.values()) {
       p.session?.conn.send({
@@ -318,6 +379,7 @@ export class Room {
         phase: this.phase,
         phaseEnds: this.phaseEnds,
         ack: p.ack,
+        ammo: [p.wallet.ammo.rivets, p.wallet.ammo.mines],
         ents,
       });
     }
@@ -351,32 +413,47 @@ export class Room {
 function resetQueue(p: Player): void {
   p.queue.length = 0;
   p.buffering = true;
-  p.lastInput = NO_INPUT;
+  p.lastInput = NO_COMMAND;
   p.starved = 0;
+  p.mineBase = null;
 }
 
-/** Take this tick's input from the player's jitter buffer. */
-function consumeInput(p: Player): Input {
+/**
+ * Take this tick's command from the player's jitter buffer. A mine press is reported only
+ * when a real input's mine counter differs from the last real input's; repeats on underrun
+ * never fire the rivet gun and never drop a mine.
+ */
+function consumeInput(p: Player): { cmd: Command; minePress: boolean } {
   if (p.buffering && p.queue.length >= QUEUE_START) p.buffering = false;
   if (!p.buffering) {
     const next = p.queue.shift();
     if (next) {
       p.ack = next.seq;
-      p.lastInput = next.input;
+      p.lastInput = next.cmd;
       p.starved = 0;
-      return next.input;
+      const count = mineCount(next.cmd.buttons);
+      const minePress = p.mineBase !== null && count !== p.mineBase;
+      p.mineBase = count;
+      return { cmd: next.cmd, minePress };
     }
     p.buffering = true; // underrun: wait for the buffer to refill
   }
   p.starved++;
-  return p.starved <= REPEAT_TICKS ? p.lastInput : NO_INPUT;
+  const last = p.lastInput;
+  const buttons = last.buttons & ~BTN_RIVET;
+  const cmd =
+    p.starved <= REPEAT_TICKS ? { throttle: last.throttle, steer: last.steer, buttons } : { ...NO_COMMAND, buttons };
+  return { cmd, minePress: false };
 }
 
 export class Rooms {
   readonly rooms = new Map<string, Room>();
   private tickNo = 0;
 
-  constructor(private readonly laps: number) {}
+  constructor(
+    private readonly laps: number,
+    private readonly hp: number = CAR_HP,
+  ) {}
 
   private newCode(): string {
     for (;;) {
@@ -392,7 +469,7 @@ export class Rooms {
     switch (msg.t) {
       case "create": {
         if (session.room) return err("Already in a room");
-        const room = new Room(this.newCode(), sharedTrack, this.laps);
+        const room = new Room(this.newCode(), sharedTrack, this.laps, this.hp);
         this.rooms.set(room.code, room);
         room.addPlayer(cleanName(msg.name), session);
         return;
@@ -411,6 +488,12 @@ export class Rooms {
       case "start": {
         if (!session.room || !session.player) return;
         const e = session.room.start(session.player, now);
+        if (e) err(e);
+        return;
+      }
+      case "buy": {
+        if (!session.room || !session.player) return;
+        const e = session.room.buy(session.player, msg.item);
         if (e) err(e);
         return;
       }

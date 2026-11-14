@@ -301,7 +301,7 @@ export class Game {
       this.history.clear();
       return;
     }
-    const server: CarState = { x: mine.x, y: mine.y, h: mine.h, vx: mine.vx, vy: mine.vy, seg: mine.seg };
+    const server: CarState = { x: mine.x, y: mine.y, h: mine.h, vx: mine.vx, vy: mine.vy, seg: mine.seg, wreck: mine.wreck };
     if (!this.car) {
       this.car = server;
       this.prevCar = cloneCar(server);
@@ -386,7 +386,7 @@ export class Game {
     }
     const tail: InputTuple[] = this.pending
       .slice(-INPUT_REDUNDANCY)
-      .map((p) => [p.seq, p.input.throttle, p.input.steer]);
+      .map((p) => [p.seq, p.input.throttle, p.input.steer, 0]);
     this.send({ t: "in", i: tail });
   }
 

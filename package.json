@@ -7,7 +7,9 @@
     "build": "vite build",
     "start": "NODE_ENV=production tsx server/index.ts",
     "check": "tsc --noEmit",
-    "bots": "tsx scripts/bots.ts"
+    "bots": "tsx scripts/bots.ts",
+    "sim": "tsx scripts/sim-test.ts",
+    "test": "tsx scripts/sim-test.ts && tsx scripts/bots.ts"
   },
   "keywords": [],
   "author": "",

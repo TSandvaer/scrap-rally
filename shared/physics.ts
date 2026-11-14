@@ -17,6 +17,7 @@ export interface CarState {
   vx: number;
   vy: number;
   seg: number; // last track segment, the search hint for track queries
+  wreck: number; // ticks left wrecked (frozen), 0 = driving; see shared/weapons.ts
 }
 
 /** Per-car tuning. The upgrade shop will modify these. */
@@ -46,7 +47,7 @@ const WALL_BOUNCE = 0.35;
 const WALL_SCRAPE = 0.97;
 
 export function cloneCar(c: CarState): CarState {
-  return { x: c.x, y: c.y, h: c.h, vx: c.vx, vy: c.vy, seg: c.seg };
+  return { x: c.x, y: c.y, h: c.h, vx: c.vx, vy: c.vy, seg: c.seg, wreck: c.wreck };
 }
 
 export function speedOf(c: { vx: number; vy: number }): number {

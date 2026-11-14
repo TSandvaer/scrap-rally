@@ -6,6 +6,8 @@
 //    lost or late snapshot is harmless (safe for an unreliable transport later).
 //  - events (`ev`, `room`, `welcome`, ...): things that must arrive exactly once.
 
+import type { Levels } from "./shop";
+
 export const LAPS = 3;
 export const MAX_PLAYERS = 6;
 export const SNAPSHOT_EVERY = 2; // ticks between snapshots -> 30 Hz
@@ -27,15 +29,16 @@ export interface PlayerInfo {
   connected: boolean;
 }
 
-/** [seq, throttle, steer] */
-export type InputTuple = [number, number, number];
+/** [seq, throttle, steer, buttons]; buttons as in shared/weapons.ts */
+export type InputTuple = [number, number, number, number];
 
 export type ClientMsg =
   | { t: "create"; name: string }
   | { t: "join"; code: string; name: string; token?: string }
   | { t: "start" }
   | { t: "in"; i: InputTuple[] } // oldest first, newest last
-  | { t: "ping"; c: number };
+  | { t: "ping"; c: number }
+  | { t: "buy"; item: string };
 
 export interface CarSnap {
   k: "car";
@@ -49,21 +52,47 @@ export interface CarSnap {
   lap: number; // completed laps
   rd: number; // race distance, for ordering
   fin: number; // finish time in ms since the start, 0 = still racing
+  hp: number;
+  maxHp: number;
+  wreck: number; // ticks left wrecked, 0 = driving
+  ghost: boolean; // just respawned or finished: no damage, no car collisions
 }
 
-/** Generic entity list so projectiles, mines and pickups can be added later. */
-export type EntSnap = CarSnap;
+export interface ShotSnap {
+  k: "shot";
+  id: number;
+  o: string; // owner player id
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+}
+
+export interface MineSnap {
+  k: "mine";
+  id: number;
+  o: string;
+  x: number;
+  y: number;
+  armed: boolean;
+}
+
+/** Generic entity list: cars, shots, mines; pickups can be added later. */
+export type EntSnap = CarSnap | ShotSnap | MineSnap;
 
 export interface ResultRow {
   id: string;
   name: string;
   color: string;
   timeMs: number; // 0 = did not finish
+  earned: number; // scrap earned this race (place + wreck bonus)
 }
 
 export type GameEvent =
   | { k: "lap"; id: string; lap: number }
-  | { k: "finish"; id: string; place: number; timeMs: number };
+  | { k: "finish"; id: string; place: number; timeMs: number }
+  | { k: "hit"; id: string; by: string; dmg: number; w: "rivet" | "mine" }
+  | { k: "wreck"; id: string; by: string };
 
 export type ServerMsg =
   | { t: "welcome"; code: string; you: string; token: string; laps: number }
@@ -82,10 +111,12 @@ export type ServerMsg =
       phase: Phase;
       phaseEnds: number; // server time the current phase ends, 0 = open-ended
       ack: number; // last input seq the server consumed for the recipient
+      ammo: [number, number]; // recipient's [rivets, mines]
       ents: EntSnap[];
     }
   | { t: "ev"; tick: number; ev: GameEvent }
   | { t: "results"; rows: ResultRow[] }
+  | { t: "garage"; scrap: number; levels: Levels } // to one player
   | { t: "pong"; c: number; s: number };
 
 export function encode(msg: ClientMsg | ServerMsg): string {

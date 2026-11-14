@@ -16,6 +16,7 @@ export interface ServerOptions {
   vite: boolean;
   laps?: number;
   host?: string;
+  hp?: number; // car hit points; tests use a low value so wrecks happen quickly
 }
 
 export interface RunningServer {
@@ -65,7 +66,7 @@ function serveStatic(req: http.IncomingMessage, res: http.ServerResponse): void 
 
 export async function startServer(opts: ServerOptions): Promise<RunningServer> {
   const httpServer = http.createServer();
-  const rooms = new Rooms(opts.laps ?? LAPS);
+  const rooms = new Rooms(opts.laps ?? LAPS, opts.hp);
 
   let vite: { close(): Promise<void> } | null = null;
   if (opts.vite) {
