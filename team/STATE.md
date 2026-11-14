@@ -1,11 +1,11 @@
 # STATE — Scrap Rally coordination
 
-**Resume (2026-11-14):** No workers in flight (run `run_c58bb5836634` idle). Ticket 123jpnbf3m2
-merged as d2fcc9e, pushed (88aebaa..d2fcc9e), ClickUp `ready for qa test`; workspaces cleaned up.
-Waiting on the user to apply the Render Blueprint and send the onrender.com URL; then run
-`npm run smoke -- <url>` (+ `--expect-restart` only if a restart is wanted) and a two-browser race on
-it, report RTT / snapshot rate. Then dispatch ClickUp 123jpnbf3m8 (review nits; user chose
-"one small ticket, after the deploy").
+**Resume (2026-11-14):** Render rejected render.yaml (autoDeploy + autoDeployTrigger both set).
+QA fix in flight on run `run_c58bb5836634`: dispatch `ctx_8b442e1260de` (task task_8c2e7a0aa447),
+workspace ~/orca/workspaces/scrap-rally/render-yaml-fix, branch `TSandvaer/render-yaml-fix`, ticket 123jpnbf3m2 back to
+in progress. On worker_done: verify, reviewer, merge, check+test, then ask the user to approve the
+push (the earlier pre-approval covered one push only), then the user applies the Blueprint.
+Afterwards: dispatch 123jpnbf3m8 (review nits).
 
 ## Branches
 
@@ -13,7 +13,9 @@ it, report RTT / snapshot rate. Then dispatch ClickUp 123jpnbf3m8 (review nits; 
 
 ## In flight
 
-None.
+| Ticket | Dispatch | Workspace | Branch | Port | Started |
+| --- | --- | --- | --- | --- | --- |
+| 123jpnbf3m2 QA fix (render.yaml) | ctx_8b442e1260de | ~/orca/workspaces/scrap-rally/render-yaml-fix | TSandvaer/render-yaml-fix | — | 2026-11-14 |
 
 ## Waiting on the user
 
