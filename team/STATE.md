@@ -3,8 +3,9 @@
 **Resume (2026-11-14):** Render rejected render.yaml (autoDeploy + autoDeployTrigger both set).
 QA fix in flight on run `run_c58bb5836634`: dispatch `ctx_8b442e1260de` (task task_8c2e7a0aa447),
 workspace ~/orca/workspaces/scrap-rally/render-yaml-fix, branch `TSandvaer/render-yaml-fix`, ticket 123jpnbf3m2 back to
-in progress. On worker_done: verify, reviewer, merge, check+test, then ask the user to approve the
-push (the earlier pre-approval covered one push only), then the user applies the Blueprint.
+in progress. Author done (7c66ee1, verified); reviewer `ctx_318687421dd4` running in the main
+checkout. On APPROVE: merge, check+test, push (pre-approved, DECISIONS), tell the user to apply
+the Blueprint.
 Afterwards: dispatch 123jpnbf3m8 (review nits).
 
 ## Branches
@@ -15,7 +16,7 @@ Afterwards: dispatch 123jpnbf3m8 (review nits).
 
 | Ticket | Dispatch | Workspace | Branch | Port | Started |
 | --- | --- | --- | --- | --- | --- |
-| 123jpnbf3m2 QA fix (render.yaml) | ctx_8b442e1260de | ~/orca/workspaces/scrap-rally/render-yaml-fix | TSandvaer/render-yaml-fix | — | 2026-11-14 |
+| 123jpnbf3m2 QA fix (render.yaml) | ctx_8b442e1260de (done, 7c66ee1); review ctx_318687421dd4 | ~/orca/workspaces/scrap-rally/render-yaml-fix | TSandvaer/render-yaml-fix | — | 2026-11-14 |
 
 ## Waiting on the user
 
