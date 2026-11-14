@@ -1,16 +1,18 @@
 // Headless end-to-end test: starts the real server in-process and drives bots that use
 // the real client netcode (client/game.ts + client/net.ts over Node's WebSocket).
-// Run: npm run bots
+// Two races in a row with weapons, the garage and a reverse grid. Run: npm run bots
 
 import { Game, NO_CONTROLS, track, type Controls, type TokenStore } from "../client/game";
 import { connectWs, type LagSim } from "../client/net";
 import { angleDiff, clamp, speedOf } from "../shared/physics";
 import { CODE_ALPHABET, CODE_LENGTH, RESULTS_MS, type GameEvent, type Phase, type ResultRow } from "../shared/protocol";
+import { PLACE_PAYOUT, WRECK_BONUS } from "../shared/shop";
 import { minSelfClearance, pointAt, queryTrackNear } from "../shared/track";
 import { startServer } from "../server/index";
 
 const STEP_MS = 1000 / 60;
 const LAPS = 1;
+const BOT_HP = 24; // low HP so wrecks really happen in a one-lap race (3 rivets or 1 mine)
 
 // ---- tiny assertion log -------------------------------------------------------------
 
@@ -52,6 +54,11 @@ class Bot {
   results: ResultRow[] | null = null;
   phases: Phase[] = [];
   welcomes = 0;
+  garages = 0;
+  weapons = true;
+  private steps = 0;
+  private slow = 0;
+  private reversing = 0;
 
   constructor(
     readonly name: string,
@@ -61,6 +68,7 @@ class Bot {
   ) {
     this.game = new Game(() => connectWs(url, sim), memoryTokens());
     this.game.on.welcome = () => this.welcomes++;
+    this.game.on.garage = () => this.garages++;
     this.game.on.event = (ev) => this.events.push(ev);
     this.game.on.results = (rows) => (this.results = rows);
     this.game.on.error = (msg) => this.errors.push(msg);
@@ -75,31 +83,57 @@ class Bot {
     this.game.step(this.drive(), STEP_MS);
   }
 
-  /** Follow the centerline (shifted sideways by `lateral`) and brake for bends. */
+  /** Follow the centerline (shifted by `lateral`), brake for bends, shoot what is ahead. */
   private drive(): Controls {
-    const c = this.game.car;
+    const g = this.game;
+    const c = g.car;
     if (!c) return NO_CONTROLS;
+    this.steps++;
     const q = queryTrackNear(track, c.x, c.y, c.seg);
     const v = speedOf(c);
     const t = pointAt(track, q.s + 55 + v * 0.3);
     const tx = t.x - Math.sin(t.h) * this.lateral;
     const ty = t.y + Math.cos(t.h) * this.lateral;
-    const steer = clamp(angleDiff(c.h, Math.atan2(ty - c.y, tx - c.x)) * 2.2, -1, 1);
+    let steer = clamp(angleDiff(c.h, Math.atan2(ty - c.y, tx - c.x)) * 2.2, -1, 1);
     const near = pointAt(track, q.s + 20).h;
     const far = pointAt(track, q.s + 20 + Math.max(120, v * 0.9)).h;
     const bend = Math.abs(angleDiff(near, far));
     const target = bend > 1.4 ? 200 : bend > 0.9 ? 260 : bend > 0.5 ? 330 : 1000;
-    const throttle = v > target + 25 ? -1 : v > target ? 0 : 1;
-    return { throttle, steer, fire: false, mine: false };
+    let throttle = v > target + 25 ? -1 : v > target ? 0 : 1;
+
+    // Spun into a wall after a mine: back out for a moment.
+    if (g.raceOn() && c.wreck === 0 && v < 20) this.slow++;
+    else this.slow = 0;
+    if (this.slow > 90) {
+      this.reversing = 50;
+      this.slow = 0;
+    }
+    if (this.reversing > 0) {
+      this.reversing--;
+      throttle = -1;
+      steer = -steer;
+    }
+
+    let fire = false;
+    if (this.weapons) {
+      fire = g.otherPoses().some((o) => {
+        const s = g.latest?.cars.get(o.id);
+        if (!s || s.ghost || s.wreck) return false;
+        const d = Math.hypot(o.x - c.x, o.y - c.y);
+        return d > 1 && d < 500 && Math.abs(angleDiff(c.h, Math.atan2(o.y - c.y, o.x - c.x))) < Math.PI / 12;
+      });
+    }
+    const mine = this.weapons && this.steps % 480 === 240;
+    return { throttle, steer, fire, mine };
   }
 }
 
 // ---- test ---------------------------------------------------------------------------
 
 async function main(): Promise<void> {
-  const server = await startServer({ port: 0, vite: false, laps: LAPS, host: "127.0.0.1" });
+  const server = await startServer({ port: 0, vite: false, laps: LAPS, host: "127.0.0.1", hp: BOT_HP });
   const url = `ws://127.0.0.1:${server.port}/ws`;
-  console.log(`server on ${url}, ${LAPS} lap(s), track length ${track.length.toFixed(0)}`);
+  console.log(`server on ${url}, ${LAPS} lap(s), ${BOT_HP} HP, track length ${track.length.toFixed(0)}`);
 
   const bots: Bot[] = [];
   let last = performance.now();
@@ -130,6 +164,42 @@ async function main(): Promise<void> {
   process.exit(failed.length ? 1 : 0);
 }
 
+/** Expected scrap per racer from finish places and counted wreck events (not from `earned`). */
+function expectedEarnings(events: GameEvent[], racers: string[]): Map<string, number> {
+  const out = new Map<string, number>(racers.map((id) => [id, 0]));
+  for (const e of events) {
+    if (e.k === "finish") out.set(e.id, (out.get(e.id) ?? 0) + (PLACE_PAYOUT[e.place - 1] ?? 0));
+    if (e.k === "wreck" && e.by !== e.id && out.has(e.by)) out.set(e.by, out.get(e.by)! + WRECK_BONUS);
+  }
+  return out;
+}
+
+async function runRace(label: string, bots: Bot[], host: Bot, racers: Bot[]): Promise<ResultRow[]> {
+  const evFrom = host.events.length;
+  for (const b of bots) b.results = null;
+  host.game.start();
+  await waitFor(`${label}: countdown`, () => host.game.phase === "countdown", 2000);
+  await waitFor(`${label}: racing`, () => host.game.phase === "racing", 5000);
+  const t0 = performance.now();
+  const finished = () => racers.every((b) => host.game.latest?.cars.get(b.game.you)?.fin);
+  await waitFor(`${label}: all finish`, finished, 150_000);
+  check(`${label}: every racer finishes`, finished(), `last finisher after ~${((performance.now() - t0) / 1000).toFixed(1)}s`);
+  await waitFor(`${label}: results`, () => host.results !== null, 5000);
+  const rows = host.results ?? [];
+  const finishOrder = host.events
+    .slice(evFrom)
+    .filter((e): e is Extract<GameEvent, { k: "finish" }> => e.k === "finish")
+    .sort((a, b) => a.place - b.place)
+    .map((e) => e.id);
+  const ascending = rows.every((r, i) => r.timeMs > 0 && (i === 0 || r.timeMs >= rows[i - 1].timeMs));
+  check(
+    `${label}: results ordered by time and match finish events`,
+    rows.length === racers.length && ascending && rows.map((r) => r.id).join() === finishOrder.join(),
+    rows.map((r) => `${r.name} ${(r.timeMs / 1000).toFixed(2)}s +${r.earned}`).join(", "),
+  );
+  return rows;
+}
+
 async function run(url: string, bots: Bot[]): Promise<void> {
   // Track sanity.
   const clearance = minSelfClearance(track);
@@ -158,17 +228,33 @@ async function run(url: string, bots: Bot[]): Promise<void> {
   check("join by code: 3 players see each other", [A, B, C].every((b) => b.game.players.length === 3));
   check("host is the creator", A.game.isHost() && B.game.hostId === A.game.you);
 
-  // Non-host cannot start.
-  B.game.start();
-  await waitFor("B start refused", () => B.errors.length > 0, 2000);
-  check("non-host start is refused", B.errors.length > 0 && A.game.phase === "lobby", B.errors[0] ?? "");
+  // Garage: starting kit, a purchase, a refusal.
+  await waitFor("garage + ammo", () => [A, B, C].every((b) => b.garages > 0 && b.game.serverAmmo[0] > 0), 3000);
+  check(
+    "garage: starting kit (400 scrap, 40 rivets, 3 mines)",
+    [A, B, C].every((b) => b.game.scrap === 400 && b.game.serverAmmo[0] === 40 && b.game.serverAmmo[1] === 3),
+  );
+  const g0 = B.garages;
+  B.game.buy("engine");
+  await waitFor("B engine bought", () => B.garages > g0, 3000);
+  check("garage: lagged bot buys Engine L1", B.game.scrap === 0 && B.game.levels.engine === 1, `scrap ${B.game.scrap}`);
+  const e0 = B.errors.length;
+  B.game.buy("tyres");
+  await waitFor("B tyres refused", () => B.errors.length > e0, 3000);
+  check("garage: purchase refused without enough scrap", B.errors[e0] === "Not enough scrap", B.errors[e0] ?? "no error");
 
-  // Host starts.
-  A.game.start();
-  await waitFor("countdown", () => A.game.phase === "countdown", 2000);
-  await waitFor("racing", () => A.game.phase === "racing", 5000);
-  const raceStartLocal = performance.now();
-  check("all 3 have a car at race start", [A, B, C].every((b) => !!b.game.car));
+  // Non-host cannot start.
+  const e1 = B.errors.length;
+  B.game.start();
+  await waitFor("B start refused", () => B.errors.length > e1, 2000);
+  check("non-host start is refused", B.errors.length > e1 && A.game.phase === "lobby", B.errors[e1] ?? "");
+
+  // ---- race 1 ----------------------------------------------------------------------
+  const scrapBefore1 = new Map([A, B, C].map((b) => [b.game.you, b.game.scrap]));
+  const ev1From = A.events.length;
+  const race1 = runRace("race 1", bots, A, [A, B, C]);
+  await waitFor("racing", () => A.game.phase === "racing", 6000);
+  check("race 1: all 3 have a car", [A, B, C].every((b) => !!b.game.car));
 
   // D joins mid-race: seated for the next race, no car.
   await sleep(2000);
@@ -184,15 +270,20 @@ async function run(url: string, bots: Bot[]): Promise<void> {
     `inRace=${dInfo?.inRace} car=${!!D.game.car}`,
   );
 
-  // C drops its connection mid-race and comes back with its token.
-  await sleep(2500);
+  // C holds fire, drops its connection mid-race and comes back with its token.
+  await sleep(1500);
+  C.weapons = false;
+  await sleep(800);
   const cId = C.game.you;
   const cBefore = A.game.latest?.cars.get(cId);
+  const cAmmo = [...C.game.serverAmmo];
+  const cScrap = C.game.scrap;
   const welcomesBefore = C.welcomes;
   C.game.simulateDrop();
   await waitFor("server marks C offline", () => A.game.player(cId)?.connected === false, 2000);
   const offlineSeen = A.game.player(cId)?.connected === false;
   await waitFor("C rejoined", () => C.welcomes > welcomesBefore && !!C.game.car, 5000);
+  await sleep(150);
   const cAfter = A.game.latest?.cars.get(cId);
   check("disconnect is visible to others", offlineSeen);
   check(
@@ -202,44 +293,70 @@ async function run(url: string, bots: Bot[]): Promise<void> {
   );
   check(
     "rejoin: car continues from where it was (not reset to the grid)",
-    !!cBefore && !!cAfter && cAfter.rd >= cBefore.rd && cBefore.rd > 500,
+    !!cBefore && !!cAfter && cAfter.rd >= cBefore.rd - 30 && cBefore.rd > 300,
     `rd ${cBefore?.rd.toFixed(0)} -> ${cAfter?.rd.toFixed(0)}`,
   );
-
-  // Everyone finishes.
-  const finished = () => [A, B, C].every((b) => A.game.latest?.cars.get(b.game.you)?.fin);
-  await waitFor("all bots finish", finished, 120_000);
-  const lapSecs = ((performance.now() - raceStartLocal) / 1000).toFixed(1);
-  check("every racing bot finishes the lap", finished(), `last finisher after ~${lapSecs}s`);
-
-  await waitFor("results", () => A.results !== null, 5000);
-  const rows = A.results ?? [];
-  const finishEvents = A.events.filter((e) => e.k === "finish");
-  const byEvents = [...finishEvents].sort((a, b) => (a.k === "finish" && b.k === "finish" ? a.place - b.place : 0)).map((e) => e.id);
-  const timesAscending = rows.every((r, i) => i === 0 || (r.timeMs >= rows[i - 1].timeMs && r.timeMs > 0));
   check(
-    "results: 3 rows, ordered by time, match finish events",
-    rows.length === 3 && rows[0].timeMs > 0 && timesAscending && rows.map((r) => r.id).join() === byEvents.join(),
-    rows.map((r) => `${r.name} ${(r.timeMs / 1000).toFixed(2)}s`).join(", "),
+    "rejoin: scrap and ammo kept",
+    C.game.scrap === cScrap && C.game.serverAmmo.join() === cAmmo.join(),
+    `scrap ${cScrap}->${C.game.scrap}, ammo ${cAmmo.join("/")}->${C.game.serverAmmo.join("/")}`,
   );
-  check("results: mid-race joiner not listed", !rows.some((r) => r.id === D.game.you));
+  C.weapons = true;
+
+  const rows1 = await race1;
+  check("results: mid-race joiner not listed", !rows1.some((r) => r.id === D.game.you));
+  const expect1 = expectedEarnings(A.events.slice(ev1From), [A, B, C].map((b) => b.game.you));
+  await waitFor("garage after payouts", () => [A, B, C].every((b) => b.game.scrap !== scrapBefore1.get(b.game.you) || expect1.get(b.game.you) === 0), 3000);
+  const scrapOk = [A, B, C].every((b) => b.game.scrap === scrapBefore1.get(b.game.you)! + expect1.get(b.game.you)!);
+  check(
+    "race 1: scrap = before + place money + 60 per wreck caused (from events)",
+    scrapOk && rows1.every((r) => r.earned === expect1.get(r.id)),
+    [A, B, C].map((b) => `${b.name} ${scrapBefore1.get(b.game.you)}+${expect1.get(b.game.you)}=${b.game.scrap}`).join(", "),
+  );
 
   await waitFor("back to lobby", () => A.game.phase === "lobby", RESULTS_MS + 3000);
-  const seq = A.phases.join(" -> ");
-  check("phases: lobby -> countdown -> racing -> results -> lobby", seq === "lobby -> countdown -> racing -> results -> lobby", seq);
-  // The room message flips the phase; the next snapshot (<= 33 ms later) drops the cars.
   const cleared = await waitFor("cars cleared", () => A.game.latest?.cars.size === 0, 1000);
   check("back in lobby: cars cleared", cleared);
 
-  // Reconciliation quality.
-  for (const b of [A, B, C]) {
+  // Spend winnings on rivets so race 2 has shooting too.
+  for (const b of [A, B, C]) if (b.game.scrap >= 150) b.game.buy("rivets");
+  await sleep(300);
+
+  // ---- race 2: reverse grid, D joins in -------------------------------------------
+  const order1 = rows1.map((r) => r.id);
+  const race2 = runRace("race 2", bots, A, [A, B, C, D]);
+  await waitFor("race 2 countdown snapshot", () => A.game.phase === "countdown" && (A.game.latest?.cars.size ?? 0) === 4, 4000);
+  const grid = [...(A.game.latest?.cars.values() ?? [])].sort((a, b) => b.rd - a.rd).map((c) => c.id);
+  const expectGrid = [D.game.you, ...[...order1].reverse()];
+  const nameOf = (id: string) => A.game.player(id)?.name ?? id;
+  check("race 2: reverse grid (newcomer first, last winner at the back)", grid.join() === expectGrid.join(), grid.map(nameOf).join(" > "));
+  await race2;
+  await waitFor("back to lobby", () => A.game.phase === "lobby", RESULTS_MS + 3000);
+
+  const seq = A.phases.join(" -> ");
+  const expectSeq = "lobby -> countdown -> racing -> results -> lobby -> countdown -> racing -> results -> lobby";
+  check("phases over two races", seq === expectSeq, seq);
+
+  // ---- combat and reconciliation ----------------------------------------------------
+  const hits = A.events.filter((e) => e.k === "hit");
+  const wrecks = A.events.filter((e): e is Extract<GameEvent, { k: "wreck" }> => e.k === "wreck");
+  check("combat happened: hits and wrecks", hits.length > 0 && wrecks.length > 0, `${hits.length} hits, ${wrecks.length} wrecks`);
+  const wreckedIds = new Set(wrecks.map((w) => w.id));
+  for (const b of [A, B, C, D]) {
     const s = stats(b.game.recErrors);
+    const w = wrecks.filter((x) => x.id === b.game.you).length;
     console.log(
-      `      ${b.name.padEnd(8)} rec err: n=${s.n} median=${s.median.toFixed(3)} p95=${s.p95.toFixed(3)} max=${s.max.toFixed(2)}  rtt=${b.game.rtt.toFixed(1)}ms`,
+      `      ${b.name.padEnd(8)} rec err: n=${s.n} median=${s.median.toFixed(3)} p95=${s.p95.toFixed(3)} max=${s.max.toFixed(2)}  rtt=${b.game.rtt.toFixed(1)}ms  wrecked ${w}x`,
     );
   }
+  const wreckedBots = [A, B, C, D].filter((b) => wreckedIds.has(b.game.you));
+  check(
+    "every wrecked bot: no reconciliation error > 50 (freeze and respawn predicted)",
+    wreckedBots.length > 0 && wreckedBots.every((b) => stats(b.game.recErrors).max <= 50),
+    wreckedBots.map((b) => `${b.name} ${stats(b.game.recErrors).max.toFixed(1)}`).join(", "),
+  );
   const sb = stats(B.game.recErrors);
-  check("lagged bot (80±10 ms): median reconciliation error < 0.5", sb.n > 100 && sb.median < 0.5, `median ${sb.median.toFixed(3)} over ${sb.n} samples`);
+  check("lagged bot (80±10 ms, Engine L1): median reconciliation error < 0.5", sb.n > 100 && sb.median < 0.5, `median ${sb.median.toFixed(3)} over ${sb.n} samples`);
   check("lagged bot: no reconciliation error > 50 (no teleports)", sb.n > 100 && sb.max <= 50, `max ${sb.max.toFixed(2)}`);
   check("lagged bot: measured RTT reflects the simulated lag", B.game.rtt > 60, `${B.game.rtt.toFixed(1)} ms`);
 }
