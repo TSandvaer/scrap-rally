@@ -158,6 +158,11 @@ is no overall race time limit yet.
 
 Weapons, scrap and the garage: see [PLAN-M2.md](PLAN-M2.md) (approved and built 2026-11-14).
 
+## Hosting
+
+Public deploy (Render free tier first, Dockerfile portable to Fly.io): see
+[PLAN-HOSTING.md](PLAN-HOSTING.md) (approved 2026-11-14).
+
 ## Later (not in the prototype)
 
 Weapons (projectiles, mines) as entities, between-race shop with money, more tracks,
