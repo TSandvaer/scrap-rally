@@ -4,7 +4,8 @@
 merged as d2fcc9e, pushed (88aebaa..d2fcc9e), ClickUp `ready for qa test`; workspaces cleaned up.
 Waiting on the user to apply the Render Blueprint and send the onrender.com URL; then run
 `npm run smoke -- <url>` (+ `--expect-restart` only if a restart is wanted) and a two-browser race on
-it, report RTT / snapshot rate. Open question to the user: a small ticket for the 3 review nits.
+it, report RTT / snapshot rate. Then dispatch ClickUp 123jpnbf3m8 (review nits; user chose
+"one small ticket, after the deploy").
 
 ## Branches
 

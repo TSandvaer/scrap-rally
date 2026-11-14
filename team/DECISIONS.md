@@ -12,3 +12,5 @@
 - 2026-11-14 — Push pre-approved once: after ticket 123jpnbf3m2 passes review and is merged into
   local main, push main to GitHub (plain push, no force) so Render can build it. Later pushes
   still need the user's go-ahead.
+- 2026-11-14 — Review nits of 123jpnbf3m2 go into one small ticket (123jpnbf3m8), dispatched only
+  after the first Render deploy is verified (user, popup).
