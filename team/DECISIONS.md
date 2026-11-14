@@ -16,3 +16,4 @@
   after the first Render deploy is verified (user, popup).
 - 2026-11-14 — Push pre-approved once more: after the render.yaml QA fix (123jpnbf3m2) passes review
   and is merged, push main so the user can apply the Blueprint.
+- 2026-11-14 — First deploy live (user applied the Blueprint): https://scrap-rally.onrender.com.
