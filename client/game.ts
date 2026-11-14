@@ -79,8 +79,26 @@ interface Pending {
   mine: boolean; // a mine press was sent on this step
 }
 
-/** gone/full/taken come from the server; unreachable = no answer; restarting = notice. */
-export type ConnReason = "gone" | "full" | "taken" | "unreachable" | "restarting";
+/**
+ * Why a connection changed state. From the server: gone = the room no longer exists,
+ * full = room full, taken = seat taken over, busy = the server is full. restarted = the
+ * room is gone after the server announced a restart; restarting = that notice itself;
+ * unreachable = no answer.
+ */
+export type ConnReason = "gone" | "restarted" | "full" | "taken" | "busy" | "unreachable" | "restarting";
+
+const LOST_MESSAGES: Partial<Record<ConnReason, string>> = {
+  restarted: "The room is gone — the server restarted. Create a new room to play on.",
+  gone: "The room was closed while you were away. Create a new room to play on.",
+  full: "The room filled up while you were away.",
+  taken: "This seat is now being played in another tab or window.",
+  busy: "The server is full right now, try again later",
+};
+
+/** The menu text for connection("lost", reason). wasInRoom: the player had a seat. */
+export function lostMessage(reason: ConnReason | undefined, wasInRoom: boolean): string {
+  return (reason && LOST_MESSAGES[reason]) ?? (wasInRoom ? "Connection lost" : "Could not reach the server");
+}
 
 export interface GameHandlers {
   welcome(): void;
@@ -144,7 +162,8 @@ export class Game {
   private haveOffset = false;
   private lastPing = 0;
   private reconnectTries = 0;
-  private restarting = false;
+  private restarting = false; // the server announced a restart since the last welcome
+  private busy = false; // the latest connection attempt was refused: server full
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(
@@ -187,6 +206,8 @@ export class Game {
     this.transport = null;
     tr?.close();
     this.connected = false;
+    this.restarting = false;
+    this.busy = false;
     this.code = "";
     this.you = "";
     this.players = [];
@@ -218,6 +239,7 @@ export class Game {
     this.transport = null;
     old?.close();
     this.intent = hello;
+    this.busy = false;
     const tr = this.makeTransport();
     this.transport = tr;
     tr.onOpen = () => {
@@ -242,7 +264,7 @@ export class Game {
       return;
     }
     if (this.reconnectTries >= RECONNECT_TRIES) {
-      this.on.connection?.("lost", "unreachable");
+      this.on.connection?.("lost", this.busy ? "busy" : "unreachable");
       return;
     }
     this.on.connection?.("reconnecting", this.restarting ? "restarting" : undefined);
@@ -328,9 +350,19 @@ export class Game {
           this.restarting = true; // the server closes the socket next; we reconnect
           return;
         }
+        if (msg.code === "busy") {
+          if (!this.you) {
+            this.stop("busy"); // create/join refused: the server is full
+          } else if (!this.connected) {
+            this.busy = true; // rejoin refused: the server closes, we retry while the seat lasts
+          }
+          return;
+        }
         if (this.you && !this.connected && (msg.code === "gone" || msg.code === "full")) {
-          // Rejoin after a drop failed: the room is gone (server restarted) or filled up.
-          this.stop(msg.code);
+          // Rejoin after a drop failed: the room no longer exists or filled up. Blame a
+          // restart only if the server announced one; otherwise the room closed while we
+          // were away (e.g. everyone was gone longer than the reconnect grace).
+          this.stop(msg.code === "gone" && this.restarting ? "restarted" : msg.code);
           return;
         }
         if (!this.you) this.detach(); // failed create/join: the socket is no longer needed

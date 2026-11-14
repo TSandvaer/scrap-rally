@@ -3,7 +3,7 @@
 import { pointAt } from "../shared/track";
 import type { GameEvent, ResultRow } from "../shared/protocol";
 import { AMMO, AMMO_IDS, priceOf, UPGRADE_IDS, UPGRADES, type ItemId, type Wallet } from "../shared/shop";
-import { Game, track, type TokenStore } from "./game";
+import { Game, lostMessage, track, type TokenStore } from "./game";
 import { Keyboard } from "./input";
 import { connectWs } from "./net";
 import { Renderer, type CarView, type HudView, type WorldFx } from "./render";
@@ -142,11 +142,6 @@ game.on.error = (msg) => {
   if (!game.you) ui.menuErr.textContent = msg;
   else toast(msg);
 };
-const LOST_MESSAGES: Record<string, string> = {
-  gone: "The room is gone — the server restarted. Create a new room to play on.",
-  full: "The room filled up while you were away.",
-  taken: "This seat is now being played in another tab or window.",
-};
 game.on.connection = (state, reason) => {
   connState = state;
   restartNotice = state === "reconnecting" && reason === "restarting";
@@ -155,9 +150,9 @@ game.on.connection = (state, reason) => {
     const code = game.code;
     game.leave();
     setRoomInUrl("");
-    if (reason === "unreachable" && code) ui.code.value = code; // the room may still be there
-    ui.menuErr.textContent =
-      (reason && LOST_MESSAGES[reason]) ?? (wasInRoom ? "Connection lost" : "Could not reach the server");
+    // The room may still be there: keep its code for another try.
+    if ((reason === "unreachable" || reason === "busy") && code) ui.code.value = code;
+    ui.menuErr.textContent = lostMessage(reason, wasInRoom);
     updatePanels();
   }
 };

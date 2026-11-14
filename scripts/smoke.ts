@@ -16,22 +16,31 @@ import { decode, encode, SNAPSHOT_EVERY, type ClientMsg, type ServerMsg } from "
 import { TICK_HZ } from "../shared/physics";
 
 const args = process.argv.slice(2);
-const option = (name: string) => {
-  const i = args.indexOf(name);
-  return i >= 0 ? args[i + 1] : undefined;
-};
-const base = args.find((a, i) => !a.startsWith("--") && !(i > 0 && args[i - 1].startsWith("--")));
-const RACE_S = Number(option("--race") ?? 10);
-// A sleeping free instance can take about a minute to wake: the first request waits longer.
-const WAKE_TIMEOUT_MS = Number(option("--wake-timeout") ?? 90) * 1000;
-const STEP_TIMEOUT_MS = 15_000;
-const EXPECT_RESTART_S = option("--expect-restart") === undefined ? 0 : Number(option("--expect-restart"));
-const EXPECTED_HZ = TICK_HZ / SNAPSHOT_EVERY;
-
-if (!base || !/^https?:\/\//.test(base) || !(RACE_S > 0) || !(EXPECT_RESTART_S >= 0)) {
+function usage(problem?: string): never {
+  if (problem) console.log(`smoke: ${problem}`);
   console.log("Usage: npm run smoke -- <http(s)://host[:port]> [--race s] [--wake-timeout s] [--expect-restart s]");
   process.exit(2);
 }
+/** A seconds flag: absent -> fallback; given -> it must be followed by a number > 0. */
+function seconds(name: string, fallback: number): number {
+  const i = args.indexOf(name);
+  if (i < 0) return fallback;
+  const raw = args[i + 1];
+  const v = Number(raw);
+  if (raw === undefined || raw.startsWith("--") || raw.trim() === "" || !Number.isFinite(v) || !(v > 0)) {
+    usage(`${name} needs a number of seconds > 0, got ${raw === undefined ? "nothing" : `"${raw}"`}`);
+  }
+  return v;
+}
+const base = args.find((a, i) => !a.startsWith("--") && !(i > 0 && args[i - 1].startsWith("--")));
+const RACE_S = seconds("--race", 10);
+// A sleeping free instance can take about a minute to wake: the first request waits longer.
+const WAKE_TIMEOUT_MS = seconds("--wake-timeout", 90) * 1000;
+const STEP_TIMEOUT_MS = 15_000;
+const EXPECT_RESTART_S = seconds("--expect-restart", 0); // 0 = no restart check
+const EXPECTED_HZ = TICK_HZ / SNAPSHOT_EVERY;
+
+if (!base || !/^https?:\/\//.test(base)) usage(base ? `not an http(s) URL: "${base}"` : "missing base URL");
 const httpBase = base.replace(/\/+$/, "");
 const wsUrl = `${httpBase.replace(/^http/, "ws")}/ws`;
 

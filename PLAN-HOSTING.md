@@ -52,8 +52,9 @@ Denmark. The user picks the host; I never create accounts or enter payment detai
 4. **Server, for a public playtest** (`server/index.ts`, `server/room.ts`):
    - `GET /healthz` → 200 "ok".
    - Caps sized to a small instance, overridable by env: `MAX_ROOMS` (default 20) and
-     `MAX_SOCKETS` (default 150). Over the cap: `create` gets `err busy "Server is full"`, new
-     sockets beyond `MAX_SOCKETS` are refused. Sockets that have not joined a room within 10 s
+     `MAX_SOCKETS` (default 150). Over the cap: `create` gets `err busy`; a new socket beyond
+     `MAX_SOCKETS` is accepted only to get `err busy`, then closed with 1013 (a browser
+     WebSocket cannot read an HTTP 503). Sockets that have not joined a room within 10 s
      are closed (the client opens its socket only on create/join).
    - Message rate: counted per socket in `index.ts` before decoding; beyond 240 messages in a
      1-second window the excess is dropped (a Wi-Fi stall can flush a burst of queued inputs;
@@ -68,11 +69,15 @@ Denmark. The user picks the host; I never create accounts or enter payment detai
    - `err taken` (seat taken over) is fatal too: no rejoin, so two tabs cannot ping-pong.
    - `err restarting`: show "Server restarting…", then the normal reconnect runs; if the room
      is gone afterwards, the rule above ends it.
-   - `connection("lost")` carries a reason; `main.ts` shows it in the menu ("The room is gone —
-     the server restarted", "This seat was taken over in another tab", ...).
+   - `connection("lost")` carries a reason; `main.ts` shows it in the menu. `gone` blames a
+     server restart only if the `restarting` notice came first ("The room is gone — the server
+     restarted"); otherwise "The room was closed while you were away". `busy`: "The server is
+     full right now, try again later" (a rejoin refused as busy keeps retrying while the seat
+     lasts). Also "This seat is now being played in another tab or window", ...
 6. **Host config**, for the chosen host only: Render `render.yaml` (Docker runtime, free plan,
-   EU region, health check `/healthz`, one instance, `autoDeploy: false` so a push is not a
-   deploy); Fly `fly.toml` (`auto_stop_machines = "off"`, `min_machines_running = 1`, health
+   EU region, health check `/healthz`, one instance, `autoDeployTrigger: "off"` so a push is
+   not a deploy; not `autoDeploy: false` as well: Render's validator rejects a service that sets
+   both); Fly `fly.toml` (`auto_stop_machines = "off"`, `min_machines_running = 1`, health
    check) and the first deploy with `--ha=false` / `fly scale count 1` (Fly creates two machines
    by default, which would split in-memory rooms).
 7. **Smoke script** `scripts/smoke.ts <base-url>`: GET `/healthz` and `/`; two WebSocket clients

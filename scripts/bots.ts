@@ -2,9 +2,19 @@
 // the real client netcode (client/game.ts + client/net.ts over Node's WebSocket).
 // Two races in a row with weapons, the garage and a reverse grid. Run: npm run bots
 
-import { Game, track, type TokenStore } from "../client/game";
+import net from "node:net";
+import { Game, lostMessage, track, type ConnReason, type TokenStore } from "../client/game";
 import { connectWs, type LagSim } from "../client/net";
-import { CODE_ALPHABET, CODE_LENGTH, RESULTS_MS, type GameEvent, type Phase, type ResultRow } from "../shared/protocol";
+import {
+  CODE_ALPHABET,
+  CODE_LENGTH,
+  decode,
+  RESULTS_MS,
+  type GameEvent,
+  type Phase,
+  type ResultRow,
+  type ServerMsg,
+} from "../shared/protocol";
 import { PLACE_PAYOUT, WRECK_BONUS } from "../shared/shop";
 import { minSelfClearance } from "../shared/track";
 import { startServer, type RunningServer } from "../server/index";
@@ -37,6 +47,50 @@ async function waitFor(what: string, cond: () => boolean, timeoutMs: number): Pr
 function memoryTokens(): TokenStore {
   const m = new Map<string, string>();
   return { get: (c) => m.get(c) ?? null, set: (c, t) => void m.set(c, t) };
+}
+
+/** Open a bare WebSocket and report what the server says before it closes it. */
+function rawConnect(url: string, timeoutMs: number): Promise<{ err: string; closeCode: number }> {
+  return new Promise((resolve) => {
+    const ws = new WebSocket(url);
+    let err = "-";
+    const timer = setTimeout(() => {
+      ws.close();
+      resolve({ err, closeCode: 0 });
+    }, timeoutMs);
+    ws.onmessage = (e) => {
+      const m = decode<ServerMsg>(e.data);
+      if (m?.t === "err") err = `${m.code ?? "-"} "${m.msg}"`;
+    };
+    ws.onclose = (e) => {
+      clearTimeout(timer);
+      resolve({ err, closeCode: e.code });
+    };
+  });
+}
+
+/**
+ * A WebSocket client that never answers the server's close frame: a refused socket that
+ * stays in its closing handshake until the server cuts it off.
+ */
+function stalledSocket(port: number): { refused: Promise<boolean>; open(): boolean; destroy(): void } {
+  const sock = net.connect(port, "127.0.0.1");
+  let open = true;
+  let buf = "";
+  sock.on("close", () => (open = false));
+  sock.on("error", () => (open = false));
+  sock.write(
+    `GET /ws HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n` +
+      "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n",
+  );
+  const refused = new Promise<boolean>((resolve) => {
+    sock.on("data", (d) => {
+      buf += d.toString("latin1");
+      if (buf.startsWith("HTTP/1.1 101") && buf.includes('"busy"')) resolve(true);
+    });
+    sock.on("close", () => resolve(false));
+  });
+  return { refused, open: () => open, destroy: () => sock.destroy() };
 }
 
 function stats(xs: number[]): { n: number; median: number; p95: number; max: number } {
@@ -179,6 +233,22 @@ async function runRace(label: string, bots: Bot[], host: Bot, racers: Bot[]): Pr
 }
 
 async function run(ctx: Ctx, bots: Bot[]): Promise<void> {
+  await runGame(ctx, bots);
+  await runServerFull(bots);
+}
+
+const lost = new Map<string, (ConnReason | undefined)[]>();
+const reconnecting = new Map<string, (ConnReason | undefined)[]>();
+function watch(b: Bot): void {
+  lost.set(b.name, []);
+  reconnecting.set(b.name, []);
+  b.game.on.connection = (state, reason) => {
+    if (state === "lost") lost.get(b.name)!.push(reason);
+    if (state === "reconnecting") reconnecting.get(b.name)!.push(reason);
+  };
+}
+
+async function runGame(ctx: Ctx, bots: Bot[]): Promise<void> {
   const url = ctx.url;
   // Track sanity.
   const clearance = minSelfClearance(track);
@@ -340,16 +410,6 @@ async function run(ctx: Ctx, bots: Bot[]): Promise<void> {
   check("lagged bot: measured RTT reflects the simulated lag", B.game.rtt > 60, `${B.game.rtt.toFixed(1)} ms`);
 
   // ---- seat taken over (a duplicated tab shares the token) ---------------------------
-  const lost = new Map<string, string[]>();
-  const reconnecting = new Map<string, string[]>();
-  const watch = (b: Bot) => {
-    lost.set(b.name, []);
-    reconnecting.set(b.name, []);
-    b.game.on.connection = (state, reason) => {
-      if (state === "lost") lost.get(b.name)!.push(reason ?? "");
-      if (state === "reconnecting") reconnecting.get(b.name)!.push(reason ?? "");
-    };
-  };
   [A, B, C, D].forEach(watch);
   const dId = D.game.you;
   const E = new Bot("Echo", url, 0, undefined, D.tokens);
@@ -369,12 +429,118 @@ async function run(ctx: Ctx, bots: Bot[]): Promise<void> {
   await ctx.restart();
   await waitFor("everyone told the room is gone", () => left.every((b) => lost.get(b.name)!.length > 0), 10_000);
   await sleep(300);
+  const restartText = lostMessage(lost.get("Alpha")![0], true);
   check(
-    "server restart: restart notice, then 'room is gone', reconnecting stops",
-    left.every((b) => reconnecting.get(b.name)![0] === "restarting" && lost.get(b.name)!.join() === "gone"),
-    left.map((b) => `${b.name}: ${reconnecting.get(b.name)![0] ?? "-"} -> ${lost.get(b.name)!.join() || "-"}`).join(", "),
+    "server restart: restart notice, then 'room is gone, the server restarted', reconnecting stops",
+    left.every((b) => reconnecting.get(b.name)![0] === "restarting" && lost.get(b.name)!.join() === "restarted") &&
+      /the server restarted/.test(restartText),
+    left.map((b) => `${b.name}: ${reconnecting.get(b.name)![0] ?? "-"} -> ${lost.get(b.name)!.join() || "-"}`).join(", ") +
+      `; menu: "${restartText}"`,
   );
   check("after the restart no client keeps a socket open", ctx.server.sockets() === 0, `${ctx.server.sockets()} open`);
+
+  // ---- room closed while away, no restart notice -------------------------------------
+  const F = new Bot("Foxtrot", url, 0);
+  bots.push(F);
+  watch(F);
+  F.game.create(F.name);
+  await waitFor("F welcome", () => !!F.game.you, 3000);
+  F.game.simulateDrop();
+  // Stands in for the reconnect grace running out with nobody in the room: the server
+  // deletes the room while F is away (F rejoins after 1 s).
+  ctx.server.rooms.rooms.delete(F.game.code);
+  await waitFor("F told the room closed", () => lost.get("Foxtrot")!.length > 0, 5000);
+  const awayText = lostMessage(lost.get("Foxtrot")![0], true);
+  check(
+    "room closed while away (no restart notice): menu says so and does not blame a restart",
+    lost.get("Foxtrot")!.join() === "gone" &&
+      !reconnecting.get("Foxtrot")!.includes("restarting") &&
+      /closed while you were away/.test(awayText) &&
+      !/restart/i.test(awayText),
+    `Foxtrot: ${reconnecting.get("Foxtrot")!.map((r) => r ?? "drop").join(",")} -> ${lost.get("Foxtrot")!.join() || "-"}; menu: "${awayText}"`,
+  );
+}
+
+/** A server with a socket cap of 2: the next socket is told "busy" over the socket. */
+async function runServerFull(bots: Bot[]): Promise<void> {
+  const FULL_TEXT = "The server is full right now, try again later";
+  const small = await startServer({ port: 0, vite: false, laps: LAPS, host: "127.0.0.1", maxSockets: 2 });
+  const url = `ws://127.0.0.1:${small.port}/ws`;
+  const G = new Bot("Golf", url, 0);
+  const H = new Bot("Hotel", url, 0);
+  const I = new Bot("India", url, 0);
+  bots.push(G, H, I);
+  [G, H, I].forEach(watch);
+  try {
+    G.game.create(G.name);
+    await waitFor("G welcome", () => !!G.game.you, 3000);
+    H.game.join(G.game.code, H.name);
+    await waitFor("H welcome", () => !!H.game.you, 3000);
+
+    const raw = await rawConnect(url, 3000);
+    check(
+      "server full (socket cap 2): a third socket gets err busy, then close 1013",
+      raw.err === `busy "${FULL_TEXT}"` && raw.closeCode === 1013,
+      `err ${raw.err}, close ${raw.closeCode}`,
+    );
+
+    I.game.join(G.game.code, I.name);
+    await waitFor("I refused", () => lost.get("India")!.length > 0, 3000);
+    const iText = lostMessage(lost.get("India")![0], false);
+    check(
+      "server full: a new client's menu says the server is full (not 'could not reach')",
+      lost.get("India")!.join() === "busy" && iText === FULL_TEXT && !I.game.you && I.errors.length === 0,
+      `India lost: ${lost.get("India")!.join() || "-"}; menu: "${iText}"`,
+    );
+    await waitFor("refused sockets closed", () => small.sockets() === 2, 2000);
+    check("server full: refused sockets do not stay open", small.sockets() === 2, `${small.sockets()} open`);
+
+    // A player who drops while the server is full keeps retrying and gets back in.
+    const hId = H.game.you;
+    const hWelcomes = H.welcomes;
+    H.game.simulateDrop();
+    await waitFor("H socket gone", () => small.sockets() === 1, 2000);
+    const filler = new WebSocket(url); // takes the free slot
+    await waitFor("filler counted", () => small.sockets() === 2, 2000);
+    await waitFor("H refused at least once", () => reconnecting.get("Hotel")!.length >= 2, 5000);
+    const refusedTries = reconnecting.get("Hotel")!.length;
+    filler.close();
+    await waitFor("H back in", () => H.welcomes > hWelcomes && H.game.connected, 5000);
+    check(
+      "server full: a dropped player retries while refused and gets back in when a slot frees",
+      refusedTries >= 2 && H.game.you === hId && H.game.connected && lost.get("Hotel")!.length === 0,
+      `${refusedTries} reconnect attempts before the slot freed, id ${hId} -> ${H.game.you}`,
+    );
+
+    H.game.leave();
+    await waitFor("H socket gone", () => small.sockets() === 1, 2000);
+    I.game.join(G.game.code, I.name);
+    await waitFor("I welcome", () => !!I.game.you, 3000);
+    check("server full: once a socket frees up, a new client joins", I.game.code === G.game.code && !!I.game.you);
+
+    // A refusal still in its closing handshake must not hold a slot: G and I fill the cap,
+    // a stalled client is refused, I leaves, and H joins before the refusal has closed.
+    const stalled = stalledSocket(small.port);
+    const wasRefused = await stalled.refused;
+    const countedWhileClosing = small.sockets();
+    I.game.leave();
+    await waitFor("I socket gone", () => small.sockets() === 2, 500);
+    H.game.join(G.game.code, H.name);
+    await waitFor("H joins", () => !!H.game.you || lost.get("Hotel")!.length > 0, 500);
+    const stillClosing = stalled.open();
+    check(
+      "server full: a freed slot is usable while a refused socket is still closing",
+      wasRefused && countedWhileClosing === 3 && stillClosing && !!H.game.you && lost.get("Hotel")!.length === 0,
+      `refused ${wasRefused}, sockets while closing ${countedWhileClosing}, refusal still open at join ${stillClosing}, ` +
+        `Hotel ${H.game.you ? "joined" : `lost: ${lost.get("Hotel")!.join() || "-"}`}`,
+    );
+    await waitFor("stalled refusal cut off", () => !stalled.open(), 3000);
+    check("server full: a refused socket that never closes is cut off", !stalled.open());
+    stalled.destroy();
+  } finally {
+    for (const b of [G, H, I]) b.game.leave();
+    await small.close();
+  }
 }
 
 main().catch((e) => {
