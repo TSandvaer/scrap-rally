@@ -2,13 +2,13 @@
 // the real client netcode (client/game.ts + client/net.ts over Node's WebSocket).
 // Two races in a row with weapons, the garage and a reverse grid. Run: npm run bots
 
-import { Game, NO_CONTROLS, track, type Controls, type TokenStore } from "../client/game";
+import { Game, track, type TokenStore } from "../client/game";
 import { connectWs, type LagSim } from "../client/net";
-import { angleDiff, clamp, speedOf } from "../shared/physics";
 import { CODE_ALPHABET, CODE_LENGTH, RESULTS_MS, type GameEvent, type Phase, type ResultRow } from "../shared/protocol";
 import { PLACE_PAYOUT, WRECK_BONUS } from "../shared/shop";
-import { minSelfClearance, pointAt, queryTrackNear } from "../shared/track";
+import { minSelfClearance } from "../shared/track";
 import { startServer } from "../server/index";
+import { BotDriver } from "./bot-ai";
 
 const STEP_MS = 1000 / 60;
 const LAPS = 1;
@@ -49,24 +49,22 @@ function stats(xs: number[]): { n: number; median: number; p95: number; max: num
 
 class Bot {
   readonly game: Game;
+  readonly driver: BotDriver;
   readonly events: GameEvent[] = [];
   readonly errors: string[] = [];
   results: ResultRow[] | null = null;
   phases: Phase[] = [];
   welcomes = 0;
   garages = 0;
-  weapons = true;
-  private steps = 0;
-  private slow = 0;
-  private reversing = 0;
 
   constructor(
     readonly name: string,
     url: string,
-    readonly lateral: number,
+    lateral: number,
     sim?: LagSim,
   ) {
     this.game = new Game(() => connectWs(url, sim), memoryTokens());
+    this.driver = new BotDriver(this.game, lateral);
     this.game.on.welcome = () => this.welcomes++;
     this.game.on.garage = () => this.garages++;
     this.game.on.event = (ev) => this.events.push(ev);
@@ -78,53 +76,13 @@ class Bot {
     };
   }
 
-  /** Called every fixed step. */
-  step(): void {
-    this.game.step(this.drive(), STEP_MS);
+  set weapons(on: boolean) {
+    this.driver.weapons = on;
   }
 
-  /** Follow the centerline (shifted by `lateral`), brake for bends, shoot what is ahead. */
-  private drive(): Controls {
-    const g = this.game;
-    const c = g.car;
-    if (!c) return NO_CONTROLS;
-    this.steps++;
-    const q = queryTrackNear(track, c.x, c.y, c.seg);
-    const v = speedOf(c);
-    const t = pointAt(track, q.s + 55 + v * 0.3);
-    const tx = t.x - Math.sin(t.h) * this.lateral;
-    const ty = t.y + Math.cos(t.h) * this.lateral;
-    let steer = clamp(angleDiff(c.h, Math.atan2(ty - c.y, tx - c.x)) * 2.2, -1, 1);
-    const near = pointAt(track, q.s + 20).h;
-    const far = pointAt(track, q.s + 20 + Math.max(120, v * 0.9)).h;
-    const bend = Math.abs(angleDiff(near, far));
-    const target = bend > 1.4 ? 200 : bend > 0.9 ? 260 : bend > 0.5 ? 330 : 1000;
-    let throttle = v > target + 25 ? -1 : v > target ? 0 : 1;
-
-    // Spun into a wall after a mine: back out for a moment.
-    if (g.raceOn() && c.wreck === 0 && v < 20) this.slow++;
-    else this.slow = 0;
-    if (this.slow > 90) {
-      this.reversing = 50;
-      this.slow = 0;
-    }
-    if (this.reversing > 0) {
-      this.reversing--;
-      throttle = -1;
-      steer = -steer;
-    }
-
-    let fire = false;
-    if (this.weapons) {
-      fire = g.otherPoses().some((o) => {
-        const s = g.latest?.cars.get(o.id);
-        if (!s || s.ghost || s.wreck) return false;
-        const d = Math.hypot(o.x - c.x, o.y - c.y);
-        return d > 1 && d < 500 && Math.abs(angleDiff(c.h, Math.atan2(o.y - c.y, o.x - c.x))) < Math.PI / 12;
-      });
-    }
-    const mine = this.weapons && this.steps % 480 === 240;
-    return { throttle, steer, fire, mine };
+  /** Called every fixed step. */
+  step(): void {
+    this.game.step(this.driver.controls(), STEP_MS);
   }
 }
 

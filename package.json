@@ -9,7 +9,8 @@
     "check": "tsc --noEmit",
     "bots": "tsx scripts/bots.ts",
     "sim": "tsx scripts/sim-test.ts",
-    "test": "tsx scripts/sim-test.ts && tsx scripts/bots.ts"
+    "test": "tsx scripts/sim-test.ts && tsx scripts/bots.ts",
+    "botplay": "tsx scripts/botplay.ts"
   },
   "keywords": [],
   "author": "",
