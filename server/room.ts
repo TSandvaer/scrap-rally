@@ -15,6 +15,7 @@ import {
   round,
   type ClientMsg,
   type EntSnap,
+  type ErrCode,
   type GameEvent,
   type Phase,
   type PlayerInfo,
@@ -157,7 +158,7 @@ export class Room {
     if (old && old !== session) {
       old.room = null;
       old.player = null;
-      old.conn.send({ t: "err", msg: "This seat was taken over by another connection" });
+      old.conn.send({ t: "err", code: "taken", msg: "This seat was taken over by another connection" });
       old.conn.close();
     }
     p.session = session;
@@ -453,6 +454,7 @@ export class Rooms {
   constructor(
     private readonly laps: number,
     private readonly hp: number = CAR_HP,
+    private readonly maxRooms: number = Infinity,
   ) {}
 
   private newCode(): string {
@@ -465,10 +467,11 @@ export class Rooms {
 
   onMessage(session: Session, msg: ClientMsg | null, now: number): void {
     if (!msg || typeof msg !== "object") return;
-    const err = (m: string) => session.conn.send({ t: "err", msg: m });
+    const err = (m: string, code?: ErrCode) => session.conn.send({ t: "err", msg: m, code });
     switch (msg.t) {
       case "create": {
         if (session.room) return err("Already in a room");
+        if (this.rooms.size >= this.maxRooms) return err("The server is full right now, try again later", "busy");
         const room = new Room(this.newCode(), sharedTrack, this.laps, this.hp);
         this.rooms.set(room.code, room);
         room.addPlayer(cleanName(msg.name), session);
@@ -478,11 +481,11 @@ export class Rooms {
         if (session.room) return err("Already in a room");
         const code = typeof msg.code === "string" ? msg.code.trim().toUpperCase() : "";
         const room = this.rooms.get(code);
-        if (!room) return err(`No room with code ${code || "(empty)"}`);
+        if (!room) return err(`No room with code ${code || "(empty)"}`, "gone");
         const existing = room.playerByToken(msg.token);
         if (existing) return room.bind(existing, session);
         const res = room.addPlayer(cleanName(msg.name), session);
-        if (typeof res === "string") err(res);
+        if (typeof res === "string") err(res, "full");
         return;
       }
       case "start": {

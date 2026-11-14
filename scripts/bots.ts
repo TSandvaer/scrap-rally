@@ -7,7 +7,7 @@ import { connectWs, type LagSim } from "../client/net";
 import { CODE_ALPHABET, CODE_LENGTH, RESULTS_MS, type GameEvent, type Phase, type ResultRow } from "../shared/protocol";
 import { PLACE_PAYOUT, WRECK_BONUS } from "../shared/shop";
 import { minSelfClearance } from "../shared/track";
-import { startServer } from "../server/index";
+import { startServer, type RunningServer } from "../server/index";
 import { BotDriver } from "./bot-ai";
 
 const STEP_MS = 1000 / 60;
@@ -62,8 +62,9 @@ class Bot {
     url: string,
     lateral: number,
     sim?: LagSim,
+    readonly tokens: TokenStore = memoryTokens(), // shared store = same "tab"
   ) {
-    this.game = new Game(() => connectWs(url, sim), memoryTokens());
+    this.game = new Game(() => connectWs(url, sim), tokens);
     this.driver = new BotDriver(this.game, lateral);
     this.game.on.welcome = () => this.welcomes++;
     this.game.on.garage = () => this.garages++;
@@ -88,9 +89,28 @@ class Bot {
 
 // ---- test ---------------------------------------------------------------------------
 
+interface Ctx {
+  url: string;
+  server: RunningServer;
+  /** Graceful shutdown, then a fresh server on the same port (rooms are gone). */
+  restart(): Promise<void>;
+}
+
 async function main(): Promise<void> {
-  const server = await startServer({ port: 0, vite: false, laps: LAPS, host: "127.0.0.1", hp: BOT_HP });
+  const opts = { port: 0, vite: false, laps: LAPS, host: "127.0.0.1", hp: BOT_HP };
+  let server = await startServer(opts);
   const url = `ws://127.0.0.1:${server.port}/ws`;
+  const ctx: Ctx = {
+    url,
+    get server() {
+      return server;
+    },
+    async restart() {
+      const port = server.port;
+      await server.shutdown();
+      server = await startServer({ ...opts, port });
+    },
+  };
   console.log(`server on ${url}, ${LAPS} lap(s), ${BOT_HP} HP, track length ${track.length.toFixed(0)}`);
 
   const bots: Bot[] = [];
@@ -110,7 +130,7 @@ async function main(): Promise<void> {
   }, 2);
 
   try {
-    await run(url, bots);
+    await run(ctx, bots);
   } finally {
     clearInterval(loop);
     for (const b of bots) b.game.leave();
@@ -158,7 +178,8 @@ async function runRace(label: string, bots: Bot[], host: Bot, racers: Bot[]): Pr
   return rows;
 }
 
-async function run(url: string, bots: Bot[]): Promise<void> {
+async function run(ctx: Ctx, bots: Bot[]): Promise<void> {
+  const url = ctx.url;
   // Track sanity.
   const clearance = minSelfClearance(track);
   check("track: minSelfClearance > 2 * wall", clearance > 2 * track.wall, `${clearance.toFixed(1)} > ${2 * track.wall}`);
@@ -317,6 +338,43 @@ async function run(url: string, bots: Bot[]): Promise<void> {
   check("lagged bot (80±10 ms, Engine L1): median reconciliation error < 0.5", sb.n > 100 && sb.median < 0.5, `median ${sb.median.toFixed(3)} over ${sb.n} samples`);
   check("lagged bot: no reconciliation error > 50 (no teleports)", sb.n > 100 && sb.max <= 50, `max ${sb.max.toFixed(2)}`);
   check("lagged bot: measured RTT reflects the simulated lag", B.game.rtt > 60, `${B.game.rtt.toFixed(1)} ms`);
+
+  // ---- seat taken over (a duplicated tab shares the token) ---------------------------
+  const lost = new Map<string, string[]>();
+  const reconnecting = new Map<string, string[]>();
+  const watch = (b: Bot) => {
+    lost.set(b.name, []);
+    reconnecting.set(b.name, []);
+    b.game.on.connection = (state, reason) => {
+      if (state === "lost") lost.get(b.name)!.push(reason ?? "");
+      if (state === "reconnecting") reconnecting.get(b.name)!.push(reason ?? "");
+    };
+  };
+  [A, B, C, D].forEach(watch);
+  const dId = D.game.you;
+  const E = new Bot("Echo", url, 0, undefined, D.tokens);
+  bots.push(E);
+  watch(E);
+  E.game.join(code, E.name);
+  await waitFor("E takes D's seat", () => E.game.you === dId && lost.get("Delta")!.length > 0, 3000);
+  await sleep(2500); // D must not come back and take the seat again
+  check(
+    "seat taken over in another tab: old client stops, no ping-pong",
+    lost.get("Delta")!.join() === "taken" && !D.game.connected && E.game.connected && E.game.you === dId && A.game.players.length === 4,
+    `Delta lost: ${lost.get("Delta")!.join() || "-"}, Echo connected: ${E.game.connected}, players ${A.game.players.length}`,
+  );
+
+  // ---- server restart: rooms are gone ------------------------------------------------
+  const left = [A, B, C, E];
+  await ctx.restart();
+  await waitFor("everyone told the room is gone", () => left.every((b) => lost.get(b.name)!.length > 0), 10_000);
+  await sleep(300);
+  check(
+    "server restart: restart notice, then 'room is gone', reconnecting stops",
+    left.every((b) => reconnecting.get(b.name)![0] === "restarting" && lost.get(b.name)!.join() === "gone"),
+    left.map((b) => `${b.name}: ${reconnecting.get(b.name)![0] ?? "-"} -> ${lost.get(b.name)!.join() || "-"}`).join(", "),
+  );
+  check("after the restart no client keeps a socket open", ctx.server.sockets() === 0, `${ctx.server.sockets()} open`);
 }
 
 main().catch((e) => {

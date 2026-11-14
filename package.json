@@ -4,8 +4,8 @@
   "description": "",
   "scripts": {
     "dev": "tsx server/index.ts",
-    "build": "vite build",
-    "start": "NODE_ENV=production tsx server/index.ts",
+    "build": "vite build && vite build --ssr server/index.ts --outDir dist-server",
+    "start": "NODE_ENV=production node dist-server/index.js",
     "check": "tsc --noEmit",
     "bots": "tsx scripts/bots.ts",
     "sim": "tsx scripts/sim-test.ts",

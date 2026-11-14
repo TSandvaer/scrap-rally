@@ -62,6 +62,7 @@ const keyboard = new Keyboard(window);
 const renderer = new Renderer($<HTMLCanvasElement>("view"), track);
 
 let connState: "connected" | "reconnecting" | "lost" = "connected";
+let restartNotice = false;
 // Hit sparks wait out the interpolation delay so they line up with the visible hit.
 let sparks: { id: string; start: number; x?: number; y?: number }[] = [];
 const SPARK_MS = 260;
@@ -141,12 +142,22 @@ game.on.error = (msg) => {
   if (!game.you) ui.menuErr.textContent = msg;
   else toast(msg);
 };
-game.on.connection = (state) => {
+const LOST_MESSAGES: Record<string, string> = {
+  gone: "The room is gone — the server restarted. Create a new room to play on.",
+  full: "The room filled up while you were away.",
+  taken: "This seat is now being played in another tab or window.",
+};
+game.on.connection = (state, reason) => {
   connState = state;
+  restartNotice = state === "reconnecting" && reason === "restarting";
   if (state === "lost") {
     const wasInRoom = !!game.you;
+    const code = game.code;
     game.leave();
-    ui.menuErr.textContent = wasInRoom ? "Connection lost" : "Could not reach the server";
+    setRoomInUrl("");
+    if (reason === "unreachable" && code) ui.code.value = code; // the room may still be there
+    ui.menuErr.textContent =
+      (reason && LOST_MESSAGES[reason]) ?? (wasInRoom ? "Connection lost" : "Could not reach the server");
     updatePanels();
   }
 };
@@ -340,8 +351,9 @@ function hudView(): HudView | null {
     if (!hud.center) hud.center = " ";
   }
 
-  if (connState === "reconnecting") hud.banner = "Connection lost — reconnecting…";
-  else if (game.car && game.car.wreck > 0) hud.banner = `WRECKED — back on track in ${(game.car.wreck / 60).toFixed(1)}s`;
+  if (connState === "reconnecting") {
+    hud.banner = restartNotice ? "Server restarting — reconnecting…" : "Connection lost — reconnecting…";
+  } else if (game.car && game.car.wreck > 0) hud.banner = `WRECKED — back on track in ${(game.car.wreck / 60).toFixed(1)}s`;
   else if (!mine && (game.phase === "countdown" || game.phase === "racing")) {
     hud.banner = "Race in progress — you're in the next one";
   } else if (game.phase === "racing" && game.phaseEnds) {
