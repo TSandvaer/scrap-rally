@@ -1,0 +1,18 @@
+# Render Blueprint (https://render.com/docs/blueprint-spec): one free web service built from
+# the Dockerfile. Rooms live in memory, so exactly one instance. A push to GitHub must not
+# deploy: deploys are started by hand, after the user's go-ahead (PLAN-HOSTING.md).
+services:
+  - type: web
+    name: scrap-rally
+    runtime: docker
+    plan: free
+    region: frankfurt # Render's only EU region; cannot be changed after creation
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /healthz
+    numInstances: 1
+    # autoDeployTrigger is the current field ("off" quoted: bare off is a YAML 1.1 boolean);
+    # autoDeploy: false is its deprecated equivalent, kept for readers that predate it.
+    autoDeployTrigger: "off"
+    autoDeploy: false
+    # PORT: the server listens on $PORT (Render's default is 10000), else 3000.
