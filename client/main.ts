@@ -2,6 +2,7 @@
 
 import { pointAt } from "../shared/track";
 import type { GameEvent, ResultRow } from "../shared/protocol";
+import { AMMO, AMMO_IDS, priceOf, UPGRADE_IDS, UPGRADES, type ItemId, type Wallet } from "../shared/shop";
 import { Game, track, type TokenStore } from "./game";
 import { Keyboard } from "./input";
 import { connectWs } from "./net";
@@ -50,7 +51,9 @@ const ui = {
   leave: $<HTMLButtonElement>("leave"),
   results: $("results"),
   resultRows: $("results-rows"),
-  resultNext: $("results-next"),
+  resultScrap: $("results-scrap"),
+  scrap: $("scrap"),
+  shop: $("shop"),
   toast: $("toast"),
 };
 
@@ -133,6 +136,7 @@ game.on.welcome = () => {
 };
 game.on.room = () => updatePanels();
 game.on.results = () => updatePanels();
+game.on.garage = () => renderGarage();
 game.on.error = (msg) => {
   if (!game.you) ui.menuErr.textContent = msg;
   else toast(msg);
@@ -195,6 +199,7 @@ function updatePanels(): void {
   ui.start.classList.toggle("hidden", !game.isHost());
   ui.wait.classList.toggle("hidden", game.isHost());
   if (game.results) renderResults(game.results);
+  if (game.phase === "lobby") renderGarage(true);
 }
 
 function renderResults(rows: ResultRow[]): void {
@@ -203,8 +208,59 @@ function renderResults(rows: ResultRow[]): void {
       const li = document.createElement("li");
       if (r.id === game.you) li.classList.add("me");
       li.append(span("place", String(i + 1)), swatch(r.color), span("name", r.name));
-      li.append(span("time", r.timeMs ? formatTime(r.timeMs) : "DNF"));
+      li.append(span("time", r.timeMs ? formatTime(r.timeMs) : "DNF"), span("earned", `+${r.earned}`));
       return li;
+    }),
+  );
+  ui.resultScrap.textContent = `You have ${game.scrap} scrap for the garage`;
+}
+
+// ---- garage -----------------------------------------------------------------------
+
+let garageKey = "";
+
+function wallet(): Wallet {
+  const [rivets, mines] = game.serverAmmo;
+  return { scrap: game.scrap, levels: { ...game.levels }, ammo: { rivets, mines } };
+}
+
+/** Rebuild the shop list only when something it shows has changed. */
+function renderGarage(force = false): void {
+  const w = wallet();
+  const key = JSON.stringify(w);
+  if (!force && key === garageKey) return;
+  garageKey = key;
+  ui.scrap.textContent = String(w.scrap);
+  const row = (item: ItemId, name: string, blurb: string, extra: HTMLElement) => {
+    const li = document.createElement("li");
+    const title = span("item", name);
+    title.append(extra);
+    const price = priceOf(item, w);
+    const btn = document.createElement("button");
+    btn.className = "btn buy";
+    btn.textContent = price === null ? "Maxed" : `${price}`;
+    btn.disabled = price === null || price > w.scrap;
+    btn.title = price === null ? "Maxed out" : `Buy for ${price} scrap`;
+    btn.addEventListener("click", () => game.buy(item));
+    li.append(title, btn, span("blurb", blurb));
+    return li;
+  };
+  ui.shop.replaceChildren(
+    ...UPGRADE_IDS.map((id) => {
+      const u = UPGRADES[id];
+      const pips = span("pips", "");
+      for (let i = 0; i < u.prices.length; i++) {
+        const pip = document.createElement("i");
+        if (i < w.levels[id]) pip.className = "on";
+        pips.append(pip);
+      }
+      pips.setAttribute("aria-label", `level ${w.levels[id]} of ${u.prices.length}`);
+      return row(id, u.name, `${u.blurb} per level`, pips);
+    }),
+    ...AMMO_IDS.map((id) => {
+      const a = AMMO[id];
+      const use = id === "rivets" ? "Hold Space / Z / J to fire" : "Tap X / K to drop behind you";
+      return row(id, `${a.name} ×${a.pack}`, use, span("count", `${w.ammo[id]}/${a.cap}`));
     }),
   );
 }
@@ -324,6 +380,7 @@ function frame(now: number): void {
   }
   if (acc >= STEP_MS) acc = 0;
   draw(acc / STEP_MS, elapsed);
+  if (game.you && game.phase === "lobby") renderGarage();
   requestAnimationFrame(frame);
 }
 

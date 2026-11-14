@@ -324,3 +324,134 @@ h2 {
   box-shadow: 4px 4px 0 rgba(0, 0, 0, 0.55);
   max-width: calc(100vw - 32px);
 }
+
+.panel.wide {
+  width: min(780px, calc(100vw - 32px));
+}
+
+.lobby-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 22px;
+}
+
+@media (min-width: 720px) {
+  .lobby-grid {
+    grid-template-columns: 290px 1fr;
+  }
+}
+
+.lobby-room {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.garage {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+
+.garage-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.scrap {
+  font-size: 14px;
+  color: var(--muted-solid);
+}
+
+.scrap b {
+  font-size: 22px;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.shop {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.shop li {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 2px 12px;
+  padding: 8px 10px;
+  background: #0b0907;
+  border: 2px solid var(--line);
+}
+
+.shop .item {
+  font-weight: 700;
+  font-size: 15px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.shop .blurb {
+  grid-column: 1;
+  font-size: 12px;
+  color: var(--muted-solid);
+}
+
+.shop .btn {
+  grid-row: 1 / span 2;
+  grid-column: 2;
+  padding: 6px 10px;
+  font-size: 13px;
+  min-width: 78px;
+}
+
+.shop .btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.pips {
+  display: inline-flex;
+  gap: 3px;
+}
+
+.pips i {
+  width: 10px;
+  height: 10px;
+  border: 2px solid var(--line);
+  background: #1c1612;
+}
+
+.pips i.on {
+  background: var(--rust);
+  border-color: #ffb27a;
+}
+
+.count {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--muted-solid);
+  font-variant-numeric: tabular-nums;
+}
+
+.fine {
+  font-size: 11px;
+  text-align: left;
+}
+
+.results li .earned {
+  font-variant-numeric: tabular-nums;
+  color: var(--rust);
+  min-width: 52px;
+  text-align: right;
+}

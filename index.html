@@ -24,23 +24,38 @@
           <button id="join" class="btn">Join</button>
         </div>
         <p id="menu-err" class="err" role="alert"></p>
-        <p class="keys"><kbd>↑</kbd><kbd>↓</kbd><kbd>←</kbd><kbd>→</kbd> or <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> to drive</p>
+        <p class="keys">
+          <kbd>↑</kbd><kbd>↓</kbd><kbd>←</kbd><kbd>→</kbd> or <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> drive<br />
+          <kbd>Space</kbd> / <kbd>Z</kbd> / <kbd>J</kbd> rivet gun · <kbd>X</kbd> / <kbd>K</kbd> drop a mine
+        </p>
       </section>
 
-      <section id="lobby" class="panel hidden">
-        <div class="label">Room code</div>
-        <div id="lobby-code" class="code"></div>
-        <button id="copy" class="btn link">Copy invite link</button>
-        <ul id="lobby-players" class="players"></ul>
-        <button id="start" class="btn primary">Start race</button>
-        <p id="lobby-wait" class="muted">Waiting for the host to start…</p>
-        <button id="leave" class="btn link small">Leave room</button>
+      <section id="lobby" class="panel wide hidden">
+        <div class="lobby-grid">
+          <div class="lobby-room">
+            <div class="label">Room code</div>
+            <div id="lobby-code" class="code"></div>
+            <button id="copy" class="btn link">Copy invite link</button>
+            <ul id="lobby-players" class="players"></ul>
+            <button id="start" class="btn primary">Start race</button>
+            <p id="lobby-wait" class="muted">Waiting for the host to start…</p>
+            <button id="leave" class="btn link small">Leave room</button>
+          </div>
+          <div class="garage">
+            <div class="garage-head">
+              <h2>Garage</h2>
+              <div class="scrap"><b id="scrap">0</b> scrap</div>
+            </div>
+            <ul id="shop" class="shop"></ul>
+            <p class="muted fine">Upgrades fit from the next race. Earn scrap by finishing high and wrecking rivals.</p>
+          </div>
+        </div>
       </section>
 
       <section id="results" class="panel hidden">
         <h2>Results</h2>
         <ol id="results-rows" class="players results"></ol>
-        <p id="results-next" class="muted"></p>
+        <p id="results-scrap" class="muted"></p>
       </section>
 
       <div id="toast" class="toast hidden" role="status"></div>
