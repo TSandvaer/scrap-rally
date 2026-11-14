@@ -1,24 +1,18 @@
 # STATE — Scrap Rally coordination
 
-**Resume (2026-11-14):** Live on Render: https://scrap-rally.onrender.com (commit 4902ee6), QA PASS
-(RTT 40-49 ms, 30 snapshots/s, largest gap 42-59 ms); 123jpnbf3m2 complete. In flight on run
-`run_c58bb5836634`: dispatch `ctx_1233e1845bdd` (task task_51db36c626c4) on ClickUp 123jpnbf3m8
-(review nits), workspace ~/orca/workspaces/scrap-rally/review-nits, branch `TSandvaer/review-nits`, port 3001. Review 1
-(ctx_0f23930fa286): REQUEST_CHANGES, 1 finding (refused busy sockets count against MAX_SOCKETS while
-closing). Fixed by follow-up `ctx_3e36bd14bb42` as 7c315df (verified). Re-review `ctx_b38e1e04d542` running
-in the main checkout (a second REQUEST_CHANGES goes to the user). On APPROVE: merge, check+test,
-then ask the user about push + Manual Deploy. Going live needs a push and a
-Manual Deploy in Render: ask the user for both.
+**Resume (2026-11-14):** No workers in flight (run `run_c58bb5836634` idle). Live on Render:
+https://scrap-rally.onrender.com (commit 4902ee6). 123jpnbf3m8 (review nits) merged as 5d8c534 (review:
+changes once, fixed, re-review APPROVE; tsc ok, sim 52/52, bots 40/40), ClickUp `ready for qa test`,
+workspace cleaned. Not pushed or deployed: waiting for the user's go-ahead on the push, then the
+user clicks Manual Deploy in Render; then QA the new texts live.
 
 ## Branches
 
-- `main`: 4902ee6 pushed to origin; later team/ commits are local only (push only when asked).
+- `main`: 5d8c534 + team/ commits local; origin at 4902ee6 (push only when asked).
 
 ## In flight
 
-| Ticket | Dispatch | Workspace | Branch | Port | Started |
-| --- | --- | --- | --- | --- | --- |
-| 123jpnbf3m8 Hosting review nits | fix 7c315df (ctx_3e36bd14bb42); re-review ctx_b38e1e04d542 | ~/orca/workspaces/scrap-rally/review-nits | TSandvaer/review-nits | 3001 | 2026-11-14 |
+None.
 
 ## Waiting on the user
 
