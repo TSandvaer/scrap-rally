@@ -5,7 +5,9 @@
 start" (no starting ammo, weapons armed 8 s after GO, half damage; DECISIONS 2026-11-15), workspace
 ~/orca/workspaces/scrap-rally/easier-start, branch `TSandvaer/easier-start`, port 3001. Review 1 of cfbbd43:
 REQUEST_CHANGES (client sends the fire bit inside the 8 s window) + 2 nits; fixed by `ctx_d0cabb08c49a` as 9ba7740
-(verified; sim 56/56, bots 44/44 x2); re-review `ctx_933890711ac8` running. Then TASTE GATE: the user tries the branch locally before merge (show how), then merge, push +
+(verified; sim 56/56, bots 44/44 x2); re-review APPROVE (`ctx_933890711ac8`). NOW AT THE TASTE GATE: the user plays the
+branch from the worker workspace on :3002 (+ botplay --url ws://localhost:3002/ws); keep that workspace
+until the verdict. Then: the user tries the branch locally before merge (show how), then merge, push +
 Manual Deploy only on the user's go-ahead. The user's own dev server runs on :3000 from the main checkout.
 
 ## Branches
@@ -16,7 +18,7 @@ Manual Deploy only on the user's go-ahead. The user's own dev server runs on :30
 
 | Ticket | Dispatch | Workspace | Branch | Port | Started |
 | --- | --- | --- | --- | --- | --- |
-| 123jpnbf3xa Easier start | fix 9ba7740; re-review ctx_933890711ac8 | ~/orca/workspaces/scrap-rally/easier-start | TSandvaer/easier-start | 3001 | 2026-11-15 |
+| 123jpnbf3xa Easier start | 9ba7740 approved; waiting for the user's taste test | ~/orca/workspaces/scrap-rally/easier-start | TSandvaer/easier-start | 3001 | 2026-11-15 |
 
 ## Waiting on the user
 
