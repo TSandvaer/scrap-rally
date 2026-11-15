@@ -1,18 +1,19 @@
 # STATE — Scrap Rally coordination
 
-**Resume (2026-11-14):** No workers in flight (run `run_c58bb5836634` idle). Live on Render:
-https://scrap-rally.onrender.com (commit 4902ee6). 123jpnbf3m8 (review nits) merged as 5d8c534 (review:
-changes once, fixed, re-review APPROVE; tsc ok, sim 52/52, bots 40/40), ClickUp `ready for qa test`,
-workspace cleaned. Not pushed or deployed: waiting for the user's go-ahead on the push, then the
-user clicks Manual Deploy in Render; then QA the new texts live.
+**Resume (2026-11-15):** Live on Render: https://scrap-rally.onrender.com at commit d912583 (user
+pushed-approved and clicked Manual Deploy, 2026-11-15 09:36). QA worker `ctx_f31ab9c386cc` (task
+task_2c384b547416, run `run_c58bb5836634`) checks it from the main checkout (smoke x3, two-browser race,
+reload rejoin). On pass: 123jpnbf3m8 -> complete, report to the user. Nothing else queued.
 
 ## Branches
 
-- `main`: 5d8c534 + team/ commits local; origin at 4902ee6 (push only when asked).
+- `main` = origin/main = d912583 (deployed). Later team/ commits are local only.
 
 ## In flight
 
-None.
+| Ticket | Dispatch | Workspace | Branch | Port | Started |
+| --- | --- | --- | --- | --- | --- |
+| QA of live d912583 (123jpnbf3m8) | ctx_f31ab9c386cc | main checkout (read-only) | — | — | 2026-11-15 |
 
 ## Waiting on the user
 
