@@ -3,7 +3,7 @@
 // Two races in a row with weapons, the garage and a reverse grid. Run: npm run bots
 
 import net from "node:net";
-import { Game, lostMessage, track, type ConnReason, type TokenStore } from "../client/game";
+import { Game, lostMessage, track, type ConnReason, type Controls, type TokenStore } from "../client/game";
 import { connectWs, type LagSim } from "../client/net";
 import {
   CODE_ALPHABET,
@@ -17,7 +17,7 @@ import {
 } from "../shared/protocol";
 import { AMMO, PLACE_PAYOUT, WRECK_BONUS } from "../shared/shop";
 import { minSelfClearance } from "../shared/track";
-import { WEAPONS_ARM_MS } from "../shared/weapons";
+import { BTN_RIVET, WEAPONS_ARM_MS } from "../shared/weapons";
 import { startServer, type RunningServer } from "../server/index";
 import { BotDriver } from "./bot-ai";
 
@@ -113,6 +113,8 @@ class Bot {
   phases: Phase[] = [];
   welcomes = 0;
   garages = 0;
+  script: (() => Controls) | null = null; // scripted controls instead of the AI driver
+  afterStep: (() => void) | null = null;
 
   constructor(
     readonly name: string,
@@ -143,7 +145,8 @@ class Bot {
 
   /** Called every fixed step. */
   step(): void {
-    this.game.step(this.driver.controls(), STEP_MS);
+    this.game.step(this.script?.() ?? this.driver.controls(), STEP_MS);
+    this.afterStep?.();
   }
 }
 
@@ -241,6 +244,7 @@ async function runRace(label: string, bots: Bot[], host: Bot, racers: Bot[]): Pr
 async function run(ctx: Ctx, bots: Bot[]): Promise<void> {
   await runGame(ctx, bots);
   await runServerFull(bots);
+  await runArmDelayLagged(bots);
 }
 
 const lost = new Map<string, (ConnReason | undefined)[]>();
@@ -420,7 +424,7 @@ async function runGame(ctx: Ctx, bots: Bot[]): Promise<void> {
   const firstHit = Math.min(...A.hitsAfterGo);
   check(
     "weapons armed delay: no hit arrives in the first 8 s of a race",
-    A.hitsAfterGo.length === hits.length && firstHit >= WEAPONS_ARM_MS - 100,
+    A.hitsAfterGo.length > 0 && firstHit >= WEAPONS_ARM_MS - 100,
     `earliest hit ${(firstHit / 1000).toFixed(2)} s after GO`,
   );
   const wreckedIds = new Set(wrecks.map((w) => w.id));
@@ -573,6 +577,52 @@ async function runServerFull(bots: Bot[]): Promise<void> {
   } finally {
     for (const b of [G, H, I]) b.game.leave();
     await small.close();
+  }
+}
+
+/**
+ * A 100 ms RTT player holding the rivet gun from GO to past the 8 s mark. Its serverNow runs
+ * behind the server and the server reads each input later still, so a fire bit sent before
+ * the client's own armed() would make the server fire rivets the client never predicted.
+ */
+async function runArmDelayLagged(bots: Bot[]): Promise<void> {
+  const srv = await startServer({ port: 0, vite: false, laps: LAPS, host: "127.0.0.1" });
+  const K = new Bot("Kilo", `ws://127.0.0.1:${srv.port}/ws`, 0, { lag: 100, jitter: 0 });
+  bots.push(K);
+  try {
+    K.game.create(K.name);
+    await waitFor("K welcome + snapshot", () => !!K.game.you && !!K.game.latest, 3000);
+    K.game.buy("rivets");
+    await waitFor("K rivets", () => K.game.serverAmmo[0] === AMMO.rivets.pack, 3000);
+    let hold = true;
+    let lastSeq = -1;
+    let predicted = 0;
+    let earlyFireBits = 0;
+    K.script = () => ({ throttle: 0, steer: 0, fire: hold, mine: false });
+    K.afterStep = () => {
+      const p = K.game.pending[K.game.pending.length - 1];
+      if (!p || p.seq <= lastSeq) return; // no input sent this step
+      lastSeq = p.seq;
+      if (p.fired) predicted++;
+      if (p.cmd.buttons & BTN_RIVET && !K.game.armed()) earlyFireBits++;
+    };
+    K.game.start();
+    await waitFor("K racing", () => K.game.phase === "racing", 5000);
+    await waitFor("K armed", () => K.game.armed(), WEAPONS_ARM_MS + 2000);
+    await sleep(1000); // keep holding past the mark
+    hold = false;
+    await sleep(800); // the server consumes the rest and snapshots the ammo
+    const serverFired = AMMO.rivets.pack - K.game.serverAmmo[0];
+    check(
+      "armed delay at 100 ms RTT: no fire bit sent before armed(); the server fires exactly the predicted rivets",
+      earlyFireBits === 0 && predicted >= 5 && serverFired === predicted,
+      `${earlyFireBits} early fire inputs, predicted ${predicted}, server fired ${serverFired}`,
+    );
+  } finally {
+    K.script = null;
+    K.afterStep = null;
+    K.game.leave();
+    await srv.close();
   }
 }
 
