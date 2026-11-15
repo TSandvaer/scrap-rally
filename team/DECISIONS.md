@@ -19,3 +19,7 @@
 - 2026-11-14 — First deploy live (user applied the Blueprint): https://scrap-rally.onrender.com.
 - 2026-11-14 — Push of main approved by the user (review nits 123jpnbf3m8, merge 5d8c534).
 - 2026-11-15 — Next step: playtest with friends on the live link before any new feature; feedback becomes ClickUp tickets.
+- 2026-11-15 — Playtest feedback (user vs. bots): "way too hard; why do we have weapons in the
+  beginning; weapons do too much damage". User choices: new players start with no ammo (buy in
+  the garage) AND no firing in the first ~8 s of a race; damage halved (rivet 4, mine 15; HP stays
+  100); practice bots unchanged. Balance is a taste gate: the user tries the branch before merge.
