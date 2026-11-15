@@ -131,6 +131,10 @@ halved. Was: 40 rivets + 3 mines to start, rivet 8 / mine 30 damage, firing from
   - fire only in `racing`, only with ammo, respects cooldown; underrun repeats never fire or
     drop; a mine tap survives an overflow trim;
   - `payouts()` and `buy()` (scrap, phase, caps); finished cars are ghosted and cannot fire.
+  - armed delay (2026-11-15; weapon tests grant ammo and jump the clock past it first): an
+    empty starting kit; with ammo in hand no rivet and no mine at ~7.9 s; the gun fires from
+    8 s; a mine press in the window never drops later; a press after 8 s drops one; rivet 4
+    and mine 15 damage.
 - `scripts/bots.ts` extended (server started with a low HP knob), two races in a row:
   - before race 1 the lagged bot buys Engine L1 (scrap deducted) and a too-expensive buy is
     refused;
@@ -141,6 +145,11 @@ halved. Was: 40 rivets + 3 mines to start, rivet 8 / mine 30 damage, firing from
   - scrap, levels and ammo survive the drop/rejoin; race 2 uses the reverse grid;
   - at least one hit and one wreck happen; every wrecked bot keeps max reconciliation
     error < 50; the lagged bot's median stays < 0.5 with upgraded stats and weapons.
+  - armed delay (2026-11-15): bots start with no ammo (BOT_HP 12); Alpha and Charlie buy
+    rivets + mines before race 1, the lagged bot races race 1 unarmed, Delta buys ammo
+    before race 2; no hit arrives in the first 8 s of a race; a 100 ms RTT client holding
+    fire across the 8 s mark sends no fire bit before its `armed()`, and the server fires
+    exactly the rivets it predicted.
 - `package.json`: `"test": "tsx scripts/sim-test.ts && tsx scripts/bots.ts"`.
 
 ## Order of work (each step its own commit, `npm run check` + tests green)
