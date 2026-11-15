@@ -523,15 +523,18 @@ export class Game {
     if (!this.car || !this.connected) return;
 
     const on = this.raceOn();
+    const armed = this.armed();
     const [rivets, mines] = this.predictedAmmo();
-    const minePress = ctl.mine && this.armed() && mines > 0;
+    const minePress = ctl.mine && armed && mines > 0;
     if (minePress) this.mineCounter = (this.mineCounter + 1) & 7;
-    // Round before use so the server applies exactly what we predicted with.
+    // Round before use so the server applies exactly what we predicted with. The fire bit is
+    // only sent once we are armed: our serverNow runs behind the server, which reads the
+    // input later still, so an earlier bit would fire rivets we never predicted.
     const cmd: Command = on
       ? {
           throttle: round(ctl.throttle, 2),
           steer: round(ctl.steer, 2),
-          buttons: makeButtons(ctl.fire, this.mineCounter),
+          buttons: makeButtons(ctl.fire && armed, this.mineCounter),
         }
       : { throttle: 0, steer: 0, buttons: makeButtons(false, this.mineCounter) };
 
