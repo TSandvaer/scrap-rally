@@ -1,9 +1,9 @@
 # STATE — Scrap Rally coordination
 
-**Resume (2026-11-15):** Live on Render: https://scrap-rally.onrender.com at commit d912583 (user
-pushed-approved and clicked Manual Deploy, 2026-11-15 09:36). QA worker `ctx_f31ab9c386cc` (task
-task_2c384b547416, run `run_c58bb5836634`) checks it from the main checkout (smoke x3, two-browser race,
-reload rejoin). On pass: 123jpnbf3m8 -> complete, report to the user. Nothing else queued.
+**Resume (2026-11-15):** Idle. No workers in flight, nothing queued in ClickUp. Live on Render:
+https://scrap-rally.onrender.com at d912583, QA PASS twice (30 snapshots/s, RTT ~40-50 ms).
+123jpnbf3m2 and 123jpnbf3m8 complete. Next work waits on the user (playtest feedback, custom domain,
+or a new plan via the Fable advisor).
 
 ## Branches
 
@@ -11,9 +11,7 @@ reload rejoin). On pass: 123jpnbf3m8 -> complete, report to the user. Nothing el
 
 ## In flight
 
-| Ticket | Dispatch | Workspace | Branch | Port | Started |
-| --- | --- | --- | --- | --- | --- |
-| QA of live d912583 (123jpnbf3m8) | ctx_f31ab9c386cc | main checkout (read-only) | — | — | 2026-11-15 |
+None.
 
 ## Waiting on the user
 
