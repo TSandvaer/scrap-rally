@@ -23,3 +23,4 @@
   beginning; weapons do too much damage". User choices: new players start with no ammo (buy in
   the garage) AND no firing in the first ~8 s of a race; damage halved (rivet 4, mine 15; HP stays
   100); practice bots unchanged. Balance is a taste gate: the user tries the branch before merge.
+- 2026-11-15 — Playtest (positive): catching up to the bots feels good. Keep bot pace and car handling as they are unless the user asks.
