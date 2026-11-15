@@ -42,7 +42,7 @@ export const PLACE_PAYOUT = [1000, 700, 500, 350, 250, 150];
 export const WRECK_BONUS = 60;
 
 export function startingWallet(): Wallet {
-  return { scrap: 400, levels: { engine: 0, tyres: 0, welder: 0 }, ammo: { rivets: 40, mines: 3 } };
+  return { scrap: 400, levels: { engine: 0, tyres: 0, welder: 0 }, ammo: { rivets: 0, mines: 0 } };
 }
 
 export function isItem(v: unknown): v is ItemId {

@@ -24,7 +24,7 @@ import {
 } from "../shared/protocol";
 import { buy, isItem, payouts, startingWallet, statsFor, type Wallet } from "../shared/shop";
 import { buildTrack, gridSlot, RUST_BOWL, type Track } from "../shared/track";
-import { BTN_RIVET, CAR_HP, mineCount, NO_COMMAND, stepRaceCar, type Command } from "../shared/weapons";
+import { BTN_RIVET, CAR_HP, mineCount, NO_COMMAND, stepRaceCar, WEAPONS_ARM_MS, type Command } from "../shared/weapons";
 import { Combat, solid, type Fighter } from "./combat";
 import { advance, compareStanding, newProgress, raceDistance, type Progress } from "./race";
 
@@ -259,6 +259,9 @@ export class Room {
     else if (this.phase === "results" && now >= this.phaseEnds) this.toLobby();
 
     const racing = this.phase === "racing";
+    // Weapons stay cold for the first seconds after GO. consumeInput still moves mineBase,
+    // so a mine press in that window is discarded rather than dropped later.
+    const armed = racing && now >= this.raceStart + WEAPONS_ARM_MS;
     const racers = [...this.players.values()].filter((p) => p.car);
     const prev = new Map<string, { x: number; y: number }>();
     for (const p of racers) {
@@ -267,7 +270,7 @@ export class Room {
       // Consumed every tick, wrecked or not, so ack keeps moving.
       const { cmd, minePress } = consumeInput(p);
       stepRaceCar(c, racing ? cmd : NO_INPUT, p.stats, this.track);
-      this.combat.act(p, cmd, minePress, racing);
+      this.combat.act(p, cmd, minePress, armed);
     }
     for (let i = 0; i < racers.length; i++) {
       for (let j = i + 1; j < racers.length; j++) {

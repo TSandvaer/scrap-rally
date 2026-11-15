@@ -30,6 +30,7 @@ export interface WorldFx {
 export interface HudView {
   topLeft: string[]; // lap / position lines
   time: string;
+  notice: string; // small line under the race time (weapons-armed countdown)
   center: string; // big countdown / status text
   centerSub: string;
   banner: string; // persistent strip at the bottom (spectating, reconnecting, ...)
@@ -470,6 +471,15 @@ export class Renderer {
       ctx.fillRect(Math.round(VIEW_W / 2 - w / 2), 6, Math.round(w), 20);
       ctx.fillStyle = PAL.hudText;
       ctx.fillText(h.time, VIEW_W / 2, 16);
+    }
+    if (h.notice) {
+      ctx.font = "bold 10px ui-monospace, Menlo, monospace";
+      ctx.textAlign = "center";
+      const w = ctx.measureText(h.notice).width + 12;
+      ctx.fillStyle = PAL.hudBg;
+      ctx.fillRect(Math.round(VIEW_W / 2 - w / 2), 29, Math.round(w), 15);
+      ctx.fillStyle = PAL.accent;
+      ctx.fillText(h.notice, VIEW_W / 2, 37);
     }
     if (h.center) {
       ctx.textAlign = "center";

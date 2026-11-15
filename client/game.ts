@@ -26,6 +26,7 @@ import {
   RIVET_COOLDOWN,
   spawnShot,
   stepRaceCar,
+  WEAPONS_ARM_MS,
   type Command,
   type Shot,
 } from "../shared/weapons";
@@ -481,10 +482,18 @@ export class Game {
     return this.phase === "racing" || (this.phase === "countdown" && this.serverNow() >= this.phaseEnds);
   }
 
-  /** Our car can shoot and drop mines (not wrecked, ghosted or finished). */
+  /** Time until weapons arm in this race (estimated server time, ms); 0 once armed. */
+  armsInMs(): number {
+    return Math.max(0, this.raceStart + WEAPONS_ARM_MS - this.serverNow());
+  }
+
+  /**
+   * Our car can shoot and drop mines: the race is on, the weapons-armed delay is over, and
+   * the car is not wrecked, ghosted or finished.
+   */
   armed(): boolean {
     const s = this.latest?.cars.get(this.you);
-    return !!this.car && this.car.wreck === 0 && !!s && !s.ghost && this.raceOn();
+    return !!this.car && this.car.wreck === 0 && !!s && !s.ghost && this.raceOn() && this.armsInMs() === 0;
   }
 
   /** Ammo minus what we already fired in inputs the server has not consumed yet. */
