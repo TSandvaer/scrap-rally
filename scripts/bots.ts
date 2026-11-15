@@ -15,14 +15,16 @@ import {
   type ResultRow,
   type ServerMsg,
 } from "../shared/protocol";
-import { PLACE_PAYOUT, WRECK_BONUS } from "../shared/shop";
+import { AMMO, PLACE_PAYOUT, WRECK_BONUS } from "../shared/shop";
 import { minSelfClearance } from "../shared/track";
+import { WEAPONS_ARM_MS } from "../shared/weapons";
 import { startServer, type RunningServer } from "../server/index";
 import { BotDriver } from "./bot-ai";
 
 const STEP_MS = 1000 / 60;
 const LAPS = 1;
-const BOT_HP = 24; // low HP so wrecks really happen in a one-lap race (3 rivets or 1 mine)
+const BOT_HP = 12; // low HP so wrecks really happen in a one-lap race (3 rivets or 1 mine)
+const AMMO_PRICE = AMMO.rivets.price + AMMO.mines.price; // one pack of each
 
 // ---- tiny assertion log -------------------------------------------------------------
 
@@ -105,6 +107,7 @@ class Bot {
   readonly game: Game;
   readonly driver: BotDriver;
   readonly events: GameEvent[] = [];
+  readonly hitsAfterGo: number[] = []; // estimated server ms since GO when each hit arrived
   readonly errors: string[] = [];
   results: ResultRow[] | null = null;
   phases: Phase[] = [];
@@ -122,7 +125,10 @@ class Bot {
     this.driver = new BotDriver(this.game, lateral);
     this.game.on.welcome = () => this.welcomes++;
     this.game.on.garage = () => this.garages++;
-    this.game.on.event = (ev) => this.events.push(ev);
+    this.game.on.event = (ev) => {
+      this.events.push(ev);
+      if (ev.k === "hit") this.hitsAfterGo.push(this.game.serverNow() - this.game.raceStart);
+    };
     this.game.on.results = (rows) => (this.results = rows);
     this.game.on.error = (msg) => this.errors.push(msg);
     // The server broadcasts a room message on every phase change.
@@ -277,11 +283,24 @@ async function runGame(ctx: Ctx, bots: Bot[]): Promise<void> {
   check("join by code: 3 players see each other", [A, B, C].every((b) => b.game.players.length === 3));
   check("host is the creator", A.game.isHost() && B.game.hostId === A.game.you);
 
-  // Garage: starting kit, a purchase, a refusal.
-  await waitFor("garage + ammo", () => [A, B, C].every((b) => b.garages > 0 && b.game.serverAmmo[0] > 0), 3000);
+  // Garage: starting kit, purchases, a refusal.
+  await waitFor("garage + snapshot", () => [A, B, C].every((b) => b.garages > 0 && !!b.game.latest), 3000);
   check(
-    "garage: starting kit (400 scrap, 40 rivets, 3 mines)",
-    [A, B, C].every((b) => b.game.scrap === 400 && b.game.serverAmmo[0] === 40 && b.game.serverAmmo[1] === 3),
+    "garage: starting kit (400 scrap, no rivets, no mines)",
+    [A, B, C].every((b) => b.game.scrap === 400 && b.game.serverAmmo.join() === "0,0"),
+    [A, B, C].map((b) => `${b.name} ${b.game.scrap} ${b.game.serverAmmo.join("/")}`).join(", "),
+  );
+  // A and C arm themselves for race 1; B spends everything on the engine and races unarmed.
+  for (const b of [A, C]) {
+    b.game.buy("rivets");
+    b.game.buy("mines");
+  }
+  const kit = `${AMMO.rivets.pack},${AMMO.mines.pack}`;
+  await waitFor("A and C ammo in snapshots", () => [A, C].every((b) => b.game.serverAmmo.join() === kit), 3000);
+  check(
+    "garage: Alpha and Charlie buy rivets and mines (350)",
+    [A, C].every((b) => b.game.scrap === 400 - AMMO_PRICE && b.game.serverAmmo.join() === kit),
+    [A, C].map((b) => `${b.name} ${b.game.scrap} ${b.game.serverAmmo.join("/")}`).join(", "),
   );
   const g0 = B.garages;
   B.game.buy("engine");
@@ -367,8 +386,16 @@ async function runGame(ctx: Ctx, bots: Bot[]): Promise<void> {
   const cleared = await waitFor("cars cleared", () => A.game.latest?.cars.size === 0, 1000);
   check("back in lobby: cars cleared", cleared);
 
-  // Spend winnings on rivets so race 2 has shooting too.
+  // Spend winnings on rivets so race 2 has shooting too; Delta buys its first ammo.
   for (const b of [A, B, C]) if (b.game.scrap >= 150) b.game.buy("rivets");
+  D.game.buy("rivets");
+  D.game.buy("mines");
+  await waitFor("D ammo in snapshots", () => D.game.serverAmmo.join() === kit, 3000);
+  check(
+    "garage: Delta buys rivets and mines before race 2",
+    D.game.scrap === 400 - AMMO_PRICE && D.game.serverAmmo.join() === kit,
+    `${D.game.scrap} ${D.game.serverAmmo.join("/")}`,
+  );
   await sleep(300);
 
   // ---- race 2: reverse grid, D joins in -------------------------------------------
@@ -390,6 +417,12 @@ async function runGame(ctx: Ctx, bots: Bot[]): Promise<void> {
   const hits = A.events.filter((e) => e.k === "hit");
   const wrecks = A.events.filter((e): e is Extract<GameEvent, { k: "wreck" }> => e.k === "wreck");
   check("combat happened: hits and wrecks", hits.length > 0 && wrecks.length > 0, `${hits.length} hits, ${wrecks.length} wrecks`);
+  const firstHit = Math.min(...A.hitsAfterGo);
+  check(
+    "weapons armed delay: no hit arrives in the first 8 s of a race",
+    A.hitsAfterGo.length === hits.length && firstHit >= WEAPONS_ARM_MS - 100,
+    `earliest hit ${(firstHit / 1000).toFixed(2)} s after GO`,
+  );
   const wreckedIds = new Set(wrecks.map((w) => w.id));
   for (const b of [A, B, C, D]) {
     const s = stats(b.game.recErrors);
