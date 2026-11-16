@@ -17,6 +17,7 @@ import {
 } from "../shared/protocol";
 import { AMMO, PLACE_PAYOUT, WRECK_BONUS } from "../shared/shop";
 import { minSelfClearance } from "../shared/track";
+import { angleDiff, capsuleGap, clamp } from "../shared/physics";
 import { BTN_RIVET, WEAPONS_ARM_MS } from "../shared/weapons";
 import { startServer, type RunningServer } from "../server/index";
 import { BotDriver } from "./bot-ai";
@@ -25,6 +26,8 @@ const STEP_MS = 1000 / 60;
 const LAPS = 1;
 const BOT_HP = 12; // low HP so wrecks really happen in a one-lap race (3 rivets or 1 mine)
 const AMMO_PRICE = AMMO.rivets.price + AMMO.mines.price; // one pack of each
+// Measured 2026-11-16 over 7 runs: 0.12-0.27 with bump prediction (0.23-0.35 without).
+const CONTACT_P95_MAX = 0.5;
 
 // ---- tiny assertion log -------------------------------------------------------------
 
@@ -113,6 +116,11 @@ class Bot {
   phases: Phase[] = [];
   welcomes = 0;
   garages = 0;
+  ram: string | null = null; // player id to steer into (contact test) ...
+  apart = false; // ... or, while set, to steer away from
+  readonly contactErrs: number[] = []; // reconciliation errors while touching another car
+  readonly freeErrs: number[] = []; // ... and all the others
+  private errsSeen = 0;
   script: (() => Controls) | null = null; // scripted controls instead of the AI driver
   afterStep: (() => void) | null = null;
 
@@ -145,8 +153,47 @@ class Bot {
 
   /** Called every fixed step. */
   step(): void {
-    this.game.step(this.script?.() ?? this.driver.controls(), STEP_MS);
+    const ctl = { ...(this.script?.() ?? this.driver.controls()) };
+    if (this.ram) this.ramInto(this.ram, ctl);
+    this.game.step(ctl, STEP_MS);
     this.afterStep?.();
+    this.sortErrors();
+  }
+
+  /**
+   * Contact test: steer at a point just ahead of the target car; with the target behind,
+   * keep the line but coast so it catches up and runs into us. While `apart`, steer
+   * away from it instead (so the next ram is a fresh impact, not just rubbing).
+   */
+  private ramInto(id: string, ctl: Controls): void {
+    const c = this.game.car;
+    const o = this.game.otherPoses().find((p) => p.id === id);
+    if (!c || !o || c.wreck) return;
+    const side = angleDiff(c.h, Math.atan2(o.y - c.y, o.x - c.x));
+    if (this.apart) {
+      if (Math.hypot(o.x - c.x, o.y - c.y) < 60) ctl.steer = side > 0 ? -0.6 : 0.6;
+      return;
+    }
+    const tx = o.x + Math.cos(o.h) * 20, ty = o.y + Math.sin(o.h) * 20;
+    const off = angleDiff(c.h, Math.atan2(ty - c.y, tx - c.x));
+    if (Math.abs(side) > Math.PI / 2) ctl.throttle = Math.min(ctl.throttle, 0);
+    else ctl.steer = clamp(off * 2.5, -1, 1);
+  }
+
+  /**
+   * File new reconciliation errors as "in contact" when the own car predicted a bump in
+   * the last 300 ms or the server shows it within 3 units of another solid car.
+   */
+  private sortErrors(): void {
+    const g = this.game;
+    const errs = g.recErrors;
+    if (errs.length === this.errsSeen) return;
+    const me = g.latest?.cars.get(g.you);
+    const touching =
+      performance.now() - g.contact.lastContact < 300 ||
+      (!!me && [...(g.latest?.cars.values() ?? [])].some((o) => o.id !== me.id && !o.ghost && !o.wreck && capsuleGap(me, o) < 3));
+    for (let i = this.errsSeen; i < errs.length; i++) (touching ? this.contactErrs : this.freeErrs).push(errs[i]);
+    this.errsSeen = errs.length;
   }
 }
 
@@ -260,6 +307,7 @@ async function run(ctx: Ctx, bots: Bot[]): Promise<void> {
   await runGame(ctx, bots);
   await runServerFull(bots);
   await runArmDelayLagged(bots);
+  await runContact(ctx, bots);
 }
 
 const lost = new Map<string, (ConnReason | undefined)[]>();
@@ -613,6 +661,51 @@ async function runServerFull(bots: Bot[]): Promise<void> {
     for (const b of [G, H, I]) b.game.leave();
     await small.close();
   }
+}
+
+/**
+ * Solid car contact: a lagged bot (80±10 ms) and an unlagged one steer into each other for
+ * a stretch of a race, weapons off. The lagged bot predicts its half of every bump; its
+ * reconciliation error while touching shows how well that prediction holds.
+ */
+async function runContact(ctx: Ctx, bots: Bot[]): Promise<void> {
+  const L = new Bot("Lima", ctx.url, 0, { lag: 80, jitter: 10 });
+  const M = new Bot("Mike", ctx.url, 0);
+  bots.push(L, M);
+  for (const b of [L, M]) b.weapons = false;
+  L.game.create(L.name);
+  await waitFor("L welcome", () => !!L.game.you, 3000);
+  M.game.join(L.game.code, M.name);
+  await waitFor("M in L's room", () => L.game.players.length === 2, 3000);
+  await readyUp("contact", L, [L, M]);
+  L.game.start();
+  await waitFor("contact: racing", () => L.game.phase === "racing" && !!L.game.car && !!M.game.car, 6000);
+  L.ram = M.game.you;
+  M.ram = L.game.you;
+  for (let i = 0; i < 7; i++) {
+    for (const b of [L, M]) b.apart = false;
+    await sleep(1400);
+    for (const b of [L, M]) b.apart = true;
+    await sleep(600);
+  }
+  const impacts = L.game.contact.takeImpacts().length + M.game.contact.takeImpacts().length;
+  for (const b of [L, M]) b.game.leave();
+
+  const all = stats(L.game.recErrors);
+  const hit = stats(L.contactErrs);
+  const free = stats(L.freeErrs);
+  console.log(
+    `      Lima     rec err: all n=${all.n} median=${all.median.toFixed(3)} p95=${all.p95.toFixed(3)} max=${all.max.toFixed(2)}; ` +
+      `in contact n=${hit.n} median=${hit.median.toFixed(3)} p95=${hit.p95.toFixed(3)} max=${hit.max.toFixed(2)}; ` +
+      `free p95=${free.p95.toFixed(3)}; impact effects ${impacts}`,
+  );
+  check("contact: the bots really bumped (>= 60 reconciliation samples in contact)", hit.n >= 60, `${hit.n} samples`);
+  check(
+    `contact: lagged bot p95 reconciliation error in contact < ${CONTACT_P95_MAX}`,
+    hit.n >= 60 && hit.p95 < CONTACT_P95_MAX,
+    `p95 ${hit.p95.toFixed(3)}`,
+  );
+  check("contact: lagged bot median < 0.5 and max <= 50 throughout", all.n > 100 && all.median < 0.5 && all.max <= 50, `median ${all.median.toFixed(3)}, max ${all.max.toFixed(2)}`);
 }
 
 /**

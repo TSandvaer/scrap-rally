@@ -30,6 +30,7 @@ import {
   type Command,
   type Shot,
 } from "../shared/weapons";
+import { Contacts } from "./contact";
 import type { Transport } from "./net";
 
 export const track = buildTrack(RUST_BOWL);
@@ -147,6 +148,7 @@ export class Game {
   lastAck = -1;
   readonly recErrors: number[] = [];
   localShots: Shot[] = []; // cosmetic: our own rivets, drawn before the server confirms
+  readonly contact = new Contacts(); // own-car bump prediction, near cars' drawn pose
   private cooldown = 0;
   private mineCounter = 0;
   private localShotId = 1;
@@ -235,6 +237,7 @@ export class Game {
     this.history.clear();
     this.localShots = [];
     this.cooldown = 0;
+    this.contact.reset();
   }
 
   private joinMsg(): ClientMsg {
@@ -439,12 +442,14 @@ export class Game {
       this.prevCar = cloneCar(server);
       this.pending = this.pending.filter((p) => p.seq > msg.ack);
       this.lastAck = msg.ack;
+      this.contact.setBase(snap, this.you);
       return;
     }
-    this.reconcile(server, msg.ack);
+    this.reconcile(server, msg.ack, snap);
   }
 
-  private reconcile(server: CarState, ack: number): void {
+  private reconcile(server: CarState, ack: number, snap: Snapshot): void {
+    const kOld = this.pending.length;
     const predicted = this.history.get(ack);
     if (predicted && ack > this.lastAck) {
       const err = Math.hypot(predicted.x - server.x, predicted.y - server.y);
@@ -455,13 +460,16 @@ export class Game {
     for (const k of this.history.keys()) if (k <= ack) this.history.delete(k);
 
     // Rewind to the server state and replay what the server has not seen yet. Replay goes
-    // through stepRaceCar, so a wreck freeze and the respawn jump are predicted too.
+    // through stepRaceCar, so a wreck freeze and the respawn jump are predicted too, and
+    // bumps: pending[i] is applied i + 1 ticks after this snapshot.
+    this.contact.rebase(snap, this.you, kOld, this.pending.length);
     const old = this.car!;
     const c = cloneCar(server);
-    for (const p of this.pending) {
+    this.pending.forEach((p, i) => {
       stepRaceCar(c, p.cmd, this.stats, track);
+      this.contact.collide(c, i + 1);
       this.history.set(p.seq, cloneCar(c));
-    }
+    });
     this.car = c;
 
     // Hide the jump: shift the render offset (and the interpolation start) by it. Wreck
@@ -552,6 +560,7 @@ export class Game {
     this.prevCar = cloneCar(before);
     if (this.cooldown > 0) this.cooldown--;
     stepRaceCar(this.car, cmd, this.stats, track);
+    this.contact.step(this.car, this.pending.length + 1, stepMs); // the server applies it then
     if (this.prevCar.wreck > 0 && this.car.wreck === 0) this.prevCar = cloneCar(this.car); // respawn: no slide
 
     // Same order as the server: step, then fire from the new pose.
