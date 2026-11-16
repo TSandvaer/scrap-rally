@@ -1,13 +1,8 @@
 # STATE — Scrap Rally coordination
 
-**Resume (2026-11-16, latest):** In flight on run `run_c58bb5836634`: dispatch `ctx_579fca225027`
-(task task_e50f163f2ffa) on ClickUp 123jpnbf637 "Lobby ready check" (DECISIONS 2026-11-16), workspace
-~/orca/workspaces/scrap-rally/ready-check, branch `TSandvaer/ready-check` (from main), port 3001. Author done
-(b3851bd, verified, 5 commits; sim 87/87, bots 43/43 x3, local smoke PASS); review APPROVE
-(ctx_86cdc99dd431). User: label "Cancel ready", then merge + push + Manual Deploy. Label change running
-as follow-up `ctx_7e79bb48c917` (task task_e682cec46419). On its worker_done: verify the diff is only
-the label (+ test text), quick re-review, merge, check+test, push, tell the user to deploy, QA live. Separately parked: easier-start
-(see next note); whichever merges second merges main in.
+**Resume (2026-11-16, latest):** 123jpnbf637 (lobby ready check) merged as a63375c and pushed
+(d912583..a63375c); workspace removed, branch deleted. Waiting for the user's Manual Deploy of a63375c,
+then a QA worker checks the live lobby (smoke now needs this build). easier-start still parked (next note).
 
 **Resume note (2026-11-16):** Workers all released; easier-start workspace removed at the user's
 request (clean, nothing running). Branch `TSandvaer/easier-start` KEPT at 9ba7740 (reviewed, APPROVE,
@@ -31,11 +26,8 @@ Manual Deploy only on the user's go-ahead. The user's own dev server runs on :30
 
 ## In flight
 
-| Ticket | Dispatch | Workspace | Branch | Port | Started |
-| --- | --- | --- | --- | --- | --- |
-| 123jpnbf637 Lobby ready check | label follow-up ctx_7e79bb48c917 (after b3851bd, APPROVE) | ~/orca/workspaces/scrap-rally/ready-check | TSandvaer/ready-check | 3001 | 2026-11-16 |
-
-Parked (unmerged, approved, awaiting the user's taste verdict): TSandvaer/easier-start @ 9ba7740 (123jpnbf3xa).
+None. Parked (unmerged, approved, awaiting the user's taste verdict): TSandvaer/easier-start @ 9ba7740
+(123jpnbf3xa); it must merge main (ready check) before it can merge.
 
 ## Waiting on the user
 
