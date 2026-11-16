@@ -11,12 +11,24 @@ during the race) instead of plain armor.
 
 ## Player-facing scope
 
-- **Rivet gun** (front, hold to fire): 8 damage, cooldown 9 ticks (150 ms), range 650,
+Balance change 2026-11-15 (playtest feedback: "way too hard; why do we have weapons in the
+beginning; weapons do too much damage"; the user's decision, ClickUp 123jpnbf3xa): new
+players start with no ammo, nobody can fire in the first 8 s of a race, and weapon damage is
+halved. Was: 40 rivets + 3 mines to start, rivet 8 / mine 30 damage, firing from GO. Car HP
+(100), prices, caps and upgrades are unchanged. The numbers below are the current ones.
+
+- **Rivet gun** (front, hold to fire): 4 damage, cooldown 9 ticks (150 ms), range 650,
   900 u/s plus the car's own velocity. Ammo packs of 20, cap 100.
-- **Scrap mine** (rear, tap to drop): arms after 0.4 s, lives 25 s, 30 damage + spin-out
+- **Scrap mine** (rear, tap to drop): arms after 0.4 s, lives 25 s, 15 damage + spin-out
   (deterministic heading kick away from the mine, speed × 0.3). Packs of 3, cap 9.
   Mines hit anyone once armed, including their owner.
-- **Starting kit** for a new player: 400 scrap, 40 rivets, 3 mines.
+- **Weapons armed delay**: nobody can fire a rivet or drop a mine until 8 s after GO
+  (`WEAPONS_ARM_MS` = 8000 of server time after `Room.raceStart`). A mine press inside the
+  window is discarded, not dropped later. The client gates its own shots, mine presses and
+  predicted ammo on the same delay (estimated server time) and the HUD shows
+  "WEAPONS ARMED IN n" until then.
+- **Starting kit** for a new player: 400 scrap, no rivets, no mines (ammo is bought in the
+  garage: rivets 150, mines 200).
 - **Hit points**: 100. At 0 the car is **wrecked**: stops dead for 90 ticks (1.5 s), then
   respawns on the centerline at its current track distance with full HP and 60 ticks of
   ghosting (no damage, no car collisions, cannot fire). Lap/checkpoint progress is kept.
@@ -112,7 +124,7 @@ during the race) instead of plain armor.
 - `scripts/sim-test.ts` (new, deterministic, no sockets): drives a `Room` directly with fake
   `Conn`s and scripted inputs (priming two inputs before expecting consumption), setting
   `p.car`/`p.progress` directly where needed:
-  - a rivet hits a car ahead (hp -8, `hit` event); never its owner; dies at range and at the
+  - a rivet hits a car ahead (hp -4, `hit` event); never its owner; dies at range and at the
     wall; the swept test catches a head-on pass;
   - a mine arms after 24 ticks, then damages and spins the first car over it (incl. owner);
   - 0 HP wrecks: frozen 90 ticks, respawn at the same s with full HP, ghosted 60 ticks,
@@ -121,6 +133,10 @@ during the race) instead of plain armor.
   - fire only in `racing`, only with ammo, respects cooldown; underrun repeats never fire or
     drop; a mine tap survives an overflow trim;
   - `payouts()` and `buy()` (scrap, phase, caps); finished cars are ghosted and cannot fire.
+  - armed delay (2026-11-15; weapon tests grant ammo and jump the clock past it first): an
+    empty starting kit; with ammo in hand no rivet and no mine at ~7.9 s; the gun fires from
+    8 s; a mine press in the window never drops later; a press after 8 s drops one; rivet 4
+    and mine 15 damage.
 - `scripts/bots.ts` extended (server started with a low HP knob), two races in a row:
   - before race 1 the lagged bot buys Engine L1 (scrap deducted) and a too-expensive buy is
     refused;
@@ -131,6 +147,11 @@ during the race) instead of plain armor.
   - scrap, levels and ammo survive the drop/rejoin; race 2 uses the reverse grid;
   - at least one hit and one wreck happen; every wrecked bot keeps max reconciliation
     error < 50; the lagged bot's median stays < 0.5 with upgraded stats and weapons.
+  - armed delay (2026-11-15): bots start with no ammo (BOT_HP 12); Alpha and Charlie buy
+    rivets + mines before race 1, the lagged bot races race 1 unarmed, Delta buys ammo
+    before race 2; no hit arrives in the first 8 s of a race; a 100 ms RTT client holding
+    fire across the 8 s mark sends no fire bit before its `armed()`, and the server fires
+    exactly the rivets it predicted.
 - `package.json`: `"test": "tsx scripts/sim-test.ts && tsx scripts/bots.ts"`.
 
 ## Order of work (each step its own commit, `npm run check` + tests green)

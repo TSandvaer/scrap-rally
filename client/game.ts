@@ -26,6 +26,7 @@ import {
   RIVET_COOLDOWN,
   spawnShot,
   stepRaceCar,
+  WEAPONS_ARM_MS,
   type Command,
   type Shot,
 } from "../shared/weapons";
@@ -490,10 +491,18 @@ export class Game {
     return this.phase === "racing" || (this.phase === "countdown" && this.serverNow() >= this.phaseEnds);
   }
 
-  /** Our car can shoot and drop mines (not wrecked, ghosted or finished). */
+  /** Time until weapons arm in this race (estimated server time, ms); 0 once armed. */
+  armsInMs(): number {
+    return Math.max(0, this.raceStart + WEAPONS_ARM_MS - this.serverNow());
+  }
+
+  /**
+   * Our car can shoot and drop mines: the race is on, the weapons-armed delay is over, and
+   * the car is not wrecked, ghosted or finished.
+   */
   armed(): boolean {
     const s = this.latest?.cars.get(this.you);
-    return !!this.car && this.car.wreck === 0 && !!s && !s.ghost && this.raceOn();
+    return !!this.car && this.car.wreck === 0 && !!s && !s.ghost && this.raceOn() && this.armsInMs() === 0;
   }
 
   /** Ammo minus what we already fired in inputs the server has not consumed yet. */
@@ -523,15 +532,18 @@ export class Game {
     if (!this.car || !this.connected) return;
 
     const on = this.raceOn();
+    const armed = this.armed();
     const [rivets, mines] = this.predictedAmmo();
-    const minePress = ctl.mine && this.armed() && mines > 0;
+    const minePress = ctl.mine && armed && mines > 0;
     if (minePress) this.mineCounter = (this.mineCounter + 1) & 7;
-    // Round before use so the server applies exactly what we predicted with.
+    // Round before use so the server applies exactly what we predicted with. The fire bit is
+    // only sent once we are armed: our serverNow runs behind the server, which reads the
+    // input later still, so an earlier bit would fire rivets we never predicted.
     const cmd: Command = on
       ? {
           throttle: round(ctl.throttle, 2),
           steer: round(ctl.steer, 2),
-          buttons: makeButtons(ctl.fire, this.mineCounter),
+          buttons: makeButtons(ctl.fire && armed, this.mineCounter),
         }
       : { throttle: 0, steer: 0, buttons: makeButtons(false, this.mineCounter) };
 

@@ -5,20 +5,24 @@
 import { CAR_LENGTH, CAR_RADIUS, DT, stepCar, type CarState, type CarStats, type Input } from "./physics";
 import { pointAt, queryTrackNear, type Track } from "./track";
 
-// All timers are in ticks (60 per second).
+// Nobody can fire or drop a mine until this long after the start (GO), in ms of server
+// time. A mine press inside the window is discarded, not saved for later.
+export const WEAPONS_ARM_MS = 8000;
+
+// All other timers are in ticks (60 per second).
 export const CAR_HP = 100;
 export const WRECK_TICKS = 90;
 export const GHOST_TICKS = 60;
 
 export const RIVET_SPEED = 900;
 export const RIVET_RANGE = 650;
-export const RIVET_DAMAGE = 8;
+export const RIVET_DAMAGE = 4;
 export const RIVET_COOLDOWN = 9;
 export const RIVET_RADIUS = 2;
 
 export const MINE_ARM_TICKS = 24;
 export const MINE_LIFE_TICKS = 25 * 60;
-export const MINE_DAMAGE = 30;
+export const MINE_DAMAGE = 15;
 export const MINE_RADIUS = 9;
 export const SPIN_KICK = 1.6; // radians
 export const SPIN_SPEED = 0.3; // speed kept after a spin-out
