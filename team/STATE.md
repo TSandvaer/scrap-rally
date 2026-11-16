@@ -1,5 +1,11 @@
 # STATE — Scrap Rally coordination
 
+**Resume (2026-11-16, latest):** In flight on run `run_c58bb5836634`: dispatch `ctx_579fca225027`
+(task task_e50f163f2ffa) on ClickUp 123jpnbf637 "Lobby ready check" (DECISIONS 2026-11-16), workspace
+~/orca/workspaces/scrap-rally/ready-check, branch `TSandvaer/ready-check` (from main), port 3001. On worker_done:
+verify, reviewer, show the user the lobby screenshots before merge. Separately parked: easier-start
+(see next note); whichever merges second merges main in.
+
 **Resume note (2026-11-16):** Workers all released; easier-start workspace removed at the user's
 request (clean, nothing running). Branch `TSandvaer/easier-start` KEPT at 9ba7740 (reviewed, APPROVE,
 unmerged, ClickUp 123jpnbf3xa `ready for qa test`): it waits for the user's taste verdict. To test it
@@ -22,7 +28,11 @@ Manual Deploy only on the user's go-ahead. The user's own dev server runs on :30
 
 ## In flight
 
-None (branch TSandvaer/easier-start parked unmerged, see the resume note).
+| Ticket | Dispatch | Workspace | Branch | Port | Started |
+| --- | --- | --- | --- | --- | --- |
+| 123jpnbf637 Lobby ready check | ctx_579fca225027 | ~/orca/workspaces/scrap-rally/ready-check | TSandvaer/ready-check | 3001 | 2026-11-16 |
+
+Parked (unmerged, approved, awaiting the user's taste verdict): TSandvaer/easier-start @ 9ba7740 (123jpnbf3xa).
 
 ## Waiting on the user
 
