@@ -8,7 +8,15 @@ export const TICK_HZ = 60;
 export const DT = 1 / TICK_HZ;
 export const CAR_LENGTH = 30;
 export const CAR_WIDTH = 16;
-export const CAR_RADIUS = 13; // used for car-car collisions
+export const CAR_RADIUS = 13; // round hit shape for rivets and mines (not car-car)
+// Car-car collision shape: a capsule along the heading that matches the drawn 30x16 car,
+// a segment of length 2 * CAPSULE_HALF centred on the car, swept by CAPSULE_R. Contact
+// distance between centres: 16 side by side, 31 nose to tail.
+export const CAPSULE_HALF = 7.5;
+export const CAPSULE_R = 8;
+// Bounce of a car-car bump (coefficient of restitution along the contact normal, 0 = no
+// bounce, 1 = elastic). The old circle model used 0.8; this starts at 0.6 of that.
+export const CAR_RESTITUTION = 0.48;
 
 export interface CarState {
   x: number;
@@ -110,23 +118,167 @@ function collideWalls(c: CarState, track: Track): void {
   c.vy *= WALL_SCRAPE;
 }
 
+/** The pose and velocity a car-car contact needs (CarState and snapshots both fit). */
+export interface Body {
+  x: number;
+  y: number;
+  h: number;
+  vx: number;
+  vy: number;
+}
+
+/**
+ * One car-car contact: the normal (unit, from a towards b), each car's share of the
+ * push-out, each car's share of the impulse, the contact point and the closing speed.
+ */
+export interface CarContact {
+  nx: number;
+  ny: number;
+  push: number; // each car moves this far along the normal (half the overlap)
+  j: number; // each car's velocity change along the normal (0 when already separating)
+  px: number; // contact point (midway between the two closest points)
+  py: number;
+  impact: number; // closing speed along the normal, > 0 when the cars move together
+}
+
+/**
+ * The single contact between two car capsules, or null when they do not touch.
+ *
+ * Normal: on a fresh contact (the capsules did not touch at the start of this tick, going
+ * back along their relative velocity) it is the closest-points direction at the moment
+ * they first touched, so a fast head-on or T-bone that overlapped deeply within one tick
+ * still pushes back along the way they met, never sideways through each other. On a
+ * sustained contact it is the closest-points direction now, or the centre line once the
+ * overlap is deeper than one radius. Push-out: the smallest move along that normal that
+ * separates the capsules.
+ */
+export function carContact(a: Body, b: Body): CarContact | null {
+  const dx = b.x - a.x, dy = b.y - a.y;
+  // Cheap reject: centres further apart than nose-to-tail contact.
+  const reach = 2 * (CAPSULE_HALF + CAPSULE_R);
+  if (dx * dx + dy * dy >= reach * reach) return null;
+  const ux = Math.cos(a.h), uy = Math.sin(a.h);
+  const vx = Math.cos(b.h), vy = Math.sin(b.h);
+  const touch = 2 * CAPSULE_R;
+  const dist = (ox: number, oy: number) => segGap(ox, oy, ux, uy, vx, vy);
+  const now = dist(dx, dy);
+  if (now.d >= touch) return null;
+
+  // Where b was relative to a at the start of the tick (current headings).
+  const rx = (b.vx - a.vx) * DT, ry = (b.vy - a.vy) * DT;
+  let at = now; // the closest points the normal is taken from
+  let exact = true; // normal = closest points now, so the overlap is touch - d
+  if (dist(dx - rx, dy - ry).d >= touch) {
+    // Fresh contact: bisect for the moment of first touch along the relative path.
+    let lo = 0, hi = 1; // fraction of the tick: lo apart, hi touching
+    for (let i = 0; i < 18; i++) {
+      const mid = (lo + hi) / 2;
+      if (dist(dx - rx * (1 - mid), dy - ry * (1 - mid)).d >= touch) lo = mid;
+      else hi = mid;
+    }
+    at = dist(dx - rx * (1 - lo), dy - ry * (1 - lo));
+    exact = false;
+  }
+  let nx: number, ny: number;
+  if (exact ? now.d >= CAPSULE_R : at.d > 1e-6) {
+    nx = at.nx;
+    ny = at.ny;
+  } else {
+    // A deep sustained overlap (the client's one-sided push leaves half of it) or one
+    // with no motion to go by: the closest points could point sideways through the other
+    // car, so use the centre line, or sideways from a when the centres coincide.
+    const dc = Math.hypot(dx, dy);
+    nx = dc > 1e-6 ? dx / dc : -uy;
+    ny = dc > 1e-6 ? dy / dc : ux;
+    exact = false;
+  }
+
+  let overlap: number;
+  if (exact) {
+    overlap = touch - now.d;
+  } else {
+    // Smallest p with the capsules apart after moving b by p along n. Separation along n
+    // by the capsules' full extents (an upper bound) certainly parts them; the touching
+    // set along a line is an interval, so bisection finds its end.
+    let hi = touch + CAPSULE_HALF * (Math.abs(ux * nx + uy * ny) + Math.abs(vx * nx + vy * ny)) - (dx * nx + dy * ny);
+    let lo = 0;
+    if (hi <= 0) return null;
+    for (let i = 0; i < 18; i++) {
+      const mid = (lo + hi) / 2;
+      if (dist(dx + nx * mid, dy + ny * mid).d >= touch) hi = mid;
+      else lo = mid;
+    }
+    overlap = hi;
+  }
+  const rel = (b.vx - a.vx) * nx + (b.vy - a.vy) * ny;
+  return {
+    nx,
+    ny,
+    push: overlap / 2,
+    j: rel < 0 ? (-rel * (1 + CAR_RESTITUTION)) / 2 : 0, // equal masses
+    px: a.x + (ux * at.s + dx + vx * at.t) / 2,
+    py: a.y + (uy * at.s + dy + vy * at.t) / 2,
+    impact: Math.max(0, -rel),
+  };
+}
+
+/** Gap between two car capsules: 0 = touching, < 0 = overlapping by that much. */
+export function capsuleGap(a: { x: number; y: number; h: number }, b: { x: number; y: number; h: number }): number {
+  const g = segGap(b.x - a.x, b.y - a.y, Math.cos(a.h), Math.sin(a.h), Math.cos(b.h), Math.sin(b.h));
+  return g.d - 2 * CAPSULE_R;
+}
+
+/**
+ * Closest points of the two car segments, a's centred at the origin with direction u and
+ * b's centred at (dx, dy) with direction v, both of half-length CAPSULE_HALF: their
+ * parameters s and t, the distance d and the unit direction from a's point to b's.
+ */
+function segGap(
+  dx: number, dy: number, ux: number, uy: number, vx: number, vy: number,
+): { d: number; nx: number; ny: number; s: number; t: number } {
+  const half = CAPSULE_HALF;
+  const b = ux * vx + uy * vy; // u·v; |u| = |v| = 1
+  const c = ux * dx + uy * dy; // u·d
+  const f = vx * dx + vy * dy; // v·d
+  const denom = 1 - b * b;
+  let s: number;
+  if (denom > 1e-9) {
+    s = clamp((c - b * f) / denom, -half, half);
+  } else {
+    // Parallel: the middle of where the two segments overlap along u, or the nearer end.
+    const lo = Math.max(-half, c - half), hi = Math.min(half, c + half);
+    s = lo <= hi ? (lo + hi) / 2 : clamp(c, -half, half);
+  }
+  let t = clamp(b * s - f, -half, half);
+  s = clamp(b * t + c, -half, half);
+  t = clamp(b * s - f, -half, half);
+  const ex = dx + vx * t - ux * s, ey = dy + vy * t - uy * s;
+  const d = Math.hypot(ex, ey);
+  return d > 0 ? { d, nx: ex / d, ny: ey / d, s, t } : { d: 0, nx: 0, ny: 0, s, t };
+}
+
 /** Push two overlapping cars apart and trade the velocity along the contact normal. */
 export function collideCars(a: CarState, b: CarState): boolean {
-  const dx = b.x - a.x, dy = b.y - a.y;
-  const d = Math.hypot(dx, dy);
-  const min = CAR_RADIUS * 2;
-  if (d >= min || d === 0) return false;
-  const nx = dx / d, ny = dy / d;
-  const push = (min - d) / 2;
-  a.x -= nx * push; a.y -= ny * push;
-  b.x += nx * push; b.y += ny * push;
-  const rel = (b.vx - a.vx) * nx + (b.vy - a.vy) * ny;
-  if (rel < 0) {
-    const j = -rel * 0.9; // equal masses, slightly inelastic
-    a.vx -= nx * j; a.vy -= ny * j;
-    b.vx += nx * j; b.vy += ny * j;
-  }
+  const k = carContact(a, b);
+  if (!k) return false;
+  a.x -= k.nx * k.push; a.y -= k.ny * k.push;
+  b.x += k.nx * k.push; b.y += k.ny * k.push;
+  a.vx -= k.nx * k.j; a.vy -= k.ny * k.j;
+  b.vx += k.nx * k.j; b.vy += k.ny * k.j;
   return true;
+}
+
+/**
+ * collideCars for car a alone: b is kinematic (not changed). a moves by exactly its half
+ * of the push and gets exactly its half of the impulse, so a ends up where collideCars(a, b)
+ * would put it. The client predicts its own car's bumps with this.
+ */
+export function collideCarOneSided(a: CarState, b: Body): CarContact | null {
+  const k = carContact(a, b);
+  if (!k) return null;
+  a.x -= k.nx * k.push; a.y -= k.ny * k.push;
+  a.vx -= k.nx * k.j; a.vy -= k.ny * k.j;
+  return k;
 }
 
 export function clamp(v: number, lo: number, hi: number): number {
