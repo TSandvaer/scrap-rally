@@ -5,7 +5,9 @@
 run `run_c58bb5836634`: dispatch `ctx_c8a5662fcae7` (task task_6f640066f3a9) on ClickUp 123jpnbf6cy
 "Solid collisions" (design approved, DECISIONS 2026-11-16), workspace
 ~/orca/workspaces/scrap-rally/solid-collisions, branch `TSandvaer/solid-collisions` (from main before the engine merge), port
-3002; taste gate before merge. easier-start still parked (next note).
+3002; taste gate before merge. easier-start APPROVED by the user: dispatch `ctx_ff922b220719` (task
+task_c59a051556ca) merges main into it, workspace ~/orca/workspaces/scrap-rally/easier-start-merge, branch
+`TSandvaer/easier-start-merge`, port 3001; then reviewer on the resolution, merge, and ask about push + deploy.
 
 **Resume note (2026-11-16):** Workers all released; easier-start workspace removed at the user's
 request (clean, nothing running). Branch `TSandvaer/easier-start` KEPT at 9ba7740 (reviewed, APPROVE,
@@ -32,9 +34,7 @@ Manual Deploy only on the user's go-ahead. The user's own dev server runs on :30
 | Ticket | Dispatch | Workspace | Branch | Port | Started |
 | --- | --- | --- | --- | --- | --- |
 | 123jpnbf6cy Solid collisions | ctx_c8a5662fcae7 | ~/orca/workspaces/scrap-rally/solid-collisions | TSandvaer/solid-collisions | 3002 | 2026-11-16 |
-
-Parked (unmerged, approved, awaiting the user's taste verdict): TSandvaer/easier-start @ 9ba7740
-(123jpnbf3xa); it must merge main before it can merge.
+| 123jpnbf3xa Easier start: merge main in | ctx_ff922b220719 | ~/orca/workspaces/scrap-rally/easier-start-merge | TSandvaer/easier-start-merge | 3001 | 2026-11-16 |
 
 ## Waiting on the user
 
