@@ -8,6 +8,7 @@ import { pointAt, queryTrack, type Track } from "../shared/track";
 export const VIEW_W = 640;
 export const VIEW_H = 360;
 const ZOOM = 0.8;
+const SHAKE_MS = 180;
 
 export interface CarView {
   id: string;
@@ -104,6 +105,8 @@ export class Renderer {
   private readonly decor: Decor[];
   private readonly mini: { scale: number; ox: number; oy: number; path: Path2D };
   readonly cam = { x: 0, y: 0 };
+  private shakeAmp = 0;
+  private shakeStart = 0;
 
   constructor(
     canvas: HTMLCanvasElement,
@@ -182,10 +185,26 @@ export class Renderer {
     this.cam.y += (y - this.cam.y) * k;
   }
 
+  /** A short camera shake of up to amp view pixels (a stronger one replaces a weaker). */
+  shake(amp: number): void {
+    const now = performance.now();
+    if (amp < this.shakeLeft(now)) return;
+    this.shakeAmp = amp;
+    this.shakeStart = now;
+  }
+
+  private shakeLeft(now: number): number {
+    const t = (now - this.shakeStart) / SHAKE_MS;
+    return t < 1 ? this.shakeAmp * (1 - t) : 0;
+  }
+
   frame(cars: CarView[], fx: WorldFx, hud: HudView | null): void {
     const ctx = this.ctx;
-    const cx = Math.round(this.cam.x * ZOOM) / ZOOM;
-    const cy = Math.round(this.cam.y * ZOOM) / ZOOM;
+    const now = performance.now();
+    const amp = this.shakeLeft(now) / ZOOM;
+    const ph = (now - this.shakeStart) / 16;
+    const cx = Math.round((this.cam.x + Math.sin(ph * 1.7) * amp) * ZOOM) / ZOOM;
+    const cy = Math.round((this.cam.y + Math.cos(ph * 2.3) * amp) * ZOOM) / ZOOM;
     ctx.setTransform(ZOOM, 0, 0, ZOOM, VIEW_W / 2 - cx * ZOOM, VIEW_H / 2 - cy * ZOOM);
 
     // Ground

@@ -69,6 +69,8 @@ let restartNotice = false;
 let sparks: { id: string; start: number; x?: number; y?: number }[] = [];
 const SPARK_MS = 260;
 const INTERP_DELAY_MS = 100;
+const BUMP_SHAKE_MAX = 3; // screen shake of a bump, 1..3 px of the 640x360 view ...
+const BUMP_SHAKE_PER = 120; // ... 1 px per this much closing speed (units/s)
 let flash = { text: "", until: 0 };
 let toastTimer = 0;
 
@@ -395,6 +397,7 @@ function hudView(): HudView | null {
       `pending ${game.pending.length}  ack ${game.lastAck}  seq ${game.seq}`,
       `rec err last ${(errs[errs.length - 1] ?? 0).toFixed(2)}  med ${median(errs).toFixed(2)}  max ${Math.max(0, ...errs).toFixed(2)}`,
       `smooth ${Math.hypot(game.smooth.x, game.smooth.y).toFixed(2)}  snaps ${game.snaps.length}`,
+      `near ${game.players.filter((p) => game.contact.weight(p.id) > 0).map((p) => `${p.name} ${game.contact.weight(p.id).toFixed(2)}`).join(", ") || "-"}`,
     ];
   }
   return hud;
@@ -434,8 +437,11 @@ function draw(alpha: number, elapsed: number): void {
     const wreck = me ? (game.car?.wreck ?? 0) > 0 : !!s?.wreck;
     return { id, x, y, h, me, color: p?.color ?? "#888", name: p?.name ?? "?", wreck, ghost: !!s?.ghost };
   };
+  // Other cars at the interpolation time; near ones are drawn at their predicted pose,
+  // where the own car bumps into them (client/contact.ts).
   const others = game.otherPoses();
-  for (const o of others) cars.push(view(o.id, o.x, o.y, o.h, false));
+  const drawn = game.contact.blend(others, game.car, game.pending.length - 1 + alpha, elapsed);
+  for (const o of drawn) cars.push(view(o.id, o.x, o.y, o.h, false));
   const own = game.ownPose(alpha);
   if (own) cars.push(view(own.id, own.x, own.y, own.h, true));
 
@@ -445,7 +451,7 @@ function draw(alpha: number, elapsed: number): void {
     target = { x: own.x + game.car.vx * 0.28, y: own.y + game.car.vy * 0.28 };
   } else {
     const leader = game.standings()[0];
-    const pose = leader && others.find((o) => o.id === leader.id);
+    const pose = leader && drawn.find((o) => o.id === leader.id);
     if (pose) target = pose;
   }
   if (target) {
@@ -458,6 +464,11 @@ function draw(alpha: number, elapsed: number): void {
     hadTarget = false;
   }
   const now = performance.now();
+  // Own predicted bumps: sparks at the contact point and a small shake, right away.
+  for (const im of game.contact.takeImpacts()) {
+    sparks.push({ id: "", start: now, x: im.x, y: im.y });
+    renderer.shake(Math.max(1, Math.min(BUMP_SHAKE_MAX, im.speed / BUMP_SHAKE_PER)));
+  }
   sparks = sparks.filter((s) => now < s.start + SPARK_MS);
   const fx: WorldFx = {
     shots: [...game.otherShots(), ...game.localShots],
@@ -467,7 +478,8 @@ function draw(alpha: number, elapsed: number): void {
   for (const s of sparks) {
     if (now < s.start) continue;
     if (s.x === undefined) {
-      const pose = cars.find((c) => c.id === s.id);
+      // Hit sparks stay at the interpolation time (also on near cars drawn predicted).
+      const pose = s.id === game.you ? own : others.find((c) => c.id === s.id);
       if (!pose) continue;
       s.x = pose.x;
       s.y = pose.y;
