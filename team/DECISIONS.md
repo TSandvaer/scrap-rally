@@ -23,3 +23,10 @@
   beginning; weapons do too much damage". User choices: new players start with no ammo (buy in
   the garage) AND no firing in the first ~8 s of a race; damage halved (rivet 4, mine 15; HP stays
   100); practice bots unchanged. Balance is a taste gate: the user tries the branch before merge.
+- 2026-11-15 — Playtest (positive): catching up to the bots feels good. Keep bot pace and car handling as they are unless the user asks.
+- 2026-11-16 — Lobby ready check (user): the host cannot start until every player is ready, so players can shop first. User choices: the host gets "Start anyway" after 60 s if someone is still not ready; offline (reconnecting) players are not waited for.
+- 2026-11-16 — Ready check: the ready player's toggle says "Cancel ready" (user). After merge: push approved, the user clicks Manual Deploy; easier-start stays parked.
+- 2026-11-16 — Playtest with a friend (old build d912583): the Engine upgrade feels overpowered because it also raised top speed. User: Engine = +7% acceleration per level only, top speed unchanged. Ready check + engine fix go live in one deploy (push approved for that). Small tuning change, no advisor review.
+- 2026-11-16 — Playtest: cars drove through each other. User wants solid bumps that show instantly on their own screen (collision shape matching the drawn car, own-car prediction of bumps, small spark/shake on impact); no ramming damage. Netcode change: advisor review + user approval before dispatch.
+- 2026-11-16 — Solid-collision design approved by the user (advisor: sound with changes, folded in): capsule shape, one-sided shared resolver, prediction in step() and in the reconcile replay, nearby cars drawn at the predicted pose, softer bounce (tuned at the taste gate), sparks + shake for own contacts only.
+- 2026-11-16 — Taste verdict: the user approves easier-start ("just approve it; if it needs changes I will say later"). Next: merge main (ready check + engine) into it, review the resolution, merge.

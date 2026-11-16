@@ -8,6 +8,7 @@ import {
   CODE_LENGTH,
   COUNTDOWN_MS,
   FINISH_GRACE_MS,
+  FORCE_START_MS,
   MAX_PLAYERS,
   RECONNECT_GRACE_MS,
   RESULTS_MS,
@@ -61,6 +62,7 @@ export interface Player extends Fighter {
   token: string;
   session: Session | null;
   disconnectedAt: number;
+  ready: boolean; // lobby ready check: kept across a rebind, reset when a race starts
   inRace: boolean;
   progress: Progress | null;
   stats: CarStats;
@@ -95,6 +97,8 @@ export class Room {
   private finishers = 0;
   private tickNo = 0;
   private lastOrder: string[] = []; // last race's standings, for the reverse grid
+  private lobbyAt = 0; // server time the lobby last opened (back from results)
+  private lastJoinAt = 0; // server time the last new player joined (the creator included)
 
   constructor(
     readonly code: string,
@@ -109,7 +113,17 @@ export class Room {
     return this.players.size === 0;
   }
 
-  addPlayer(name: string, session: Session): Player | string {
+  /** Server time from which the host may start with players not ready; 0 outside the lobby. */
+  get forceStartAt(): number {
+    return this.phase === "lobby" ? Math.max(this.lobbyAt, this.lastJoinAt) + FORCE_START_MS : 0;
+  }
+
+  /** Players the host's Start waits for: connected, not the host, not ready. */
+  notReady(): Player[] {
+    return [...this.players.values()].filter((p) => p.session && p.id !== this.hostId && !p.ready);
+  }
+
+  addPlayer(name: string, session: Session, now: number): Player | string {
     if (this.players.size >= MAX_PLAYERS) return "Room is full";
     const used = new Set([...this.players.values()].map((p) => p.color));
     const wallet = startingWallet();
@@ -120,6 +134,7 @@ export class Room {
       token: newId(18),
       session: null,
       disconnectedAt: 0,
+      ready: false,
       inRace: false,
       car: null,
       progress: null,
@@ -142,6 +157,7 @@ export class Room {
     };
     this.players.set(p.id, p);
     if (!this.hostId) this.hostId = p.id;
+    this.lastJoinAt = now; // only a new player moves forceStartAt, never a rebind
     this.bind(p, session);
     return p;
   }
@@ -200,9 +216,18 @@ export class Room {
     return [...fresh, ...reversed];
   }
 
-  start(p: Player, now: number): string | null {
+  /**
+   * The host's Start counts as the host's ready. Without force, every other connected
+   * player must be ready; force ("Start anyway") is accepted from forceStartAt and races
+   * every connected player, ready or not. Offline players sit the race out either way.
+   */
+  start(p: Player, now: number, force = false): string | null {
     if (p.id !== this.hostId) return "Only the host can start";
     if (this.phase !== "lobby") return "A race is already running";
+    const waiting = this.notReady().length;
+    if (waiting > 0 && !force) return `Waiting for ${waiting} player${waiting === 1 ? "" : "s"} to get ready`;
+    if (waiting > 0 && now < this.forceStartAt) return "Start anyway is not available yet";
+    for (const q of this.players.values()) q.ready = false; // everyone readies again next time
     this.combat.reset();
     this.gridOrder().forEach((q, slot) => {
       const g = gridSlot(this.track, slot);
@@ -220,6 +245,13 @@ export class Room {
     this.raceStart = now + COUNTDOWN_MS;
     this.setPhase("countdown", this.raceStart);
     return null;
+  }
+
+  /** Lobby ready toggle. Ignored from the host, outside the lobby and for non-booleans. */
+  setReady(p: Player, ready: unknown): void {
+    if (this.phase !== "lobby" || p.id === this.hostId || typeof ready !== "boolean" || p.ready === ready) return;
+    p.ready = ready;
+    this.broadcastRoom();
   }
 
   /** Garage purchase; only between races. */
@@ -256,7 +288,7 @@ export class Room {
     // Phase timers first, so the first racing tick already applies inputs.
     if (this.phase === "countdown" && now >= this.phaseEnds) this.setPhase("racing", 0);
     else if (this.phase === "racing" && this.phaseEnds && now >= this.phaseEnds) this.endRace(now);
-    else if (this.phase === "results" && now >= this.phaseEnds) this.toLobby();
+    else if (this.phase === "results" && now >= this.phaseEnds) this.toLobby(now);
 
     const racing = this.phase === "racing";
     // Weapons stay cold for the first seconds after GO. consumeInput still moves mineBase,
@@ -294,7 +326,7 @@ export class Room {
         if (this.finishers === 1) this.phaseEnds = now + FINISH_GRACE_MS;
       }
       if (racers.length > 0 && racers.every((p) => p.progress!.fin)) this.endRace(now);
-      else if (racers.length === 0) this.toLobby();
+      else if (racers.length === 0) this.toLobby(now);
     }
 
     for (const p of [...this.players.values()]) {
@@ -323,7 +355,8 @@ export class Room {
     for (const r of rows) this.sendGarage(r.p);
   }
 
-  private toLobby(): void {
+  private toLobby(now: number): void {
+    this.lobbyAt = now;
     for (const p of this.players.values()) {
       p.car = null;
       p.progress = null;
@@ -396,6 +429,7 @@ export class Room {
       color: p.color,
       inRace: p.inRace,
       connected: !!p.session,
+      ready: p.ready && p.id !== this.hostId, // a new host's old flag is not shown
     }));
   }
 
@@ -405,6 +439,7 @@ export class Room {
       hostId: this.hostId,
       phase: this.phase,
       raceStart: this.raceStart,
+      forceStartAt: this.forceStartAt,
       players: this.info(),
     });
   }
@@ -477,7 +512,7 @@ export class Rooms {
         if (this.rooms.size >= this.maxRooms) return err("The server is full right now, try again later", "busy");
         const room = new Room(this.newCode(), sharedTrack, this.laps, this.hp);
         this.rooms.set(room.code, room);
-        room.addPlayer(cleanName(msg.name), session);
+        room.addPlayer(cleanName(msg.name), session, now);
         return;
       }
       case "join": {
@@ -487,16 +522,19 @@ export class Rooms {
         if (!room) return err(`No room with code ${code || "(empty)"}`, "gone");
         const existing = room.playerByToken(msg.token);
         if (existing) return room.bind(existing, session);
-        const res = room.addPlayer(cleanName(msg.name), session);
+        const res = room.addPlayer(cleanName(msg.name), session, now);
         if (typeof res === "string") err(res, "full");
         return;
       }
       case "start": {
         if (!session.room || !session.player) return;
-        const e = session.room.start(session.player, now);
+        const e = session.room.start(session.player, now, msg.force === true);
         if (e) err(e);
         return;
       }
+      case "ready":
+        if (session.room && session.player) session.room.setReady(session.player, msg.ready);
+        return;
       case "buy": {
         if (!session.room || !session.player) return;
         const e = session.room.buy(session.player, msg.item);

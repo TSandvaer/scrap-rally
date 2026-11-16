@@ -47,6 +47,8 @@ const ui = {
   copy: $<HTMLButtonElement>("copy"),
   players: $("lobby-players"),
   start: $<HTMLButtonElement>("start"),
+  startAnyway: $<HTMLButtonElement>("start-anyway"),
+  ready: $<HTMLButtonElement>("ready"),
   wait: $("lobby-wait"),
   leave: $<HTMLButtonElement>("leave"),
   results: $("results"),
@@ -111,6 +113,8 @@ ui.join.addEventListener("click", doJoin);
 ui.code.addEventListener("keydown", (e) => e.key === "Enter" && doJoin());
 ui.name.addEventListener("keydown", (e) => e.key === "Enter" && (ui.code.value ? doJoin() : ui.create.click()));
 ui.start.addEventListener("click", () => game.start());
+ui.startAnyway.addEventListener("click", () => game.start(true));
+ui.ready.addEventListener("click", () => game.setReady(!game.me()?.ready));
 ui.copy.addEventListener("click", async () => {
   const link = `${location.origin}/?room=${game.code}`;
   try {
@@ -199,13 +203,41 @@ function updatePanels(): void {
       if (p.id === game.you) li.append(span("tag-pill", "you"));
       if (p.id === game.hostId) li.append(span("tag-pill host", "host"));
       if (!p.connected) li.append(span("tag-pill", "offline"));
+      if (p.ready && p.id !== game.hostId) li.append(span("tag-pill ready", "ready"));
       return li;
     }),
   );
-  ui.start.classList.toggle("hidden", !game.isHost());
-  ui.wait.classList.toggle("hidden", game.isHost());
+  renderLobbyButtons();
   if (game.results) renderResults(game.results);
   if (game.phase === "lobby") renderGarage(true);
+}
+
+/**
+ * Host: Start (disabled until everyone is ready) and, from forceStartAt, Start anyway.
+ * Others: the Ready toggle. Runs every lobby frame, since Start anyway appears on the
+ * clock rather than on a room message; it only touches the DOM when something changed.
+ */
+function renderLobbyButtons(): void {
+  const host = game.isHost();
+  const waiting = game.waitingFor();
+  const ready = !!game.me()?.ready;
+  show(ui.start, host);
+  ui.start.disabled = waiting > 0;
+  setText(ui.start, waiting > 0 ? `Waiting for ${waiting} to get ready` : "Start race");
+  show(ui.startAnyway, host && waiting > 0 && game.canForceStart());
+  show(ui.ready, !host);
+  ui.ready.classList.toggle("primary", !ready);
+  setText(ui.ready, ready ? "Cancel ready" : "I'm ready");
+  show(ui.wait, !host);
+  setText(ui.wait, ready ? "Ready — waiting for the host to start…" : "Shop first, then tell the host you're ready");
+}
+
+function show(el: HTMLElement, on: boolean): void {
+  el.classList.toggle("hidden", !on);
+}
+
+function setText(el: HTMLElement, text: string): void {
+  if (el.textContent !== text) el.textContent = text;
 }
 
 function renderResults(rows: ResultRow[]): void {
@@ -391,7 +423,10 @@ function frame(now: number): void {
   }
   if (acc >= STEP_MS) acc = 0;
   draw(acc / STEP_MS, elapsed);
-  if (game.you && game.phase === "lobby") renderGarage();
+  if (game.you && game.phase === "lobby") {
+    renderGarage();
+    renderLobbyButtons();
+  }
   requestAnimationFrame(frame);
 }
 

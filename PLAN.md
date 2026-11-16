@@ -108,6 +108,16 @@ Accept some rubber-banding during sustained contact in the prototype.
   camera follows the leader meanwhile. No separate spectator mode.
 - Host = first player; reassigned when the host is removed. An empty room is deleted.
 - Host clicks Start (works solo for testing) → 3 s countdown → race.
+- Ready check: in the lobby every player except the host toggles Ready (`ready` message;
+  the host's Start counts as the host's ready). Start is refused while a connected
+  non-host is not ready ("Waiting for n players to get ready"); offline players (in their
+  reconnect grace) are not waited for and sit the race out. Ready is kept across a
+  rebind, reset for everyone when a race starts, never set outside the lobby, and
+  unchanged by buying. A new host after a reassignment need not be ready.
+- Start anyway: `start` with `force` is accepted from `forceStartAt` (in the `room`
+  message) = `FORCE_START_MS` (60 s) after the later of the lobby opening and the last
+  new player joining (a rejoin does not move it), and races every connected player,
+  ready or not. The client shows the button only once it has a server clock estimate.
 - Heartbeat: protocol-level ping every 10 s, terminate sockets that missed a pong.
   App-level `ping`/`pong` for the RTT shown in the HUD. `maxPayload` 4 KB.
 

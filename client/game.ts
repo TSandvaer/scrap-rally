@@ -126,6 +126,7 @@ export class Game {
   phase: Phase = "lobby";
   phaseEnds = 0;
   raceStart = 0;
+  forceStartAt = 0; // server time from which the host may "Start anyway", 0 outside the lobby
   results: ResultRow[] | null = null;
   connected = false;
   rtt = 0;
@@ -185,8 +186,14 @@ export class Game {
     this.open(this.joinMsg());
   }
 
-  start(): void {
-    this.send({ t: "start" });
+  /** Host only. force: "Start anyway" while players are not ready (from forceStartAt). */
+  start(force = false): void {
+    this.send(force ? { t: "start", force: true } : { t: "start" });
+  }
+
+  /** Non-hosts in the lobby: report ready (or take it back). */
+  setReady(ready: boolean): void {
+    this.send({ t: "ready", ready });
   }
 
   buy(item: string): void {
@@ -214,6 +221,7 @@ export class Game {
     this.players = [];
     this.hostId = "";
     this.phase = "lobby";
+    this.forceStartAt = 0;
     this.results = null;
     this.resetOwnCar();
     this.snaps = [];
@@ -331,6 +339,7 @@ export class Game {
         this.hostId = msg.hostId;
         this.phase = msg.phase;
         this.raceStart = msg.raceStart;
+        this.forceStartAt = msg.forceStartAt;
         this.players = msg.players;
         if (msg.phase !== "results") this.results = null;
         this.on.room?.();
@@ -580,6 +589,11 @@ export class Game {
 
   // ---- queries for rendering and HUD ------------------------------------------------
 
+  /** A clock offset exists (first snapshot seen); before that serverNow() is local time. */
+  hasClock(): boolean {
+    return this.haveOffset;
+  }
+
   /** Estimated server time now (biased slightly late by the one-way latency). */
   serverNow(): number {
     return performance.now() + (this.haveOffset ? this.offset : 0);
@@ -672,6 +686,16 @@ export class Game {
 
   isHost(): boolean {
     return !!this.you && this.hostId === this.you;
+  }
+
+  /** How many players the host's Start waits for: connected, not the host, not ready. */
+  waitingFor(): number {
+    return this.players.filter((p) => p.connected && p.id !== this.hostId && !p.ready).length;
+  }
+
+  /** The host may "Start anyway" now, by the estimated server clock. */
+  canForceStart(): boolean {
+    return this.phase === "lobby" && this.forceStartAt > 0 && this.hasClock() && this.serverNow() >= this.forceStartAt;
   }
 
   /** Cars in race order (server view), for positions and the spectator camera. */

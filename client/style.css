@@ -455,3 +455,20 @@ h2 {
   min-width: 52px;
   text-align: right;
 }
+
+.players .tag-pill.ready {
+  color: #8fe09a;
+  border-color: #3c7a46;
+}
+
+/* Host's Start while players are not ready: clearly off, text still readable. */
+.lobby-room .btn:disabled,
+.lobby-room .btn:disabled:hover,
+.lobby-room .btn:disabled:active {
+  cursor: not-allowed;
+  background: #1c1612;
+  border-color: var(--line);
+  color: var(--muted-solid);
+  box-shadow: none;
+  transform: none;
+}

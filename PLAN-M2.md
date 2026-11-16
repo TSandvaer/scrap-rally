@@ -36,7 +36,9 @@ halved. Was: 40 rivets + 3 mines to start, rivet 8 / mine 30 damage, firing from
 - **Scrap payout** per race, by place among racers: 1000 / 700 / 500 / 350 / 250 / 150,
   DNF 0, plus 60 per wreck you cause.
 - **Garage** (lobby only; purchases are never applied mid-race):
-  - Engine L1-3: accel and topSpeed +7 % per level — 400 / 800 / 1400
+  - Engine L1-3: accel +7 % per level, top speed unchanged — 400 / 800 / 1400
+    (2026-11-16 playtest: engine felt overpowered because it also raised top speed; it is now
+    acceleration only. Terminal speed is the same at every level, L3 just gets there sooner.)
   - Tyres L1-3: grip +10 %, turn +4 % per level — 350 / 700 / 1200
   - Welding rig L1-3: repairs 2 / 4 / 6 HP per second while driving — 300 / 600 / 1000
   - Rivets (20) 150, Mines (3) 200, up to the caps.
