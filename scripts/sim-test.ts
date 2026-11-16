@@ -18,6 +18,9 @@ import {
   type Command,
 } from "../shared/weapons";
 import { Room, Rooms, type Conn, type Player, type Session } from "../server/room";
+import { CAR_RESTITUTION, capsuleGap, carContact, collideCarOneSided, collideCars, type CarState } from "../shared/physics";
+import type { CarSnap } from "../shared/protocol";
+import { Contacts, IMPACT_MIN_SPEED, PREDICT_MAX_MS, predicted } from "../client/contact";
 
 const track = buildTrack(RUST_BOWL);
 const L = track.length;
@@ -535,7 +538,272 @@ function garage(): void {
   check("DT sanity", Math.abs(DT - 1 / 60) < 1e-12);
 }
 
-for (const t of [rivets, gating, mines, wrecks, finishing, garage, readyCheck]) {
+// ---- solid car collisions -------------------------------------------------------------
+
+const body = (x: number, y: number, h: number, vx = 0, vy = 0): CarState => ({ x, y, h, vx, vy, seg: 0, wreck: 0 });
+
+/** b relative to a, in a's frame: along a's heading and sideways. */
+function relPos(a: CarState, b: CarState): { along: number; lat: number } {
+  const c = Math.cos(a.h), s = Math.sin(a.h);
+  const dx = b.x - a.x, dy = b.y - a.y;
+  return { along: dx * c + dy * s, lat: -dx * s + dy * c };
+}
+
+/**
+ * Drive a and b for n ticks (straight-line motion, or a Room when given) and report whether
+ * they ever overlapped after a tick, touched at all, or b went through a's body (crossed
+ * a's nose-tail line within its width, or its side line within its length).
+ */
+function drive(a: CarState, b: CarState, n: number): { overlap: number; touched: boolean; through: boolean } {
+  const r0 = relPos(a, b);
+  let overlap = 0, touched = false, through = false;
+  for (let i = 0; i < n; i++) {
+    a.x += a.vx * DT; a.y += a.vy * DT;
+    b.x += b.vx * DT; b.y += b.vy * DT;
+    touched = collideCars(a, b) || touched;
+    overlap = Math.max(overlap, -capsuleGap(a, b));
+    const r = relPos(a, b);
+    if (Math.sign(r.along) !== Math.sign(r0.along) && Math.abs(r.lat) < 16 && Math.abs(r0.lat) < 16) through = true;
+    if (Math.sign(r.lat) !== Math.sign(r0.lat) && Math.abs(r.along) < 15.5 && Math.abs(r0.along) < 15.5) through = true;
+  }
+  return { overlap, touched, through };
+}
+
+/** Snapshot-shaped car (what the client's prediction sees). */
+function snapCar(id: string, c: CarState, extra: Partial<CarSnap> = {}): CarSnap {
+  return { k: "car", id, x: c.x, y: c.y, h: c.h, vx: c.vx, vy: c.vy, seg: 0, lap: 0, rd: 0, fin: 0, hp: 100, maxHp: 100, wreck: c.wreck, ghost: false, ...extra };
+}
+
+function collisions(): void {
+  // Shape: a capsule matching the drawn 30x16 car.
+  const contactAt = (dirx: number, diry: number, h: number) => {
+    let lo = 0, hi = 60;
+    for (let i = 0; i < 40; i++) {
+      const m = (lo + hi) / 2;
+      if (carContact(body(0, 0, 0), body(dirx * m, diry * m, h))) lo = m;
+      else hi = m;
+    }
+    return lo;
+  };
+  const side = contactAt(0, 1, 0), nose = contactAt(1, 0, 0), tee = contactAt(0, 1, Math.PI / 2);
+  check("capsule: contact at 16 between centres side by side", Math.abs(side - 16) < 0.01, side.toFixed(3));
+  check("capsule: contact at 31 between centres nose to tail", Math.abs(nose - 31) < 0.01, nose.toFixed(3));
+  check("capsule: T contact at 23.5 (nose to side)", Math.abs(tee - 23.5) < 0.01, tee.toFixed(3));
+  const pushed = body(0, 0, 0), other = body(0, 10, 0);
+  collideCars(pushed, other);
+  check("an overlap resolves to exactly touching (side by side 10 -> 16)", Math.abs(other.y - pushed.y - 16) < 1e-9, `${(other.y - pushed.y).toFixed(6)}`);
+
+  // No pass-through at twice top speed: head-on with every lateral offset that touches,
+  // at several tick phases, and T-bones on a still and on a moving car.
+  const V = 2 * BASE_STATS.topSpeed;
+  let cases = 0, bad: string[] = [];
+  for (const lat of [0, 0.5, 2, 5, 8, 12, 15]) {
+    for (const start of [100, 100.4, 103.1, 107.7, 112]) {
+      const r = drive(body(0, 0, 0, V, 0), body(start, lat, Math.PI, -V, 0), 40);
+      cases++;
+      if (r.through || r.overlap > 1e-6 || !r.touched) bad.push(`lat ${lat} start ${start}: ${JSON.stringify(r)}`);
+    }
+  }
+  check(`no pass-through head-on at twice top speed (${cases} offsets and tick phases)`, bad.length === 0, bad.slice(0, 2).join("; "));
+  cases = 0;
+  bad = [];
+  for (const avx of [0, V / 2, V]) {
+    for (const bx of [-12, -5, 0, 5, 12]) {
+      for (const off of [0, 3.3, 7.1, 11.9]) {
+        const r = drive(body(0, 0, 0, avx, 0), body(bx + (avx * (60 + off)) / V, -60 - off, Math.PI / 2, 0, V), 40);
+        cases++;
+        if (r.through || r.overlap > 1e-6 || !r.touched) bad.push(`avx ${avx} bx ${bx} off ${off}: ${JSON.stringify(r)}`);
+      }
+    }
+  }
+  check(`no pass-through in a T-bone at twice top speed (${cases} cases)`, bad.length === 0, bad.slice(0, 2).join("; "));
+
+  // The same through the server: Room ticks with stepCar, walls and the jitter buffer, on
+  // the straight at s = 6500..6800.
+  {
+    const sim = new Sim();
+    const a = sim.add("A");
+    const b = sim.add("B");
+    sim.startRace(a);
+    sim.place(a, 6560, 3, V);
+    sim.place(b, 6700, -3, V);
+    b.car!.h += Math.PI;
+    b.car!.vx = -b.car!.vx;
+    b.car!.vy = -b.car!.vy;
+    const r0 = relPos(a.car!, b.car!);
+    let overlap = 0, through = false, minGap = Infinity;
+    for (let i = 0; i < 30; i++) {
+      sim.run(1, () => ({ throttle: 1 }));
+      const g = capsuleGap(a.car!, b.car!);
+      overlap = Math.max(overlap, -g);
+      minGap = Math.min(minGap, g);
+      const r = relPos(a.car!, b.car!);
+      if (Math.sign(r.along) !== Math.sign(r0.along) && Math.abs(r.lat) < 16) through = true;
+    }
+    check("server: head-on at twice top speed bounces back, no overlap after any tick", !through && overlap < 1e-6 && minGap < 0.5, `min gap ${minGap.toFixed(3)}, max overlap ${overlap.toExponential(1)}`);
+
+    sim.place(a, 6600, 0, 0);
+    sim.place(b, 6600, -60, 0);
+    b.car!.h += Math.PI / 2; // facing a's side
+    b.car!.vx = Math.cos(b.car!.h) * V;
+    b.car!.vy = Math.sin(b.car!.h) * V;
+    const t0 = relPos(a.car!, b.car!);
+    overlap = 0;
+    through = false;
+    minGap = Infinity;
+    for (let i = 0; i < 20; i++) {
+      sim.run(1, (p) => (p === b ? { throttle: 1 } : {}));
+      const g = capsuleGap(a.car!, b.car!);
+      overlap = Math.max(overlap, -g);
+      minGap = Math.min(minGap, g);
+      const r = relPos(a.car!, b.car!);
+      if (Math.sign(r.lat) !== Math.sign(t0.lat) && Math.abs(r.along) < 15.5) through = true;
+    }
+    check("server: T-bone at twice top speed stops at the side, no overlap after any tick", !through && overlap < 1e-6 && minGap < 0.5, `min gap ${minGap.toFixed(3)}, max overlap ${overlap.toExponential(1)}`);
+  }
+
+  // One-sided resolver = collideCars for car a; b untouched.
+  let seed = 7;
+  const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+  let contacts = 0, maxDiff = 0, bMoved = 0, mismatched = 0;
+  for (let i = 0; i < 20000; i++) {
+    const a = body(rnd() * 10, rnd() * 10, rnd() * 7 - 3.5, (rnd() - 0.5) * 900, (rnd() - 0.5) * 900);
+    const b = body(a.x + (rnd() - 0.5) * 64, a.y + (rnd() - 0.5) * 64, rnd() * 7 - 3.5, (rnd() - 0.5) * 900, (rnd() - 0.5) * 900);
+    const a1 = cloneCar(a), b1 = cloneCar(b), a2 = cloneCar(a), b2 = cloneCar(b);
+    const hit = collideCars(a1, b1);
+    const one = collideCarOneSided(a2, b2);
+    if (hit !== !!one) mismatched++;
+    if (hit) contacts++;
+    for (const k of ["x", "y", "h", "vx", "vy"] as const) {
+      maxDiff = Math.max(maxDiff, Math.abs(a1[k] - a2[k]));
+      if (b2[k] !== b[k]) bMoved++;
+    }
+  }
+  check(
+    "one-sided resolver gives car a exactly collideCars' result, b unchanged",
+    contacts > 5000 && maxDiff === 0 && bMoved === 0 && mismatched === 0,
+    `${contacts} contacts, max diff ${maxDiff}, b changed ${bMoved}x, hit mismatches ${mismatched}`,
+  );
+
+  // Server: ghosted, wrecked and finished cars are skipped (side by side 10 apart stays 10).
+  {
+    const sim = new Sim();
+    const a = sim.add("A");
+    const b = sim.add("B");
+    sim.startRace(a);
+    const gapAfter = (prep: () => void) => {
+      sim.place(a, 2000, -5);
+      sim.place(b, 2000, 5);
+      a.ghost = b.ghost = 0;
+      a.finished = b.finished = false;
+      prep();
+      sim.run(1);
+      return Math.hypot(b.car!.x - a.car!.x, b.car!.y - a.car!.y);
+    };
+    const solidGap = gapAfter(() => {});
+    const ghostGap = gapAfter(() => (b.ghost = 30));
+    const wreckGap = gapAfter(() => (b.car!.wreck = 30));
+    const finGap = gapAfter(() => (b.finished = true));
+    check("server: solid cars 10 apart are pushed to 16", Math.abs(solidGap - 16) < 0.5, solidGap.toFixed(2));
+    check(
+      "server: ghosted, wrecked and finished cars do not collide",
+      [ghostGap, wreckGap, finGap].every((g) => Math.abs(g - 10) < 0.5),
+      `ghost ${ghostGap.toFixed(2)}, wreck ${wreckGap.toFixed(2)}, finished ${finGap.toFixed(2)}`,
+    );
+
+    // Client prediction against a real snapshot: the same cars are skipped there.
+    const snapWith = (prep: () => void) => {
+      sim.place(a, 2000, -40);
+      sim.place(b, 2000, 5);
+      a.ghost = b.ghost = 0;
+      a.finished = b.finished = false;
+      prep();
+      sim.run(2); // a snapshot goes out every 2 ticks
+      const m = sim.conns.get(a.id)!.msgs.filter((x) => x.t === "snap").pop() as Extract<ServerMsg, { t: "snap" }>;
+      return { cars: new Map(m.ents.filter((e): e is CarSnap => e.k === "car").map((e) => [e.id, e])) };
+    };
+    const predictHit = (snap: { cars: Map<string, CarSnap> }, wreck = 0) => {
+      const c = new Contacts();
+      c.setBase(snap, a.id);
+      const bs = snap.cars.get(b.id)!;
+      const own = body(bs.x - Math.sin(bs.h) * 10, bs.y + Math.cos(bs.h) * 10, bs.h); // 10 to b's side
+      own.wreck = wreck;
+      return !!c.collide(own, 0);
+    };
+    const solid = predictHit(snapWith(() => {}));
+    const ghost = predictHit(snapWith(() => (b.ghost = 30)));
+    const wreck = predictHit(snapWith(() => (b.car!.wreck = 30)));
+    const fin = predictHit(snapWith(() => (b.finished = true)));
+    const ownGhost = predictHit(snapWith(() => (a.ghost = 30)));
+    const ownFin = predictHit(snapWith(() => (a.finished = true)));
+    const ownWreck = predictHit(snapWith(() => {}), 30);
+    check("client prediction: bumps a solid car from the snapshot", solid);
+    check("client prediction: skips ghosted, wrecked and finished cars", !ghost && !wreck && !fin, `ghost ${ghost} wreck ${wreck} finished ${fin}`);
+    check(
+      "client prediction: no bumps while the own car is ghosted, finished or wrecked",
+      !ownGhost && !ownFin && !ownWreck,
+      `ghost ${ownGhost} finished ${ownFin} wrecked ${ownWreck}`,
+    );
+  }
+
+  // Prediction pose: snapshot + v * k * DT, at most PREDICT_MAX_MS ahead.
+  const ps = snapCar("o", body(100, 50, 0.3, 300, -120));
+  const p3 = predicted(ps, 3), p50 = predicted(ps, 50);
+  check(
+    "predicted pose = snapshot + v*k*DT, clamped to 150 ms",
+    Math.abs(p3.x - (100 + 300 * 3 * DT)) < 1e-9 && Math.abs(p3.y - (50 - 120 * 3 * DT)) < 1e-9 &&
+      Math.abs(p50.x - (100 + 300 * PREDICT_MAX_MS / 1000)) < 1e-9 && p50.h === 0.3,
+    `k=3 (${p3.x.toFixed(2)}, ${p3.y.toFixed(2)}), k=50 x ${p50.x.toFixed(2)}`,
+  );
+
+  // Feedback: a hard live contact queues one effect, then a cooldown; replays never do.
+  {
+    const snap = { cars: new Map([["o", snapCar("o", body(100, 0, 0))], ["me", snapCar("me", body(0, 0, 0))]]) };
+    const fx = new Contacts();
+    fx.setBase(snap, "me");
+    const hard = body(70, 0, 0, 300, 0); // nose 1 unit into o's tail, closing at 300
+    fx.step(hard, 1, 1000 / 60);
+    const first = fx.takeImpacts();
+    let again = 0;
+    for (let i = 0; i < 5; i++) {
+      const c = body(70, 0, 0, 300, 0);
+      fx.step(c, 1, 1000 / 60);
+      again += fx.takeImpacts().length;
+    }
+    const replay = new Contacts();
+    replay.setBase(snap, "me");
+    const replayHit = replay.collide(body(70, 0, 0, 300, 0), 1);
+    const slow = new Contacts();
+    slow.setBase(snap, "me");
+    slow.step(body(70, 0, 0, IMPACT_MIN_SPEED * 0.5, 0), 1, 1000 / 60);
+    check(
+      "impact effect: one for a hard live contact, at the contact point",
+      first.length === 1 && Math.abs(first[0].x - 85) < 1e-6 && Math.abs(first[0].y) < 1e-9 && first[0].speed === 300, // nose 77.5, tail 92.5
+      first.map((e) => `(${e.x.toFixed(2)}, ${e.y.toFixed(2)}) at ${e.speed}`).join() || "none",
+    );
+    check("impact effect: ~150 ms cooldown (none for the next 5 hard steps)", again === 0, `${again} more`);
+    check("impact effect: replayed contacts and soft touches fire none", !!replayHit && replay.takeImpacts().length === 0 && slow.takeImpacts().length === 0);
+    check("one-sided bump: own car takes half the push and half the impulse", Math.abs(hard.x - 69.5) < 1e-6 && Math.abs(hard.vx - 300 * (1 - (1 + CAR_RESTITUTION) / 2)) < 1e-6, `x ${hard.x.toFixed(3)} vx ${hard.vx.toFixed(2)}`);
+
+    // Drawing: a near car eases to exactly its predicted pose; a far one stays interpolated.
+    const draw = new Contacts();
+    const near = snapCar("n", body(50, 20, 0.5, 200, 0));
+    const far = snapCar("f", body(400, 0, 0, 200, 0));
+    draw.setBase({ cars: new Map([["n", near], ["f", far], ["me", snapCar("me", body(0, 0, 0))]]) }, "me");
+    const interp = [{ id: "n", x: 30, y: 20, h: 0.5 }, { id: "f", x: 380, y: 0, h: 0 }];
+    let out = draw.blend(interp, body(0, 0, 0), 4.5, 16);
+    const early = out[0].x;
+    for (let i = 0; i < 12; i++) out = draw.blend(interp, body(0, 0, 0), 4.5, 16);
+    const want = predicted(near, 4.5);
+    check(
+      "drawing: a near car eases (~150 ms) to exactly its predicted pose; a far car stays interpolated",
+      early > 30 && early < want.x && out[0].x === want.x && out[0].y === want.y && out[1].x === 380,
+      `first frame x ${early.toFixed(2)}, after 13 frames (${out[0].x.toFixed(2)}, ${out[0].y.toFixed(2)}) want (${want.x.toFixed(2)}, ${want.y.toFixed(2)}), far x ${out[1].x}`,
+    );
+  }
+}
+
+for (const t of [rivets, gating, mines, wrecks, finishing, garage, readyCheck, collisions]) {
   console.log(`\n# ${t.name}`);
   try {
     t();

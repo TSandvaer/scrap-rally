@@ -3,7 +3,7 @@
 // Two races in a row with weapons, the garage and a reverse grid. Run: npm run bots
 
 import net from "node:net";
-import { Game, lostMessage, track, type ConnReason, type TokenStore } from "../client/game";
+import { Game, lostMessage, track, type ConnReason, type Controls, type TokenStore } from "../client/game";
 import { connectWs, type LagSim } from "../client/net";
 import {
   CODE_ALPHABET,
@@ -17,12 +17,15 @@ import {
 } from "../shared/protocol";
 import { PLACE_PAYOUT, WRECK_BONUS } from "../shared/shop";
 import { minSelfClearance } from "../shared/track";
+import { angleDiff, capsuleGap, clamp } from "../shared/physics";
 import { startServer, type RunningServer } from "../server/index";
 import { BotDriver } from "./bot-ai";
 
 const STEP_MS = 1000 / 60;
 const LAPS = 1;
 const BOT_HP = 24; // low HP so wrecks really happen in a one-lap race (3 rivets or 1 mine)
+// Measured 2026-11-16 over 7 runs: 0.12-0.27 with bump prediction (0.23-0.35 without).
+const CONTACT_P95_MAX = 0.5;
 
 // ---- tiny assertion log -------------------------------------------------------------
 
@@ -110,6 +113,11 @@ class Bot {
   phases: Phase[] = [];
   welcomes = 0;
   garages = 0;
+  ram: string | null = null; // player id to steer into (contact test) ...
+  apart = false; // ... or, while set, to steer away from
+  readonly contactErrs: number[] = []; // reconciliation errors while touching another car
+  readonly freeErrs: number[] = []; // ... and all the others
+  private errsSeen = 0;
 
   constructor(
     readonly name: string,
@@ -137,7 +145,46 @@ class Bot {
 
   /** Called every fixed step. */
   step(): void {
-    this.game.step(this.driver.controls(), STEP_MS);
+    const ctl = this.driver.controls();
+    if (this.ram) this.ramInto(this.ram, ctl);
+    this.game.step(ctl, STEP_MS);
+    this.sortErrors();
+  }
+
+  /**
+   * Contact test: steer at a point just ahead of the target car; with the target behind,
+   * keep the line but coast so it catches up and runs into us. While `apart`, steer
+   * away from it instead (so the next ram is a fresh impact, not just rubbing).
+   */
+  private ramInto(id: string, ctl: Controls): void {
+    const c = this.game.car;
+    const o = this.game.otherPoses().find((p) => p.id === id);
+    if (!c || !o || c.wreck) return;
+    const side = angleDiff(c.h, Math.atan2(o.y - c.y, o.x - c.x));
+    if (this.apart) {
+      if (Math.hypot(o.x - c.x, o.y - c.y) < 60) ctl.steer = side > 0 ? -0.6 : 0.6;
+      return;
+    }
+    const tx = o.x + Math.cos(o.h) * 20, ty = o.y + Math.sin(o.h) * 20;
+    const off = angleDiff(c.h, Math.atan2(ty - c.y, tx - c.x));
+    if (Math.abs(side) > Math.PI / 2) ctl.throttle = Math.min(ctl.throttle, 0);
+    else ctl.steer = clamp(off * 2.5, -1, 1);
+  }
+
+  /**
+   * File new reconciliation errors as "in contact" when the own car predicted a bump in
+   * the last 300 ms or the server shows it within 3 units of another solid car.
+   */
+  private sortErrors(): void {
+    const g = this.game;
+    const errs = g.recErrors;
+    if (errs.length === this.errsSeen) return;
+    const me = g.latest?.cars.get(g.you);
+    const touching =
+      performance.now() - g.contact.lastContact < 300 ||
+      (!!me && [...(g.latest?.cars.values() ?? [])].some((o) => o.id !== me.id && !o.ghost && !o.wreck && capsuleGap(me, o) < 3));
+    for (let i = this.errsSeen; i < errs.length; i++) (touching ? this.contactErrs : this.freeErrs).push(errs[i]);
+    this.errsSeen = errs.length;
   }
 }
 
@@ -250,6 +297,7 @@ async function runRace(label: string, bots: Bot[], host: Bot, racers: Bot[]): Pr
 async function run(ctx: Ctx, bots: Bot[]): Promise<void> {
   await runGame(ctx, bots);
   await runServerFull(bots);
+  await runContact(ctx, bots);
 }
 
 const lost = new Map<string, (ConnReason | undefined)[]>();
@@ -576,6 +624,51 @@ async function runServerFull(bots: Bot[]): Promise<void> {
     for (const b of [G, H, I]) b.game.leave();
     await small.close();
   }
+}
+
+/**
+ * Solid car contact: a lagged bot (80±10 ms) and an unlagged one steer into each other for
+ * a stretch of a race, weapons off. The lagged bot predicts its half of every bump; its
+ * reconciliation error while touching shows how well that prediction holds.
+ */
+async function runContact(ctx: Ctx, bots: Bot[]): Promise<void> {
+  const K = new Bot("Kilo", ctx.url, 0, { lag: 80, jitter: 10 });
+  const M = new Bot("Mike", ctx.url, 0);
+  bots.push(K, M);
+  for (const b of [K, M]) b.weapons = false;
+  K.game.create(K.name);
+  await waitFor("K welcome", () => !!K.game.you, 3000);
+  M.game.join(K.game.code, M.name);
+  await waitFor("M in K's room", () => K.game.players.length === 2, 3000);
+  await readyUp("contact", K, [K, M]);
+  K.game.start();
+  await waitFor("contact: racing", () => K.game.phase === "racing" && !!K.game.car && !!M.game.car, 6000);
+  K.ram = M.game.you;
+  M.ram = K.game.you;
+  for (let i = 0; i < 7; i++) {
+    for (const b of [K, M]) b.apart = false;
+    await sleep(1400);
+    for (const b of [K, M]) b.apart = true;
+    await sleep(600);
+  }
+  const impacts = K.game.contact.takeImpacts().length + M.game.contact.takeImpacts().length;
+  for (const b of [K, M]) b.game.leave();
+
+  const all = stats(K.game.recErrors);
+  const hit = stats(K.contactErrs);
+  const free = stats(K.freeErrs);
+  console.log(
+    `      Kilo     rec err: all n=${all.n} median=${all.median.toFixed(3)} p95=${all.p95.toFixed(3)} max=${all.max.toFixed(2)}; ` +
+      `in contact n=${hit.n} median=${hit.median.toFixed(3)} p95=${hit.p95.toFixed(3)} max=${hit.max.toFixed(2)}; ` +
+      `free p95=${free.p95.toFixed(3)}; impact effects ${impacts}`,
+  );
+  check("contact: the bots really bumped (>= 60 reconciliation samples in contact)", hit.n >= 60, `${hit.n} samples`);
+  check(
+    `contact: lagged bot p95 reconciliation error in contact < ${CONTACT_P95_MAX}`,
+    hit.n >= 60 && hit.p95 < CONTACT_P95_MAX,
+    `p95 ${hit.p95.toFixed(3)}`,
+  );
+  check("contact: lagged bot median < 0.5 and max <= 50 throughout", all.n > 100 && all.median < 0.5 && all.max <= 50, `median ${all.median.toFixed(3)}, max ${all.max.toFixed(2)}`);
 }
 
 main().catch((e) => {
