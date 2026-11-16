@@ -8,7 +8,11 @@ live is still d912583; ask before the next push. In flight on run `run_c58bb5836
 before its own merge). Taste test moved AFTER merge (user, 2026-11-16): merge on reviewer APPROVE + gate,
 then the user plays from the main checkout; M3 starts on the user's OK.
 Update 2026-11-16: author done, head 0ca2619 (main merged in; sim 117/117, bots 50/50; verified clean);
-ticket in review; reviewer ctx_d881cd9c7151 on new run run_3bffa6014793 (author still on run_c58bb5836634). Milestone 3 queued (below), starts after collisions merge.
+ticket in review; reviewer ctx_d881cd9c7151 on new run run_3bffa6014793 (author still on run_c58bb5836634).
+MERGED 2026-11-16: review APPROVE (3 non-blocking notes in the ClickUp comment); main 72f5697 = collisions
+(gate: check clean, sim 117/117, bots 50/50); ticket ready for qa test; reviewer released. NOW AT THE TASTE TEST:
+the user plays from the main checkout (:3000; try ?lag=80 too, prediction goes inelastic with latency).
+Author worker + workspace kept until the verdict (restitution tuning goes to it). Then: cleanup, start M3-T1a + M3-T2. Milestone 3 queued (below), starts after collisions merge.
 
 **Resume (2026-11-15):** Live: https://scrap-rally.onrender.com at d912583. In flight on run
 `run_c58bb5836634`: dispatch `ctx_a40ce564286f` (task task_3736690503f4) on ClickUp 123jpnbf3xa "Easier
