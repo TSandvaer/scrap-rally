@@ -4,7 +4,8 @@
 //   npm run smoke -- https://example.onrender.com --race 10
 //
 // Checks GET /healthz and GET /, then two WebSocket clients create and join a room, the
-// host starts, and both race for --race seconds (default 10) while pinging. Prints RTT,
+// guest reports ready, the host starts, and both race for --race seconds (default 10)
+// while pinging. Prints RTT,
 // snapshots per second and the largest gap between snapshots (arrival time and server
 // clock). Exits 1 on any failure. https:// uses wss://.
 //
@@ -229,6 +230,13 @@ async function main(): Promise<void> {
     await host.expect("room with 2 players (host)", roomWith(2));
     await guest.expect("room with 2 players (guest)", roomWith(2));
     console.log("PASS  join: both clients see 2 players");
+
+    // Lobby ready check: the host's Start waits until the guest is ready.
+    guest.send({ t: "ready", ready: true });
+    const guestReady = (m: ServerMsg): m is Extract<ServerMsg, { t: "room" }> =>
+      m.t === "room" && m.players.some((p) => p.id === guest.you && p.ready);
+    await host.expect("room with the guest ready (host)", guestReady);
+    console.log("PASS  ready: the host sees the guest ready");
 
     host.send({ t: "start" });
     const raceStart = (m: ServerMsg): m is Extract<ServerMsg, { t: "room" }> => m.t === "room" && m.phase === "racing";
