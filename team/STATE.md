@@ -1,6 +1,10 @@
 # STATE — Scrap Rally coordination
 
-**Resume note (2026-11-16):** the user is playtesting the LIVE site (old balance, d912583) with a friend; easier-start (9ba7740) still waits for the user's taste verdict, unmerged.
+**Resume note (2026-11-16):** Workers all released; easier-start workspace removed at the user's
+request (clean, nothing running). Branch `TSandvaer/easier-start` KEPT at 9ba7740 (reviewed, APPROVE,
+unmerged, ClickUp 123jpnbf3xa `ready for qa test`): it waits for the user's taste verdict. To test it
+again: either merge + push + Manual Deploy (on the user's go-ahead) and play live, or have Orca create a
+fresh workspace from that branch for a local run. Live site = old balance d912583.
 
 **Resume (2026-11-15):** Live: https://scrap-rally.onrender.com at d912583. In flight on run
 `run_c58bb5836634`: dispatch `ctx_a40ce564286f` (task task_3736690503f4) on ClickUp 123jpnbf3xa "Easier
@@ -18,9 +22,7 @@ Manual Deploy only on the user's go-ahead. The user's own dev server runs on :30
 
 ## In flight
 
-| Ticket | Dispatch | Workspace | Branch | Port | Started |
-| --- | --- | --- | --- | --- | --- |
-| 123jpnbf3xa Easier start | 9ba7740 approved; waiting for the user's taste test | ~/orca/workspaces/scrap-rally/easier-start | TSandvaer/easier-start | 3001 | 2026-11-15 |
+None (branch TSandvaer/easier-start parked unmerged, see the resume note).
 
 ## Waiting on the user
 
