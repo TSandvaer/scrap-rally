@@ -6,7 +6,9 @@ live is still d912583; ask before the next push. In flight on run `run_c58bb5836
 `ctx_c8a5662fcae7` on ClickUp 123jpnbf6cy "Solid collisions" (workspace
 ~/orca/workspaces/scrap-rally/solid-collisions, branch TSandvaer/solid-collisions, port 3002; must merge main
 before its own merge). Taste test moved AFTER merge (user, 2026-11-16): merge on reviewer APPROVE + gate,
-then the user plays from the main checkout; M3 starts on the user's OK. Milestone 3 queued (below), starts after collisions merge.
+then the user plays from the main checkout; M3 starts on the user's OK.
+Update 2026-11-16: author done, head 0ca2619 (main merged in; sim 117/117, bots 50/50; verified clean);
+ticket in review; reviewer ctx_d881cd9c7151 on new run run_3bffa6014793 (author still on run_c58bb5836634). Milestone 3 queued (below), starts after collisions merge.
 
 **Resume (2026-11-15):** Live: https://scrap-rally.onrender.com at d912583. In flight on run
 `run_c58bb5836634`: dispatch `ctx_a40ce564286f` (task task_3736690503f4) on ClickUp 123jpnbf3xa "Easier
@@ -27,6 +29,7 @@ Manual Deploy only on the user's go-ahead. The user's own dev server runs on :30
 | Ticket | Dispatch | Workspace | Branch | Port | Started |
 | --- | --- | --- | --- | --- | --- |
 | 123jpnbf6cy Solid collisions | ctx_c8a5662fcae7 | ~/orca/workspaces/scrap-rally/solid-collisions | TSandvaer/solid-collisions | 3002 | 2026-11-16 |
+| 123jpnbf6cy review of 0ca2619 | ctx_d881cd9c7151 (run run_3bffa6014793) | main checkout (read-only) | — | — | 2026-11-16 |
 
 ## Queued (milestone 3, PLAN-M3.md; start after solid collisions 123jpnbf6cy and easier-start 123jpnbf3xa merge)
 
