@@ -37,6 +37,15 @@ Manual Deploy only on the user's go-ahead. The user's own dev server runs on :30
 | 123jpnbf6cy Solid collisions | ctx_c8a5662fcae7 | ~/orca/workspaces/scrap-rally/solid-collisions | TSandvaer/solid-collisions | 3002 | 2026-11-16 |
 | 123jpnbf3xa Easier start: merge main in | ctx_ff922b220719 | ~/orca/workspaces/scrap-rally/easier-start-merge | TSandvaer/easier-start-merge | 3001 | 2026-11-16 |
 
+
+## Queued (milestone 3, PLAN-M3.md; start after solid collisions 123jpnbf6cy and easier-start 123jpnbf3xa merge)
+
+1. 123jpnbf6e6 M3-T1a shared track features + jump/fall/recovery physics + validation  } in parallel
+2. 123jpnbf6e7 M3-T2 per-room track + host track selection (plumbing)                  }
+3. 123jpnbf6e8 M3-T1b server/client wiring (after T1a + T2)                            } in parallel
+4. 123jpnbf6e9 M3-T3 rendering (after T1a; taste gate: screenshots)                    }
+5. 123jpnbf6ea M3-T4 Crusher Run + Overpass Knot + jumping bots (last; taste gate: user drives both)
+
 ## Waiting on the user
 
 - Render: done (account, GitHub, Blueprint, first deploy). Later deploys: user clicks Manual Deploy.
