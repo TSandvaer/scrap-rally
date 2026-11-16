@@ -1,5 +1,7 @@
 # STATE — Scrap Rally coordination
 
+**Resume note (2026-11-16):** the user is playtesting the LIVE site (old balance, d912583) with a friend; easier-start (9ba7740) still waits for the user's taste verdict, unmerged.
+
 **Resume (2026-11-15):** Live: https://scrap-rally.onrender.com at d912583. In flight on run
 `run_c58bb5836634`: dispatch `ctx_a40ce564286f` (task task_3736690503f4) on ClickUp 123jpnbf3xa "Easier
 start" (no starting ammo, weapons armed 8 s after GO, half damage; DECISIONS 2026-11-15), workspace
