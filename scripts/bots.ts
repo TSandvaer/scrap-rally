@@ -206,11 +206,26 @@ function expectedEarnings(events: GameEvent[], racers: string[]): Map<string, nu
   return out;
 }
 
+/** Every racer except the host reports ready; resolves once the host's room state shows it. */
+async function readyUp(label: string, host: Bot, racers: Bot[]): Promise<boolean> {
+  const others = racers.filter((b) => b !== host);
+  for (const b of others) b.game.setReady(true);
+  return waitFor(`${label}: racers ready`, () => others.every((b) => host.game.player(b.game.you)?.ready), 3000);
+}
+
 async function runRace(label: string, bots: Bot[], host: Bot, racers: Bot[]): Promise<ResultRow[]> {
   const evFrom = host.events.length;
   for (const b of bots) b.results = null;
+  await readyUp(label, host, racers);
+  const e0 = host.errors.length;
+  const waiting = host.game.waitingFor();
   host.game.start();
   await waitFor(`${label}: countdown`, () => host.game.phase === "countdown", 2000);
+  check(
+    `${label}: host start accepted once every racer is ready`,
+    host.game.phase === "countdown" && host.errors.length === e0,
+    host.errors.slice(e0).join("; ") || `host counted ${waiting} not ready at Start`,
+  );
   await waitFor(`${label}: racing`, () => host.game.phase === "racing", 5000);
   const t0 = performance.now();
   const finished = () => racers.every((b) => host.game.latest?.cars.get(b.game.you)?.fin);
@@ -297,6 +312,26 @@ async function runGame(ctx: Ctx, bots: Bot[]): Promise<void> {
   B.game.start();
   await waitFor("B start refused", () => B.errors.length > e1, 2000);
   check("non-host start is refused", B.errors.length > e1 && A.game.phase === "lobby", B.errors[e1] ?? "");
+
+  // Ready check: the host's Start waits for B and C; with B ready it still waits for C.
+  const e2 = A.errors.length;
+  A.game.start();
+  await waitFor("A start refused (nobody ready)", () => A.errors.length > e2, 2000);
+  const waitingBefore = A.game.waitingFor();
+  B.game.setReady(true);
+  await waitFor("A sees B ready", () => !!A.game.player(B.game.you)?.ready, 2000);
+  const e3 = A.errors.length;
+  A.game.start();
+  await waitFor("A start refused (C not ready)", () => A.errors.length > e3, 2000);
+  check(
+    "ready check: start refused while a bot is not ready (2, then 1 waiting)",
+    A.errors[e2] === "Waiting for 2 players to get ready" &&
+      A.errors[e3] === "Waiting for 1 player to get ready" &&
+      waitingBefore === 2 &&
+      A.game.waitingFor() === 1 &&
+      A.game.phase === "lobby",
+    `${A.errors[e2] ?? "-"}; ${A.errors[e3] ?? "-"}; client counted ${waitingBefore} then ${A.game.waitingFor()}`,
+  );
 
   // ---- race 1 ----------------------------------------------------------------------
   const scrapBefore1 = new Map([A, B, C].map((b) => [b.game.you, b.game.scrap]));
