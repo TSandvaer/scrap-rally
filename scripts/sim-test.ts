@@ -2,10 +2,10 @@
 // scripted inputs (no sockets, no wall clock). Covers weapons, wrecks, the garage and
 // payouts. Run: npx tsx scripts/sim-test.ts
 
-import { BASE_STATS, cloneCar, DT } from "../shared/physics";
+import { BASE_STATS, cloneCar, DT, speedOf, stepCar, TICK_HZ, type CarState } from "../shared/physics";
 import { FORCE_START_MS, RECONNECT_GRACE_MS, type ClientMsg, type GameEvent, type ServerMsg } from "../shared/protocol";
 import { payouts, startingWallet, buy as shopBuy, statsFor } from "../shared/shop";
-import { buildTrack, pointAt, queryTrackNear, RUST_BOWL } from "../shared/track";
+import { buildTrack, pointAt, queryTrackNear, RUST_BOWL, type TrackDef } from "../shared/track";
 import {
   BTN_RIVET,
   GHOST_TICKS,
@@ -512,7 +512,11 @@ function garage(): void {
   check("upgrade levels cap at 3", sim.room.buy(a, "welder") === "Already maxed out" && a.levels.welder === 3);
   sim.startRace(a);
   check("garage closed during a race", sim.room.buy(a, "mines") === "The garage is closed during a race");
-  check("upgrades change the stats the car steps with", a.stats.topSpeed === statsFor(a.levels).topSpeed && a.stats.topSpeed > BASE_STATS.topSpeed * 1.069);
+  check(
+    "upgrades change the stats the car steps with: engine raises accel, not top speed",
+    a.stats.accel === statsFor(a.levels).accel && a.stats.accel > BASE_STATS.accel * 1.069 && a.stats.topSpeed === BASE_STATS.topSpeed,
+    `accel=${a.stats.accel.toFixed(1)} topSpeed=${a.stats.topSpeed}`,
+  );
 
   // Welding rig L3: 6 HP/s.
   sim.place(a, 300, 0);
@@ -535,7 +539,56 @@ function garage(): void {
   check("DT sanity", Math.abs(DT - 1 / 60) < 1e-12);
 }
 
-for (const t of [rivets, gating, mines, wrecks, finishing, garage, readyCheck]) {
+// Engine upgrade = acceleration only (playtest 2026-11-16). Pure physics on a flat straight:
+// full throttle from standstill, same terminal speed at every level, L3 gets there sooner.
+function engine(): void {
+  const ok = [0, 1, 2, 3].every((e) => {
+    const s = statsFor({ engine: e, tyres: 0, welder: 0 });
+    return s.topSpeed === BASE_STATS.topSpeed && Math.abs(s.accel - BASE_STATS.accel * (1 + 0.07 * e)) < 1e-9;
+  });
+  check("engine L0-L3: accel +7% per level, top speed always the base value", ok);
+  const t2 = statsFor({ engine: 3, tyres: 2, welder: 1 });
+  check("tyres still scale grip and turn", Math.abs(t2.grip - BASE_STATS.grip * 1.2) < 1e-9 && Math.abs(t2.turn - BASE_STATS.turn * 1.08) < 1e-9);
+
+  // A long closed loop whose bottom edge is a 12 000 u straight (collinear control points keep
+  // the spline exactly on y = 0 there). The car starts at x = 1500 on the centerline, heading +x.
+  const straight: TrackDef = {
+    name: "Test Straight",
+    control: [...Array.from({ length: 13 }, (_, i): [number, number] => [i * 1000, 0]), [12000, 3000], [0, 3000]],
+    halfWidth: 64,
+    verge: 44,
+  };
+  const flat = buildTrack(straight);
+  const SECONDS = 8;
+  const drive = (level: number) => {
+    const stats = statsFor({ engine: level, tyres: 0, welder: 0 });
+    const c: CarState = { x: 1500, y: 0, h: 0, vx: 0, vy: 0, seg: 0, wreck: 0 };
+    let t300 = -1;
+    for (let i = 1; i <= SECONDS * TICK_HZ; i++) {
+      stepCar(c, { throttle: 1, steer: 0 }, stats, flat);
+      if (t300 < 0 && speedOf(c) >= 300) t300 = i * DT;
+    }
+    return { terminal: speedOf(c), t300, x: c.x, y: c.y };
+  };
+  const l0 = drive(0);
+  const l3 = drive(3);
+  const detail = (r: ReturnType<typeof drive>) =>
+    `terminal ${r.terminal.toFixed(2)} u/s, 300 u/s at ${r.t300.toFixed(3)} s, x=${r.x.toFixed(0)} y=${r.y.toFixed(2)}`;
+  check("engine L0 run stays on the straight", l0.x < 12000 && Math.abs(l0.y) < 1e-6, detail(l0));
+  check("engine L3 run stays on the straight", l3.x < 12000 && Math.abs(l3.y) < 1e-6, detail(l3));
+  check(
+    "engine L3 and L0 reach the same terminal speed (within 1%)",
+    Math.abs(l3.terminal - l0.terminal) / l0.terminal < 0.01,
+    `L0 ${l0.terminal.toFixed(2)} vs L3 ${l3.terminal.toFixed(2)} u/s`,
+  );
+  check(
+    "engine L3 reaches 300 u/s measurably sooner than L0 (>= 10%)",
+    l0.t300 > 0 && l3.t300 > 0 && l3.t300 <= l0.t300 * 0.9,
+    `L0 ${l0.t300.toFixed(3)} s vs L3 ${l3.t300.toFixed(3)} s`,
+  );
+}
+
+for (const t of [rivets, gating, mines, wrecks, finishing, garage, engine, readyCheck]) {
   console.log(`\n# ${t.name}`);
   try {
     t();

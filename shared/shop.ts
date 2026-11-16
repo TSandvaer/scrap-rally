@@ -25,7 +25,7 @@ export interface Wallet {
 }
 
 export const UPGRADES: Record<UpgradeId, { name: string; blurb: string; prices: number[] }> = {
-  engine: { name: "Engine", blurb: "+7% acceleration and top speed", prices: [400, 800, 1400] },
+  engine: { name: "Engine", blurb: "+7% acceleration", prices: [400, 800, 1400] },
   tyres: { name: "Tyres", blurb: "+10% grip, +4% steering", prices: [350, 700, 1200] },
   welder: { name: "Welding rig", blurb: "Repairs 2 HP/s while driving", prices: [300, 600, 1000] },
 };
@@ -49,11 +49,15 @@ export function isItem(v: unknown): v is ItemId {
   return v === "engine" || v === "tyres" || v === "welder" || v === "rivets" || v === "mines";
 }
 
+/**
+ * Stats a car races with. The engine raises acceleration only (+7 % per level); top speed
+ * stays at the base value at every level (playtest 2026-11-16: a faster top speed made the
+ * engine overpowered).
+ */
 export function statsFor(l: Levels): CarStats {
-  const engine = 1 + 0.07 * l.engine;
   return {
-    accel: BASE_STATS.accel * engine,
-    topSpeed: BASE_STATS.topSpeed * engine,
+    accel: BASE_STATS.accel * (1 + 0.07 * l.engine),
+    topSpeed: BASE_STATS.topSpeed,
     grip: BASE_STATS.grip * (1 + 0.1 * l.tyres),
     turn: BASE_STATS.turn * (1 + 0.04 * l.tyres),
   };
