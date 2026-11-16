@@ -1,17 +1,12 @@
 # STATE — Scrap Rally coordination
 
-**Resume (2026-11-16, latest):** Ready check a63375c is pushed but NOT deployed (live is still d912583;
-probe: no forceStartAt in the room message). In flight on run `run_c58bb5836634`: dispatch
-`ctx_1ebb1b0ac649` (task task_f3809486c4c1) on ClickUp 123jpnbf6ca "Engine acceleration only", workspace
-~/orca/workspaces/scrap-rally/engine-accel, branch `TSandvaer/engine-accel` (from main). On worker_done: verify,
-reviewer, merge, check+test, push (approved: one deploy with both), then the user clicks Manual Deploy
-once; then live QA of the ready check + engine. easier-start still parked (next note).
-
-**Resume note (2026-11-16):** Workers all released; easier-start workspace removed at the user's
-request (clean, nothing running). Branch `TSandvaer/easier-start` KEPT at 9ba7740 (reviewed, APPROVE,
-unmerged, ClickUp 123jpnbf3xa `ready for qa test`): it waits for the user's taste verdict. To test it
-again: either merge + push + Manual Deploy (on the user's go-ahead) and play live, or have Orca create a
-fresh workspace from that branch for a local run. Live site = old balance d912583.
+**Resume (2026-11-16, latest):** main 0dec6c9 (local, 15 ahead of origin) = ready check + engine
+(pushed 4f9ef51) + easier-start (merged locally, user-approved, reviews APPROVE). Deploys are batched:
+live is still d912583; ask before the next push. In flight on run `run_c58bb5836634`: dispatch
+`ctx_c8a5662fcae7` on ClickUp 123jpnbf6cy "Solid collisions" (workspace
+~/orca/workspaces/scrap-rally/solid-collisions, branch TSandvaer/solid-collisions, port 3002; must merge main
+before its own merge). Taste test moved AFTER merge (user, 2026-11-16): merge on reviewer APPROVE + gate,
+then the user plays from the main checkout; M3 starts on the user's OK. Milestone 3 queued (below), starts after collisions merge.
 
 **Resume (2026-11-15):** Live: https://scrap-rally.onrender.com at d912583. In flight on run
 `run_c58bb5836634`: dispatch `ctx_a40ce564286f` (task task_3736690503f4) on ClickUp 123jpnbf3xa "Easier
@@ -31,10 +26,15 @@ Manual Deploy only on the user's go-ahead. The user's own dev server runs on :30
 
 | Ticket | Dispatch | Workspace | Branch | Port | Started |
 | --- | --- | --- | --- | --- | --- |
-| 123jpnbf6ca Engine acceleration only | ctx_1ebb1b0ac649 | ~/orca/workspaces/scrap-rally/engine-accel | TSandvaer/engine-accel | — | 2026-11-16 |
+| 123jpnbf6cy Solid collisions | ctx_c8a5662fcae7 | ~/orca/workspaces/scrap-rally/solid-collisions | TSandvaer/solid-collisions | 3002 | 2026-11-16 |
 
-Parked (unmerged, approved, awaiting the user's taste verdict): TSandvaer/easier-start @ 9ba7740
-(123jpnbf3xa); it must merge main before it can merge.
+## Queued (milestone 3, PLAN-M3.md; start after solid collisions 123jpnbf6cy and easier-start 123jpnbf3xa merge)
+
+1. 123jpnbf6e6 M3-T1a shared track features + jump/fall/recovery physics + validation  } in parallel
+2. 123jpnbf6e7 M3-T2 per-room track + host track selection (plumbing)                  }
+3. 123jpnbf6e8 M3-T1b server/client wiring (after T1a + T2)                            } in parallel
+4. 123jpnbf6e9 M3-T3 rendering (after T1a; taste gate: screenshots)                    }
+5. 123jpnbf6ea M3-T4 Crusher Run + Overpass Knot + jumping bots (last; taste gate: user drives both)
 
 ## Waiting on the user
 

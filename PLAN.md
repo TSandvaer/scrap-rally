@@ -192,6 +192,11 @@ Weapons, scrap and the garage: see [PLAN-M2.md](PLAN-M2.md) (approved and built 
 Public deploy (Render free tier first, Dockerfile portable to Fly.io): see
 [PLAN-HOSTING.md](PLAN-HOSTING.md) (approved 2026-11-14).
 
+## Milestone 3
+
+Jumps, road crossings, holes, recovery points and two new tracks: see [PLAN-M3.md](PLAN-M3.md)
+(approved 2026-11-16, Fable-reviewed).
+
 ## Later (not in the prototype)
 
 Weapons (projectiles, mines) as entities, between-race shop with money, more tracks,

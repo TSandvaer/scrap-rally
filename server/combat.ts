@@ -63,11 +63,11 @@ export class Combat {
   /**
    * Weapons for one consumed command, right after the fighter's car stepped (the client
    * spawns its cosmetic shots at the same point). `minePress` is true only when a real
-   * input's mine counter changed.
+   * input's mine counter changed. `armed`: racing and past the weapons-armed delay.
    */
-  act(f: Fighter, cmd: Command, minePress: boolean, racing: boolean): void {
+  act(f: Fighter, cmd: Command, minePress: boolean, armed: boolean): void {
     if (f.cooldown > 0) f.cooldown--;
-    if (!racing || !solid(f)) return;
+    if (!armed || !solid(f)) return;
     const car = f.car!;
     if (cmd.buttons & BTN_RIVET && f.cooldown === 0 && f.ammo.rivets > 0) {
       this.shots.push(spawnShot(car, this.nextId++, f.id));

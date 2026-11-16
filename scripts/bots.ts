@@ -15,15 +15,17 @@ import {
   type ResultRow,
   type ServerMsg,
 } from "../shared/protocol";
-import { PLACE_PAYOUT, WRECK_BONUS } from "../shared/shop";
+import { AMMO, PLACE_PAYOUT, WRECK_BONUS } from "../shared/shop";
 import { minSelfClearance } from "../shared/track";
 import { angleDiff, capsuleGap, clamp } from "../shared/physics";
+import { BTN_RIVET, WEAPONS_ARM_MS } from "../shared/weapons";
 import { startServer, type RunningServer } from "../server/index";
 import { BotDriver } from "./bot-ai";
 
 const STEP_MS = 1000 / 60;
 const LAPS = 1;
-const BOT_HP = 24; // low HP so wrecks really happen in a one-lap race (3 rivets or 1 mine)
+const BOT_HP = 12; // low HP so wrecks really happen in a one-lap race (3 rivets or 1 mine)
+const AMMO_PRICE = AMMO.rivets.price + AMMO.mines.price; // one pack of each
 // Measured 2026-11-16 over 7 runs: 0.12-0.27 with bump prediction (0.23-0.35 without).
 const CONTACT_P95_MAX = 0.5;
 
@@ -108,6 +110,7 @@ class Bot {
   readonly game: Game;
   readonly driver: BotDriver;
   readonly events: GameEvent[] = [];
+  readonly hitsAfterGo: number[] = []; // estimated server ms since GO when each hit arrived
   readonly errors: string[] = [];
   results: ResultRow[] | null = null;
   phases: Phase[] = [];
@@ -118,6 +121,8 @@ class Bot {
   readonly contactErrs: number[] = []; // reconciliation errors while touching another car
   readonly freeErrs: number[] = []; // ... and all the others
   private errsSeen = 0;
+  script: (() => Controls) | null = null; // scripted controls instead of the AI driver
+  afterStep: (() => void) | null = null;
 
   constructor(
     readonly name: string,
@@ -130,7 +135,10 @@ class Bot {
     this.driver = new BotDriver(this.game, lateral);
     this.game.on.welcome = () => this.welcomes++;
     this.game.on.garage = () => this.garages++;
-    this.game.on.event = (ev) => this.events.push(ev);
+    this.game.on.event = (ev) => {
+      this.events.push(ev);
+      if (ev.k === "hit") this.hitsAfterGo.push(this.game.serverNow() - this.game.raceStart);
+    };
     this.game.on.results = (rows) => (this.results = rows);
     this.game.on.error = (msg) => this.errors.push(msg);
     // The server broadcasts a room message on every phase change.
@@ -145,9 +153,10 @@ class Bot {
 
   /** Called every fixed step. */
   step(): void {
-    const ctl = this.driver.controls();
+    const ctl = { ...(this.script?.() ?? this.driver.controls()) };
     if (this.ram) this.ramInto(this.ram, ctl);
     this.game.step(ctl, STEP_MS);
+    this.afterStep?.();
     this.sortErrors();
   }
 
@@ -297,6 +306,7 @@ async function runRace(label: string, bots: Bot[], host: Bot, racers: Bot[]): Pr
 async function run(ctx: Ctx, bots: Bot[]): Promise<void> {
   await runGame(ctx, bots);
   await runServerFull(bots);
+  await runArmDelayLagged(bots);
   await runContact(ctx, bots);
 }
 
@@ -340,11 +350,24 @@ async function runGame(ctx: Ctx, bots: Bot[]): Promise<void> {
   check("join by code: 3 players see each other", [A, B, C].every((b) => b.game.players.length === 3));
   check("host is the creator", A.game.isHost() && B.game.hostId === A.game.you);
 
-  // Garage: starting kit, a purchase, a refusal.
-  await waitFor("garage + ammo", () => [A, B, C].every((b) => b.garages > 0 && b.game.serverAmmo[0] > 0), 3000);
+  // Garage: starting kit, purchases, a refusal.
+  await waitFor("garage + snapshot", () => [A, B, C].every((b) => b.garages > 0 && !!b.game.latest), 3000);
   check(
-    "garage: starting kit (400 scrap, 40 rivets, 3 mines)",
-    [A, B, C].every((b) => b.game.scrap === 400 && b.game.serverAmmo[0] === 40 && b.game.serverAmmo[1] === 3),
+    "garage: starting kit (400 scrap, no rivets, no mines)",
+    [A, B, C].every((b) => b.game.scrap === 400 && b.game.serverAmmo.join() === "0,0"),
+    [A, B, C].map((b) => `${b.name} ${b.game.scrap} ${b.game.serverAmmo.join("/")}`).join(", "),
+  );
+  // A and C arm themselves for race 1; B spends everything on the engine and races unarmed.
+  for (const b of [A, C]) {
+    b.game.buy("rivets");
+    b.game.buy("mines");
+  }
+  const kit = `${AMMO.rivets.pack},${AMMO.mines.pack}`;
+  await waitFor("A and C ammo in snapshots", () => [A, C].every((b) => b.game.serverAmmo.join() === kit), 3000);
+  check(
+    "garage: Alpha and Charlie buy rivets and mines (350)",
+    [A, C].every((b) => b.game.scrap === 400 - AMMO_PRICE && b.game.serverAmmo.join() === kit),
+    [A, C].map((b) => `${b.name} ${b.game.scrap} ${b.game.serverAmmo.join("/")}`).join(", "),
   );
   const g0 = B.garages;
   B.game.buy("engine");
@@ -450,8 +473,16 @@ async function runGame(ctx: Ctx, bots: Bot[]): Promise<void> {
   const cleared = await waitFor("cars cleared", () => A.game.latest?.cars.size === 0, 1000);
   check("back in lobby: cars cleared", cleared);
 
-  // Spend winnings on rivets so race 2 has shooting too.
+  // Spend winnings on rivets so race 2 has shooting too; Delta buys its first ammo.
   for (const b of [A, B, C]) if (b.game.scrap >= 150) b.game.buy("rivets");
+  D.game.buy("rivets");
+  D.game.buy("mines");
+  await waitFor("D ammo in snapshots", () => D.game.serverAmmo.join() === kit, 3000);
+  check(
+    "garage: Delta buys rivets and mines before race 2",
+    D.game.scrap === 400 - AMMO_PRICE && D.game.serverAmmo.join() === kit,
+    `${D.game.scrap} ${D.game.serverAmmo.join("/")}`,
+  );
   await sleep(300);
 
   // ---- race 2: reverse grid, D joins in -------------------------------------------
@@ -473,6 +504,12 @@ async function runGame(ctx: Ctx, bots: Bot[]): Promise<void> {
   const hits = A.events.filter((e) => e.k === "hit");
   const wrecks = A.events.filter((e): e is Extract<GameEvent, { k: "wreck" }> => e.k === "wreck");
   check("combat happened: hits and wrecks", hits.length > 0 && wrecks.length > 0, `${hits.length} hits, ${wrecks.length} wrecks`);
+  const firstHit = Math.min(...A.hitsAfterGo);
+  check(
+    "weapons armed delay: no hit arrives in the first 8 s of a race",
+    A.hitsAfterGo.length > 0 && firstHit >= WEAPONS_ARM_MS - 100,
+    `earliest hit ${(firstHit / 1000).toFixed(2)} s after GO`,
+  );
   const wreckedIds = new Set(wrecks.map((w) => w.id));
   for (const b of [A, B, C, D]) {
     const s = stats(b.game.recErrors);
@@ -632,33 +669,33 @@ async function runServerFull(bots: Bot[]): Promise<void> {
  * reconciliation error while touching shows how well that prediction holds.
  */
 async function runContact(ctx: Ctx, bots: Bot[]): Promise<void> {
-  const K = new Bot("Kilo", ctx.url, 0, { lag: 80, jitter: 10 });
+  const L = new Bot("Lima", ctx.url, 0, { lag: 80, jitter: 10 });
   const M = new Bot("Mike", ctx.url, 0);
-  bots.push(K, M);
-  for (const b of [K, M]) b.weapons = false;
-  K.game.create(K.name);
-  await waitFor("K welcome", () => !!K.game.you, 3000);
-  M.game.join(K.game.code, M.name);
-  await waitFor("M in K's room", () => K.game.players.length === 2, 3000);
-  await readyUp("contact", K, [K, M]);
-  K.game.start();
-  await waitFor("contact: racing", () => K.game.phase === "racing" && !!K.game.car && !!M.game.car, 6000);
-  K.ram = M.game.you;
-  M.ram = K.game.you;
+  bots.push(L, M);
+  for (const b of [L, M]) b.weapons = false;
+  L.game.create(L.name);
+  await waitFor("L welcome", () => !!L.game.you, 3000);
+  M.game.join(L.game.code, M.name);
+  await waitFor("M in L's room", () => L.game.players.length === 2, 3000);
+  await readyUp("contact", L, [L, M]);
+  L.game.start();
+  await waitFor("contact: racing", () => L.game.phase === "racing" && !!L.game.car && !!M.game.car, 6000);
+  L.ram = M.game.you;
+  M.ram = L.game.you;
   for (let i = 0; i < 7; i++) {
-    for (const b of [K, M]) b.apart = false;
+    for (const b of [L, M]) b.apart = false;
     await sleep(1400);
-    for (const b of [K, M]) b.apart = true;
+    for (const b of [L, M]) b.apart = true;
     await sleep(600);
   }
-  const impacts = K.game.contact.takeImpacts().length + M.game.contact.takeImpacts().length;
-  for (const b of [K, M]) b.game.leave();
+  const impacts = L.game.contact.takeImpacts().length + M.game.contact.takeImpacts().length;
+  for (const b of [L, M]) b.game.leave();
 
-  const all = stats(K.game.recErrors);
-  const hit = stats(K.contactErrs);
-  const free = stats(K.freeErrs);
+  const all = stats(L.game.recErrors);
+  const hit = stats(L.contactErrs);
+  const free = stats(L.freeErrs);
   console.log(
-    `      Kilo     rec err: all n=${all.n} median=${all.median.toFixed(3)} p95=${all.p95.toFixed(3)} max=${all.max.toFixed(2)}; ` +
+    `      Lima     rec err: all n=${all.n} median=${all.median.toFixed(3)} p95=${all.p95.toFixed(3)} max=${all.max.toFixed(2)}; ` +
       `in contact n=${hit.n} median=${hit.median.toFixed(3)} p95=${hit.p95.toFixed(3)} max=${hit.max.toFixed(2)}; ` +
       `free p95=${free.p95.toFixed(3)}; impact effects ${impacts}`,
   );
@@ -669,6 +706,52 @@ async function runContact(ctx: Ctx, bots: Bot[]): Promise<void> {
     `p95 ${hit.p95.toFixed(3)}`,
   );
   check("contact: lagged bot median < 0.5 and max <= 50 throughout", all.n > 100 && all.median < 0.5 && all.max <= 50, `median ${all.median.toFixed(3)}, max ${all.max.toFixed(2)}`);
+}
+
+/**
+ * A 100 ms RTT player holding the rivet gun from GO to past the 8 s mark. Its serverNow runs
+ * behind the server and the server reads each input later still, so a fire bit sent before
+ * the client's own armed() would make the server fire rivets the client never predicted.
+ */
+async function runArmDelayLagged(bots: Bot[]): Promise<void> {
+  const srv = await startServer({ port: 0, vite: false, laps: LAPS, host: "127.0.0.1" });
+  const K = new Bot("Kilo", `ws://127.0.0.1:${srv.port}/ws`, 0, { lag: 100, jitter: 0 });
+  bots.push(K);
+  try {
+    K.game.create(K.name);
+    await waitFor("K welcome + snapshot", () => !!K.game.you && !!K.game.latest, 3000);
+    K.game.buy("rivets");
+    await waitFor("K rivets", () => K.game.serverAmmo[0] === AMMO.rivets.pack, 3000);
+    let hold = true;
+    let lastSeq = -1;
+    let predicted = 0;
+    let earlyFireBits = 0;
+    K.script = () => ({ throttle: 0, steer: 0, fire: hold, mine: false });
+    K.afterStep = () => {
+      const p = K.game.pending[K.game.pending.length - 1];
+      if (!p || p.seq <= lastSeq) return; // no input sent this step
+      lastSeq = p.seq;
+      if (p.fired) predicted++;
+      if (p.cmd.buttons & BTN_RIVET && !K.game.armed()) earlyFireBits++;
+    };
+    K.game.start();
+    await waitFor("K racing", () => K.game.phase === "racing", 5000);
+    await waitFor("K armed", () => K.game.armed(), WEAPONS_ARM_MS + 2000);
+    await sleep(1000); // keep holding past the mark
+    hold = false;
+    await sleep(800); // the server consumes the rest and snapshots the ammo
+    const serverFired = AMMO.rivets.pack - K.game.serverAmmo[0];
+    check(
+      "armed delay at 100 ms RTT: no fire bit sent before armed(); the server fires exactly the predicted rivets",
+      earlyFireBits === 0 && predicted >= 5 && serverFired === predicted,
+      `${earlyFireBits} early fire inputs, predicted ${predicted}, server fired ${serverFired}`,
+    );
+  } finally {
+    K.script = null;
+    K.afterStep = null;
+    K.game.leave();
+    await srv.close();
+  }
 }
 
 main().catch((e) => {

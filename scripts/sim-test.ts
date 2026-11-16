@@ -2,23 +2,26 @@
 // scripted inputs (no sockets, no wall clock). Covers weapons, wrecks, the garage and
 // payouts. Run: npx tsx scripts/sim-test.ts
 
-import { BASE_STATS, cloneCar, DT } from "../shared/physics";
+import { BASE_STATS, cloneCar, DT, speedOf, stepCar, TICK_HZ, type CarState } from "../shared/physics";
 import { FORCE_START_MS, RECONNECT_GRACE_MS, type ClientMsg, type GameEvent, type ServerMsg } from "../shared/protocol";
 import { payouts, startingWallet, buy as shopBuy, statsFor } from "../shared/shop";
-import { buildTrack, pointAt, queryTrackNear, RUST_BOWL } from "../shared/track";
+import { buildTrack, pointAt, queryTrackNear, RUST_BOWL, type TrackDef } from "../shared/track";
 import {
   BTN_RIVET,
   GHOST_TICKS,
   makeButtons,
+  MINE_DAMAGE,
+  RIVET_DAMAGE,
   shotHits,
   spinOut,
   SPIN_KICK,
   stepRaceCar,
+  WEAPONS_ARM_MS,
   WRECK_TICKS,
   type Command,
 } from "../shared/weapons";
 import { Room, Rooms, type Conn, type Player, type Session } from "../server/room";
-import { CAR_RESTITUTION, capsuleGap, carContact, collideCarOneSided, collideCars, type CarState } from "../shared/physics";
+import { CAR_RESTITUTION, capsuleGap, carContact, collideCarOneSided, collideCars } from "../shared/physics";
 import type { CarSnap } from "../shared/protocol";
 import { Contacts, IMPACT_MIN_SPEED, PREDICT_MAX_MS, predicted } from "../client/contact";
 
@@ -40,6 +43,9 @@ class FakeConn implements Conn {
   }
   close(): void {}
 }
+
+/** Scripted controls for one input: fire = rivet gun held, mine = a new mine press. */
+type Ctl = Partial<Command> & { fire?: boolean; mine?: boolean };
 
 class Sim {
   readonly room: Room;
@@ -65,9 +71,9 @@ class Sim {
   }
 
   /** Queue one input for p (one per tick keeps the jitter buffer steady). */
-  feed(p: Player, cmd: Partial<Command> & { mine?: boolean } = {}): void {
+  feed(p: Player, cmd: Ctl = {}): void {
     if (cmd.mine) this.mineCounts.set(p.id, (this.mineCounts.get(p.id)! + 1) & 7);
-    const buttons = cmd.buttons ?? makeButtons(false, 0) | ((this.mineCounts.get(p.id)! & 7) << 1);
+    const buttons = cmd.buttons ?? makeButtons(!!cmd.fire, this.mineCounts.get(p.id)!);
     const seq = this.seqs.get(p.id)!;
     this.seqs.set(p.id, seq + 1);
     this.room.queueInputs(p, [[seq, cmd.throttle ?? 0, cmd.steer ?? 0, buttons]]);
@@ -91,7 +97,7 @@ class Sim {
   }
 
   /** Run n ticks, feeding every racer the command from `cmd` (default idle). */
-  run(n: number, cmd: (p: Player) => Partial<Command> & { mine?: boolean } = () => ({})): void {
+  run(n: number, cmd: (p: Player) => Ctl = () => ({})): void {
     for (let i = 0; i < n; i++) {
       for (const p of this.room.players.values()) if (p.car) this.feed(p, cmd(p));
       this.tick();
@@ -108,6 +114,25 @@ class Sim {
     const e = this.room.start(host, this.now);
     if (e) throw new Error(e);
     while (this.room.phase !== "racing") this.run(1);
+  }
+
+  /** Give every player a full race's worth of ammo (players start with none). */
+  grantAmmo(rivets = 40, mines = 3): void {
+    for (const p of this.room.players.values()) {
+      p.ammo.rivets = rivets;
+      p.ammo.mines = mines;
+    }
+  }
+
+  /** Grant ammo and jump the clock past the weapons-armed delay (no ticks run). */
+  armWeapons(): void {
+    this.grantAmmo();
+    this.now = Math.max(this.now, this.room.raceStart + WEAPONS_ARM_MS);
+  }
+
+  /** Milliseconds since GO. */
+  sinceGo(): number {
+    return this.now - this.room.raceStart;
   }
 
   /** Put a car on the track at distance s, `lateral` units sideways, facing along the track. */
@@ -146,6 +171,7 @@ function rivets(): void {
   const a = sim.add("A");
   const b = sim.add("B");
   sim.startRace(a);
+  sim.armWeapons();
   sim.place(a, 200, 0);
   sim.place(b, 320, 0);
   const ammo0 = a.ammo.rivets;
@@ -153,8 +179,8 @@ function rivets(): void {
   sim.run(20);
   const hits = sim.eventsOf("hit");
   check(
-    "rivet hits the car ahead for 8",
-    hits.length === 1 && b.hp === 92 && hits[0].k === "hit" && hits[0].by === a.id && hits[0].w === "rivet",
+    "rivet hits the car ahead for 4",
+    RIVET_DAMAGE === 4 && hits.length === 1 && b.hp === 96 && hits[0].k === "hit" && hits[0].dmg === 4 && hits[0].by === a.id && hits[0].w === "rivet",
     `hits=${hits.length} b.hp=${b.hp}`,
   );
   check("firing uses one rivet", a.ammo.rivets === ammo0 - 1, `${ammo0} -> ${a.ammo.rivets}`);
@@ -196,10 +222,12 @@ function gating(): void {
   sim.readyAll(a);
   const started = sim.room.start(a, sim.now);
   check("gating: start accepted once B is ready", started === null, started ?? "");
+  sim.grantAmmo(); // with ammo, so the countdown check cannot pass for lack of it
   let ammo = a.ammo.rivets;
   for (let i = 0; i < 60; i++) sim.run(1, (p) => (p === a ? { buttons: sim.rivet(a) } : {}));
-  check("no firing during the countdown", a.ammo.rivets === ammo && sim.room.combat.shots.length === 0);
+  check("no firing during the countdown", ammo === 40 && a.ammo.rivets === ammo && sim.room.combat.shots.length === 0);
   while (sim.room.phase !== "racing") sim.run(1);
+  sim.armWeapons();
   sim.place(a, 200, 0);
 
   // 9 real rivet inputs then starve: repeats must not fire again (cooldown would allow it).
@@ -234,6 +262,7 @@ function mines(): void {
   const a = sim.add("A");
   const b = sim.add("B");
   sim.startRace(a);
+  sim.armWeapons();
   sim.place(a, 300, 0);
   sim.place(b, 1500, 0);
   sim.run(1, (p) => (p === a ? { mine: true } : {}));
@@ -251,7 +280,11 @@ function mines(): void {
     if (sim.eventsOf("hit").length) hitAt = i;
   }
   check("mine is harmless until armed (~0.4 s), then hits", hitAt >= 18 && hitAt <= 26, `hit after ${hitAt} ticks`);
-  check("mine does 30 damage and spins the car", b.hp === 70 && Math.abs(Math.abs(b.car.h - h0) - SPIN_KICK) < 1e-9, `hp=${b.hp}`);
+  check(
+    "mine does 15 damage and spins the car",
+    MINE_DAMAGE === 15 && b.hp === 85 && Math.abs(Math.abs(b.car.h - h0) - SPIN_KICK) < 1e-9,
+    `hp=${b.hp}`,
+  );
   check("mine is used up", sim.room.combat.mines.length === 0);
 
   // Owner drives back over its own armed mine.
@@ -262,7 +295,7 @@ function mines(): void {
   a.car!.x = own.x;
   a.car!.y = own.y;
   sim.run(2);
-  check("an armed mine also hits its owner", a.hp === 70, `a.hp=${a.hp}`);
+  check("an armed mine also hits its owner", a.hp === 85, `a.hp=${a.hp}`);
   check("no wreck credit for hurting yourself", !sim.room.combat.wrecksCaused.has(a.id));
 
   const c = { x: 0, y: 0, h: 0, vx: 100, vy: 0, seg: 0, wreck: 0 };
@@ -271,10 +304,11 @@ function mines(): void {
 }
 
 function wrecks(): void {
-  const sim = new Sim(1, 8); // 8 HP: one rivet wrecks
+  const sim = new Sim(1, 4); // 4 HP: one rivet wrecks
   const a = sim.add("A");
   const b = sim.add("B");
   sim.startRace(a);
+  sim.armWeapons();
   sim.place(a, 200, 20);
   sim.place(b, 320, 20);
   const progress0 = { ...b.progress! };
@@ -314,6 +348,7 @@ function finishing(): void {
   const a = sim.add("A");
   const b = sim.add("B");
   sim.startRace(a);
+  sim.armWeapons();
   const near = (p: Player) => {
     sim.place(p, L - 40, 0, 300);
     p.progress = { s: queryTrackNear(track, p.car!.x, p.car!.y, p.car!.seg).s, cp: 3, lap: 0, fin: 0 };
@@ -325,14 +360,19 @@ function finishing(): void {
   // Finished: cannot fire, cannot be hit.
   const ammo = a.ammo.rivets;
   sim.run(10, (p) => (p === a ? { buttons: sim.rivet(a) } : {}));
-  check("finished cars cannot fire", a.ammo.rivets === ammo);
+  check("finished cars cannot fire", ammo > 0 && a.ammo.rivets === ammo);
   a.car!.vx = a.car!.vy = 0;
   const s = queryTrackNear(track, a.car!.x, a.car!.y, a.car!.seg).s;
   sim.place(b, s - 120, 0);
   b.progress!.cp = 1;
+  const bAmmo = b.ammo.rivets;
   sim.run(1, (p) => (p === b ? { buttons: sim.rivet(b) } : {}));
   sim.run(15);
-  check("finished cars are ghosted (rivets pass through)", a.hp === 100 && sim.eventsOf("hit").length === 0);
+  check(
+    "finished cars are ghosted (rivets pass through)",
+    b.ammo.rivets === bAmmo - 1 && a.hp === 100 && sim.eventsOf("hit").length === 0,
+    `b fired ${bAmmo - b.ammo.rivets}`,
+  );
 
   // B finishes too -> race ends, payouts.
   near(b);
@@ -499,7 +539,11 @@ function garage(): void {
   const a = sim.add("A");
   sim.add("B");
   const g0 = sim.lastGarage(a);
-  check("garage sent on join with the starting kit", g0?.scrap === 400 && a.ammo.rivets === 40 && a.ammo.mines === 3);
+  check(
+    "starting kit: 400 scrap, no rivets, no mines",
+    g0?.scrap === 400 && a.ammo.rivets === 0 && a.ammo.mines === 0 && startingWallet().ammo.rivets === 0 && startingWallet().ammo.mines === 0,
+    `scrap ${g0?.scrap}, ammo ${a.ammo.rivets}/${a.ammo.mines}`,
+  );
   check("buy engine L1 (400)", sim.room.buy(a, "engine") === null && a.wallet.scrap === 0 && a.levels.engine === 1);
   check("garage sent after a purchase", sim.lastGarage(a)?.levels.engine === 1 && sim.lastGarage(a)?.scrap === 0);
   check("refused when too poor", sim.room.buy(a, "tyres") === "Not enough scrap");
@@ -515,7 +559,11 @@ function garage(): void {
   check("upgrade levels cap at 3", sim.room.buy(a, "welder") === "Already maxed out" && a.levels.welder === 3);
   sim.startRace(a);
   check("garage closed during a race", sim.room.buy(a, "mines") === "The garage is closed during a race");
-  check("upgrades change the stats the car steps with", a.stats.topSpeed === statsFor(a.levels).topSpeed && a.stats.topSpeed > BASE_STATS.topSpeed * 1.069);
+  check(
+    "upgrades change the stats the car steps with: engine raises accel, not top speed",
+    a.stats.accel === statsFor(a.levels).accel && a.stats.accel > BASE_STATS.accel * 1.069 && a.stats.topSpeed === BASE_STATS.topSpeed,
+    `accel=${a.stats.accel.toFixed(1)} topSpeed=${a.stats.topSpeed}`,
+  );
 
   // Welding rig L3: 6 HP/s.
   sim.place(a, 300, 0);
@@ -534,7 +582,7 @@ function garage(): void {
   );
   check("payouts: place + 60 per wreck, DNF no place money", pay.get("x") === 1120 && pay.get("y") === 700 && pay.get("z") === 60);
   const w = startingWallet();
-  check("shop.buy is pure on the wallet", shopBuy(w, "mines") === null && w.ammo.mines === 6 && w.scrap === 200);
+  check("shop.buy is pure on the wallet", shopBuy(w, "mines") === null && w.ammo.mines === 3 && w.scrap === 200);
   check("DT sanity", Math.abs(DT - 1 / 60) < 1e-12);
 }
 
@@ -803,7 +851,105 @@ function collisions(): void {
   }
 }
 
-for (const t of [rivets, gating, mines, wrecks, finishing, garage, readyCheck, collisions]) {
+function armDelay(): void {
+  const sim = new Sim();
+  const a = sim.add("A");
+  const b = sim.add("B");
+  sim.startRace(a);
+  sim.grantAmmo(); // ammo in hand, so "nothing fired" means the delay held it back
+  sim.place(a, 200, 0);
+  sim.place(b, 1500, 0);
+  const rivets0 = a.ammo.rivets;
+  const mines0 = a.ammo.mines;
+
+  // Hold the gun from GO and tap the mine key every 20 ticks, the last tap just before 7.9 s.
+  let taps = 0;
+  let i = 0;
+  while (sim.sinceGo() < 7900) {
+    const tap = i++ % 20 === 0 || sim.sinceGo() + 1000 / 60 >= 7900;
+    if (tap) taps++;
+    sim.run(1, (p) => (p === a ? { fire: true, mine: tap } : {}));
+  }
+  const c = sim.room.combat;
+  check(
+    "armed delay: no rivet and no mine at ~7.9 s, ammo in hand",
+    WEAPONS_ARM_MS === 8000 && rivets0 > 0 && mines0 > 0 && taps > 10 && a.ammo.rivets === rivets0 && a.ammo.mines === mines0 && c.shots.length === 0 && c.mines.length === 0,
+    `t=${sim.sinceGo().toFixed(0)} ms, ${taps} mine taps, shots ${c.shots.length}, mines ${c.mines.length}`,
+  );
+
+  // Keep holding the gun (no new mine taps) until ~8.1 s.
+  let firstShot = -1;
+  while (sim.sinceGo() < 8100) {
+    sim.run(1, (p) => (p === a ? { fire: true } : {}));
+    if (firstShot < 0 && a.ammo.rivets < rivets0) firstShot = sim.sinceGo();
+  }
+  check(
+    "armed delay: the rivet gun fires from 8 s",
+    firstShot >= WEAPONS_ARM_MS && firstShot < 8100 && a.ammo.rivets < rivets0,
+    `first shot at ${firstShot.toFixed(0)} ms, ${rivets0 - a.ammo.rivets} fired by ${sim.sinceGo().toFixed(0)} ms`,
+  );
+  sim.run(30);
+  check(
+    "armed delay: a mine press in the window never drops later",
+    a.ammo.mines === mines0 && c.mines.length === 0,
+    `mines ${mines0} -> ${a.ammo.mines}`,
+  );
+  sim.run(1, (p) => (p === a ? { mine: true } : {}));
+  sim.run(1);
+  check("armed delay: a mine press after 8 s drops a mine", a.ammo.mines === mines0 - 1 && c.mines.length === 1);
+}
+
+
+// Engine upgrade = acceleration only (playtest 2026-11-16). Pure physics on a flat straight:
+// full throttle from standstill, same terminal speed at every level, L3 gets there sooner.
+function engine(): void {
+  const ok = [0, 1, 2, 3].every((e) => {
+    const s = statsFor({ engine: e, tyres: 0, welder: 0 });
+    return s.topSpeed === BASE_STATS.topSpeed && Math.abs(s.accel - BASE_STATS.accel * (1 + 0.07 * e)) < 1e-9;
+  });
+  check("engine L0-L3: accel +7% per level, top speed always the base value", ok);
+  const t2 = statsFor({ engine: 3, tyres: 2, welder: 1 });
+  check("tyres still scale grip and turn", Math.abs(t2.grip - BASE_STATS.grip * 1.2) < 1e-9 && Math.abs(t2.turn - BASE_STATS.turn * 1.08) < 1e-9);
+
+  // A long closed loop whose bottom edge is a 12 000 u straight (collinear control points keep
+  // the spline exactly on y = 0 there). The car starts at x = 1500 on the centerline, heading +x.
+  const straight: TrackDef = {
+    name: "Test Straight",
+    control: [...Array.from({ length: 13 }, (_, i): [number, number] => [i * 1000, 0]), [12000, 3000], [0, 3000]],
+    halfWidth: 64,
+    verge: 44,
+  };
+  const flat = buildTrack(straight);
+  const SECONDS = 8;
+  const drive = (level: number) => {
+    const stats = statsFor({ engine: level, tyres: 0, welder: 0 });
+    const c: CarState = { x: 1500, y: 0, h: 0, vx: 0, vy: 0, seg: 0, wreck: 0 };
+    let t300 = -1;
+    for (let i = 1; i <= SECONDS * TICK_HZ; i++) {
+      stepCar(c, { throttle: 1, steer: 0 }, stats, flat);
+      if (t300 < 0 && speedOf(c) >= 300) t300 = i * DT;
+    }
+    return { terminal: speedOf(c), t300, x: c.x, y: c.y };
+  };
+  const l0 = drive(0);
+  const l3 = drive(3);
+  const detail = (r: ReturnType<typeof drive>) =>
+    `terminal ${r.terminal.toFixed(2)} u/s, 300 u/s at ${r.t300.toFixed(3)} s, x=${r.x.toFixed(0)} y=${r.y.toFixed(2)}`;
+  check("engine L0 run stays on the straight", l0.x < 12000 && Math.abs(l0.y) < 1e-6, detail(l0));
+  check("engine L3 run stays on the straight", l3.x < 12000 && Math.abs(l3.y) < 1e-6, detail(l3));
+  check(
+    "engine L3 and L0 reach the same terminal speed (within 1%)",
+    Math.abs(l3.terminal - l0.terminal) / l0.terminal < 0.01,
+    `L0 ${l0.terminal.toFixed(2)} vs L3 ${l3.terminal.toFixed(2)} u/s`,
+  );
+  check(
+    "engine L3 reaches 300 u/s measurably sooner than L0 (>= 10%)",
+    l0.t300 > 0 && l3.t300 > 0 && l3.t300 <= l0.t300 * 0.9,
+    `L0 ${l0.t300.toFixed(3)} s vs L3 ${l3.t300.toFixed(3)} s`,
+  );
+}
+
+for (const t of [rivets, gating, mines, wrecks, finishing, garage, armDelay, engine, readyCheck, collisions]) {
   console.log(`\n# ${t.name}`);
   try {
     t();

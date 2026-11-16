@@ -352,7 +352,7 @@ function median(xs: number[]): number {
 
 function hudView(): HudView | null {
   if (!game.you) return null;
-  const hud: HudView = { topLeft: [], time: "", center: "", centerSub: "", banner: "", corner: "", debug: [], hp: null };
+  const hud: HudView = { topLeft: [], time: "", notice: "", center: "", centerSub: "", banner: "", corner: "", debug: [], hp: null };
   const now = game.serverNow();
   const standings = game.standings();
   const mine = game.latest?.cars.get(game.you);
@@ -367,6 +367,10 @@ function hudView(): HudView | null {
   }
   if ((game.phase === "racing" || game.phase === "results") && game.raceStart) {
     hud.time = formatTime(mine?.fin || Math.max(0, now - game.raceStart));
+  }
+  const armsIn = game.armsInMs();
+  if (mine && !mine.fin && game.raceOn() && armsIn > 0) {
+    hud.notice = `WEAPONS ARMED IN ${Math.ceil(armsIn / 1000)}`;
   }
   if (game.phase === "countdown") {
     const left = game.phaseEnds - now;
