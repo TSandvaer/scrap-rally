@@ -5,7 +5,7 @@
 //
 // Options: --calm (bots do not shoot or drop mines), --url ws://host:port/ws.
 // Bots race every race the host starts, spend their scrap in the garage between races,
-// and leave on Ctrl+C.
+// report ready in the lobby once they have shopped, and leave on Ctrl+C.
 
 import { Game, type TokenStore } from "../client/game";
 import { connectWs } from "../client/net";
@@ -42,6 +42,7 @@ interface Bot {
   game: Game;
   driver: BotDriver;
   shopped: boolean;
+  readyDue: boolean; // a room update arrived: check (once) whether to report ready
 }
 
 /** Between races: top up rivets, then buy the cheapest affordable upgrade, a few times. */
@@ -68,7 +69,7 @@ const bots: Bot[] = [];
 for (let i = 0; i < count; i++) {
   const name = NAMES[i];
   const game = new Game(() => connectWs(url), memoryTokens());
-  const bot: Bot = { name, game, driver: new BotDriver(game, LANES[i]), shopped: false };
+  const bot: Bot = { name, game, driver: new BotDriver(game, LANES[i]), shopped: false, readyDue: false };
   bot.driver.weapons = !flag("--calm");
   game.on.error = (msg) => console.log(`${name}: ${msg}`);
   game.on.connection = (state) => {
@@ -78,6 +79,7 @@ for (let i = 0; i < count; i++) {
     }
   };
   game.on.welcome = () => console.log(`${name} joined ${game.code}`);
+  game.on.room = () => (bot.readyDue = true);
   game.on.event = (ev) => {
     if (i !== 0) return; // log each event once
     const who = (id: string) => game.player(id)?.name ?? "?";
@@ -103,6 +105,11 @@ const loop = setInterval(() => {
         if (!b.shopped && b.game.scrap > 0 && b.game.latest) {
           b.shopped = true;
           shop(b);
+        }
+        // Ready after shopping (the buys go first on the socket); a broke bot readies at once.
+        if (b.readyDue && (b.shopped || b.game.scrap === 0)) {
+          b.readyDue = false;
+          if (b.game.me()?.ready === false && !b.game.isHost()) b.game.setReady(true);
         }
       } else {
         b.shopped = false;
