@@ -1,8 +1,11 @@
 # STATE — Scrap Rally coordination
 
-**Resume (2026-11-16, latest):** 123jpnbf637 (lobby ready check) merged as a63375c and pushed
-(d912583..a63375c); workspace removed, branch deleted. Waiting for the user's Manual Deploy of a63375c,
-then a QA worker checks the live lobby (smoke now needs this build). easier-start still parked (next note).
+**Resume (2026-11-16, latest):** Ready check a63375c is pushed but NOT deployed (live is still d912583;
+probe: no forceStartAt in the room message). In flight on run `run_c58bb5836634`: dispatch
+`ctx_1ebb1b0ac649` (task task_f3809486c4c1) on ClickUp 123jpnbf6ca "Engine acceleration only", workspace
+~/orca/workspaces/scrap-rally/engine-accel, branch `TSandvaer/engine-accel` (from main). On worker_done: verify,
+reviewer, merge, check+test, push (approved: one deploy with both), then the user clicks Manual Deploy
+once; then live QA of the ready check + engine. easier-start still parked (next note).
 
 **Resume note (2026-11-16):** Workers all released; easier-start workspace removed at the user's
 request (clean, nothing running). Branch `TSandvaer/easier-start` KEPT at 9ba7740 (reviewed, APPROVE,
@@ -26,8 +29,12 @@ Manual Deploy only on the user's go-ahead. The user's own dev server runs on :30
 
 ## In flight
 
-None. Parked (unmerged, approved, awaiting the user's taste verdict): TSandvaer/easier-start @ 9ba7740
-(123jpnbf3xa); it must merge main (ready check) before it can merge.
+| Ticket | Dispatch | Workspace | Branch | Port | Started |
+| --- | --- | --- | --- | --- | --- |
+| 123jpnbf6ca Engine acceleration only | ctx_1ebb1b0ac649 | ~/orca/workspaces/scrap-rally/engine-accel | TSandvaer/engine-accel | — | 2026-11-16 |
+
+Parked (unmerged, approved, awaiting the user's taste verdict): TSandvaer/easier-start @ 9ba7740
+(123jpnbf3xa); it must merge main before it can merge.
 
 ## Waiting on the user
 
