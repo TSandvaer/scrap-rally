@@ -1,7 +1,8 @@
 # STATE — Scrap Rally coordination
 
 **Resume (2026-11-16, latest):** Pushed 4f9ef51 = ready check (a63375c) + engine acceleration-only
-(123jpnbf6ca, review APPROVE); waiting for the user's ONE Manual Deploy, then live QA of both. In flight on
+(123jpnbf6ca, review APPROVE); the user batches deploys (DECISIONS 2026-11-16): live stays d912583 until they deploy a batch;
+ask before the next push; live QA after their deploy. In flight on
 run `run_c58bb5836634`: dispatch `ctx_c8a5662fcae7` (task task_6f640066f3a9) on ClickUp 123jpnbf6cy
 "Solid collisions" (design approved, DECISIONS 2026-11-16), workspace
 ~/orca/workspaces/scrap-rally/solid-collisions, branch `TSandvaer/solid-collisions` (from main before the engine merge), port
