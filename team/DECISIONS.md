@@ -25,3 +25,4 @@
   100); practice bots unchanged. Balance is a taste gate: the user tries the branch before merge.
 - 2026-11-15 — Playtest (positive): catching up to the bots feels good. Keep bot pace and car handling as they are unless the user asks.
 - 2026-11-16 — Lobby ready check (user): the host cannot start until every player is ready, so players can shop first. User choices: the host gets "Start anyway" after 60 s if someone is still not ready; offline (reconnecting) players are not waited for.
+- 2026-11-16 — Ready check: the ready player's toggle says "Cancel ready" (user). After merge: push approved, the user clicks Manual Deploy; easier-start stays parked.
