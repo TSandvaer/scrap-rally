@@ -3,7 +3,7 @@
 // payouts. Run: npx tsx scripts/sim-test.ts
 
 import { BASE_STATS, cloneCar, DT } from "../shared/physics";
-import type { GameEvent, ServerMsg } from "../shared/protocol";
+import { FORCE_START_MS, RECONNECT_GRACE_MS, type ClientMsg, type GameEvent, type ServerMsg } from "../shared/protocol";
 import { payouts, startingWallet, buy as shopBuy, statsFor } from "../shared/shop";
 import { buildTrack, pointAt, queryTrackNear, RUST_BOWL } from "../shared/track";
 import {
@@ -17,7 +17,7 @@ import {
   WRECK_TICKS,
   type Command,
 } from "../shared/weapons";
-import { Room, type Conn, type Player, type Session } from "../server/room";
+import { Room, Rooms, type Conn, type Player, type Session } from "../server/room";
 
 const track = buildTrack(RUST_BOWL);
 const L = track.length;
@@ -54,7 +54,7 @@ class Sim {
   add(name: string): Player {
     const conn = new FakeConn();
     const session: Session = { conn, room: null, player: null };
-    const p = this.room.addPlayer(name, session) as Player;
+    const p = this.room.addPlayer(name, session, this.now) as Player;
     this.conns.set(p.id, conn);
     this.seqs.set(p.id, 0);
     this.mineCounts.set(p.id, 0);
@@ -95,7 +95,13 @@ class Sim {
     }
   }
 
+  /** Every player except the host reports ready (the host's Start is the host's ready). */
+  readyAll(host: Player): void {
+    for (const p of this.room.players.values()) if (p !== host) this.room.setReady(p, true);
+  }
+
   startRace(host: Player): void {
+    this.readyAll(host);
     const e = this.room.start(host, this.now);
     if (e) throw new Error(e);
     while (this.room.phase !== "racing") this.run(1);
@@ -116,6 +122,17 @@ class Sim {
 
   lastGarage(p: Player): Extract<ServerMsg, { t: "garage" }> | undefined {
     return this.conns.get(p.id)!.msgs.filter((m) => m.t === "garage").pop() as Extract<ServerMsg, { t: "garage" }>;
+  }
+
+  lastRoom(p: Player): Extract<ServerMsg, { t: "room" }> | undefined {
+    return this.conns.get(p.id)!.msgs.filter((m) => m.t === "room").pop() as Extract<ServerMsg, { t: "room" }>;
+  }
+
+  /** Reconnect p on a fresh socket, as a rejoin with the token does. */
+  rebind(p: Player): void {
+    const conn = new FakeConn();
+    this.room.bind(p, { conn, room: null, player: null });
+    this.conns.set(p.id, conn);
   }
 }
 
@@ -173,7 +190,9 @@ function gating(): void {
   const sim = new Sim();
   const a = sim.add("A");
   sim.add("B");
-  sim.room.start(a, sim.now);
+  sim.readyAll(a);
+  const started = sim.room.start(a, sim.now);
+  check("gating: start accepted once B is ready", started === null, started ?? "");
   let ammo = a.ammo.rivets;
   for (let i = 0; i < 60; i++) sim.run(1, (p) => (p === a ? { buttons: sim.rivet(a) } : {}));
   check("no firing during the countdown", a.ammo.rivets === ammo && sim.room.combat.shots.length === 0);
@@ -334,6 +353,144 @@ function finishing(): void {
   check("grid slots follow that order", c.car!.y < b.car!.y && b.car!.y < a.car!.y, "track starts heading up");
 }
 
+/** Lobby ready check and "Start anyway", on the fake clock (sim.now is set directly). */
+function readyCheck(): void {
+  const shown = (sim: Sim, to: Player, p: Player) => sim.lastRoom(to)?.players.find((x) => x.id === p.id)?.ready;
+
+  // Not ready -> refused; un-ready; buying keeps ready; the host's ready is ignored.
+  let sim = new Sim();
+  const a = sim.add("A");
+  const b = sim.add("B");
+  const c = sim.add("C");
+  check("ready: host and newcomers start not ready", !a.ready && !b.ready && !c.ready);
+  let e = sim.room.start(a, sim.now);
+  check("ready: start refused while 2 are not ready", e === "Waiting for 2 players to get ready" && sim.room.phase === "lobby", e ?? "");
+  sim.room.setReady(b, true);
+  check("ready: shown in the room message", shown(sim, a, b) === true && shown(sim, a, c) === false);
+  e = sim.room.start(a, sim.now);
+  check("ready: still refused while 1 is not ready", e === "Waiting for 1 player to get ready", e ?? "");
+  sim.room.setReady(c, true);
+  sim.room.setReady(b, false);
+  e = sim.room.start(a, sim.now);
+  check("ready: a player can un-ready", !b.ready && shown(sim, a, b) === false && e === "Waiting for 1 player to get ready", e ?? "");
+  sim.room.setReady(b, true);
+  sim.room.buy(b, "mines");
+  check("ready: buying does not change ready", b.ready && shown(sim, a, b) === true);
+  sim.room.setReady(a, true);
+  check("ready: the host's ready is ignored (no READY on the host row)", !a.ready && shown(sim, b, a) === false);
+  sim.room.setReady(c, "no");
+  check("ready: a non-boolean ready is ignored", c.ready);
+  e = sim.room.start(a, sim.now);
+  check("ready: start accepted once everyone else is ready", e === null && sim.room.phase === "countdown", e ?? "");
+  check("ready: reset for everyone when the race starts", ![a, b, c].some((p) => p.ready) && shown(sim, a, b) === false);
+  check("ready: forceStartAt is 0 outside the lobby", sim.room.forceStartAt === 0 && sim.lastRoom(a)?.forceStartAt === 0);
+  sim.room.setReady(b, true);
+  const inCountdown = b.ready;
+  while (sim.room.phase !== "racing") sim.run(1);
+  sim.room.setReady(b, true);
+  check("ready: never set outside the lobby (countdown, race)", !inCountdown && !b.ready);
+
+  // Everyone finishes -> results -> lobby: everyone readies again.
+  for (const p of [a, b, c]) {
+    sim.place(p, L - 40, 0, 300);
+    p.progress = { s: queryTrackNear(track, p.car!.x, p.car!.y, p.car!.seg).s, cp: 3, lap: 0, fin: 0 };
+    sim.run(15, (q) => (q === p ? { throttle: 1 } : {}));
+  }
+  const phase = (): string => sim.room.phase; // not narrowed by the loop above
+  check("ready: race over", phase() === "results", phase());
+  while (phase() !== "lobby") sim.run(1);
+  e = sim.room.start(a, sim.now);
+  check("ready: after the results nobody is ready, start refused", e === "Waiting for 2 players to get ready", e ?? "");
+  check(
+    "ready: the lobby reopening restarts the Start anyway clock",
+    sim.room.forceStartAt === sim.now + FORCE_START_MS && sim.lastRoom(b)?.forceStartAt === sim.now + FORCE_START_MS,
+  );
+
+  // A solo host starts at once.
+  sim = new Sim();
+  const solo = sim.add("Solo");
+  check("ready: a solo host can start at once", sim.room.start(solo, sim.now) === null);
+
+  // An offline player (in the reconnect grace) is not waited for and sits the race out.
+  sim = new Sim();
+  const h = sim.add("H");
+  const on = sim.add("On");
+  const off = sim.add("Off");
+  sim.room.setReady(on, true);
+  sim.room.unbind(off, sim.now);
+  e = sim.room.start(h, sim.now);
+  check("ready: an offline player is not waited for", e === null, e ?? "");
+  check("ready: the offline player sits the race out", !off.car && !off.inRace && !!on.car && sim.room.players.has(off.id));
+
+  // Start anyway: from 60 s after the last join; a late joiner pushes it, a rejoin does not.
+  sim = new Sim();
+  const fh = sim.add("FH");
+  const slow = sim.add("Slow");
+  const t0 = sim.now;
+  check("force: forceStartAt = last join + 60 s", sim.room.forceStartAt === t0 + FORCE_START_MS && sim.lastRoom(fh)?.forceStartAt === t0 + FORCE_START_MS);
+  e = sim.room.start(fh, t0 + FORCE_START_MS - 1, true);
+  check("force: refused before forceStartAt", e === "Start anyway is not available yet" && sim.room.phase === "lobby", e ?? "");
+  sim.now = t0 + 30_000;
+  const late = sim.add("Late");
+  check("force: a late joiner pushes forceStartAt", sim.room.forceStartAt === t0 + 30_000 + FORCE_START_MS && sim.lastRoom(fh)?.forceStartAt === sim.room.forceStartAt);
+  e = sim.room.start(fh, t0 + FORCE_START_MS, true);
+  check("force: refused at the old forceStartAt", e === "Start anyway is not available yet", e ?? "");
+  sim.room.setReady(late, true);
+  sim.room.unbind(late, sim.now);
+  sim.now = t0 + 50_000;
+  sim.rebind(late);
+  check("force: a rejoin does not move forceStartAt", sim.room.forceStartAt === t0 + 30_000 + FORCE_START_MS);
+  check("ready: kept across a rebind (a Wi-Fi blip does not un-ready)", late.ready && shown(sim, fh, late) === true);
+  sim.now = t0 + 30_000 + FORCE_START_MS;
+  e = sim.room.start(fh, sim.now, true);
+  check("force: accepted from forceStartAt", e === null && sim.room.phase === "countdown", e ?? "");
+  check("force: races every connected player, ready or not", [fh, slow, late].every((p) => !!p.car && p.inRace));
+
+  // Force with everyone ready is just a start, whatever the clock says.
+  sim = new Sim();
+  const qh = sim.add("QH");
+  sim.room.setReady(sim.add("Q"), true);
+  check("force: with everyone ready it is a plain start", sim.room.start(qh, sim.now, true) === null);
+
+  // Host reassignment: the new host need not be ready; the rest still are waited for.
+  sim = new Sim();
+  const oldHost = sim.add("Old");
+  const next = sim.add("Next");
+  const g = sim.add("G");
+  sim.room.setReady(next, true);
+  sim.room.unbind(oldHost, sim.now);
+  sim.now += RECONNECT_GRACE_MS + 1;
+  sim.tick();
+  check("host leaves: the host passes on", sim.room.hostId === next.id && !sim.room.players.has(oldHost.id));
+  check("host leaves: no READY on the new host's row", shown(sim, g, next) === false);
+  e = sim.room.start(next, sim.now);
+  check("host leaves: the new host need not be ready, G still is waited for", e === "Waiting for 1 player to get ready", e ?? "");
+  sim.room.setReady(g, true);
+  e = sim.room.start(next, sim.now);
+  check("host leaves: the new host starts once G is ready", e === null, e ?? "");
+
+  // The same rules through the message handler (ready and start with force on the wire).
+  const rooms = new Rooms(1);
+  const conn1 = new FakeConn();
+  const conn2 = new FakeConn();
+  const s1: Session = { conn: conn1, room: null, player: null };
+  const s2: Session = { conn: conn2, room: null, player: null };
+  const w0 = 5000;
+  rooms.onMessage(s1, { t: "create", name: "W1" }, w0);
+  rooms.onMessage(s2, { t: "join", code: s1.room!.code, name: "W2" }, w0 + 1000);
+  const room = s1.room!;
+  const lastErr = () => (conn1.msgs.filter((m) => m.t === "err").pop() as Extract<ServerMsg, { t: "err" }> | undefined)?.msg;
+  rooms.onMessage(s2, { t: "ready", ready: "yes" } as unknown as ClientMsg, w0 + 2000);
+  rooms.onMessage(s1, { t: "start" }, w0 + 2000);
+  check("wire: a non-boolean ready is ignored, start refused", !s2.player!.ready && lastErr() === "Waiting for 1 player to get ready", lastErr());
+  rooms.onMessage(s2, { t: "ready", ready: true }, w0 + 3000);
+  rooms.onMessage(s2, { t: "ready", ready: false }, w0 + 4000);
+  rooms.onMessage(s1, { t: "start", force: true }, w0 + 1000 + FORCE_START_MS - 1);
+  check("wire: ready, un-ready, force too early refused", !s2.player!.ready && lastErr() === "Start anyway is not available yet", lastErr());
+  rooms.onMessage(s1, { t: "start", force: true }, w0 + 1000 + FORCE_START_MS);
+  check("wire: force accepted from forceStartAt", room.phase === "countdown" && !!s2.player!.car);
+}
+
 function garage(): void {
   const sim = new Sim();
   const a = sim.add("A");
@@ -378,7 +535,7 @@ function garage(): void {
   check("DT sanity", Math.abs(DT - 1 / 60) < 1e-12);
 }
 
-for (const t of [rivets, gating, mines, wrecks, finishing, garage]) {
+for (const t of [rivets, gating, mines, wrecks, finishing, garage, readyCheck]) {
   console.log(`\n# ${t.name}`);
   try {
     t();

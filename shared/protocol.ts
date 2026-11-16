@@ -16,6 +16,9 @@ export const COUNTDOWN_MS = 3000;
 export const FINISH_GRACE_MS = 30000; // race ends this long after the winner finishes
 export const RESULTS_MS = 8000;
 export const RECONNECT_GRACE_MS = 20000;
+// The host may "Start anyway" (not everyone ready) this long after the lobby opened or the
+// last player joined, whichever is later: every newcomer gets at least this long to shop.
+export const FORCE_START_MS = 60000;
 export const CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"; // no 0/O, 1/I/L
 export const CODE_LENGTH = 4;
 
@@ -27,6 +30,7 @@ export interface PlayerInfo {
   color: string;
   inRace: boolean;
   connected: boolean;
+  ready: boolean; // lobby ready check; never set for the host
 }
 
 /** [seq, throttle, steer, buttons]; buttons as in shared/weapons.ts */
@@ -35,7 +39,8 @@ export type InputTuple = [number, number, number, number];
 export type ClientMsg =
   | { t: "create"; name: string }
   | { t: "join"; code: string; name: string; token?: string }
-  | { t: "start" }
+  | { t: "start"; force?: boolean } // force: "Start anyway", allowed from forceStartAt
+  | { t: "ready"; ready: boolean } // lobby only; ignored from the host and outside the lobby
   | { t: "in"; i: InputTuple[] } // oldest first, newest last
   | { t: "ping"; c: number }
   | { t: "buy"; item: string };
@@ -108,6 +113,7 @@ export type ServerMsg =
       hostId: string;
       phase: Phase;
       raceStart: number; // server time the current race starts/started, 0 = no race
+      forceStartAt: number; // server time from which the host may start anyway, 0 outside the lobby
       players: PlayerInfo[];
     }
   | { t: "err"; msg: string; code?: ErrCode }
