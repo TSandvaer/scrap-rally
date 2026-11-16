@@ -227,7 +227,7 @@ function renderLobbyButtons(): void {
   show(ui.startAnyway, host && waiting > 0 && game.canForceStart());
   show(ui.ready, !host);
   ui.ready.classList.toggle("primary", !ready);
-  setText(ui.ready, ready ? "Not ready yet" : "I'm ready");
+  setText(ui.ready, ready ? "Cancel ready" : "I'm ready");
   show(ui.wait, !host);
   setText(ui.wait, ready ? "Ready — waiting for the host to start…" : "Shop first, then tell the host you're ready");
 }
