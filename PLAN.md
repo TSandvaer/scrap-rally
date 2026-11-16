@@ -82,8 +82,27 @@ debug overlay (`?debug=1`) and asserted in the bot test.
 offset = **max** over the last ~2 s of `(snap.time − localRecvTime)` (the minimum-latency
 sample; an EMA would be biased by jitter).
 
-**Car-car collisions** are server-only; the predicted car gets smoothed corrections.
-Accept some rubber-banding during sustained contact in the prototype.
+**Car-car collisions.** Shape (`shared/physics.ts`): each car is a capsule along its
+heading, a segment of length 15 centred on the car with radius 8, matching the drawn 30x16
+car (contact at 16 between centres side by side, 31 nose to tail). Per car pair the server
+resolves one contact: closest points of the two segments give the normal, both cars move
+half the overlap apart and trade velocity along the normal with restitution
+`CAR_RESTITUTION`. A fresh contact takes its normal from the moment the capsules first
+touched along this tick's relative motion, so a deep overlap at speed pushes back the way
+the cars met, never through each other. `CAR_RADIUS` stays the round hit shape for
+weapons; walls stay centre-based; no ramming damage. Ghosted, wrecked and finished cars do
+not collide.
+The client predicts its own car's bumps (`client/contact.ts`): after each own step, in
+`step()` and in every replayed step of the reconcile, a one-sided resolver moves only the
+own car by exactly its half of the push and impulse, against each other solid car's pose
+= latest snapshot + v·k·DT, k = the step index after that snapshot (the tick the server
+applies that input), clamped to 150 ms. Nothing collides while the own car is wrecked or
+ghosted. Other cars within ~90 units (until ~130) ease over 150 ms to that same predicted
+pose, so a bump is seen where it happens; their snapshot-to-snapshot jumps decay like the
+own car's correction. Further away they stay interpolated 100 ms in the past, and rivets
+and hit sparks stay at the interpolation time. A live predicted contact above
+`IMPACT_MIN_SPEED` closing speed shows sparks at the contact point and a small screen
+shake (150 ms cooldown; replays never fire it). There is no server bump event.
 
 **Do not chase bit-exact determinism** across JS engines; reconciliation absorbs it.
 
