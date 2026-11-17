@@ -3243,7 +3243,10 @@ import {
   type SoundView,
   type Trigger,
   type WatchedSnap,
+  ENGINE_PRESETS,
 } from "../client/soundlogic";
+import { ENGINES } from "../client/sfx";
+import { AudioEngine } from "../client/audio";
 
 /** A client Game on a Rooms server whose inbox can also be thrown away (a dropped link). */
 function soundWired(rooms: Rooms, clock: { now: number }): { game: Game; open(): void; flush(): void; drop(): void } {
@@ -3443,10 +3446,25 @@ function raceSounds(): void {
   const coast = engineTarget({ ...base, throttle: 0 });
   const countdownRev = engineTarget({ ...base, phase: "countdown", speed: 0 });
   const countdownIdle = engineTarget({ ...base, phase: "countdown", speed: 0, throttle: 0 });
+  const top = engineTarget({ ...base, speed: 430 });
   check(
-    "sfx engine: silent with no car, disconnected, wrecked, falling, finished, on results and outside races; pitch rises with speed, gain with throttle; revs in the countdown",
-    silent && fast.freq > slow.freq && base.throttle === 1 && engineTarget(base).gain > coast.gain && coast.gain > 0 && countdownRev.freq > countdownIdle.freq && countdownRev.on,
-    `slow ${slow.freq.toFixed(0)} Hz, fast ${fast.freq.toFixed(0)} Hz, gain ${engineTarget(base).gain.toFixed(2)} / coast ${coast.gain.toFixed(2)}`,
+    "sfx engine: silent with no car, disconnected, wrecked, falling, finished, on results and outside races; revs rise with speed (1 at top), load and gain with throttle; revs in the countdown",
+    silent && fast.rpm > slow.rpm && top.rpm === 1 && base.throttle === 1 && engineTarget(base).load === 1 && coast.load === 0 &&
+      engineTarget(base).gain > coast.gain && coast.gain > 0 && countdownRev.rpm > countdownIdle.rpm && countdownIdle.rpm === 0 && countdownRev.on,
+    `rpm slow ${slow.rpm.toFixed(2)}, fast ${fast.rpm.toFixed(2)}, countdown rev ${countdownRev.rpm.toFixed(2)}; gain ${engineTarget(base).gain.toFixed(2)} / coast ${coast.gain.toFixed(2)}`,
+  );
+
+  // Engine presets: petrol firing rates, a stored choice.
+  const ranges = ENGINE_PRESETS.map((p) => `${p} ${ENGINES[p].idleHz}-${ENGINES[p].topHz} Hz`);
+  const rangesOk = ENGINE_PRESETS.every((p) => ENGINES[p].idleHz >= 25 && ENGINES[p].idleHz <= 40 && ENGINES[p].topHz >= 150 && ENGINES[p].topHz <= 220);
+  const distinct = new Set(ENGINE_PRESETS.map((p) => JSON.stringify(ENGINES[p].pulses))).size === ENGINE_PRESETS.length;
+  const stored = parseSoundSettings(JSON.stringify({ engine: "v8" })).engine;
+  const unknown = parseSoundSettings(JSON.stringify({ engine: "electric" })).engine;
+  check(
+    "sfx engine presets: 3 distinct petrol engines, idle firing 25-40 Hz up to 150-220 Hz at top speed; the choice is a stored sound setting (unknown -> the default)",
+    ENGINE_PRESETS.length === 3 && rangesOk && distinct && stored === "v8" && unknown === DEFAULT_SOUND.engine && ENGINE_PRESETS.includes(DEFAULT_SOUND.engine) &&
+      parseSoundSettings(null).engine === DEFAULT_SOUND.engine,
+    `${ranges.join(", ")}; default ${DEFAULT_SOUND.engine}`,
   );
 
   // Hidden / not running: nothing comes out, nothing is kept for later.
@@ -3621,7 +3639,72 @@ function runTimers(): void {
   }
 }
 
-for (const t of [rivets, gating, mines, wrecks, finishing, garage, armDelay, engine, readyCheck, collisions, trackFeatures, roomTrack, jumpsWired, shippedTracks, botDriver, botLaps, mineCap, chatRoom, chatClient, sound, raceSounds]) {
+// ---- audio unlock after a hidden tab (SND-2 review fix, client/audio.ts) -----------------
+
+/**
+ * AudioEngine on fake browser globals: window and document event targets and an
+ * AudioContext whose resume() can be told to leave it suspended (as a browser may on
+ * return to a tab). Promises are synchronous thenables, so the checks need no event loop.
+ */
+function audioUnlock(): void {
+  const g = globalThis as unknown as Record<string, unknown>;
+  const saved = { window: g.window, document: g.document, AudioContext: g.AudioContext };
+  const win = new EventTarget();
+  const doc = Object.assign(new EventTarget(), { hidden: false });
+  const done = { then(ok?: () => void) { ok?.(); return done; }, catch() { return done; } };
+  const param = () => ({ value: 0, setTargetAtTime() {}, setValueAtTime() {}, cancelScheduledValues() {}, linearRampToValueAtTime() {} });
+  const node = () => ({ gain: param(), threshold: param(), knee: param(), ratio: param(), attack: param(), release: param(), connect: (n: unknown) => n, disconnect() {} });
+  class FakeContext extends EventTarget {
+    static last: FakeContext | null = null;
+    state = "suspended";
+    currentTime = 0;
+    sampleRate = 8000;
+    destination = node();
+    resumeWorks = true;
+    resumes = 0;
+    constructor() {
+      super();
+      FakeContext.last = this;
+    }
+    createGain() { return node(); }
+    createDynamicsCompressor() { return node(); }
+    createBuffer(_ch: number, len: number) { const d = new Float32Array(len); return { getChannelData: () => d }; }
+    resume() { this.resumes++; if (this.resumeWorks) this.to("running"); return done; }
+    suspend() { this.to("suspended"); return done; }
+    private to(s: string) { if (s !== this.state) { this.state = s; this.dispatchEvent(new Event("statechange")); } }
+  }
+  Object.assign(g, { window: win, document: doc, AudioContext: FakeContext });
+  try {
+    const eng = new AudioEngine();
+    eng.attach();
+    const states: string[] = [];
+    const note = (what: string) => states.push(`${what}:${FakeContext.last?.state ?? "none"}:${eng.running()}`);
+    win.dispatchEvent(new Event("pointerup")); // the first gesture creates and starts the context
+    note("unlock");
+    doc.hidden = true;
+    doc.dispatchEvent(new Event("visibilitychange"));
+    note("hidden");
+    const ctx = FakeContext.last!;
+    ctx.resumeWorks = false; // the browser keeps it suspended on return
+    doc.hidden = false;
+    doc.dispatchEvent(new Event("visibilitychange"));
+    note("back");
+    ctx.resumeWorks = true;
+    win.dispatchEvent(new Event("keydown")); // the next gesture
+    note("key");
+    const resumes = ctx.resumes;
+    win.dispatchEvent(new Event("click")); // running: the unlock is disarmed again
+    check(
+      "audio: back from a hidden tab with the context still suspended, the next key or click starts it again (and the unlock disarms once it runs)",
+      states.join(" ") === "unlock:running:true hidden:suspended:false back:suspended:false key:running:true" && ctx.resumes === resumes,
+      `${states.join(" ")}; resume() calls ${resumes}, after another click ${ctx.resumes}`,
+    );
+  } finally {
+    Object.assign(g, saved);
+  }
+}
+
+for (const t of [rivets, gating, mines, wrecks, finishing, garage, armDelay, engine, readyCheck, collisions, trackFeatures, roomTrack, jumpsWired, shippedTracks, botDriver, botLaps, mineCap, chatRoom, chatClient, sound, raceSounds, audioUnlock]) {
   console.log(`\n# ${t.name}`);
   try {
     t();

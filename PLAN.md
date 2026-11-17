@@ -254,10 +254,19 @@ SND-2 (built 2026-11-17): race effects, all synthesized on the effects bus.
 - `client/sfx.ts`: 14 recipes (countdown beep + GO, rivet, mine drop, mine blast, hit, wreck, bump,
   take-off, landing, fall, recover, lap, finish) built from oscillators, the shared noise buffer,
   filters and envelopes when they start; every source stops with its voice and the nodes disconnect
-  on `ended`. The own engine is one persistent voice (two saws + a square sub through a low-pass)
-  moved once a frame with setTargetAtTime: pitch from speed (higher in the air, a rev at a
-  standstill), gain from the throttle of the controls the frame loop stepped with; silent with no
-  car, disconnected, wrecked, falling, finished, on results and outside races; stopped in the lobby.
+  on `ended`. The rivet is a machine-gun round (a noise crack on a falling sine thump, varied
+  +-8% per shot); the mine blast an explosion (crack, 120 -> 35 Hz boom, a low-passed noise
+  rumble closing over ~1.1 s, light saturation; other cars' blasts capped at 2 at once).
+- Engine (user feedback 2026-11-17: "sounds electric"): a petrol engine, one persistent voice moved
+  once a frame with setTargetAtTime: one oscillator plays a whole engine cycle (a PeriodicWave of
+  decaying firing pulses at their positions and strengths, so uneven engines lope), a sub sine at
+  half the firing rate, noise chuffing with every firing, a soft clipper driven harder on throttle,
+  a low-pass opening with revs and throttle, two slow LFOs for an unsteady idle. Presets `ENGINES`:
+  4-cyl buzz (32 -> 205 Hz firing rate), V8 rumble (27 -> 150 Hz), old rattly Buggy (25 -> 170 Hz,
+  the default, picked by the user). The choice is sound setting `engine` (sound board "Engine: use
+  in game"). rpm follows speed (a rev at a standstill, higher in the air), load the throttle of the
+  controls the frame loop stepped with; silent with no car, disconnected, wrecked, falling,
+  finished, on results and outside races; stopped in the lobby.
   `RaceSounds` plays what the triggers decide; other cars by distance from the own car (the camera
   when spectating): full within 150 units, silent from 900, x0.75, light pan (max 0.5) by screen x.
 - Triggers (`client/soundlogic.ts` `SoundTriggers`, pure, tested in sim-test): own take-off /
@@ -273,8 +282,11 @@ SND-2 (built 2026-11-17): race effects, all synthesized on the effects bus.
   while audio does not run (locked, suspended, tab hidden) and nothing is kept for later.
 - Debug: `scrapDebug.sounds.log` (every trigger with src, own, outcome played / far / capped,
   entity id, race), `dropped.silent`, `triggers.refractoryDrops`. The sound board has a button per
-  effect, other cars at 100 / 400 / 700 units, an engine rev, `scrapSound.effects.check()` (levels
-  per effect, offline) and an effects WAV.
+  effect, a 3 s rivet burst, other cars at 100 / 400 / 700 units and a blast at 450, a rev per
+  engine (idle -> top -> idle) and the in-game engine picker, `scrapSound.effects.check()` (levels
+  per effect, offline), effects and engine WAVs.
+- Unlock after a hidden tab (review fix): on return the gesture unlock is armed while the context
+  does not run, so a resume() that leaves it suspended is recovered by the next key or click.
 
 ## Later (not in the prototype)
 

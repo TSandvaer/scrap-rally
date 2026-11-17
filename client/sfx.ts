@@ -14,6 +14,7 @@ import {
   panFor,
   SfxCaps,
   SoundTriggers,
+  type EnginePreset,
   type SfxKind,
   type SoundView,
   type Trigger,
@@ -24,9 +25,9 @@ import type { GameEvent } from "../shared/protocol";
 const LEVEL: Record<SfxKind, number> = {
   beep: 0.25,
   go: 0.16,
-  rivet: 0.19,
+  rivet: 0.27,
   drop: 0.25,
-  blast: 0.26,
+  blast: 0.8,
   hit: 0.18,
   wreck: 0.43,
   bump: 0.22,
@@ -44,7 +45,7 @@ export const SFX_DUR: Record<SfxKind, number> = {
   go: 0.85,
   rivet: 0.16,
   drop: 0.42,
-  blast: 1.3,
+  blast: 1.9,
   hit: 0.3,
   wreck: 1.3,
   bump: 0.25,
@@ -56,8 +57,6 @@ export const SFX_DUR: Record<SfxKind, number> = {
   finish: 1.4,
 };
 
-const ENGINE_LEVEL = 0.11;
-const ENGINE_MULT = [1, 1.006, 0.5]; // two saws (one detuned) and the square sub-octave
 
 type Src = AudioScheduledSourceNode;
 
@@ -170,8 +169,8 @@ export class SfxVoices {
     return w;
   }
 
-  engine(): EngineVoice {
-    return new EngineVoice(this.ctx, this.out);
+  engine(preset: EnginePreset): EngineVoice {
+    return new EngineVoice(this.ctx, this.out, this.noiseBuf, preset, this.curve);
   }
 }
 
@@ -209,12 +208,22 @@ const RECIPES: Record<SfxKind, (v: Voice, s: SfxVoices) => void> = {
     }
     v.chain(lp, e);
   },
-  // Rivet gun: a hiss of band-passed noise, a falling square snap and a little thump.
-  rivet(v) {
+  // Rivet gun, a machine-gun round: a sharp broadband crack of noise on a low punchy thump
+  // through a little saturation. Pitch and filters vary by a few percent per shot, so held
+  // fire rattles instead of repeating one sample.
+  rivet(v, s) {
     const t = v.t;
-    v.chain(v.noise(t, v.end, Math.random()), v.filter("bandpass", 3400, 1.3), v.env(1, 0.022, t, 0.001));
-    blip(v, "square", 1500, t, 0.45, 0.018, 0, 380);
-    blip(v, "triangle", 210, t, 0.5, 0.03);
+    const vary = () => 1 + (Math.random() * 2 - 1) * 0.08;
+    const sat = s.shaper(v);
+    const crack = v.filter("highpass", 1400 * vary(), 0.8);
+    const bite = v.filter("peaking", 3600 * vary(), 1.2);
+    bite.gain.value = 6;
+    v.chain(v.noise(t, t + 0.09, Math.random()), crack, bite, v.env(1, 0.014, t, 0.0005, 0.004), sat);
+    v.chain(v.noise(t, t + 0.08, Math.random()), v.filter("bandpass", 900 * vary(), 1.1), v.env(0.55, 0.02, t, 0.001));
+    const hz = 140 * vary();
+    const thump = v.osc("sine", hz, t, t + 0.12);
+    thump.frequency.exponentialRampToValueAtTime(hz * 0.48, t + 0.05);
+    v.chain(thump, v.env(0.9, 0.018, t, 0.001, 0.006), sat);
   },
   // Mine dropped: a heavy clunk on the road, then two arming ticks.
   drop(v) {
@@ -224,15 +233,23 @@ const RECIPES: Record<SfxKind, (v: Voice, s: SfxVoices) => void> = {
     blip(v, "square", 2100, t + 0.2, 0.16, 0.01);
     blip(v, "square", 2100, t + 0.32, 0.16, 0.01);
   },
-  // Mine blast: a gritty low-passed noise burst closing down, a sine boom and a crackle.
+  // Mine blast, an explosion: a short bright crack, a deep boom sweeping ~120 -> 35 Hz, and a
+  // noise burst through a low-pass that closes over about a second (the rumble tail), all
+  // lightly saturated.
   blast(v, s) {
     const t = v.t;
-    const lp = v.filter("lowpass", 4200);
-    lp.frequency.setValueAtTime(4200, t);
-    lp.frequency.exponentialRampToValueAtTime(160, t + 0.8);
-    v.chain(v.noise(t, v.end, Math.random()), lp, s.shaper(v), v.env(1, 0.28, t, 0.002, 0.03));
-    blip(v, "sine", 110, t, 0.75, 0.2, 0.02, 30);
-    v.chain(v.noise(t, t + 0.4, Math.random()), v.filter("highpass", 2600), v.env(0.35, 0.05, t + 0.01, 0.001));
+    const sat = s.shaper(v);
+    v.chain(v.noise(t, t + 0.12, Math.random()), v.filter("highpass", 2400), v.env(0.7, 0.016, t, 0.0005, 0.003), sat);
+    const boom = v.osc("sine", 120, t, v.end);
+    boom.frequency.exponentialRampToValueAtTime(35, t + 0.55);
+    v.chain(boom, v.env(1, 0.32, t, 0.003, 0.05), sat);
+    const body = v.osc("triangle", 240, t, t + 0.8);
+    body.frequency.exponentialRampToValueAtTime(70, t + 0.4);
+    v.chain(body, v.env(0.3, 0.12, t, 0.003), sat);
+    const lp = v.filter("lowpass", 5000, 0.9);
+    lp.frequency.setValueAtTime(5000, t);
+    lp.frequency.exponentialRampToValueAtTime(140, t + 1.1);
+    v.chain(v.noise(t, v.end, Math.random()), lp, v.env(1, 0.38, t, 0.002, 0.06), sat);
   },
   // Rivet hit: a metal clang and a click.
   hit(v) {
@@ -316,49 +333,221 @@ const RECIPES: Record<SfxKind, (v: Voice, s: SfxVoices) => void> = {
 };
 
 /**
- * The own car's engine: two slightly detuned saws and a square sub-octave through a low-pass
- * that opens with the pitch. set() only moves parameters (setTargetAtTime), once a frame.
+ * A petrol engine preset. The firing rate (pulses per second) runs from idleHz at idle to
+ * topHz at top speed; one oscillator plays a whole engine cycle (`pulses` firings at their
+ * positions and strengths, so worn or uneven engines lope), each firing a decaying pulse
+ * `width` of a firing interval long (shorter = brighter, buzzier).
+ */
+interface EngineDef {
+  label: string;
+  idleHz: number;
+  topHz: number;
+  pulses: readonly (readonly [at: number, amp: number])[];
+  width: number;
+  sub: number; // a sine at half the firing rate: body, rumble
+  noise: number; // band-passed noise chuffing (or rattling) with every firing
+  noiseBand: number; // its centre, in firing-rate multiples
+  noiseQ: number;
+  wobble: number; // idle unsteadiness, cents (fades out with the revs)
+  drive: readonly [coast: number, full: number]; // into the soft clipper: grit on throttle
+  cutoff: readonly [coast: number, full: number]; // low-pass, in firing-rate multiples
+  q: number;
+  level: number;
+}
+
+export const ENGINES: Readonly<Record<EnginePreset, EngineDef>> = {
+  // A small four-cylinder buzz: even, narrow firings, high revs.
+  four: {
+    label: "4-cyl",
+    idleHz: 32,
+    topHz: 205,
+    pulses: [[0, 1], [0.25, 0.93], [0.5, 0.97], [0.75, 0.9]],
+    width: 0.16,
+    sub: 0.12,
+    noise: 0.07,
+    noiseBand: 9,
+    noiseQ: 1.2,
+    wobble: 10,
+    drive: [1.2, 2.6],
+    cutoff: [7, 20],
+    q: 1.2,
+    level: 0.06,
+  },
+  // A deep V8 rumble: eight wide firings a cycle, one bank louder than the other (the
+  // cross-plane lope), a strong sub, low revs.
+  v8: {
+    label: "V8",
+    idleHz: 27,
+    topHz: 150,
+    pulses: [[0, 1], [0.125, 0.68], [0.25, 1], [0.375, 0.95], [0.5, 0.7], [0.625, 1], [0.75, 0.66], [0.875, 0.72]],
+    width: 0.34,
+    sub: 0.5,
+    noise: 0.05,
+    noiseBand: 6,
+    noiseQ: 1,
+    wobble: 16,
+    drive: [1.6, 3.6],
+    cutoff: [5, 13],
+    q: 1.6,
+    level: 0.046,
+  },
+  // An old rattly buggy: four worn cylinders firing a little off time and unevenly, loose
+  // metal rattling with every firing, a lumpy idle.
+  buggy: {
+    label: "Buggy",
+    idleHz: 25,
+    topHz: 170,
+    pulses: [[0, 1], [0.27, 0.6], [0.5, 0.88], [0.78, 0.5]],
+    width: 0.24,
+    sub: 0.25,
+    noise: 0.2,
+    noiseBand: 11,
+    noiseQ: 1.8,
+    wobble: 34,
+    drive: [2, 4.2],
+    cutoff: [6, 16],
+    q: 1.4,
+    level: 0.047,
+  },
+};
+
+const ENGINE_HARMONICS = 96; // of the cycle oscillator: ~12-24 firing harmonics
+const waveCache = new Map<EnginePreset, { real: Float32Array<ArrayBuffer>; imag: Float32Array<ArrayBuffer> }>();
+
+/**
+ * One engine cycle as a Fourier series: each firing a one-sided exponential pulse
+ * (time constant `width` of a firing interval) at its position, summed.
+ */
+function cycleWave(preset: EnginePreset): { real: Float32Array<ArrayBuffer>; imag: Float32Array<ArrayBuffer> } {
+  const hit = waveCache.get(preset);
+  if (hit) return hit;
+  const def = ENGINES[preset];
+  const n = ENGINE_HARMONICS + 1;
+  const real = new Float32Array(n);
+  const imag = new Float32Array(n);
+  const w = def.width / def.pulses.length; // in cycles
+  for (let k = 1; k < n; k++) {
+    // One pulse e^{-t/w}: c = w / (1 + i 2 pi k w); shifted to `at`: times e^{-i 2 pi k at}.
+    const x = 2 * Math.PI * k * w;
+    const pr = w / (1 + x * x);
+    const pi = (-w * x) / (1 + x * x);
+    let re = 0;
+    let im = 0;
+    for (const [at, amp] of def.pulses) {
+      const ph = -2 * Math.PI * k * at;
+      re += amp * (pr * Math.cos(ph) - pi * Math.sin(ph));
+      im += amp * (pr * Math.sin(ph) + pi * Math.cos(ph));
+    }
+    real[k] = 2 * re; // x(t) = sum real[k] cos + imag[k] sin = sum 2 Re(c e^{i 2 pi k t})
+    imag[k] = -2 * im;
+  }
+  const out = { real, imag };
+  waveCache.set(preset, out);
+  return out;
+}
+
+/**
+ * The own car's engine, a petrol engine (ENGINES): the firing pulses of the cycle oscillator
+ * and a sub sine, chuffing noise gated by the firing rate, through a soft clipper (more drive
+ * on throttle) and a low-pass that opens with the revs and the throttle; two slow LFOs make
+ * the idle unsteady. One persistent voice; set() only moves parameters (setTargetAtTime).
  */
 export class EngineVoice {
-  private readonly oscs: OscillatorNode[];
+  private readonly def: EngineDef;
+  private readonly cycle: OscillatorNode;
+  private readonly sub: OscillatorNode;
+  private readonly am: OscillatorNode; // the firing rate, gating the noise
+  private readonly noiseSrc: AudioBufferSourceNode;
+  private readonly band: BiquadFilterNode;
+  private readonly drive: GainNode;
   private readonly lp: BiquadFilterNode;
   private readonly g: GainNode;
+  private readonly wobbleDepth: GainNode;
+  private readonly sources: AudioScheduledSourceNode[];
+  private readonly nodes: AudioNode[];
   private stopped = false;
 
   constructor(
     private readonly c: BaseAudioContext,
     out: AudioNode,
+    noise: AudioBuffer,
+    readonly preset: EnginePreset,
+    shaperCurve: Float32Array<ArrayBuffer>,
   ) {
+    const def = (this.def = ENGINES[preset]);
     const t = c.currentTime;
-    this.g = c.createGain();
-    this.g.gain.value = 0;
-    this.lp = c.createBiquadFilter();
-    this.lp.type = "lowpass";
-    this.lp.Q.value = 2.5;
-    this.lp.frequency.value = 400;
-    this.lp.connect(this.g).connect(out);
-    const mk = (type: OscillatorType, mult: number, level: number) => {
+    const idle = def.idleHz;
+    const gain = (v: number) => {
+      const g = c.createGain();
+      g.gain.value = v;
+      return g;
+    };
+    const osc = (type: OscillatorType, hz: number) => {
       const o = c.createOscillator();
       o.type = type;
-      o.frequency.value = 42 * mult;
-      const lv = c.createGain();
-      lv.gain.value = level;
-      o.connect(lv).connect(this.lp);
-      o.start(t);
-      o.addEventListener("ended", () => {
-        o.disconnect();
-        lv.disconnect();
-      });
+      o.frequency.value = hz;
       return o;
     };
-    this.oscs = [mk("sawtooth", ENGINE_MULT[0], 0.6), mk("sawtooth", ENGINE_MULT[1], 0.5), mk("square", ENGINE_MULT[2], 0.55)];
+    const { real, imag } = cycleWave(preset);
+    this.cycle = c.createOscillator();
+    this.cycle.setPeriodicWave(c.createPeriodicWave(real, imag));
+    this.cycle.frequency.value = idle / def.pulses.length;
+    this.sub = osc("sine", idle / 2);
+    this.am = osc("sine", idle);
+    this.noiseSrc = c.createBufferSource();
+    this.noiseSrc.buffer = noise;
+    this.noiseSrc.loop = true;
+    this.band = c.createBiquadFilter();
+    this.band.type = "bandpass";
+    this.band.frequency.value = idle * def.noiseBand;
+    this.band.Q.value = def.noiseQ;
+    // The noise gain swings 0..2x its level with the firing rate: a chuff per firing.
+    const noiseGate = gain(def.noise);
+    const amDepth = gain(def.noise);
+    this.drive = gain(def.drive[0]);
+    const shaper = c.createWaveShaper();
+    shaper.curve = shaperCurve;
+    this.lp = c.createBiquadFilter();
+    this.lp.type = "lowpass";
+    this.lp.frequency.value = idle * def.cutoff[0];
+    this.lp.Q.value = def.q;
+    this.g = gain(0);
+    const cycleLevel = gain(0.55);
+    const subLevel = gain(def.sub);
+    // Idle unsteadiness: two slow LFOs (detune, cents) on every rate-bound oscillator.
+    this.wobbleDepth = gain(def.wobble);
+    const lfo1 = osc("sine", 2.1);
+    const lfo2 = osc("sine", 0.53);
+    const lfo2Level = gain(0.7);
+
+    this.cycle.connect(cycleLevel).connect(this.drive);
+    this.sub.connect(subLevel).connect(this.drive);
+    this.noiseSrc.connect(this.band).connect(noiseGate).connect(this.drive);
+    this.am.connect(amDepth).connect(noiseGate.gain);
+    this.drive.connect(shaper).connect(this.lp).connect(this.g).connect(out);
+    lfo1.connect(this.wobbleDepth);
+    lfo2.connect(lfo2Level).connect(this.wobbleDepth);
+    for (const o of [this.cycle, this.sub, this.am]) this.wobbleDepth.connect(o.detune);
+
+    this.sources = [this.cycle, this.sub, this.am, this.noiseSrc, lfo1, lfo2];
+    this.nodes = [this.band, noiseGate, amDepth, this.drive, shaper, this.lp, this.g, cycleLevel, subLevel, this.wobbleDepth, lfo2Level];
+    for (const s of this.sources) s.start(t);
   }
 
-  set(freq: number, gain: number, t = this.c.currentTime): void {
+  /** rpm 0..1 (idle .. top), load 0..1 (throttle), gain 0..1 (0 = silent). */
+  set(rpm: number, load: number, gain: number, t = this.c.currentTime): void {
     if (this.stopped) return;
-    for (let i = 0; i < this.oscs.length; i++) this.oscs[i].frequency.setTargetAtTime(freq * ENGINE_MULT[i], t, 0.06);
-    this.lp.frequency.setTargetAtTime(200 + freq * 7, t, 0.06);
-    this.g.gain.setTargetAtTime(gain * ENGINE_LEVEL, t, gain > 0 ? 0.05 : 0.03);
+    const d = this.def;
+    const hz = d.idleHz + (d.topHz - d.idleHz) * rpm;
+    const tau = 0.07;
+    this.cycle.frequency.setTargetAtTime(hz / d.pulses.length, t, tau);
+    this.sub.frequency.setTargetAtTime(hz / 2, t, tau);
+    this.am.frequency.setTargetAtTime(hz, t, tau);
+    this.band.frequency.setTargetAtTime(hz * d.noiseBand, t, tau);
+    this.lp.frequency.setTargetAtTime(150 + hz * (d.cutoff[0] + (d.cutoff[1] - d.cutoff[0]) * load), t, 0.05);
+    this.drive.gain.setTargetAtTime(d.drive[0] + (d.drive[1] - d.drive[0]) * load, t, 0.05);
+    this.wobbleDepth.gain.setTargetAtTime(d.wobble * (1 - rpm) * (1 - rpm), t, 0.2);
+    this.g.gain.setTargetAtTime(gain * d.level, t, gain > 0 ? 0.05 : 0.03);
   }
 
   stop(t = this.c.currentTime): void {
@@ -366,10 +555,10 @@ export class EngineVoice {
     this.stopped = true;
     this.g.gain.cancelScheduledValues(t);
     this.g.gain.setTargetAtTime(0, t, 0.03);
-    for (const o of this.oscs) o.stop(t + 0.25);
-    this.oscs[0].addEventListener("ended", () => {
-      this.lp.disconnect();
-      this.g.disconnect();
+    for (const s of this.sources) s.stop(t + 0.25);
+    this.cycle.addEventListener("ended", () => {
+      for (const s of this.sources) s.disconnect();
+      for (const n of this.nodes) n.disconnect();
     });
   }
 }
@@ -501,12 +690,17 @@ export class RaceSounds {
       topSpeed: g.stats.topSpeed,
       throttle: ctl.throttle,
     });
+    const preset = this.audio.settings.engine;
+    if (this.engine && this.engine.preset !== preset) {
+      this.engine.stop(); // another engine was picked on the sound board
+      this.engine = null;
+    }
     if (!this.engine) {
       if (!target.on) return;
       const sv = this.voicesNow();
       if (!sv) return;
-      this.engine = sv.engine();
+      this.engine = sv.engine(preset);
     }
-    this.engine.set(target.freq, target.gain);
+    this.engine.set(target.rpm, target.load, target.gain);
   }
 }

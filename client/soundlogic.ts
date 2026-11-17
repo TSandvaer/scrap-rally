@@ -8,9 +8,17 @@ export interface SoundSettings {
   music: number; // music volume 0..1
   effects: number; // effects volume 0..1
   muted: boolean;
+  engine: EnginePreset; // the own car's engine sound in races (client/sfx.ts presets)
 }
 
-export const DEFAULT_SOUND: Readonly<SoundSettings> = { music: 0.5, effects: 0.8, muted: false };
+/**
+ * Petrol engine sounds (client/sfx.ts ENGINES): a small four-cylinder buzz, a deep V8
+ * rumble, an old rattly buggy. The race uses settings.engine; the sound board picks it.
+ */
+export type EnginePreset = "four" | "v8" | "buggy";
+export const ENGINE_PRESETS: readonly EnginePreset[] = ["four", "v8", "buggy"];
+
+export const DEFAULT_SOUND: Readonly<SoundSettings> = { music: 0.5, effects: 0.8, muted: false, engine: "buggy" };
 
 /** A volume in 0..1; anything that is not a finite number falls back. */
 export function clampVolume(v: unknown, fallback: number): number {
@@ -30,6 +38,7 @@ export function parseSoundSettings(raw: string | null): SoundSettings {
     music: clampVolume(o.music, DEFAULT_SOUND.music),
     effects: clampVolume(o.effects, DEFAULT_SOUND.effects),
     muted: typeof o.muted === "boolean" ? o.muted : DEFAULT_SOUND.muted,
+    engine: ENGINE_PRESETS.find((p) => p === o.engine) ?? DEFAULT_SOUND.engine,
   };
 }
 
@@ -224,7 +233,7 @@ export const SFX_CAPS: Readonly<Record<SfxKind, { cap: number; gapMs: number }>>
   go: { cap: 1, gapMs: 0 },
   rivet: { cap: 6, gapMs: 40 },
   drop: { cap: 3, gapMs: 60 },
-  blast: { cap: 3, gapMs: 60 },
+  blast: { cap: 2, gapMs: 80 }, // 1.9 s each: two at once is plenty, and four stacked would clip
   hit: { cap: 4, gapMs: 30 },
   wreck: { cap: 2, gapMs: 100 },
   bump: { cap: 2, gapMs: 90 },
@@ -522,19 +531,19 @@ export interface EngineState {
   throttle: number; // -1..1, from the controls the frame loop read
 }
 
-export const ENGINE_IDLE_HZ = 42;
-export const ENGINE_SPAN_HZ = 118; // + this at top speed
-
 /**
- * The own engine: on in the countdown and the race while the car drives; pitch from the
- * speed (higher in the air: no load; a rev at a standstill), gain from the throttle.
+ * The own engine: on in the countdown and the race while the car drives. rpm 0 (idle) .. 1
+ * (top speed) follows the speed, revs up at a standstill on the throttle and runs higher in
+ * the air (the wheels spin free); load 0..1 is the throttle (opens the filter, more grit).
  * Silent with no car, disconnected, wrecked, falling, finished or outside a race.
  */
-export function engineTarget(e: EngineState): { on: boolean; freq: number; gain: number } {
+export function engineTarget(e: EngineState): { on: boolean; rpm: number; load: number; gain: number } {
   const on = e.hasCar && e.connected && (e.phase === "countdown" || e.phase === "racing") && e.wreck === 0 && e.fall === 0 && !e.finished;
   const thr = Math.min(1, Math.abs(e.throttle));
   const v = Math.min(1, Math.max(0, e.speed / Math.max(1, e.topSpeed)));
-  const rev = v < 0.15 ? thr * 22 * (1 - v / 0.15) : 0;
-  const freq = ENGINE_IDLE_HZ + ENGINE_SPAN_HZ * v + rev + (e.air > 0 ? 24 : 0);
-  return { on, freq, gain: on ? 0.4 + 0.6 * (e.air > 0 ? 0.6 : thr) : 0 };
+  const rev = v < 0.2 ? thr * 0.3 * (1 - v / 0.2) : 0;
+  const air = e.air > 0;
+  const rpm = Math.min(1, v + rev + (air ? 0.12 : 0));
+  const load = air ? thr * 0.5 : thr;
+  return { on, rpm, load, gain: on ? 0.6 + 0.4 * load : 0 };
 }
