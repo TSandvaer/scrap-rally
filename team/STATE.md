@@ -31,6 +31,8 @@ T3 MERGED 2026-11-17 after the user's OK on the screenshots: main e653afc (check
 T3 workers released, workspace removed. T1b merges next (review pending), then M3-T4.
 T1b review 1: REQUEST_CHANGES (otherPoses freezes far cars at a wreck/fall START: new 33 ms hitch, also on Rust Bowl;
 plus a test that cannot fail). Sent to the author with `git merge main` (e653afc) as ctx_0274dcaa4905; reviewer kept for re-review.
+T1b fix round: a63e979 (main e653afc merged in as 62b8884; sim 215/215, bots 68/68); re-review ctx_45a04c0b27d9.
+M3-T4 spec prepared: tmp/spec-m3-t4.md (port 3001; dispatch after T1b merges).
 
 **Resume (2026-11-16):** main 0dec6c9 (local, 15 ahead of origin) = ready check + engine
 (pushed 4f9ef51) + easier-start (merged locally, user-approved, reviews APPROVE). Deploys are batched:
