@@ -42,3 +42,4 @@
 - 2026-11-17 — M3-T4 taste feedback (user, driving Crusher Run): "the holes in the road is two many too close". Hole field thinned to about 3 holes with more room between them (worker's call within that), in the same fix round as the review fixes.
 - 2026-11-17 — M3-T4 drive verdict (user): "it looks good to merge". Crusher Run (moved jumps, 3 pits) and Overpass Knot approved; merge. Milestone 3 complete locally.
 - 2026-11-17 — Mine cap (user): "set a cap that you can hold max 3 mines at a time (pr run)". Read as: AMMO.mines.cap 9 -> 3 (one pack of 3 fills it); mines are only bought in the garage between races, so this also means at most 3 mines per race. Small tuning ticket, no advisor review.
+- 2026-11-17 — Deploy (user, popup): push now. main pushed to origin (4f9ef51..274f052); the user clicks Manual Deploy in Render; then a QA worker on the live site and the "ready for qa test" tickets close.
