@@ -84,7 +84,10 @@ TSandvaer/snd2, :3004); it must not edit client/audio.ts, index.html, client/sty
 or main before its own review/merge.
 SND-1 fix round: da6a69a (captions no longer <label>; speaker button placed clear of minimap/HUD via layout()); re-review
 ctx_8dad4e11ceee. Note: the fix also touched client/main.ts (+2) and client/soundboard.ts, which SND-2 owns: SND-2's merge of snd1
-may conflict there (small). Still pending: remove m3-t4 workspace once the
+may conflict there (small).
+SND-1 MERGED 2026-11-17: re-review APPROVE, music approved by the user; main 2c4777a (check clean, sim 297/297, bots 82/82,
+build ok); workers released, snd1 workspace removed. SND-2 told to `git merge main` before worker_done (msg_c8b362515d6d); its
+no-edit rule on audio.ts/index.html/style.css is lifted. Still pending: remove m3-t4 workspace once the
 user stops :3001 (PID 16470).
 
 **Resume (2026-11-16):** main 0dec6c9 (local, 15 ahead of origin) = ready check + engine
@@ -133,7 +136,6 @@ Manual Deploy only on the user's go-ahead. The user's own dev server runs on :30
 | Ticket | Dispatch | Workspace | Branch | Port | Started |
 | --- | --- | --- | --- | --- | --- |
 | 123jpnbf9bf SND-2 | ctx_98dd2f7f0f8c | ~/orca/workspaces/scrap-rally/snd2 | TSandvaer/snd2 | 3004 | 2026-11-17 |
-| 123jpnbf9be SND-1 | ctx_af130886dcb7 | ~/orca/workspaces/scrap-rally/snd1 | TSandvaer/snd1 | 3002 | 2026-11-17 |
 
 ## Queued (milestone 3, PLAN-M3.md; start after solid collisions 123jpnbf6cy and easier-start 123jpnbf3xa merge)
 
