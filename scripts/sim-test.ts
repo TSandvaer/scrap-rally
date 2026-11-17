@@ -25,6 +25,21 @@ import { CAR_RESTITUTION, capsuleGap, carContact, collideCarOneSided, collideCar
 import type { CarSnap } from "../shared/protocol";
 import { Contacts, drawnPose, IMPACT_MIN_SPEED, PREDICT_MAX_MS, predicted } from "../client/contact";
 import { JerkMeter } from "../client/jerk";
+import {
+  DEFAULT_SOUND,
+  isMuteKey,
+  MUSIC_FADE_OUT_S,
+  MusicDirector,
+  musicWanted,
+  parseSoundSettings,
+  SEQ_LOOKAHEAD_S,
+  SEQ_START_DELAY_S,
+  SEQ_TIMER_MS,
+  StepClock,
+  stepSeconds,
+  type MusicAction,
+} from "../client/soundlogic";
+import { midiOf, SONG } from "../client/music";
 import { angleDiff, clamp } from "../shared/physics";
 import { LIP_ZONE, queryTrack, recoveryAt, validateTrack, type Track } from "../shared/track";
 import {
@@ -3055,7 +3070,155 @@ function chatClient(): void {
   }
 }
 
-for (const t of [rivets, gating, mines, wrecks, finishing, garage, armDelay, engine, readyCheck, collisions, trackFeatures, roomTrack, jumpsWired, shippedTracks, botDriver, botLaps, mineCap, chatRoom, chatClient]) {
+// ---- sound (SND-1, PLAN-SOUND.md, 2026-11-17): settings, music state, sequencer timing ----
+
+function sound(): void {
+  // Settings: defaults, clamping, broken storage.
+  const d = parseSoundSettings(null);
+  const broken = parseSoundSettings("{not json");
+  const clamped = parseSoundSettings(JSON.stringify({ music: 2, effects: -1, muted: "yes" }));
+  const kept = parseSoundSettings(JSON.stringify({ music: 0.3, effects: 0.65, muted: true }));
+  const partial = parseSoundSettings(JSON.stringify({ effects: 0.2 }));
+  check(
+    "sound settings: defaults music 0.5, effects 0.8, unmuted; broken or missing values fall back; out of range clamps",
+    d.music === 0.5 && d.effects === 0.8 && !d.muted && JSON.stringify(broken) === JSON.stringify(DEFAULT_SOUND) &&
+      clamped.music === 1 && clamped.effects === 0 && clamped.muted === false &&
+      kept.music === 0.3 && kept.effects === 0.65 && kept.muted && partial.music === 0.5 && partial.effects === 0.2,
+    `${JSON.stringify(d)} ${JSON.stringify(clamped)} ${JSON.stringify(partial)}`,
+  );
+  const key = (code: string, mods: Partial<{ repeat: boolean; ctrlKey: boolean; metaKey: boolean; altKey: boolean; shiftKey: boolean }> = {}) =>
+    isMuteKey({ code, repeat: false, ctrlKey: false, metaKey: false, altKey: false, shiftKey: false, ...mods });
+  check(
+    "sound settings: M (KeyM) mutes; not on repeat, with a modifier, or another key",
+    key("KeyM") && !key("KeyM", { repeat: true }) && !key("KeyM", { ctrlKey: true }) && !key("KeyM", { metaKey: true }) &&
+      !key("KeyM", { altKey: true }) && !key("KeyM", { shiftKey: true }) && !key("KeyN") && !key("KeyX"),
+  );
+
+  // Phase -> music.
+  check(
+    "music: wanted in a room's lobby and results only, never on the menu (phase reads lobby there too)",
+    musicWanted(true, "lobby") && musicWanted(true, "results") && !musicWanted(true, "countdown") &&
+      !musicWanted(true, "racing") && !musicWanted(false, "lobby") && !musicWanted(false, "results"),
+  );
+  const dir = new MusicDirector();
+  const trace: string[] = [];
+  const at = (inRoom: boolean, phase: string, audible: boolean, now: number, force?: boolean) => {
+    const a: MusicAction | null = dir.update(inRoom, phase, audible, now, force);
+    if (a) trace.push(`${now}:${a}`);
+    return a;
+  };
+  at(false, "lobby", true, 0); // menu, unlocked
+  at(true, "lobby", false, 1); // joined by a reload: no gesture yet
+  const locked = trace.length;
+  at(true, "lobby", true, 2); // the first click unlocks: music starts
+  at(true, "lobby", true, 3); // garage, still the lobby
+  at(true, "countdown", true, 10); // fade out
+  at(true, "countdown", true, 10 + MUSIC_FADE_OUT_S / 2);
+  at(true, "countdown", true, 10 + MUSIC_FADE_OUT_S); // then stop
+  at(true, "racing", true, 15);
+  at(true, "results", true, 60); // back in on the results screen
+  at(true, "lobby", true, 70);
+  at(false, "lobby", true, 80); // left the room
+  at(false, "lobby", true, 81);
+  check(
+    "music: nothing on the menu or before the unlock; starts on unlock in the lobby; fades at the countdown, stops after the fade; back on results; stops on leave",
+    locked === 0 && trace.join(" ") === `2:start 10:fadeOut ${10 + MUSIC_FADE_OUT_S}:stop 60:start 80:stop` && dir.mode === "off",
+    trace.join(" "),
+  );
+  trace.length = 0;
+  at(true, "lobby", true, 100);
+  at(true, "countdown", true, 101);
+  at(true, "lobby", true, 101.3); // the countdown cancelled mid-fade: fade back in
+  at(true, "lobby", false, 102); // tab hidden while wanted: keep the state (the clock pauses)
+  at(true, "countdown", false, 103); // the race began while hidden: stop at once
+  at(true, "racing", true, 104);
+  at(false, "lobby", true, 105, true); // sound board Play on the menu
+  at(false, "lobby", true, 106, false); // sound board Stop
+  check(
+    "music: a cancelled countdown fades back in; hidden keeps playing state, a race starting while hidden stops at once; the board's play/stop override",
+    trace.join(" ") === "100:start 101:fadeOut 101.3:resume 103:stop 105:start 106:stop",
+    trace.join(" "),
+  );
+
+  // Sequencer timing: a jittery ~25 ms timer, some late wakes, a hidden stretch.
+  const sec = stepSeconds(SONG.bpm);
+  const clock = new StepClock(sec);
+  let now = 3.217;
+  clock.start(now);
+  const t0 = clock.timeOf(0);
+  let seed = 7;
+  const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+  const got: { step: number; time: number; now: number }[] = [];
+  let hiddenCalls = 0;
+  let afterHidden: { step: number; time: number; now: number } | null = null;
+  let resumedAt = 0;
+  for (let i = 0; i < 4000; i++) {
+    const late = i % 500 === 250 ? 1.3 : 0; // a throttled timer: 1.3 s late
+    now += SEQ_TIMER_MS / 1000 + rnd() * 0.02 + late;
+    const hidden = i >= 2000 && i < 2100;
+    const due = clock.due(now, !hidden);
+    if (hidden) hiddenCalls += due.length;
+    if (!hidden && i >= 2100 && !afterHidden && due.length) {
+      afterHidden = { ...due[0], now };
+      resumedAt = now;
+    }
+    for (const x of due) got.push({ ...x, now });
+  }
+  const neverPast = got.every((x) => x.time >= x.now - 1e-9);
+  const ahead = got.every((x) => x.time < x.now + SEQ_LOOKAHEAD_S + 1e-9);
+  const increasing = got.every((x, i) => i === 0 || (x.step > got[i - 1].step && x.time > got[i - 1].time));
+  const before = got.filter((x) => x.now < 2000 * 0.03); // the first stretch (before any restart)
+  const onGrid = got
+    .filter((x) => x.now < resumedAt || resumedAt === 0)
+    .every((x) => Math.abs((x.time - t0) / sec - Math.round((x.time - t0) / sec)) < 1e-6 && Math.round((x.time - t0) / sec) === x.step);
+  const beat = (60 / SONG.bpm);
+  const beats = before.filter((x) => x.step % 4 === 0).every((x) => Math.abs(((x.time - t0) / beat) - x.step / 4) < 1e-6);
+  check(
+    "music sequencer: steps land on the beat grid of the song's BPM; lookahead never schedules in the past or past now + 100 ms",
+    got.length > 500 && neverPast && ahead && increasing && onGrid && beats,
+    `${got.length} steps, past ${got.filter((x) => x.time < x.now - 1e-9).length}, grid ${onGrid}, beats ${beats}`,
+  );
+  check(
+    "music sequencer: nothing is due while hidden; on return the clock restarts from now (+start delay) at the next song step",
+    hiddenCalls === 0 && !!afterHidden && Math.abs(afterHidden.time - (afterHidden.now + SEQ_START_DELAY_S)) < 1e-9,
+    afterHidden ? `restart step ${afterHidden.step} at now+${(afterHidden.time - afterHidden.now).toFixed(3)} s` : "no restart",
+  );
+  const skip = new StepClock(sec);
+  skip.start(0);
+  const first = skip.due(0.01, true).length;
+  const lateBurst = skip.due(5, true); // woke 5 s late
+  check(
+    "music sequencer: a late wake skips the missed steps instead of playing them in a burst",
+    first > 0 && lateBurst.length <= Math.ceil(SEQ_LOOKAHEAD_S / sec) + 1 && lateBurst.every((x) => x.time >= 5),
+    `${lateBurst.length} steps due after a 5 s gap`,
+  );
+
+  // The song: tempo, length, A/B structure, playable note ranges, a mono lead.
+  const bars = SONG.bars;
+  const steps = SONG.steps;
+  const names = SONG.sections.map((x) => x.name);
+  const covered = SONG.sections.reduce((n, x, i) => (x.bar === n && (i === 0 || x.bar > SONG.sections[i - 1].bar) ? n + x.bars : -1), 0);
+  let leadOk = true;
+  let lastEnd = 0;
+  let bassOk = true;
+  let drumsOk = true;
+  steps.forEach((e, i) => {
+    if (e.lead) {
+      leadOk &&= i >= lastEnd && e.lead.len > 0 && i + e.lead.len <= steps.length && e.lead.midi >= midiOf("C4") && e.lead.midi <= midiOf("C6");
+      lastEnd = i + (e.lead?.len ?? 0);
+    }
+    if (e.bass) bassOk &&= e.bass.len > 0 && e.bass.midi >= midiOf("A1") && e.bass.midi <= midiOf("C4");
+    if (i % SONG.stepsPerBar === 0) drumsOk &&= e.drums.some((x) => x.kind === "kick");
+  });
+  check(
+    "music song: 110-128 BPM, 16-32 bars in A/B sections covering the loop, 16 steps a bar; a kick on every downbeat; a mono lead and bass in range",
+    SONG.bpm >= 110 && SONG.bpm <= 128 && bars >= 16 && bars <= 32 && steps.length === bars * SONG.stepsPerBar &&
+      SONG.stepsPerBar === 16 && names.includes("A") && names.includes("B") && covered === bars && leadOk && bassOk && drumsOk,
+    `${SONG.title}: ${SONG.bpm} BPM, ${bars} bars, sections ${names.join(" ")}, loop ${((bars * 16 * sec)).toFixed(1)} s`,
+  );
+}
+
+for (const t of [rivets, gating, mines, wrecks, finishing, garage, armDelay, engine, readyCheck, collisions, trackFeatures, roomTrack, jumpsWired, shippedTracks, botDriver, botLaps, mineCap, chatRoom, chatClient, sound]) {
   console.log(`\n# ${t.name}`);
   try {
     t();
