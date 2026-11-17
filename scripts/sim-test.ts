@@ -3218,7 +3218,410 @@ function sound(): void {
   );
 }
 
-for (const t of [rivets, gating, mines, wrecks, finishing, garage, armDelay, engine, readyCheck, collisions, trackFeatures, roomTrack, jumpsWired, shippedTracks, botDriver, botLaps, mineCap, chatRoom, chatClient, sound]) {
+// ---- race sound effects (SND-2, PLAN-SOUND.md, 2026-11-17): trigger decisions ----------
+
+import {
+  COUNTDOWN_CUES,
+  CountdownCues,
+  CUE_LATE_MS,
+  distanceGain,
+  engineTarget,
+  EventGate,
+  FAR_UNITS,
+  HIT_HOLD_MAX_MS,
+  NEAR_UNITS,
+  PAN_MAX,
+  panFor,
+  Refractory,
+  REFRACTORY_MS,
+  SFX_CAPS,
+  SfxCaps,
+  SNAP_GAP_MS,
+  SnapWatcher,
+  SoundTriggers,
+  type EngineState,
+  type SoundView,
+  type Trigger,
+  type WatchedSnap,
+} from "../client/soundlogic";
+
+/** A client Game on a Rooms server whose inbox can also be thrown away (a dropped link). */
+function soundWired(rooms: Rooms, clock: { now: number }): { game: Game; open(): void; flush(): void; drop(): void } {
+  const inbox: ServerMsg[] = [];
+  const session: Session = { conn: { send: (m) => inbox.push(decode<ServerMsg>(encode(m))!), close() {} }, room: null, player: null };
+  const tr: Transport = {
+    send: (m) => rooms.onMessage(session, decode<ClientMsg>(encode(m)), clock.now),
+    close() {},
+    onOpen() {},
+    onMessage() {},
+    onClose() {},
+  };
+  const game = new Game(() => tr, { get: () => null, set() {} });
+  return {
+    game,
+    open: () => tr.onOpen(),
+    flush: () => {
+      for (const m of inbox.splice(0)) tr.onMessage(m);
+    },
+    drop: () => void inbox.splice(0),
+  };
+}
+
+/** The view main.ts builds each frame (client/sfx.ts RaceSounds.frame). */
+function soundView(g: Game): SoundView {
+  return {
+    you: g.you,
+    phase: g.phase,
+    raceStart: g.raceStart,
+    phaseEnds: g.phaseEnds,
+    serverNow: g.serverNow(),
+    hasClock: g.hasClock(),
+    snapTick: g.snapTick,
+    own: g.takeOwnSounds(),
+    snap: g.you ? g.interpSnapshot() : null,
+  };
+}
+
+const tkey = (t: Trigger) => `${t.src}:${t.own ? "own" : "other"}:${t.kind}`;
+const tally = (ts: Trigger[]) => ts.reduce<Record<string, number>>((m, t) => ((m[tkey(t)] = (m[tkey(t)] ?? 0) + 1), m), {});
+
+function raceSounds(): void {
+  // Distance gain and pan.
+  const dg = [0, NEAR_UNITS, 300, 600, FAR_UNITS, 2000].map(distanceGain);
+  check(
+    "sfx distance: full within 150 units, silent from 900, falling in between; pan is light and follows the side",
+    dg[0] === 1 && dg[1] === 1 && dg[2] < 1 && dg[3] < dg[2] && dg[3] > 0 && dg[4] === 0 && dg[5] === 0 &&
+      panFor(-1e4) === -PAN_MAX && panFor(1e4) === PAN_MAX && panFor(0) === 0 && panFor(100) > 0 && PAN_MAX <= 0.6,
+    dg.map((x) => x.toFixed(3)).join(" "),
+  );
+
+  // Per-kind caps.
+  const caps = new SfxCaps();
+  let other = 0;
+  for (let t = 0; t < 100; t += 5) if (caps.tryStart("rivet", t, 120, false)) other++; // 20 rivets in 100 ms
+  let own = 0;
+  for (let t = 0; t < 100; t += 5) if (caps.tryStart("rivet", t, 120, true)) own++;
+  const caps2 = new SfxCaps();
+  const wrecks = [0, 50, 120, 240, 360, 2000].map((t) => caps2.tryStart("wreck", t, 1300, false));
+  check(
+    "sfx caps: other cars' sounds keep a per-kind gap and a concurrent cap; the own car's always play; a cap frees when its sounds end",
+    other === Math.ceil(100 / SFX_CAPS.rivet.gapMs) && own === 20 && wrecks.join() === "true,false,true,false,false,true",
+    `rivets in 100 ms: ${other} of 20 (others), ${own} of 20 (own); wrecks ${wrecks.join(",")}`,
+  );
+
+  // Refractory.
+  const rf = new Refractory();
+  const rfs = [
+    rf.allow("takeoff", 0),
+    rf.allow("takeoff", 16),
+    rf.allow("land", 20),
+    rf.allow("takeoff", REFRACTORY_MS - 1),
+    rf.allow("takeoff", REFRACTORY_MS),
+  ];
+  check("sfx refractory: a kind plays at most once per 400 ms; kinds are independent", REFRACTORY_MS === 400 && rfs.join() === "true,false,true,false,true", rfs.join());
+
+  // Countdown: a race seen from the lobby, the clock estimate jittering and jumping back.
+  const cueRun = (o: { firstMs: number; stallAt?: number; stallMs?: number; jitter: number; clock?: (t: number) => boolean }) => {
+    const cc = new CountdownCues();
+    const T0 = 50_000; // the countdown starts (server time); raceStart = T0 + 3000
+    let seed = 11;
+    const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+    const out: { cue: number; late: number }[] = [];
+    let err = 0;
+    for (let t = T0 - 500; t < T0 + 5000; t += 1000 / 60) {
+      if (o.stallAt !== undefined && t >= o.stallAt && t < o.stallAt + o.stallMs!) continue; // no frames
+      if (Math.floor(t / 400) !== Math.floor((t - 1000 / 60) / 400)) err = (rnd() * 2 - 1) * o.jitter; // the estimate moves in steps
+      const now = t + err;
+      const seen = t >= T0 + o.firstMs; // when this client learns of the countdown
+      const phase = !seen ? "lobby" : now < T0 + 3000 + 60 ? "countdown" : "racing";
+      const raceStart = seen ? T0 + 3000 : 0;
+      const phaseEnds = phase === "countdown" ? T0 + 3000 : 0;
+      const cue = cc.update(phase, raceStart, phaseEnds, now, o.clock ? o.clock(t) : true);
+      if (cue !== null) out.push({ cue, late: Math.round(now - (T0 + 3000 - (COUNTDOWN_CUES - 1 - cue) * 1000)) });
+    }
+    return out;
+  };
+  const normal = cueRun({ firstMs: 60, jitter: 40 });
+  const rejoin = cueRun({ firstMs: 1400, jitter: 40 });
+  const stall = cueRun({ firstMs: 60, jitter: 0, stallAt: 51_900, stallMs: 450 }); // straddles the "1" beep at 52 000
+  const noClock = cueRun({ firstMs: 60, jitter: 0, clock: (t) => t > 50_500 });
+  const fmt = (r: { cue: number; late: number }[]) => r.map((x) => `${x.cue}@${x.late}`).join(" ");
+  check(
+    "sfx countdown: exactly 3 beeps + GO per race, in order, on time, under a jittering clock estimate that jumps back",
+    normal.map((x) => x.cue).join() === "0,1,2,3" && normal.every((x) => x.late >= 0 && x.late <= CUE_LATE_MS),
+    fmt(normal),
+  );
+  check(
+    "sfx countdown: first seen mid-countdown (a rejoin) passes the cues already gone silently; a stalled frame skips its cue; none before the clock exists",
+    rejoin.map((x) => x.cue).join() === "2,3" && stall.map((x) => x.cue).join() === "0,1,3" && noClock.map((x) => x.cue).join() === "1,2,3",
+    `rejoin ${fmt(rejoin)} | stall ${fmt(stall)} | no clock until 0.5 s ${fmt(noClock)}`,
+  );
+  const cc2 = new CountdownCues();
+  const second: number[] = [];
+  for (const [race, t] of [[10_000, 7_000], [10_000, 8_000], [10_000, 9_000], [10_000, 10_100], [60_000, 57_010], [60_000, 58_010], [60_000, 59_010], [60_000, 60_010]] as const) {
+    const c = cc2.update(t < race ? "countdown" : "racing", race, t < race ? race : 0, t, true);
+    if (c !== null) second.push(c);
+  }
+  check("sfx countdown: latched per raceStart: the next race counts down again", second.join() === "0,1,2,3,0,1,2,3", second.join());
+
+  // Snapshot watcher.
+  const car = (air = 0, fall = 0) => ({ x: 0, y: 0, air, fall });
+  const snapOf = (time: number, o: { shots?: [number, string][]; mines?: [number, string][]; cars?: [string, number, number][] }): WatchedSnap => ({
+    time,
+    shots: new Map((o.shots ?? []).map(([id, ow]) => [id, { o: ow, x: 0, y: 0 }])),
+    mines: (o.mines ?? []).map(([id, ow]) => ({ id, o: ow, x: 0, y: 0 })),
+    cars: new Map((o.cars ?? []).map(([id, a, f]) => [id, car(a, f)])),
+  });
+  const sw = new SnapWatcher();
+  const run = (s: WatchedSnap | null) => {
+    const out: Trigger[] = [];
+    sw.update(s, "me", out);
+    return out.map((t) => `${t.kind}:${t.id}`).join(",");
+  };
+  const steps = [
+    run(snapOf(1000, { shots: [[1, "o"], [2, "me"]], mines: [[1, "o"]], cars: [["o", 5, 0], ["me", 0, 0]] })), // first: seeds
+    run(snapOf(1033, { shots: [[1, "o"], [2, "me"], [3, "o"], [4, "me"]], mines: [[1, "o"], [2, "o"], [3, "me"]], cars: [["o", 0, 0], ["me", 7, 0]] })),
+    run(snapOf(1033, { shots: [[9, "o"]] })), // the same snapshot again
+    run(snapOf(1000, { shots: [[9, "o"]] })), // an older one (the clock jumped back)
+    run(snapOf(1066, { cars: [["o", 0, 30]] })),
+    run(snapOf(1100, { cars: [["o", 0, 0]] })),
+    run(snapOf(1133, { cars: [["o", 9, 0]] })),
+    run(snapOf(1500, { shots: [[20, "o"]], mines: [[30, "o"]], cars: [["o", 0, 0]] })), // a gap > 250 ms: seeds
+    run(snapOf(1533, { shots: [[20, "o"], [21, "o"]], mines: [[30, "o"]], cars: [["o", 0, 0]] })),
+  ];
+  sw.reset(); // a welcome
+  steps.push(run(snapOf(1566, { shots: [[22, "o"]], mines: [[31, "o"]], cars: [["o", 3, 0]] })));
+  steps.push(run(snapOf(1600, { shots: [[22, "o"], [23, "o"]], mines: [[31, "o"]], cars: [["o", 0, 0]] })));
+  check(
+    "sfx snapshots: seeded silently on the first snapshot, after a gap > 250 ms and after a welcome; new shots, mines and air/fall changes of other cars only; never the own car; old or repeated snapshots ignored",
+    SNAP_GAP_MS === 250 &&
+      steps.join(" | ") === " | rivet:o,drop:o,land:o |  |  | fall:o | recover:o | takeoff:o |  | rivet:o |  | rivet:o,land:o",
+    steps.join(" | "),
+  );
+
+  // Server events.
+  const gate = new EventGate(100);
+  const got: string[] = [];
+  const take = (now: number, snapTick: number) => {
+    const out: Trigger[] = [];
+    gate.take(now, snapTick, out);
+    for (const t of out) got.push(`${now}:${t.kind}:${t.id}`);
+  };
+  gate.event({ k: "hit", id: "o", by: "me", dmg: 4, w: "rivet" }, 10, "me", 0); // another car: 100 ms later
+  gate.event({ k: "hit", id: "me", by: "o", dmg: 4, w: "rivet" }, 11, "me", 0); // own: when tick 11's snapshot is in
+  take(0, 10);
+  take(16, 12);
+  take(99, 12);
+  take(100, 12);
+  gate.event({ k: "hit", id: "me", by: "o", dmg: 4, w: "rivet" }, 20, "me", 200); // fatal: the wreck follows, same tick
+  take(210, 18);
+  gate.event({ k: "wreck", id: "me", by: "o" }, 20, "me", 230);
+  take(240, 20);
+  gate.event({ k: "hit", id: "o", by: "me", dmg: 15, w: "mine" }, 30, "me", 300); // a fatal mine: blast under the wreck
+  gate.event({ k: "wreck", id: "o", by: "me" }, 30, "me", 310);
+  take(405, 30);
+  take(410, 30);
+  gate.event({ k: "hit", id: "o", by: "me", dmg: 15, w: "mine" }, 40, "me", 500); // a mine that does not wreck
+  gate.event({ k: "hit", id: "me", by: "o", dmg: 4, w: "rivet" }, 41, "me", 500); // no snapshot ever: released after the hold
+  gate.event({ k: "lap", id: "me", lap: 1 }, 41, "me", 500);
+  take(500, 0);
+  take(500 + HIT_HOLD_MAX_MS, 0);
+  take(600, 0);
+  take(750, 0);
+  check(
+    "sfx events: other cars' wait out the interpolation delay; own hits wait for their tick's snapshot; a wreck replaces its fatal hit (a mine keeps its blast); a mine hit is a blast",
+    got.join(" ") === "16:hit:me 100:hit:o 240:wreck:me 405:blast:o 410:wreck:o 500:lap:me 650:hit:me 750:blast:o",
+    got.join(" "),
+  );
+
+  // Engine.
+  const base: EngineState = { phase: "racing", hasCar: true, connected: true, wreck: 0, fall: 0, air: 0, finished: false, speed: 200, topSpeed: 430, throttle: 1 };
+  const silentWhen: Partial<EngineState>[] = [{ hasCar: false }, { connected: false }, { wreck: 5 }, { fall: 5 }, { finished: true }, { phase: "results" }, { phase: "lobby" }];
+  const silent = silentWhen.every((p) => engineTarget({ ...base, ...p }).gain === 0 && !engineTarget({ ...base, ...p }).on);
+  const slow = engineTarget({ ...base, speed: 100 });
+  const fast = engineTarget({ ...base, speed: 430 });
+  const coast = engineTarget({ ...base, throttle: 0 });
+  const countdownRev = engineTarget({ ...base, phase: "countdown", speed: 0 });
+  const countdownIdle = engineTarget({ ...base, phase: "countdown", speed: 0, throttle: 0 });
+  check(
+    "sfx engine: silent with no car, disconnected, wrecked, falling, finished, on results and outside races; pitch rises with speed, gain with throttle; revs in the countdown",
+    silent && fast.freq > slow.freq && base.throttle === 1 && engineTarget(base).gain > coast.gain && coast.gain > 0 && countdownRev.freq > countdownIdle.freq && countdownRev.on,
+    `slow ${slow.freq.toFixed(0)} Hz, fast ${fast.freq.toFixed(0)} Hz, gain ${engineTarget(base).gain.toFixed(2)} / coast ${coast.gain.toFixed(2)}`,
+  );
+
+  // Hidden / not running: nothing comes out, nothing is kept for later.
+  const st = new SoundTriggers(100);
+  st.event({ k: "hit", id: "o", by: "x", dmg: 4, w: "rivet" }, 1, "me", 0, false);
+  const view: SoundView = { you: "me", phase: "racing", raceStart: 1, phaseEnds: 0, serverNow: 5000, hasClock: true, snapTick: 99, own: ["shot", "takeoff"], snap: null };
+  const hiddenOut = st.frame(view, 0, false);
+  st.event({ k: "hit", id: "o", by: "x", dmg: 4, w: "rivet" }, 2, "me", 10, true);
+  st.frame({ ...view, own: [] }, 20, false); // hidden before it was due: dropped
+  const back = st.frame({ ...view, own: [] }, 500, true);
+  check(
+    "sfx hidden: while audio does not run (hidden tab, suspended), no trigger comes out and held events are dropped, not played on return",
+    hiddenOut.length === 0 && back.length === 0 && st.bump(500, 0, 0, false) === null,
+    `${hiddenOut.length} while hidden, ${back.length} on return`,
+  );
+
+  // End to end without lag (performance.now() is the sim clock): a jumper through a race on
+  // the T1b track with an observer, then a weapons race with a dropped link and a rejoin.
+  const realNow = performance.now.bind(performance);
+  const clock = { now: realNow() };
+  performance.now = () => clock.now;
+  try {
+    const rooms = new Rooms(1);
+    const J = soundWired(rooms, clock);
+    const jt = new SoundTriggers(100);
+    J.game.on.welcome = () => jt.reset();
+    J.game.on.event = (ev, tick) => jt.event(ev, tick, J.game.you, clock.now, true);
+    J.game.create("Jumper");
+    J.open();
+    J.flush();
+    J.game.pickTrack(T1B_ID);
+    J.flush();
+    J.game.start();
+    J.flush();
+    const room = [...rooms.rooms.values()][0];
+    const t1b = trackById(T1B_ID);
+    const script = new JumpFallScript(t1b);
+    const O = soundWired(rooms, clock);
+    const ot = new SoundTriggers(100);
+    O.game.on.welcome = () => ot.reset();
+    let observing = false;
+    const jOut: Trigger[] = [];
+    const oOut: Trigger[] = [];
+    let after = 0;
+    for (let i = 0; i < 60 * 40 && after < 90; i++) {
+      if (script.done()) after++;
+      clock.now += 1000 / 60;
+      rooms.step(clock.now);
+      J.flush();
+      O.flush();
+      J.game.step(script.controls(J.game.car), 1000 / 60);
+      O.game.step(NO_CONTROLS, 1000 / 60);
+      jOut.push(...jt.frame(soundView(J.game), clock.now, true));
+      if (observing) oOut.push(...ot.frame(soundView(O.game), clock.now, true).filter((t) => t.src === "snap"));
+      if (room.phase === "racing" && !observing) {
+        observing = true;
+        O.game.join(room.code, "Observer");
+        O.open();
+      }
+    }
+    const jt1 = tally(jOut);
+    const ot1 = tally(oOut);
+    check(
+      "sfx end to end: the jumper hears 3 beeps + GO, and its own take-off, landing, fall and recovery once each (from step())",
+      script.done() && jt1["countdown:own:beep"] === 3 && jt1["countdown:own:go"] === 1 &&
+        ["takeoff", "land", "fall", "recover"].every((k) => jt1[`step:own:${k}`] === 1) && Object.keys(jt1).length === 6,
+      JSON.stringify(jt1),
+    );
+    check(
+      "sfx end to end: an observer hears the jumper's take-off, landing, fall and recovery once each (from its snapshots)",
+      ["takeoff", "land", "fall", "recover"].every((k) => ot1[`snap:other:${k}`] === 1) && Object.keys(ot1).length === 4,
+      JSON.stringify(ot1),
+    );
+
+    // Weapons: A fires and drops mines, B watches; B's link drops, A drops a mine meanwhile,
+    // B is welcomed back with the mines on the track.
+    const rooms2 = new Rooms(1);
+    const A = soundWired(rooms2, clock);
+    const B = soundWired(rooms2, clock);
+    const at = new SoundTriggers(100);
+    const bt = new SoundTriggers(100);
+    let bWelcomes = 0;
+    A.game.on.welcome = () => at.reset();
+    B.game.on.welcome = () => {
+      bWelcomes++;
+      bt.reset();
+    };
+    A.game.create("Ann");
+    A.open();
+    A.flush();
+    B.game.join(A.game.code, "Bo");
+    B.open();
+    B.flush();
+    A.flush();
+    for (const g of [A, B]) {
+      g.game.buy("rivets");
+      g.game.buy("mines");
+    }
+    B.game.setReady(true);
+    A.flush();
+    B.flush();
+    A.game.start();
+    const room2 = rooms2.rooms.get(A.game.code)!;
+    const aOut: Trigger[] = [];
+    const bOut: Trigger[] = [];
+    const bAfter: Trigger[] = [];
+    let linkDown = false;
+    let rejoined = false;
+    let mineAt = -1;
+    const shot0 = A.game["localShotId"];
+    const aBot = new BotDriver(A.game, 0);
+    aBot.weapons = false;
+    let droppedMine = 0;
+    for (let i = 0; i < 60 * 20; i++) {
+      clock.now += 1000 / 60;
+      rooms2.step(clock.now);
+      A.flush();
+      if (linkDown) B.drop();
+      else B.flush();
+      // A drives on, fires in bursts once armed and drops its 3 mines; B sits still behind.
+      const mine = A.game.armed() && droppedMine < 3 && (i % 50 === 0);
+      if (mine) {
+        droppedMine++;
+        if (droppedMine === 3) mineAt = i;
+      }
+      A.game.step({ ...aBot.controls(), fire: A.game.armed() && i % 40 < 20, mine }, 1000 / 60);
+      B.game.step(NO_CONTROLS, 1000 / 60);
+      aOut.push(...at.frame(soundView(A.game), clock.now, true));
+      runTimers();
+      if (linkDown) continue;
+      const bt1 = bt.frame(soundView(B.game), clock.now, true);
+      (rejoined ? bAfter : bOut).push(...bt1);
+      // Two mines are out: the link drops for 1.5 s; the third goes down while it is down.
+      if (droppedMine === 2 && !linkDown && !rejoined && i % 50 === 25) {
+        linkDown = true;
+        setTimeout0(() => {
+          linkDown = false;
+          rejoined = true;
+          B.game["handle"]({ t: "welcome", code: A.game.code, you: B.game.you, token: "t", laps: room2.laps });
+        }, 90);
+      }
+    }
+    const fired = A.game["localShotId"] - shot0;
+    const aT = tally(aOut);
+    const bT = tally(bOut);
+    const bA = tally(bAfter);
+    check(
+      "sfx end to end: the own rivet sounds equal the rivets fired, the own mine drops the mines dropped (from step(), none from snapshots)",
+      fired > 10 && aT["step:own:rivet"] === fired && aT["step:own:drop"] === 3 && !aT["snap:other:rivet"] && !aT["snap:other:drop"],
+      `fired ${fired}, rivet sounds ${aT["step:own:rivet"]}, mines 3, drop sounds ${aT["step:own:drop"]}`,
+    );
+    check(
+      "sfx end to end: a watcher hears the other car's rivets and its first 2 mines; after a dropped link and a welcome, the mine laid meanwhile and the ones on the track make no sound",
+      (bT["snap:other:rivet"] ?? 0) > 0 && bT["snap:other:drop"] === 2 && rejoined && bWelcomes === 2 && mineAt > 0 && !bA["snap:other:drop"] &&
+        (B.game.interpSnapshot()?.mines.length ?? 0) >= 3,
+      `before ${JSON.stringify(bT)}; after the rejoin ${JSON.stringify(bA)}; mines on the track ${B.game.interpSnapshot()?.mines.length}; welcomes ${bWelcomes}`,
+    );
+  } finally {
+    performance.now = realNow;
+  }
+}
+
+// A tiny frame-counted timer for the tests above (no wall clock).
+const timers: { left: number; fn: () => void }[] = [];
+function setTimeout0(fn: () => void, frames: number): void {
+  timers.push({ left: frames, fn });
+}
+function runTimers(): void {
+  for (const t of timers.splice(0)) {
+    if (--t.left <= 0) t.fn();
+    else timers.push(t);
+  }
+}
+
+for (const t of [rivets, gating, mines, wrecks, finishing, garage, armDelay, engine, readyCheck, collisions, trackFeatures, roomTrack, jumpsWired, shippedTracks, botDriver, botLaps, mineCap, chatRoom, chatClient, sound, raceSounds]) {
   console.log(`\n# ${t.name}`);
   try {
     t();
