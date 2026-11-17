@@ -148,6 +148,21 @@ shake (150 ms cooldown; replays never fire it). There is no server bump event.
   ready or not. The client shows the button only once it has a server clock estimate.
 - Heartbeat: protocol-level ping every 10 s, terminate sockets that missed a pong.
   App-level `ping`/`pong` for the RTT shown in the HUD. `maxPayload` 4 KB.
+- Leave: the Leave button sends `{t:"leave"}`; the server removes the player at once (no
+  reconnect grace) and closes the socket. A dropped socket is still removed only when the
+  grace runs out.
+- Room chat (see [PLAN-CHAT.md](PLAN-CHAT.md), built 2026-11-17): C->S `{t:"chat", text}` in
+  any phase from a bound player; S->C `{t:"chat", line}` live to the room and
+  `{t:"chatlog", lines}` right after every `welcome` (join, rejoin, takeover). `ChatLine =
+  {n, kind: say|join|leave|result, from?, name, color, text}`; name and colour as at the time
+  of the line. The room keeps the last 300 lines in memory; they go with the room. Text is
+  cleaned on the server (whitespace collapsed, `\p{C}` stripped except ZWNJ/ZWJ, trimmed,
+  cut to 200 code points; empty or non-string ignored) and rate-limited per player (5 at
+  once, one more per second; over that a plain `err` "Slow down", at most about once a
+  second). Game lines: "join" before the joiner's bind (so the joiner sees it once, in its
+  log), "leave" only when a player is removed for good, one "result" per race from the end
+  of the race (none when a race ends because every racer left). The client replaces its list
+  on `chatlog` and clears it on leave and in another room.
 
 ## Ready for weapons and shop later
 
