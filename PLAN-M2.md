@@ -20,8 +20,10 @@ halved. Was: 40 rivets + 3 mines to start, rivet 8 / mine 30 damage, firing from
 - **Rivet gun** (front, hold to fire): 4 damage, cooldown 9 ticks (150 ms), range 650,
   900 u/s plus the car's own velocity. Ammo packs of 20, cap 100.
 - **Scrap mine** (rear, tap to drop): arms after 0.4 s, lives 25 s, 15 damage + spin-out
-  (deterministic heading kick away from the mine, speed × 0.3). Packs of 3, cap 9.
-  Mines hit anyone once armed, including their owner.
+  (deterministic heading kick away from the mine, speed × 0.3). Packs of 3, cap 3
+  (2026-11-17, user request: hold at most 3 mines at a time; was cap 9). Mines are only
+  bought between races, so that is also at most 3 mines per race. Mines hit anyone once
+  armed, including their owner.
 - **Weapons armed delay**: nobody can fire a rivet or drop a mine until 8 s after GO
   (`WEAPONS_ARM_MS` = 8000 of server time after `Room.raceStart`). A mine press inside the
   window is discarded, not dropped later. The client gates its own shots, mine presses and
@@ -41,7 +43,10 @@ halved. Was: 40 rivets + 3 mines to start, rivet 8 / mine 30 damage, firing from
     acceleration only. Terminal speed is the same at every level, L3 just gets there sooner.)
   - Tyres L1-3: grip +10 %, turn +4 % per level — 350 / 700 / 1200
   - Welding rig L1-3: repairs 2 / 4 / 6 HP per second while driving — 300 / 600 / 1000
-  - Rivets (20) 150, Mines (3) 200, up to the caps.
+  - Rivets (20) 150, Mines (3) 200, up to the caps (rivets 100, mines 3). One mine pack
+    fills the mine cap; with 1-2 mines left a pack tops up to 3. `Room.start` clamps every
+    racer's ammo to its cap (`clampAmmo`), so a wallet over the cap (for example one kept
+    from before the 2026-11-17 cap change) races with at most 3 mines.
   - Scrap, levels and ammo live on the Player: they persist across races and across a
     reconnect within `RECONNECT_GRACE_MS` (20 s); after that the seat is gone.
 - **Grid**: players not in the last race first (join order), then the last race's

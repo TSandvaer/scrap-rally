@@ -2481,7 +2481,67 @@ function botLaps(): void {
   }
 }
 
-for (const t of [rivets, gating, mines, wrecks, finishing, garage, armDelay, engine, readyCheck, collisions, trackFeatures, roomTrack, jumpsWired, shippedTracks, botDriver, botLaps]) {
+// ---- mine cap: hold at most 3 mines (ClickUp 123jpnbf8nx, 2026-11-17) ----------------
+
+import { AMMO, clampAmmo, priceOf } from "../shared/shop";
+
+function mineCap(): void {
+  check(
+    "mine cap: AMMO.mines is a pack of 3 for 200 with a cap of 3",
+    AMMO.mines.cap === 3 && AMMO.mines.pack === 3 && AMMO.mines.price === 200,
+    `pack ${AMMO.mines.pack}, price ${AMMO.mines.price}, cap ${AMMO.mines.cap}`,
+  );
+  const sim = new Sim();
+  const a = sim.add("A");
+  const b = sim.add("B");
+  a.wallet.scrap = 1000;
+  let e = sim.room.buy(a, "mines");
+  check("mine cap: buying at 0 gives 3 for 200", e === null && a.ammo.mines === 3 && a.wallet.scrap === 800, `${e} ${a.ammo.mines} ${a.wallet.scrap}`);
+  e = sim.room.buy(a, "mines");
+  check(
+    "mine cap: refused at 3 (Already maxed out), scrap kept, garage price shows maxed",
+    e === "Already maxed out" && a.ammo.mines === 3 && a.wallet.scrap === 800 && priceOf("mines", a.wallet) === null,
+    `${e} ${a.ammo.mines} ${a.wallet.scrap}`,
+  );
+  for (const left of [1, 2]) {
+    a.ammo.mines = left;
+    const before = a.wallet.scrap;
+    e = sim.room.buy(a, "mines");
+    check(
+      `mine cap: a top-up from ${left} fills to 3 for 200`,
+      e === null && a.ammo.mines === 3 && a.wallet.scrap === before - 200,
+      `${e} ${a.ammo.mines} ${before}->${a.wallet.scrap}`,
+    );
+  }
+
+  // Over-cap wallets (e.g. kept from before the cap was lowered) are clamped at race start.
+  const w = startingWallet();
+  w.ammo.rivets = 37;
+  w.ammo.mines = 9;
+  clampAmmo(w);
+  check("mine cap: clampAmmo cuts mines to 3 and leaves ammo under its cap alone", w.ammo.mines === 3 && w.ammo.rivets === 37, `${w.ammo.rivets}/${w.ammo.mines}`);
+  a.ammo.mines = 9;
+  b.ammo.mines = 2;
+  sim.readyAll(a);
+  e = sim.room.start(a, sim.now);
+  check("mine cap: a 9-mine wallet is clamped to 3 when the race starts", e === null && a.ammo.mines === 3 && a.wallet.ammo.mines === 3, `${e} ${a.ammo.mines}`);
+  check("mine cap: a wallet under the cap keeps its mines at race start", b.ammo.mines === 2, `${b.ammo.mines}`);
+  while (sim.room.phase !== "racing") sim.run(1);
+  const snap = sim.conns.get(a.id)!.msgs.filter((x) => x.t === "snap").pop() as Extract<ServerMsg, { t: "snap" }> | undefined;
+  check("mine cap: the racer's snapshot shows 3 mines", snap?.ammo[1] === 3, `${snap?.ammo.join("/")}`);
+  // Past the armed delay, five mine taps drop only the three mines it holds.
+  sim.now = Math.max(sim.now, sim.room.raceStart + WEAPONS_ARM_MS);
+  sim.place(a, 300, 0);
+  sim.place(b, 1500, 0);
+  for (let i = 0; i < 5; i++) {
+    sim.run(1, (p) => (p === a ? { mine: true } : {}));
+    sim.run(1);
+  }
+  const dropped = sim.room.combat.mines.filter((m) => m.owner === a.id).length;
+  check("mine cap: five taps from a clamped wallet drop 3 mines", dropped === 3 && a.ammo.mines === 0, `${dropped} dropped, ${a.ammo.mines} left`);
+}
+
+for (const t of [rivets, gating, mines, wrecks, finishing, garage, armDelay, engine, readyCheck, collisions, trackFeatures, roomTrack, jumpsWired, shippedTracks, botDriver, botLaps, mineCap]) {
   console.log(`\n# ${t.name}`);
   try {
     t();
