@@ -61,7 +61,9 @@ export interface CarSnap {
   hp: number;
   maxHp: number;
   wreck: number; // ticks left wrecked, 0 = driving
-  ghost: boolean; // just respawned or finished: no damage, no car collisions
+  air: number; // ticks left in the air (shared/weapons.ts stepRaceCar), 0 = grounded
+  fall: number; // ticks left falling, then placed at a recovery point; 0 = not falling
+  ghost: boolean; // just respawned, recovered or finished: no damage, no car collisions
 }
 
 export interface ShotSnap {

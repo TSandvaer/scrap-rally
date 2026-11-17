@@ -2,7 +2,7 @@
 // the other cars, shots and mines, and the server clock estimate. No DOM access, so the
 // headless bot test drives exactly this code.
 
-import { angleDiff, BASE_STATS, CAR_RADIUS, cloneCar, type CarState, type CarStats, type Input } from "../shared/physics";
+import { angleDiff, BASE_STATS, CAR_RADIUS, cloneCar, TICK_HZ, type CarState, type CarStats, type Input } from "../shared/physics";
 import {
   INPUT_REDUNDANCY,
   round,
@@ -21,7 +21,9 @@ import { statsFor, type Levels } from "../shared/shop";
 import type { Track } from "../shared/track";
 import { DEFAULT_TRACK_ID, findTrack, trackById } from "../shared/tracks";
 import {
+  airHeight,
   BTN_RIVET,
+  FALL_TICKS,
   makeButtons,
   moveShot,
   RIVET_COOLDOWN,
@@ -64,6 +66,32 @@ export interface Pose {
   x: number;
   y: number;
   h: number;
+  // Drawing only (client/render.ts):
+  height?: number; // 0..1, airHeight() of the drawn car; absent or 0 = on the ground
+  falling?: number; // 0..1, fraction of the fall elapsed (FALL_TICKS); absent = not falling
+  ghost?: boolean; // ghosted (after a recovery or a wreck respawn, or finished): blinks
+}
+
+/** A car's air/fall/wreck state, as far as drawing and the no-slide rules care. */
+function sameState(a: { air: number; fall: number; wreck: number }, b: { air: number; fall: number; wreck: number }): boolean {
+  return a.air > 0 === b.air > 0 && a.fall > 0 === b.fall > 0 && a.wreck > 0 === b.wreck > 0;
+}
+
+/** Fraction of the fall elapsed, or undefined when the car is not falling. */
+function fallFraction(fall: number): number | undefined {
+  return fall > 0 ? (FALL_TICKS - fall) / FALL_TICKS : undefined;
+}
+
+/** height / falling for a car drawn between states a and b (fraction t from a to b). */
+function airFall(a: CarState, b: CarState, t: number): { height: number; falling?: number } {
+  const ha = airHeight(a), hb = airHeight(b);
+  const out: { height: number; falling?: number } = { height: ha + (hb - ha) * t };
+  const fb = fallFraction(b.fall);
+  if (fb !== undefined) {
+    const fa = fallFraction(a.fall) ?? fb;
+    out.falling = fa + (fb - fa) * t;
+  }
+  return out;
 }
 
 interface Snapshot {
@@ -148,6 +176,8 @@ export class Game {
   history = new Map<number, CarState>();
   lastAck = -1;
   readonly recErrors: number[] = [];
+  /** Acked steps whose predicted air/fall/wreck state differed from the server's. */
+  recStateErrors = 0;
   localShots: Shot[] = []; // cosmetic: our own rivets, drawn before the server confirms
   readonly contact = new Contacts(); // own-car bump prediction, near cars' drawn pose
   private cooldown = 0;
@@ -456,6 +486,8 @@ export class Game {
       vy: mine.vy,
       seg: mine.seg,
       wreck: mine.wreck,
+      air: mine.air,
+      fall: mine.fall,
     };
     if (!this.car) {
       this.car = server;
@@ -474,14 +506,16 @@ export class Game {
     if (predicted && ack > this.lastAck) {
       const err = Math.hypot(predicted.x - server.x, predicted.y - server.y);
       if (this.recErrors.length < MAX_ERROR_SAMPLES) this.recErrors.push(err);
+      if (!sameState(predicted, server)) this.recStateErrors++;
     }
     if (ack > this.lastAck) this.lastAck = ack;
     while (this.pending.length && this.pending[0].seq <= ack) this.pending.shift();
     for (const k of this.history.keys()) if (k <= ack) this.history.delete(k);
 
     // Rewind to the server state and replay what the server has not seen yet. Replay goes
-    // through stepRaceCar, so a wreck freeze and the respawn jump are predicted too, and
-    // bumps: pending[i] is applied i + 1 ticks after this snapshot.
+    // through stepRaceCar, so a wreck freeze and the respawn jump, jumps, falls and the
+    // recovery are predicted too, and bumps: pending[i] is applied i + 1 ticks after this
+    // snapshot.
     this.contact.rebase(snap, this.you, kOld, this.pending.length);
     const old = this.car!;
     const c = cloneCar(server);
@@ -492,12 +526,13 @@ export class Game {
     });
     this.car = c;
 
-    // Hide the jump: shift the render offset (and the interpolation start) by it. Wreck
-    // state changes and big jumps are shown as they are.
+    // Hide the jump: shift the render offset (and the interpolation start) by it. Wreck, air
+    // and fall state changes (a take-off, a landing, a fall or a recovery a tick off) and
+    // big jumps are shown as they are.
     const dx = old.x - c.x;
     const dy = old.y - c.y;
     const dh = angleDiff(c.h, old.h);
-    if (Math.hypot(dx, dy) > SNAP_DISTANCE || old.wreck > 0 !== c.wreck > 0) {
+    if (Math.hypot(dx, dy) > SNAP_DISTANCE || !sameState(old, c)) {
       this.smooth.x = this.smooth.y = this.smooth.h = 0;
       this.prevCar = cloneCar(c);
       return;
@@ -526,11 +561,12 @@ export class Game {
 
   /**
    * Our car can shoot and drop mines: the race is on, the weapons-armed delay is over, and
-   * the car is not wrecked, ghosted or finished.
+   * the car is not wrecked, airborne, falling, ghosted or finished (the server's solid()).
    */
   armed(): boolean {
+    const c = this.car;
     const s = this.latest?.cars.get(this.you);
-    return !!this.car && this.car.wreck === 0 && !!s && !s.ghost && this.raceOn() && this.armsInMs() === 0;
+    return !!c && c.wreck === 0 && c.air === 0 && c.fall === 0 && !!s && !s.ghost && this.raceOn() && this.armsInMs() === 0;
   }
 
   /** Ammo minus what we already fired in inputs the server has not consumed yet. */
@@ -579,18 +615,23 @@ export class Game {
     const before = this.car;
     this.prevCar = cloneCar(before);
     if (this.cooldown > 0) this.cooldown--;
-    stepRaceCar(this.car, cmd, this.stats, this.track);
+    const ev = stepRaceCar(this.car, cmd, this.stats, this.track);
     this.contact.step(this.car, this.pending.length + 1); // the server applies it then
-    if (this.prevCar.wreck > 0 && this.car.wreck === 0) this.prevCar = cloneCar(this.car); // respawn: no slide
+    // A respawn, a take-off or a recovery: drawn from the new state, no slide into it.
+    if ((this.prevCar.wreck > 0 && this.car.wreck === 0) || ev === "takeoff" || ev === "recover") {
+      this.prevCar = cloneCar(this.car);
+    }
 
-    // Same order as the server: step, then fire from the new pose.
+    // Same order as the server: step, then fire from the new pose. A mine press the server
+    // will discard (the step took the car off the ground) is not counted as a mine dropped.
     let fired = false;
-    if (cmd.buttons & BTN_RIVET && this.cooldown === 0 && rivets > 0 && this.armed()) {
+    const armedNow = this.armed();
+    if (cmd.buttons & BTN_RIVET && this.cooldown === 0 && rivets > 0 && armedNow) {
       this.localShots.push(spawnShot(this.car, this.localShotId++, this.you));
       this.cooldown = RIVET_COOLDOWN;
       fired = true;
     }
-    this.pending.push({ seq, cmd, fired, mine: minePress });
+    this.pending.push({ seq, cmd, fired, mine: minePress && armedNow });
     this.history.set(seq, cloneCar(this.car));
     if (this.pending.length > MAX_PENDING) {
       const dropped = this.pending.shift()!;
@@ -602,12 +643,15 @@ export class Game {
     this.send({ t: "in", i: tail });
   }
 
-  /** Cosmetic own rivets: fly until range, a wall, or another car they visibly touch. */
+  /**
+   * Cosmetic own rivets: fly until range, a wall, or another car they visibly touch (one the
+   * server can hit: not ghosted, wrecked, airborne or falling).
+   */
   private moveLocalShots(): void {
     if (!this.localShots.length) return;
     const targets = this.otherPoses().filter((p) => {
       const s = this.latest?.cars.get(p.id);
-      return s && !s.ghost && !s.wreck;
+      return s && !s.ghost && !s.wreck && !s.air && !s.fall;
     });
     const r = CAR_RADIUS + 2;
     this.localShots = this.localShots.filter((s) => {
@@ -628,7 +672,10 @@ export class Game {
     return performance.now() + (this.haveOffset ? this.offset : 0);
   }
 
-  /** Own car pose: interpolated between the last two steps, plus the decaying correction. */
+  /**
+   * Own car pose: interpolated between the last two steps, plus the decaying correction.
+   * Height and fall progress come from the predicted car, the ghost from the snapshot.
+   */
   ownPose(alpha: number): Pose | null {
     const c = this.car;
     if (!c) return null;
@@ -638,6 +685,8 @@ export class Game {
       x: p.x + (c.x - p.x) * alpha + this.smooth.x,
       y: p.y + (c.y - p.y) * alpha + this.smooth.y,
       h: p.h + angleDiff(p.h, c.h) * alpha + this.smooth.h,
+      ...airFall(p, c, alpha),
+      ghost: !!this.latest?.cars.get(this.you)?.ghost,
     };
   }
 
@@ -650,7 +699,13 @@ export class Game {
     return { a: this.snaps[i], b: this.snaps[i + 1], t };
   }
 
-  /** Every car except our own predicted one, interpolated in the past. */
+  /**
+   * Every car except our own predicted one, interpolated in the past, with its height, fall
+   * progress and ghost from the snapshots. Across a teleport between the two snapshots (a
+   * recovery or a wreck respawn) the car is not interpolated (no slide to a recovery point
+   * or a respawn spot): it is drawn as in the older one until the newer one is reached. The
+   * start of a fall or a wreck is no teleport and interpolates as usual.
+   */
   otherPoses(): Pose[] {
     const out: Pose[] = [];
     const br = this.bracket();
@@ -659,21 +714,33 @@ export class Game {
     for (const [id, ca] of a.cars) {
       if (id === this.you && this.car) continue;
       const cb = b?.cars.get(id);
-      if (b && cb && b.time > a.time && t >= a.time) {
+      const teleport = cb && ((ca.wreck > 0 && cb.wreck === 0) || (ca.fall > 0 && cb.fall === 0));
+      if (b && cb && b.time > a.time && t >= a.time && !teleport) {
         const f = Math.min(1, (t - a.time) / (b.time - a.time));
-        out.push({ id, x: ca.x + (cb.x - ca.x) * f, y: ca.y + (cb.y - ca.y) * f, h: ca.h + angleDiff(ca.h, cb.h) * f });
+        out.push({
+          id,
+          x: ca.x + (cb.x - ca.x) * f,
+          y: ca.y + (cb.y - ca.y) * f,
+          h: ca.h + angleDiff(ca.h, cb.h) * f,
+          ...airFall(ca, cb, f),
+          ghost: f < 0.5 ? ca.ghost : cb.ghost,
+        });
       } else if (!b) {
+        // Extrapolated along the velocity: in the air too (committed flight); the height
+        // follows the air ticks left.
         const dt = Math.max(0, Math.min(EXTRAP_MAX_MS, t - a.time)) / 1000;
-        out.push({ id, x: ca.x + ca.vx * dt, y: ca.y + ca.vy * dt, h: ca.h });
+        const ticks = Math.floor(dt * TICK_HZ);
+        const on = { ...ca, air: Math.max(0, ca.air - ticks), fall: ca.fall > 0 ? Math.max(1, ca.fall - ticks) : 0 };
+        out.push({ id, x: ca.x + ca.vx * dt, y: ca.y + ca.vy * dt, h: ca.h, ...airFall(on, on, 0), ghost: ca.ghost });
       } else {
-        out.push({ id, x: ca.x, y: ca.y, h: ca.h });
+        out.push({ id, x: ca.x, y: ca.y, h: ca.h, ...airFall(ca, ca, 0), ghost: ca.ghost });
       }
     }
     // Cars that only exist in the newer snapshot (just spawned).
     if (b) {
       for (const [id, cb] of b.cars) {
         if (a.cars.has(id) || (id === this.you && this.car)) continue;
-        out.push({ id, x: cb.x, y: cb.y, h: cb.h });
+        out.push({ id, x: cb.x, y: cb.y, h: cb.h, ...airFall(cb, cb, 0), ghost: cb.ghost });
       }
     }
     return out;

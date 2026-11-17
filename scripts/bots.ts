@@ -3,7 +3,7 @@
 // Two races in a row with weapons, the garage and a reverse grid. Run: npm run bots
 
 import net from "node:net";
-import { Game, lostMessage, type ConnReason, type Controls, type TokenStore } from "../client/game";
+import { Game, lostMessage, NO_CONTROLS, type ConnReason, type Controls, type TokenStore } from "../client/game";
 import { connectWs, type LagSim } from "../client/net";
 import {
   CODE_ALPHABET,
@@ -16,10 +16,10 @@ import {
   type ServerMsg,
 } from "../shared/protocol";
 import { AMMO, PLACE_PAYOUT, WRECK_BONUS } from "../shared/shop";
-import { minSelfClearance, queryTrackNear, type TrackDef } from "../shared/track";
+import { minSelfClearance, pointAt, queryTrackNear, validateTrack, type Track, type TrackDef } from "../shared/track";
 import { DEFAULT_TRACK_ID, registerTestTrack, trackById } from "../shared/tracks";
-import { angleDiff, capsuleGap, clamp } from "../shared/physics";
-import { BTN_RIVET, WEAPONS_ARM_MS } from "../shared/weapons";
+import { angleDiff, capsuleGap, clamp, speedOf, type CarState } from "../shared/physics";
+import { BTN_RIVET, validateRunUps, WEAPONS_ARM_MS } from "../shared/weapons";
 import { startServer, type RunningServer } from "../server/index";
 import { BotDriver } from "./bot-ai";
 
@@ -43,6 +43,58 @@ const TEST_LOOP: TrackDef = {
   verge: 44,
 };
 registerTestTrack(TEST_LOOP);
+
+// Jumps and falls (M3-T1b): the layout of scripts/sim-test.ts's T1B_DEF. One straight
+// (s = x there): ramp 1100..1200 into a gap 1200..1400, ramp 2000..2100 into a gap
+// 2100..2250, a hole at s = 5000; recovery points 0, 700, 1700 and 4500.
+const JUMPS_TRACK_ID = "t1b-jumps";
+const JUMPS: TrackDef = {
+  id: JUMPS_TRACK_ID,
+  name: "T1b Jumps",
+  control: [...Array.from({ length: 13 }, (_, i): [number, number] => [i * 1000, 0]), [12000, 3000], [-1000, 3000], [-1000, 0]],
+  halfWidth: 64,
+  verge: 44,
+  features: [
+    { k: "ramp", s: 1100, len: 100 },
+    { k: "gap", s0: 1200, s1: 1400 },
+    { k: "ramp", s: 2000, len: 100 },
+    { k: "gap", s0: 2100, s1: 2250 },
+    { k: "hole", s: 5000, lat: 0, r: 30 },
+  ],
+  recovery: [0, 700, 1700, 4500],
+};
+registerTestTrack(JUMPS);
+// The prediction error bound through a jump and a fall (advisor change 9): below one tick of
+// top-speed travel (~7.2 units).
+const JUMP_FALL_ERR_MAX = 7;
+
+/**
+ * The jump-then-roll-off driver (as in scripts/sim-test.ts), on the predicted car: full
+ * throttle along the centerline over the first jump; once landed, hold ~150 u/s (below the
+ * take-off speed) and roll off the second ramp into its gap; after the recovery, sit still.
+ */
+class JumpFallScript {
+  stage: "jump" | "slow" | "fall" | "done" = "jump";
+  private flown = false;
+  constructor(private readonly track: Track) {}
+  done(): boolean {
+    return this.stage === "done";
+  }
+  controls(c: CarState | null): Controls {
+    if (!c) return NO_CONTROLS;
+    if (c.air > 0) this.flown = true;
+    if (this.stage === "jump" && this.flown && c.air === 0 && c.fall === 0) this.stage = "slow";
+    if (this.stage === "slow" && c.fall > 0) this.stage = "fall";
+    if (this.stage === "fall" && c.fall === 0) this.stage = "done";
+    if (this.stage === "fall" || this.stage === "done") return NO_CONTROLS;
+    const q = queryTrackNear(this.track, c.x, c.y, c.seg);
+    const v = speedOf(c);
+    const t = pointAt(this.track, q.s + 40 + v * 0.25);
+    const steer = clamp(angleDiff(c.h, Math.atan2(t.y - c.y, t.x - c.x)) * 2.2, -1, 1);
+    const throttle = this.stage === "jump" ? 1 : v < 140 ? 1 : v > 160 ? -1 : 0;
+    return { throttle, steer, fire: false, mine: false };
+  }
+}
 
 // ---- tiny assertion log -------------------------------------------------------------
 
@@ -206,7 +258,8 @@ class Bot {
     const me = g.latest?.cars.get(g.you);
     const touching =
       performance.now() - g.contact.lastContact < 300 ||
-      (!!me && [...(g.latest?.cars.values() ?? [])].some((o) => o.id !== me.id && !o.ghost && !o.wreck && capsuleGap(me, o) < 3));
+      (!!me &&
+        [...(g.latest?.cars.values() ?? [])].some((o) => o.id !== me.id && !o.ghost && !o.wreck && !o.air && !o.fall && capsuleGap(me, o) < 3));
     for (let i = this.errsSeen; i < errs.length; i++) (touching ? this.contactErrs : this.freeErrs).push(errs[i]);
     this.errsSeen = errs.length;
   }
@@ -324,6 +377,7 @@ async function run(ctx: Ctx, bots: Bot[]): Promise<void> {
   await runArmDelayLagged(bots);
   await runContact(ctx, bots);
   await runTrackSwitch(ctx, bots);
+  await runJumpFall(ctx, bots);
 }
 
 const lost = new Map<string, (ConnReason | undefined)[]>();
@@ -866,6 +920,102 @@ async function runTrackSwitch(ctx: Ctx, bots: Bot[]): Promise<void> {
   } finally {
     N.afterStep = null;
     for (const b of [N, O2]) b.game.leave();
+  }
+}
+
+/**
+ * Jumps and falls over a lagged link (M3-T1b): a solo bot at 80±10 ms runs the scripted jump
+ * and roll-off fall on the jumps test track. Its prediction must match the server through
+ * the take-off, the flight, the landing, the fall and the recovery: no predicted air/fall
+ * state that the server did not have, and a max reconciliation error below
+ * JUMP_FALL_ERR_MAX through each. A car-less observer (joined mid-race) sees the jumper's
+ * height, fall and ghost in its poses, with no slide to the recovery point.
+ */
+async function runJumpFall(ctx: Ctx, bots: Bot[]): Promise<void> {
+  const jumps = trackById(JUMPS_TRACK_ID);
+  const tErr = [...validateTrack(jumps), ...validateRunUps(jumps)];
+  check("jumps track: validates (track and run-ups)", tErr.length === 0, tErr.join("; "));
+  const J = new Bot("Juliett", ctx.url, 0, { lag: 80, jitter: 10 });
+  const P = new Bot("Papa", ctx.url, 0);
+  bots.push(J, P);
+  for (const b of [J, P]) b.weapons = false;
+  J.game.create(J.name);
+  await waitFor("J welcome", () => !!J.game.you, 3000);
+  J.game.pickTrack(JUMPS_TRACK_ID);
+  await waitFor("J on the jumps track", () => J.game.trackId === JUMPS_TRACK_ID, 2000);
+  const script = new JumpFallScript(J.game.track);
+  J.script = () => script.controls(J.game.car);
+  const errs = { jump: [] as number[], fall: [] as number[] };
+  const seen = { serverAir: false, serverFall: false, serverGhost: false, ownHeight: false, ownFalling: false, ownGhost: false, obsHeight: false, obsFalling: false, obsGhost: false };
+  let slide = 0;
+  let errsSeen = 0;
+  J.afterStep = () => {
+    const g = J.game;
+    for (; errsSeen < g.recErrors.length; errsSeen++) (script.stage === "jump" ? errs.jump : errs.fall).push(g.recErrors[errsSeen]);
+    const s = g.ownSnap();
+    if (s) {
+      seen.serverAir ||= s.air > 0;
+      seen.serverFall ||= s.fall > 0;
+      seen.serverGhost ||= s.ghost && seen.serverFall;
+    }
+    const own = g.ownPose(1);
+    seen.ownHeight ||= (own?.height ?? 0) > 0;
+    seen.ownFalling ||= own?.falling !== undefined;
+    seen.ownGhost ||= !!own?.ghost && seen.ownFalling;
+    const obs = P.game.otherPoses().find((o) => o.id === g.you);
+    if (obs) {
+      seen.obsHeight ||= (obs.height ?? 0) > 0;
+      seen.obsFalling ||= obs.falling !== undefined;
+      seen.obsGhost ||= !!obs.ghost && seen.obsFalling;
+      // Falling at the second ramp's end (~2100) or recovered at 1700, never in between.
+      if ((script.stage === "fall" || script.stage === "done") && obs.x > 1750 && obs.x < 2050) slide++;
+    }
+  };
+  try {
+    J.game.start();
+    await waitFor("jumps: racing", () => J.game.phase === "racing" && !!J.game.car, 6000);
+    P.game.join(J.game.code, P.name);
+    await waitFor("observer in", () => !!P.game.you && !!P.game.latest, 3000);
+    await waitFor("jump, roll-off fall and recovery", () => script.done(), 40_000);
+    await sleep(1500); // the server's recovery, ghost and the last acks arrive
+    const all = J.game.recErrors;
+    const sj = stats(errs.jump), sf = stats(errs.fall), sa = stats(all);
+    const rec = pointAt(jumps, 1700);
+    const car = J.game.ownSnap();
+    console.log(
+      `      Juliett  rec err: jump n=${sj.n} median=${sj.median.toFixed(3)} max=${sj.max.toFixed(3)}; ` +
+        `roll-off fall n=${sf.n} median=${sf.median.toFixed(3)} max=${sf.max.toFixed(3)}; state mismatches ${J.game.recStateErrors}; rtt=${J.game.rtt.toFixed(1)}ms`,
+    );
+    check(
+      "jumps: the lagged bot jumps, rolls off into the second gap and recovers at its recovery point",
+      script.done() && seen.serverAir && seen.serverFall && seen.serverGhost && !!car && Math.hypot(car.x - rec.x, car.y - rec.y) < 1,
+      `stage ${script.stage}, server car at x=${car?.x.toFixed(1)}`,
+    );
+    check(
+      "jumps: strict prediction parity at 80±10 ms (no air/fall state mismatch at any acked step)",
+      sa.n > 200 && J.game.recStateErrors === 0,
+      `${J.game.recStateErrors} of ${sa.n} acked steps`,
+    );
+    check(
+      `jumps: lagged bot max reconciliation error < ${JUMP_FALL_ERR_MAX} through the jump`,
+      sj.n > 50 && sj.max < JUMP_FALL_ERR_MAX,
+      `max ${sj.max.toFixed(3)} over ${sj.n} samples`,
+    );
+    check(
+      `jumps: lagged bot max reconciliation error < ${JUMP_FALL_ERR_MAX} through the roll-off fall and recovery`,
+      sf.n > 50 && sf.max < JUMP_FALL_ERR_MAX,
+      `max ${sf.max.toFixed(3)} over ${sf.n} samples`,
+    );
+    check("jumps: own Pose has height in the air, falling while falling, ghost after the recovery", seen.ownHeight && seen.ownFalling && seen.ownGhost, JSON.stringify(seen));
+    check(
+      "jumps: an observer's Pose of the jumper has height, falling and ghost; no slide to the recovery point",
+      seen.obsHeight && seen.obsFalling && seen.obsGhost && slide === 0,
+      `${slide} drawn poses between the fall spot and the recovery point`,
+    );
+  } finally {
+    J.script = null;
+    J.afterStep = null;
+    for (const b of [J, P]) b.game.leave();
   }
 }
 

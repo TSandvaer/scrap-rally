@@ -153,7 +153,7 @@ class Sim {
     const pt = pointAt(track, s);
     const x = pt.x - Math.sin(pt.h) * lateral;
     const y = pt.y + Math.cos(pt.h) * lateral;
-    p.car = { x, y, h: pt.h, vx: Math.cos(pt.h) * speed, vy: Math.sin(pt.h) * speed, seg: pt.seg, wreck: 0 };
+    p.car = { x, y, h: pt.h, vx: Math.cos(pt.h) * speed, vy: Math.sin(pt.h) * speed, seg: pt.seg, wreck: 0, air: 0, fall: 0 };
     p.progress = { s: queryTrackNear(track, x, y, pt.seg).s, cp: 1, lap: 0, fin: 0 };
   }
 
@@ -285,7 +285,7 @@ function mines(): void {
   if (!m) return;
   // B parks 2 units off the mine, before it arms.
   const pt = pointAt(track, 0);
-  b.car = { x: m.x, y: m.y + 2, h: pt.h, vx: 0, vy: 0, seg: a.car!.seg, wreck: 0 };
+  b.car = { x: m.x, y: m.y + 2, h: pt.h, vx: 0, vy: 0, seg: a.car!.seg, wreck: 0, air: 0, fall: 0 };
   const h0 = b.car.h;
   let hitAt = -1;
   for (let i = 0; i < 40 && hitAt < 0; i++) {
@@ -311,7 +311,7 @@ function mines(): void {
   check("an armed mine also hits its owner", a.hp === 85, `a.hp=${a.hp}`);
   check("no wreck credit for hurting yourself", !sim.room.combat.wrecksCaused.has(a.id));
 
-  const c = { x: 0, y: 0, h: 0, vx: 100, vy: 0, seg: 0, wreck: 0 };
+  const c = { x: 0, y: 0, h: 0, vx: 100, vy: 0, seg: 0, wreck: 0, air: 0, fall: 0 };
   spinOut(c, 0, 10);
   check("spin-out is deterministic: away from the mine, speed x0.3", c.h === -SPIN_KICK && Math.abs(c.vx - 30) < 1e-9);
 }
@@ -601,7 +601,7 @@ function garage(): void {
 
 // ---- solid car collisions -------------------------------------------------------------
 
-const body = (x: number, y: number, h: number, vx = 0, vy = 0): CarState => ({ x, y, h, vx, vy, seg: 0, wreck: 0 });
+const body = (x: number, y: number, h: number, vx = 0, vy = 0): CarState => ({ x, y, h, vx, vy, seg: 0, wreck: 0, air: 0, fall: 0 });
 
 /** b relative to a, in a's frame: along a's heading and sideways. */
 function relPos(a: CarState, b: CarState): { along: number; lat: number } {
@@ -632,7 +632,7 @@ function drive(a: CarState, b: CarState, n: number): { overlap: number; touched:
 
 /** Snapshot-shaped car (what the client's prediction sees). */
 function snapCar(id: string, c: CarState, extra: Partial<CarSnap> = {}): CarSnap {
-  return { k: "car", id, x: c.x, y: c.y, h: c.h, vx: c.vx, vy: c.vy, seg: 0, lap: 0, rd: 0, fin: 0, hp: 100, maxHp: 100, wreck: c.wreck, ghost: false, ...extra };
+  return { k: "car", id, x: c.x, y: c.y, h: c.h, vx: c.vx, vy: c.vy, seg: 0, lap: 0, rd: 0, fin: 0, hp: 100, maxHp: 100, wreck: c.wreck, air: c.air, fall: c.fall, ghost: false, ...extra };
 }
 
 function collisions(): void {
@@ -1065,6 +1065,7 @@ function engine(): void {
   // A long closed loop whose bottom edge is a 12 000 u straight (collinear control points keep
   // the spline exactly on y = 0 there). The car starts at x = 1500 on the centerline, heading +x.
   const straight: TrackDef = {
+    id: "test-straight",
     name: "Test Straight",
     control: [...Array.from({ length: 13 }, (_, i): [number, number] => [i * 1000, 0]), [12000, 3000], [0, 3000]],
     halfWidth: 64,
@@ -1074,7 +1075,7 @@ function engine(): void {
   const SECONDS = 8;
   const drive = (level: number) => {
     const stats = statsFor({ engine: level, tyres: 0, welder: 0 });
-    const c: CarState = { x: 1500, y: 0, h: 0, vx: 0, vy: 0, seg: 0, wreck: 0 };
+    const c: CarState = { x: 1500, y: 0, h: 0, vx: 0, vy: 0, seg: 0, wreck: 0, air: 0, fall: 0 };
     let t300 = -1;
     for (let i = 1; i <= SECONDS * TICK_HZ; i++) {
       stepCar(c, { throttle: 1, steer: 0 }, stats, flat);
@@ -1449,7 +1450,7 @@ function trackFeatures(): void {
 
   // 10. Validation: near sections must be far apart in segment index; start zone; recovery.
   {
-    const clip = buildTrack({ name: "Test Clip", halfWidth: 64, verge: 44, control: [[0, 0], [3000, 0], [3000, 200], [0, 200]] });
+    const clip = buildTrack({ id: "test-clip", name: "Test Clip", halfWidth: 64, verge: 44, control: [[0, 0], [3000, 0], [3000, 200], [0, 200]] });
     const clipErr = validateTrack(clip);
     check("validation: sections that come near within too few segment indices are caught", clipErr.some((e) => e.includes("segments apart")), clipErr.find((e) => e.includes("segments apart")));
     const L = plain.length;
@@ -1495,7 +1496,7 @@ function placeOn(t: Track, p: Player, s: number, lateral = 0, speed = 0): void {
   const pt = pointAt(t, s);
   const x = pt.x - Math.sin(pt.h) * lateral;
   const y = pt.y + Math.cos(pt.h) * lateral;
-  p.car = { x, y, h: pt.h, vx: Math.cos(pt.h) * speed, vy: Math.sin(pt.h) * speed, seg: pt.seg, wreck: 0 };
+  p.car = { x, y, h: pt.h, vx: Math.cos(pt.h) * speed, vy: Math.sin(pt.h) * speed, seg: pt.seg, wreck: 0, air: 0, fall: 0 };
   p.progress = { s: queryTrackNear(t, x, y, pt.seg).s, cp: 1, lap: 0, fin: 0 };
 }
 
@@ -1634,7 +1635,476 @@ function roomTrack(): void {
   );
 }
 
-for (const t of [rivets, gating, mines, wrecks, finishing, garage, armDelay, engine, readyCheck, collisions, trackFeatures, roomTrack]) {
+// ---- M3-T1b: jumps, falls and recovery in the room and the client ---------------------
+
+// This section's imports (hoisted like the ones at the top).
+import { Game, NO_CONTROLS, type Controls } from "../client/game";
+import type { Transport } from "../client/net";
+import { solid } from "../server/combat";
+import { decode, encode, SNAPSHOT_EVERY } from "../shared/protocol";
+import { MINE_ARM_TICKS, RIVET_COOLDOWN } from "../shared/weapons";
+
+/**
+ * A test track with a jump and a roll-off ramp on one straight (s = x there, heading +x):
+ * ramp 1100..1200 into a gap 1200..1400, ramp 2000..2100 into a gap 2100..2250, a hole at
+ * s = 5000 on the centerline; recovery points 0, 700, 1700 and 4500. scripts/bots.ts uses
+ * the same layout.
+ */
+const T1B_ID = "t1b-jumps";
+const T1B_DEF: TrackDef = {
+  id: T1B_ID,
+  name: "T1b Jumps",
+  control: [...Array.from({ length: 13 }, (_, i): [number, number] => [i * 1000, 0]), [12000, 3000], [-1000, 3000], [-1000, 0]],
+  halfWidth: 64,
+  verge: 44,
+  features: [
+    { k: "ramp", s: 1100, len: 100 },
+    { k: "gap", s0: 1200, s1: 1400 },
+    { k: "ramp", s: 2000, len: 100 },
+    { k: "gap", s0: 2100, s1: 2250 },
+    { k: "hole", s: 5000, lat: 0, r: 30 },
+  ],
+  recovery: [0, 700, 1700, 4500],
+};
+
+/**
+ * The jump-then-roll-off driver (also in scripts/bots.ts): full throttle along the
+ * centerline over the first jump; once landed, hold ~150 u/s (below take-off speed) and
+ * roll off the second ramp into its gap; after the recovery, sit still.
+ */
+class JumpFallScript {
+  stage: "jump" | "slow" | "fall" | "done" = "jump";
+  private flown = false;
+  constructor(private readonly track: Track) {}
+  done(): boolean {
+    return this.stage === "done";
+  }
+  controls(c: CarState | null): Controls {
+    if (!c) return NO_CONTROLS;
+    if (c.air > 0) this.flown = true;
+    if (this.stage === "jump" && this.flown && c.air === 0 && c.fall === 0) this.stage = "slow";
+    if (this.stage === "slow" && c.fall > 0) this.stage = "fall";
+    if (this.stage === "fall" && c.fall === 0) this.stage = "done";
+    if (this.stage === "fall" || this.stage === "done") return NO_CONTROLS;
+    const q = queryTrackNear(this.track, c.x, c.y, c.seg);
+    const v = speedOf(c);
+    const t = pointAt(this.track, q.s + 40 + v * 0.25);
+    const steer = clamp(angleDiff(c.h, Math.atan2(t.y - c.y, t.x - c.x)) * 2.2, -1, 1);
+    const throttle = this.stage === "jump" ? 1 : v < 140 ? 1 : v > 160 ? -1 : 0;
+    return { throttle, steer, fire: false, mine: false };
+  }
+}
+
+/** A client Game on a Rooms server with no lag: inputs arrive at once, server messages on flush(). */
+function wiredGame(rooms: Rooms, clock: { now: number }): { game: Game; open(): void; flush(): void } {
+  const inbox: ServerMsg[] = [];
+  const session: Session = { conn: { send: (m) => inbox.push(decode<ServerMsg>(encode(m))!), close() {} }, room: null, player: null };
+  const tr: Transport = {
+    send: (m) => rooms.onMessage(session, decode<ClientMsg>(encode(m)), clock.now),
+    close() {},
+    onOpen() {},
+    onMessage() {},
+    onClose() {},
+  };
+  const tokens = new Map<string, string>();
+  const game = new Game(() => tr, { get: (c) => tokens.get(c) ?? null, set: (c, t) => void tokens.set(c, t) });
+  return {
+    game,
+    open: () => tr.onOpen(), // after create/join: the socket "opens" and sends the hello
+    flush: () => {
+      for (const m of inbox.splice(0)) tr.onMessage(m);
+    },
+  };
+}
+
+function jumpsWired(): void {
+  registerTestTrack(T1B_DEF);
+  const t = trackById(T1B_ID);
+  const tErr = [...validateTrack(t), ...validateRunUps(t)];
+  check("t1b track: validates (track and run-ups)", tErr.length === 0, tErr.join("; "));
+  const lastSnap = (sim: Sim, to: Player, of: Player): CarSnap | undefined => {
+    const m = sim.conns.get(to.id)!.msgs.filter((x) => x.t === "snap").pop() as Extract<ServerMsg, { t: "snap" }> | undefined;
+    return m?.ents.find((e): e is CarSnap => e.k === "car" && e.id === of.id);
+  };
+
+  // A room on the test track, racing, weapons armed.
+  const sim = new Sim();
+  const a = sim.add("A");
+  const b = sim.add("B");
+  sim.room.setTrack(a, T1B_ID);
+  sim.startRace(a);
+  sim.armWeapons();
+  const put = (p: Player, s: number, lat = 0, speed = 0) => placeOn(t, p, s, lat, speed);
+  const fire = (p: Player) => (q: Player) => (q === p ? { fire: true } : {});
+  /** Run n ticks, then up to one more so the last tick sent a snapshot. */
+  const runToSnap = (n: number, cmd?: (p: Player) => Ctl) => {
+    sim.run(n, cmd);
+    if (sim.tickNo % SNAPSHOT_EVERY !== 0) sim.run(1, cmd);
+  };
+
+  // 1. The snapshot carries air and fall.
+  {
+    put(b, 8000);
+    put(a, 1203, 0, 300); // in the lip zone at take-off speed
+    runToSnap(1);
+    const s1 = lastSnap(sim, b, a);
+    const air1 = a.car!.air;
+    const airOk = air1 > 0 && s1?.air === air1 && s1.fall === 0;
+    runToSnap(40, () => ({ throttle: 1 })); // 300 u/s is too slow to clear 200 units: lands short
+    const s2 = lastSnap(sim, b, a);
+    check("snapshot: carries air while a car is airborne", airOk, `server air ${air1}, snap air ${s1?.air}`);
+    check(
+      "snapshot: carries fall while a car is falling (and air 0)",
+      a.car!.fall > 0 && s2?.fall === a.car!.fall && s2.air === 0,
+      `server fall ${a.car!.fall}, snap fall ${s2?.fall}`,
+    );
+  }
+
+  // 2. Airborne and falling cars are not solid: no rivets, mines or car contact, no firing.
+  for (const state of ["air", "fall"] as const) {
+    const lift = (p: Player, n: number) => {
+      p.car![state] = n; // hovering in place: zero speed, so it neither moves nor falls
+    };
+    const what = state === "air" ? "an airborne" : "a falling";
+    sim.run(RIVET_COOLDOWN + 1);
+    // Rivets: B 200 units ahead of A, A fires straight at it.
+    put(a, 6000);
+    put(b, 6200);
+    lift(b, 40);
+    const hp0 = b.hp;
+    const hits0 = sim.eventsOf("hit").length;
+    check(`not solid: ${what} car is not solid()`, !solid(b) && solid(a));
+    sim.run(1, fire(a));
+    sim.run(20);
+    const passed = b.hp === hp0 && sim.eventsOf("hit").length === hits0;
+    put(b, 6200);
+    sim.run(1, fire(a));
+    sim.run(20);
+    check(`not solid: a rivet flies through ${what} car; the same shot hits it on the ground`, passed && b.hp === hp0 - RIVET_DAMAGE, `hp ${hp0} -> ${b.hp}`);
+    b.hp = b.maxHp;
+    // Mines: an armed mine under an airborne/falling car does not go off.
+    put(b, 7000);
+    lift(b, 30);
+    sim.room.combat.mines.push({ id: 9000, owner: a.id, x: b.car!.x, y: b.car!.y, age: MINE_ARM_TICKS });
+    sim.run(5);
+    const kept = sim.room.combat.mines.length === 1 && b.hp === b.maxHp;
+    sim.room.combat.mines.length = 0;
+    check(`not solid: an armed mine under ${what} car does not go off`, kept);
+    // Car contact: A overlaps the hovering B and neither is pushed.
+    put(b, 7500);
+    lift(b, 30);
+    put(a, 7490);
+    const ax = a.car!.x, bx = b.car!.x;
+    sim.run(3);
+    const still = a.car!.x === ax && b.car!.x === bx && capsuleGap(a.car!, b.car!) < 0;
+    put(b, 7500);
+    put(a, 7490);
+    sim.run(1);
+    check(`not solid: no car contact with ${what} car (on the ground they are pushed apart)`, still && a.car!.x < ax && b.car!.x > bx);
+    // No firing, no mines dropped: the press made in the air is discarded, not saved.
+    put(b, 9500);
+    put(a, 8000);
+    lift(a, 30);
+    sim.room.combat.shots.length = 0;
+    const ammo = [a.ammo.rivets, a.ammo.mines];
+    sim.run(1, (p) => (p === a ? { fire: true, mine: true } : {}));
+    sim.run(10, fire(a));
+    const quiet = sim.room.combat.shots.length === 0 && sim.room.combat.mines.length === 0 && a.ammo.rivets === ammo[0] && a.ammo.mines === ammo[1];
+    const inAir = `in the air: shots ${sim.room.combat.shots.length}, mines ${sim.room.combat.mines.length}, ammo ${a.ammo.rivets}/${a.ammo.mines}`;
+    a.car![state] = 0;
+    sim.run(5); // grounded again, the old mine press does not come back
+    check(
+      `not solid: ${what} car cannot fire or drop mines (the mine press is discarded)`,
+      quiet && sim.room.combat.mines.length === 0 && a.ammo.mines === ammo[1],
+      `${inAir}; after landing: mines ${sim.room.combat.mines.length}`,
+    );
+    sim.room.combat.shots.length = 0;
+  }
+
+  // 3. The recovery ghost: GHOST_TICKS after the "recover" tick, longer while it overlaps a car.
+  {
+    put(b, 9000);
+    put(a, 1250); // grounded in the gap: falls at once
+    a.progress!.cp = 0;
+    let ticks = 0;
+    while (a.car!.fall === 0 && ticks++ < 5) sim.run(1);
+    const sFall = a.progress!.s;
+    let progressFrozen = true;
+    while (a.car!.fall > 0 && ticks++ < 200) {
+      sim.run(1);
+      if (a.car!.fall > 0) progressFrozen &&= a.progress!.s === sFall;
+    }
+    const rec = pointAt(t, 700);
+    const atRec = Math.abs(a.car!.x - rec.x) < 1e-9 && Math.abs(a.car!.y - rec.y) < 1e-9;
+    const ghost0 = a.ghost;
+    const snapGhost = (sim.run(1), lastSnap(sim, b, a)?.ghost);
+    let ghosted = 2; // the recover tick and the one just run
+    while (a.ghost > 0 && ghosted < 200) {
+      sim.run(1);
+      if (a.ghost > 0) ghosted++;
+    }
+    check("recovery: the car is put at the recovery point with GHOST_TICKS of ghost", atRec && ghost0 === GHOST_TICKS && snapGhost === true, `ghost ${ghost0}`);
+    check("recovery: the ghost lasts GHOST_TICKS ticks when no car is near", ghosted === GHOST_TICKS, `${ghosted} ticks`);
+    // A guard, not a proof: the room skips progress while falling, but a falling car is
+    // frozen, so its progress would not move without the skip either. The checkpoint test
+    // across the recovery teleport is in 4b below.
+    check(
+      "race progress (guard): unchanged while falling; after the recovery it is at the recovery point",
+      progressFrozen && Math.abs(a.progress!.s - 700) < 1e-6 && a.progress!.cp === 0 && a.progress!.lap === 0,
+      `s ${sFall.toFixed(1)} while falling -> ${a.progress!.s.toFixed(1)}, cp ${a.progress!.cp}`,
+    );
+
+    // B parked on the recovery point: A recovers on top of it and stays ghosted until apart.
+    put(b, 700);
+    put(a, 1250);
+    sim.run(2 + FALL_TICKS + GHOST_TICKS + 30);
+    const bx = b.car!.x;
+    const held = a.ghost === 1 && capsuleGap(a.car!, b.car!) < 0 && Math.abs(bx - rec.x) < 1e-9 && !solid(a);
+    put(b, 9000);
+    sim.run(1);
+    check(
+      "recovery: the ghost lasts while the car still overlaps another car, and ends once apart",
+      held && a.ghost === 0 && solid(a),
+      `ghost ${a.ghost} after moving B away; B at x=${bx.toFixed(1)}`,
+    );
+  }
+
+  // 4. A wreck respawn onto a hazard goes to the recovery point (room level). A regression
+  // check of T1a's respawn() through the room's tick, not new T1b code.
+  {
+    put(b, 9000);
+    put(a, 5000, 45); // beside the hole: its centerline point is inside the pit
+    sim.room.combat.damage(a, 999, b.id, "rivet");
+    sim.run(WRECK_TICKS);
+    const p4500 = pointAt(t, 4500);
+    const toRec = Math.abs(a.car!.x - p4500.x) < 1e-9 && Math.abs(a.car!.y) < 1e-9 && a.car!.wreck === 0;
+    const ghost = a.ghost;
+    put(a, 6000, 45);
+    sim.room.combat.damage(a, 999, b.id, "rivet");
+    sim.run(WRECK_TICKS);
+    check(
+      "wreck respawn onto a hole goes to the recovery point (on the road: respawns where it was)",
+      toRec && ghost === GHOST_TICKS && Math.abs(a.car!.x - 6000) < 1e-6 && Math.abs(a.car!.y) < 1e-9,
+      `hole wreck -> recovery point ${toRec}, ghost ${ghost}; road wreck -> x=${a.car!.x.toFixed(1)}`,
+    );
+  }
+
+  // 4b. Race progress across the recovery teleport: a car crosses checkpoint 1, falls into a
+  // gap past it and is put back at a recovery point before it. It keeps the checkpoint (not
+  // lost) and crossing it again on the way back up earns nothing (not earned twice).
+  {
+    const L = trackById(T1B_ID).length; // same geometry as T1B_DEF
+    const cp1 = 0.25 * L; // checkpoint 1, on the straight (s = x)
+    const progDef: TrackDef = {
+      ...T1B_DEF,
+      id: "t1b-progress",
+      name: "T1b Progress",
+      features: [{ k: "gap", s0: cp1 + 150, s1: cp1 + 350 }],
+      recovery: [0, cp1 - 500],
+    };
+    registerTestTrack(progDef);
+    const pt = trackById(progDef.id);
+    const sim2 = new Sim();
+    const c = sim2.add("C");
+    sim2.room.setTrack(c, progDef.id);
+    sim2.startRace(c);
+    placeOn(pt, c, cp1 - 100, 0, 300);
+    c.progress!.cp = 0;
+    const log: string[] = [];
+    let cpBeforeFall = -1, cpAfterRecovery = -1, cpAfterRecross = -1;
+    for (let i = 0; i < 600 && cpAfterRecross < 0; i++) {
+      const wasFalling = c.car!.fall > 0;
+      sim2.run(1, () => ({ throttle: 1 }));
+      if (!wasFalling && c.car!.fall > 0) cpBeforeFall = c.progress!.cp;
+      if (wasFalling && c.car!.fall === 0) cpAfterRecovery = c.progress!.cp;
+      if (cpAfterRecovery >= 0 && c.progress!.s > cp1 + 50) cpAfterRecross = c.progress!.cp;
+    }
+    log.push(`cp ${cpBeforeFall} at the fall, ${cpAfterRecovery} after the recovery to s=${(cp1 - 500).toFixed(0)}, ${cpAfterRecross} after re-crossing`);
+    check(
+      "race progress: a recovery back behind a checkpoint neither loses it nor lets it be earned twice",
+      cpBeforeFall === 1 && cpAfterRecovery === 1 && cpAfterRecross === 1 && c.progress!.lap === 0 && sim2.eventsOf("lap").length === 0,
+      log.join("; "),
+    );
+  }
+
+  // 5. Client: armed(), contact prediction and the Pose fields from the predicted car and the snapshots.
+  {
+    const g = new Game(() => ({ send() {}, close() {}, onOpen() {}, onMessage() {}, onClose() {} }), { get: () => null, set() {} });
+    const car = body(0, 0, 0);
+    g.you = "me";
+    g.car = car;
+    g.prevCar = cloneCar(car);
+    g.phase = "racing";
+    g.raceStart = -1e12;
+    g.latest = { time: 0, cars: new Map([["me", snapCar("me", car)]]), shots: new Map(), mines: [] };
+    const armedGround = g.armed();
+    car.air = 5;
+    const armedAir = g.armed();
+    car.air = 0;
+    car.fall = 5;
+    const armedFall = g.armed();
+    car.fall = 0;
+    check("client armed(): on the ground yes, airborne or falling no", armedGround && !armedAir && !armedFall);
+
+    const ct = new Contacts();
+    const other = body(12, 0, 0);
+    const base = (extra: Partial<CarSnap>) => ({ cars: new Map([["me", snapCar("me", car)], ["o", snapCar("o", other, extra)]]) });
+    const hits = (extra: Partial<CarSnap>, k: number, own: Partial<CarState> = {}) => {
+      ct.setBase(base(extra), "me");
+      return ct.collide({ ...cloneCar(car), ...own }, k) !== null;
+    };
+    check(
+      "client contact: no bump with an airborne car (until its air ticks run out) or a falling one",
+      hits({}, 1) && !hits({ air: 5 }, 1) && !hits({ air: 5 }, 4) && hits({ air: 5 }, 5) && !hits({ fall: 3 }, 1),
+    );
+    check("client contact: the own car does not bump while airborne or falling", !hits({}, 1, { air: 3 }) && !hits({}, 1, { fall: 3 }));
+
+    // Own pose: height and fall progress from the predicted car (interpolated), ghost from the snapshot.
+    const up = { ...cloneCar(car), vx: 300, air: airTicksFor(300) - 10 };
+    g.prevCar = { ...up, air: up.air + 1 };
+    g.car = up;
+    const pose = g.ownPose(0.5)!;
+    const hMid = (airHeight(g.prevCar) + airHeight(up)) / 2;
+    g.car = { ...cloneCar(car), fall: 30 };
+    g.prevCar = { ...cloneCar(car), fall: 31 };
+    g.latest.cars.set("me", snapCar("me", car, { ghost: true }));
+    const falling = g.ownPose(0)!;
+    g.car = cloneCar(car);
+    g.prevCar = cloneCar(car);
+    const ground = g.ownPose(1)!;
+    check(
+      "client ownPose: height (interpolated), falling fraction and ghost",
+      Math.abs(pose.height! - hMid) < 1e-9 && pose.height! > 0 && pose.falling === undefined &&
+        Math.abs(falling.falling! - (FALL_TICKS - 31) / FALL_TICKS) < 1e-9 && falling.ghost === true &&
+        ground.height === 0 && ground.falling === undefined,
+      `height ${pose.height?.toFixed(3)}, falling ${falling.falling?.toFixed(3)}`,
+    );
+
+    // Other cars: interpolated height; no slide across a recovery between two snapshots.
+    const now = performance.now(); // serverNow() without a clock offset; drawn at now - 100 ms
+    const snapOf = (time: number, s: CarSnap) => ({ time, cars: new Map([["o", s]]), shots: new Map(), mines: [] });
+    g.car = null;
+    const fly = body(0, 0, 0, 300, 0);
+    g.snaps = [snapOf(now - 150, snapCar("o", { ...fly, air: 20 })), snapOf(now - 50, snapCar("o", { ...fly, x: 10, air: 18 }, { ghost: true }))];
+    const o1 = g.otherPoses()[0];
+    const hExp = (airHeight({ ...fly, air: 20 }) + airHeight({ ...fly, air: 18 })) / 2;
+    g.snaps = [snapOf(now - 150, snapCar("o", { ...body(1300, 0, 0), fall: 1 })), snapOf(now - 50, snapCar("o", body(700, 0, 0), { ghost: true }))];
+    const o2 = g.otherPoses()[0];
+    check(
+      "client otherPoses: height interpolated from the snapshots' air, ghost from the snapshots",
+      Math.abs(o1.height! - hExp) < 0.02 && o1.height! > 0 && Math.abs(o1.x - 5) < 0.5 && typeof o1.ghost === "boolean",
+      `height ${o1.height?.toFixed(3)} (expected ~${hExp.toFixed(3)}), x ${o1.x.toFixed(2)}`,
+    );
+    check(
+      "client otherPoses: a recovery between two snapshots is not interpolated (no slide)",
+      o2.x === 1300 && o2.falling !== undefined && o2.falling > 0.98,
+      `x ${o2.x.toFixed(1)}, falling ${o2.falling}`,
+    );
+    // The start of a wreck or a fall is no teleport: the car moved up to where it froze, so
+    // it is interpolated as when driving (no freeze, then a pop forward). A wreck respawn is
+    // a teleport and is not.
+    const drive = body(0, 0, 0, 400, 0);
+    const halfway = (ea: Partial<CarSnap>, eb: Partial<CarSnap>, xb = 20) => {
+      g.snaps = [snapOf(now - 150, snapCar("o", drive, ea)), snapOf(now - 50, snapCar("o", { ...drive, x: xb }, eb))];
+      return g.otherPoses()[0];
+    };
+    const plain = halfway({}, {});
+    const wreckStart = halfway({}, { wreck: WRECK_TICKS, vx: 0 });
+    const fallStart = halfway({}, { fall: FALL_TICKS, vx: 0 });
+    const respawn = halfway({ wreck: 1, vx: 0 }, { wreck: 0, vx: 0 }, 300);
+    check(
+      "client otherPoses: the start of a wreck or a fall between two snapshots still interpolates",
+      Math.abs(plain.x - 10) < 0.5 && Math.abs(wreckStart.x - plain.x) < 0.05 && Math.abs(fallStart.x - plain.x) < 0.05 && fallStart.falling === 0,
+      `driving x ${plain.x.toFixed(2)}, wreck start x ${wreckStart.x.toFixed(2)}, fall start x ${fallStart.x.toFixed(2)} falling ${fallStart.falling}`,
+    );
+    check("client otherPoses: a wreck respawn between two snapshots is not interpolated (no slide)", respawn.x === 0, `x ${respawn.x.toFixed(2)}`);
+  }
+
+  // 6. End to end without lag: a client Game on a Rooms server jumps, rolls off into a gap
+  // and recovers; its prediction matches the server step for step, and a car-less observer
+  // sees the height, the fall and the ghost. The clients' performance.now() is the sim clock,
+  // so the observer draws at the real interpolation time (100 ms behind the server).
+  const realNow = performance.now.bind(performance);
+  const clock = { now: realNow() };
+  performance.now = () => clock.now;
+  try {
+    const rooms = new Rooms(1);
+    const J = wiredGame(rooms, clock);
+    J.game.create("Jumper");
+    J.open();
+    J.flush();
+    J.game.pickTrack(T1B_ID);
+    J.flush();
+    J.game.start();
+    J.flush();
+    const room = [...rooms.rooms.values()][0];
+    const me = room.players.get(J.game.you)!;
+    const script = new JumpFallScript(t);
+    const O = wiredGame(rooms, clock);
+    let observing = false;
+    const seen = { serverAir: false, serverFall: false, serverGhost: false, ownHeight: false, ownFalling: false, ownGhost: false, obsHeight: false, obsFalling: false, obsGhost: false };
+    let slide = 0;
+    const stages = new Set<string>();
+    // Until a second after the predicted recovery (the server's comes a few ticks later).
+    let after = 0;
+    for (let i = 0; i < 60 * 40 && after < 60; i++) {
+      if (script.done()) after++;
+      clock.now += 1000 / 60;
+      rooms.step(clock.now);
+      J.flush();
+      O.flush();
+      J.game.step(script.controls(J.game.car), 1000 / 60);
+      O.game.step(NO_CONTROLS, 1000 / 60);
+      stages.add(script.stage);
+      if (room.phase === "racing" && !observing) {
+        observing = true;
+        O.game.join(room.code, "Observer");
+        O.open();
+      }
+      const c = me.car;
+      if (c) {
+        seen.serverAir ||= c.air > 0;
+        seen.serverFall ||= c.fall > 0;
+        seen.serverGhost ||= me.ghost > 0 && seen.serverFall;
+      }
+      const own = J.game.ownPose(1);
+      seen.ownHeight ||= (own?.height ?? 0) > 0;
+      seen.ownFalling ||= own?.falling !== undefined;
+      seen.ownGhost ||= !!own?.ghost && seen.ownFalling;
+      const obs = O.game.otherPoses().find((p) => p.id === J.game.you);
+      if (obs) {
+        seen.obsHeight ||= (obs.height ?? 0) > 0;
+        seen.obsFalling ||= obs.falling !== undefined;
+        seen.obsGhost ||= !!obs.ghost && seen.obsFalling;
+        // While falling or just recovered, the car is at the fall spot or the recovery point.
+        if ((script.stage === "fall" || script.stage === "done") && obs.x > 1750 && obs.x < 2050) slide++;
+      }
+    }
+    const errs = J.game.recErrors;
+    const max = errs.length ? Math.max(...errs) : NaN;
+    const rec = pointAt(t, 1700);
+    check(
+      "no lag: the scripted jumper jumps, rolls off into the second gap and recovers at s = 1700",
+      script.done() && seen.serverAir && seen.serverFall && seen.serverGhost && Math.hypot(me.car!.x - rec.x, me.car!.y - rec.y) < 1,
+      `stages ${[...stages].join(">")}, server car at x=${me.car!.x.toFixed(1)}`,
+    );
+    check(
+      "no lag: prediction parity through take-off, flight, landing, fall and recovery (state and position)",
+      errs.length > 300 && J.game.recStateErrors === 0 && max < 0.1,
+      `${errs.length} acked steps, ${J.game.recStateErrors} state mismatches, max error ${max.toFixed(4)}`,
+    );
+    check("no lag: own Pose has height in the air, falling while falling, ghost after the recovery", seen.ownHeight && seen.ownFalling && seen.ownGhost, JSON.stringify(seen));
+    check(
+      "no lag: an observer's Pose of the jumper has height, falling and ghost; no slide to the recovery point",
+      seen.obsHeight && seen.obsFalling && seen.obsGhost && slide === 0,
+      `${slide} poses between the fall spot and the recovery point`,
+    );
+  } finally {
+    performance.now = realNow;
+  }
+}
+
+for (const t of [rivets, gating, mines, wrecks, finishing, garage, armDelay, engine, readyCheck, collisions, trackFeatures, roomTrack, jumpsWired]) {
   console.log(`\n# ${t.name}`);
   try {
     t();
