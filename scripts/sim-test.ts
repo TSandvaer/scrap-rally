@@ -1845,8 +1845,11 @@ function jumpsWired(): void {
     }
     check("recovery: the car is put at the recovery point with GHOST_TICKS of ghost", atRec && ghost0 === GHOST_TICKS && snapGhost === true, `ghost ${ghost0}`);
     check("recovery: the ghost lasts GHOST_TICKS ticks when no car is near", ghosted === GHOST_TICKS, `${ghosted} ticks`);
+    // A guard, not a proof: the room skips progress while falling, but a falling car is
+    // frozen, so its progress would not move without the skip either. The checkpoint test
+    // across the recovery teleport is in 4b below.
     check(
-      "race progress: frozen while falling; the recovery back never earns or loses a checkpoint",
+      "race progress (guard): unchanged while falling; after the recovery it is at the recovery point",
       progressFrozen && Math.abs(a.progress!.s - 700) < 1e-6 && a.progress!.cp === 0 && a.progress!.lap === 0,
       `s ${sFall.toFixed(1)} while falling -> ${a.progress!.s.toFixed(1)}, cp ${a.progress!.cp}`,
     );
@@ -1866,7 +1869,8 @@ function jumpsWired(): void {
     );
   }
 
-  // 4. A wreck respawn onto a hazard goes to the recovery point (room level).
+  // 4. A wreck respawn onto a hazard goes to the recovery point (room level). A regression
+  // check of T1a's respawn() through the room's tick, not new T1b code.
   {
     put(b, 9000);
     put(a, 5000, 45); // beside the hole: its centerline point is inside the pit
@@ -1882,6 +1886,44 @@ function jumpsWired(): void {
       "wreck respawn onto a hole goes to the recovery point (on the road: respawns where it was)",
       toRec && ghost === GHOST_TICKS && Math.abs(a.car!.x - 6000) < 1e-6 && Math.abs(a.car!.y) < 1e-9,
       `hole wreck -> recovery point ${toRec}, ghost ${ghost}; road wreck -> x=${a.car!.x.toFixed(1)}`,
+    );
+  }
+
+  // 4b. Race progress across the recovery teleport: a car crosses checkpoint 1, falls into a
+  // gap past it and is put back at a recovery point before it. It keeps the checkpoint (not
+  // lost) and crossing it again on the way back up earns nothing (not earned twice).
+  {
+    const L = trackById(T1B_ID).length; // same geometry as T1B_DEF
+    const cp1 = 0.25 * L; // checkpoint 1, on the straight (s = x)
+    const progDef: TrackDef = {
+      ...T1B_DEF,
+      id: "t1b-progress",
+      name: "T1b Progress",
+      features: [{ k: "gap", s0: cp1 + 150, s1: cp1 + 350 }],
+      recovery: [0, cp1 - 500],
+    };
+    registerTestTrack(progDef);
+    const pt = trackById(progDef.id);
+    const sim2 = new Sim();
+    const c = sim2.add("C");
+    sim2.room.setTrack(c, progDef.id);
+    sim2.startRace(c);
+    placeOn(pt, c, cp1 - 100, 0, 300);
+    c.progress!.cp = 0;
+    const log: string[] = [];
+    let cpBeforeFall = -1, cpAfterRecovery = -1, cpAfterRecross = -1;
+    for (let i = 0; i < 600 && cpAfterRecross < 0; i++) {
+      const wasFalling = c.car!.fall > 0;
+      sim2.run(1, () => ({ throttle: 1 }));
+      if (!wasFalling && c.car!.fall > 0) cpBeforeFall = c.progress!.cp;
+      if (wasFalling && c.car!.fall === 0) cpAfterRecovery = c.progress!.cp;
+      if (cpAfterRecovery >= 0 && c.progress!.s > cp1 + 50) cpAfterRecross = c.progress!.cp;
+    }
+    log.push(`cp ${cpBeforeFall} at the fall, ${cpAfterRecovery} after the recovery to s=${(cp1 - 500).toFixed(0)}, ${cpAfterRecross} after re-crossing`);
+    check(
+      "race progress: a recovery back behind a checkpoint neither loses it nor lets it be earned twice",
+      cpBeforeFall === 1 && cpAfterRecovery === 1 && cpAfterRecross === 1 && c.progress!.lap === 0 && sim2.eventsOf("lap").length === 0,
+      log.join("; "),
     );
   }
 
@@ -1958,6 +2000,24 @@ function jumpsWired(): void {
       o2.x === 1300 && o2.falling !== undefined && o2.falling > 0.98,
       `x ${o2.x.toFixed(1)}, falling ${o2.falling}`,
     );
+    // The start of a wreck or a fall is no teleport: the car moved up to where it froze, so
+    // it is interpolated as when driving (no freeze, then a pop forward). A wreck respawn is
+    // a teleport and is not.
+    const drive = body(0, 0, 0, 400, 0);
+    const halfway = (ea: Partial<CarSnap>, eb: Partial<CarSnap>, xb = 20) => {
+      g.snaps = [snapOf(now - 150, snapCar("o", drive, ea)), snapOf(now - 50, snapCar("o", { ...drive, x: xb }, eb))];
+      return g.otherPoses()[0];
+    };
+    const plain = halfway({}, {});
+    const wreckStart = halfway({}, { wreck: WRECK_TICKS, vx: 0 });
+    const fallStart = halfway({}, { fall: FALL_TICKS, vx: 0 });
+    const respawn = halfway({ wreck: 1, vx: 0 }, { wreck: 0, vx: 0 }, 300);
+    check(
+      "client otherPoses: the start of a wreck or a fall between two snapshots still interpolates",
+      Math.abs(plain.x - 10) < 0.5 && Math.abs(wreckStart.x - plain.x) < 0.05 && Math.abs(fallStart.x - plain.x) < 0.05 && fallStart.falling === 0,
+      `driving x ${plain.x.toFixed(2)}, wreck start x ${wreckStart.x.toFixed(2)}, fall start x ${fallStart.x.toFixed(2)} falling ${fallStart.falling}`,
+    );
+    check("client otherPoses: a wreck respawn between two snapshots is not interpolated (no slide)", respawn.x === 0, `x ${respawn.x.toFixed(2)}`);
   }
 
   // 6. End to end without lag: a client Game on a Rooms server jumps, rolls off into a gap

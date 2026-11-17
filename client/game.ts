@@ -701,9 +701,10 @@ export class Game {
 
   /**
    * Every car except our own predicted one, interpolated in the past, with its height, fall
-   * progress and ghost from the snapshots. Across a fall, a recovery, a wreck or a respawn
-   * between the two snapshots the car is not interpolated (no slide to or from a recovery
-   * point): it is drawn as in the older one until the newer one is reached.
+   * progress and ghost from the snapshots. Across a teleport between the two snapshots (a
+   * recovery or a wreck respawn) the car is not interpolated (no slide to a recovery point
+   * or a respawn spot): it is drawn as in the older one until the newer one is reached. The
+   * start of a fall or a wreck is no teleport and interpolates as usual.
    */
   otherPoses(): Pose[] {
     const out: Pose[] = [];
@@ -713,7 +714,8 @@ export class Game {
     for (const [id, ca] of a.cars) {
       if (id === this.you && this.car) continue;
       const cb = b?.cars.get(id);
-      if (b && cb && b.time > a.time && t >= a.time && ca.fall > 0 === cb.fall > 0 && ca.wreck > 0 === cb.wreck > 0) {
+      const teleport = cb && ((ca.wreck > 0 && cb.wreck === 0) || (ca.fall > 0 && cb.fall === 0));
+      if (b && cb && b.time > a.time && t >= a.time && !teleport) {
         const f = Math.min(1, (t - a.time) / (b.time - a.time));
         out.push({
           id,
