@@ -249,6 +249,33 @@ results screen, none in the countdown or the race, never on the menu.
   follow game, volumes, an offline 4-bar level check (`window.scrapSound.check(bars, volume)`) and a
   30 s WAV export. SND-2 adds the race effects to the sfx bus and its buttons to this board.
 
+SND-2 (built 2026-11-17): race effects, all synthesized on the effects bus.
+
+- `client/sfx.ts`: 14 recipes (countdown beep + GO, rivet, mine drop, mine blast, hit, wreck, bump,
+  take-off, landing, fall, recover, lap, finish) built from oscillators, the shared noise buffer,
+  filters and envelopes when they start; every source stops with its voice and the nodes disconnect
+  on `ended`. The own engine is one persistent voice (two saws + a square sub through a low-pass)
+  moved once a frame with setTargetAtTime: pitch from speed (higher in the air, a rev at a
+  standstill), gain from the throttle of the controls the frame loop stepped with; silent with no
+  car, disconnected, wrecked, falling, finished, on results and outside races; stopped in the lobby.
+  `RaceSounds` plays what the triggers decide; other cars by distance from the own car (the camera
+  when spectating): full within 150 units, silent from 900, x0.75, light pan (max 0.5) by screen x.
+- Triggers (`client/soundlogic.ts` `SoundTriggers`, pure, tested in sim-test): own take-off /
+  landing / fall / recovery, shots and mines from `Game.step()` only (`takeOwnSounds()`; landing =
+  `prevCar.air > 0 && car.air === 0 && car.fall === 0`), a 400 ms refractory for the first four;
+  other cars' shots, mines and air/fall from `Game.interpSnapshot()` (the drawn snapshot) against
+  the ids and states seen, seeded silently on the first snapshot, after a welcome and after a gap
+  > 250 ms; server events through `EventGate`: other cars' after the interpolation delay, a hit
+  waits for a snapshot of its tick so a wreck of the same tick replaces it (a fatal mine keeps its
+  blast); bumps from the existing `takeImpacts()` loop; countdown cues latched per raceStart with a
+  monotonic index on the HUD's clock, none before `hasClock()`, a cue > 250 ms late passed silently.
+  Per-kind caps (concurrent and gap) for other cars; the own car's always play. Nothing triggers
+  while audio does not run (locked, suspended, tab hidden) and nothing is kept for later.
+- Debug: `scrapDebug.sounds.log` (every trigger with src, own, outcome played / far / capped,
+  entity id, race), `dropped.silent`, `triggers.refractoryDrops`. The sound board has a button per
+  effect, other cars at 100 / 400 / 700 units, an engine rev, `scrapSound.effects.check()` (levels
+  per effect, offline) and an effects WAV.
+
 ## Later (not in the prototype)
 
 Weapons (projectiles, mines) as entities, between-race shop with money, more tracks,
