@@ -83,7 +83,8 @@ STEP 3: worker_done with --outcome succeeded|failed, a 3-sentence summary, branc
 RULES: never fabricate values; `npm run dev`/`npm start` only on PORT=<3001|3002> (3000 is the
   user's; `npm test` uses free ports itself); stop only processes you started, by PID, never
   pkill/killall by pattern (it kills the user's dev server); agent-browser sessions named after
-  your slug; keep the game original.
+  your slug and kept SILENT (the browser is a real Chrome on the user's speakers: mute the game,
+  or launch with --mute-audio); keep the game original.
 ```
 
 ## 3. Supervise
