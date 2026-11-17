@@ -2,7 +2,7 @@
 // track from here and the client builds the same one from the room's trackId, so both sides
 // run the same geometry. Add a track by adding its TrackDef (with an id) to SHIPPED.
 
-import { buildTrack, RUST_BOWL, type Track, type TrackDef } from "./track";
+import { buildTrack, CRUSHER_RUN, OVERPASS_KNOT, RUST_BOWL, type Track, type TrackDef } from "./track";
 
 export interface TrackEntry {
   id: string; // stable id on the wire ({t:"track"}, room.trackId)
@@ -12,7 +12,7 @@ export interface TrackEntry {
 
 export const DEFAULT_TRACK_ID = "rust-bowl";
 
-const SHIPPED: TrackDef[] = [RUST_BOWL];
+const SHIPPED: TrackDef[] = [RUST_BOWL, CRUSHER_RUN, OVERPASS_KNOT];
 
 function entryOf(def: TrackDef): TrackEntry {
   return { id: def.id, name: def.name, def };

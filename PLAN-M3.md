@@ -3,6 +3,9 @@
 Reviewed by the Fable 5.2 advisor: "sound with changes"; the section "Advisor changes (binding)"
 below overrides the design text where they differ.
 
+Status (2026-11-17): T1a, T2, T3 and T1b merged; T4 (Crusher Run, Overpass Knot, bot driver)
+built on TSandvaer/m3-t4, waiting for review and the user's taste gate.
+
 User request 2026-11-16: two new, more advanced tracks with ramps to jump over obstacles and over
 roads (roads crossing roads), holes, and a recovery feature: if you fall (onto the road below, into a
 hole, short of a landing) your car blinks and returns to the recovery point. User choices: committed

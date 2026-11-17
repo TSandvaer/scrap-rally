@@ -1488,7 +1488,7 @@ function trackFeatures(): void {
 // ---- per-room track (M3-T2) ----------------------------------------------------------
 
 // This section's imports (hoisted like the ones at the top; queryTrack and Track come from there).
-import { gridSlot } from "../shared/track";
+import { CRUSHER_RUN, gridSlot, OVERPASS_KNOT } from "../shared/track";
 import { DEFAULT_TRACK_ID, registerTestTrack, trackById, trackList } from "../shared/tracks";
 
 /** Sim.place on any track (Sim.place uses the default track). */
@@ -1501,7 +1501,7 @@ function placeOn(t: Track, p: Player, s: number, lateral = 0, speed = 0): void {
 }
 
 function roomTrack(): void {
-  // A second track for this test only (the shipped registry has one), far away from Rust
+  // A track for this test only (not shipped), far away from Rust
   // Bowl: a car, a shot or a lap on it cannot pass by accident on the default track.
   const LOOP = "test-loop";
   const loopDef: TrackDef = {
@@ -1516,8 +1516,10 @@ function roomTrack(): void {
   const rust = trackById(DEFAULT_TRACK_ID);
   check("track: the test loop is nowhere near Rust Bowl", loop.pts.every((q) => queryTrack(rust, q.x, q.y).dist > 4 * rust.wall));
   check(
-    "track: the registry ships rust-bowl only, keyed by TrackDef.id",
-    trackList().map((e) => e.id).join() === `${DEFAULT_TRACK_ID},${LOOP}` && rust.def === RUST_BOWL && trackList()[0].name === RUST_BOWL.name,
+    "track: the registry ships rust-bowl (first, the default), crusher-run and overpass-knot, keyed by TrackDef.id",
+    trackList().map((e) => e.id).join() === `${DEFAULT_TRACK_ID},crusher-run,overpass-knot,${LOOP}` &&
+      rust.def === RUST_BOWL && trackList()[0].name === RUST_BOWL.name &&
+      trackById("crusher-run").def === CRUSHER_RUN && trackById("overpass-knot").def === OVERPASS_KNOT,
     trackList().map((e) => e.id).join(),
   );
   // Every registered track (the shipped one and the test loop) passes T1a's validators.
@@ -1720,8 +1722,10 @@ function wiredGame(rooms: Rooms, clock: { now: number }): { game: Game; open(): 
 function jumpsWired(): void {
   registerTestTrack(T1B_DEF);
   const t = trackById(T1B_ID);
-  const tErr = [...validateTrack(t), ...validateRunUps(t)];
-  check("t1b track: validates (track and run-ups)", tErr.length === 0, tErr.join("; "));
+  // A test straight: its features sit on the start straight on purpose (s = x), so that one
+  // rule (startStraightEnd) is not asked of it; everything else is.
+  const tErr = [...validateTrack(t).filter((m) => !m.includes("start straight")), ...validateRunUps(t)];
+  check("t1b track: validates (track and run-ups; its features are on the start straight by design)", tErr.length === 0, tErr.join("; "));
   const lastSnap = (sim: Sim, to: Player, of: Player): CarSnap | undefined => {
     const m = sim.conns.get(to.id)!.msgs.filter((x) => x.t === "snap").pop() as Extract<ServerMsg, { t: "snap" }> | undefined;
     return m?.ents.find((e): e is CarSnap => e.k === "car" && e.id === of.id);
@@ -2104,7 +2108,380 @@ function jumpsWired(): void {
   }
 }
 
-for (const t of [rivets, gating, mines, wrecks, finishing, garage, armDelay, engine, readyCheck, collisions, trackFeatures, roomTrack, jumpsWired]) {
+// ---- M3-T4: the shipped tracks (Crusher Run, Overpass Knot) and the bot driver ----------
+
+// This section's imports (hoisted like the ones at the top).
+import { BotDriver, holeLane, speedAfter, takeoffSpeedFor } from "./bot-ai";
+import { gapAt as gapAtT4, START_ZONE, startStraightEnd } from "../shared/track";
+import { CAR_WIDTH } from "../shared/physics";
+import type { Pose } from "../client/game";
+
+const MAX_UPGRADES = statsFor({ engine: 3, tyres: 3, welder: 3 });
+/** The new tracks: the shipped ones with features. */
+const T4_TRACKS = ["crusher-run", "overpass-knot"];
+
+/** The hazards of a track as stretches of s: a ramp with the gap at its lip is one jump; holes closer than 400 are one field. */
+function hazardStretches(t: Track): { what: string; s0: number; s1: number }[] {
+  const out: { what: string; s0: number; s1: number }[] = [];
+  for (const r of t.ramps) {
+    const lip = r.s + r.len;
+    const g = t.gaps.find((x) => x.s0 >= r.s && x.s0 <= lip + LIP_ZONE);
+    out.push({ what: g ? (g.scrap ? "scrap jump" : "jump") : "ramp", s0: r.s, s1: g ? g.s1 : lip + LIP_ZONE });
+  }
+  for (const g of t.gaps) {
+    if (!t.ramps.some((r) => g.s0 >= r.s && g.s0 <= r.s + r.len + LIP_ZONE)) out.push({ what: "gap", s0: g.s0, s1: g.s1 });
+  }
+  for (const h of t.holes) {
+    const last = out[out.length - 1];
+    if (last && last.what === "holes" && h.s - h.r - last.s1 < 400) last.s1 = Math.max(last.s1, h.s + h.r);
+    else out.push({ what: "holes", s0: h.s - h.r, s1: h.s + h.r });
+  }
+  return out.sort((a, b) => a.s0 - b.s0);
+}
+
+/** A grounded car taking off from the lip of `lipS` at speed v, `lat` units off the centerline, along the track. */
+function flyFrom(t: Track, lipS: number, v: number, lat: number): { fell: boolean; landS: number; landDist: number } {
+  const p = pointAt(t, lipS + 1);
+  const x = p.x - Math.sin(p.h) * lat, y = p.y + Math.cos(p.h) * lat;
+  const c: CarState = { x, y, h: p.h, vx: Math.cos(p.h) * v, vy: Math.sin(p.h) * v, seg: p.seg, wreck: 0, air: 0, fall: 0 };
+  let fell = false;
+  for (let i = 0; i < 200; i++) {
+    const ev = stepRaceCar(c, NO_COMMAND, BASE_STATS, t);
+    if (ev === "fall") fell = true;
+    if (c.air === 0) break;
+  }
+  const q = queryTrackNear(t, c.x, c.y, c.seg);
+  return { fell, landS: q.s, landDist: q.dist };
+}
+
+/** BotDriver on a bare car (no server): the Game fields it reads. */
+function stubGame(t: Track, car: CarState, others: { pose: Pose; snap: Partial<CarSnap> }[] = []): Game {
+  const cars = new Map<string, CarSnap>(others.map((o) => [o.pose.id, { ...snapCar(o.pose.id, car), ...o.pose, ...o.snap } as CarSnap]));
+  return {
+    car,
+    track: t,
+    stats: { ...BASE_STATS },
+    raceOn: () => true,
+    otherPoses: () => others.map((o) => o.pose),
+    latest: { time: 0, cars, shots: new Map(), mines: [] },
+  } as unknown as Game;
+}
+
+function shippedTracks(): void {
+  for (const id of T4_TRACKS) {
+    const t = trackById(id);
+    const v1 = validateTrack(t), v2 = validateRunUps(t, BASE_STATS), v3 = validateRunUps(t, MAX_UPGRADES);
+    check(
+      `${id}: validateTrack and validateRunUps (no upgrades and max upgrades) pass`,
+      v1.length + v2.length + v3.length === 0,
+      [...v1, ...v2.map((m) => `base: ${m}`), ...v3.map((m) => `max: ${m}`)].join("; ") ||
+        `length ${t.length.toFixed(0)}, ${t.ramps.length} ramps, ${t.gaps.length} gaps, ${t.holes.length} holes, recovery ${t.recovery.map((r) => r.toFixed(0)).join(",")}`,
+    );
+    // Recovery: the start line listed explicitly (PLAN-M3 design 1), and one before every hazard.
+    const hz = hazardStretches(t);
+    const missing: string[] = [];
+    hz.forEach((h, i) => {
+      const prev = hz[(i - 1 + hz.length) % hz.length];
+      const from = i === 0 ? prev.s1 - t.length : prev.s1;
+      if (!t.recovery.some((r) => (r >= from && r < h.s0) || (r - t.length >= from && r - t.length < h.s0))) missing.push(`${h.what} at ${h.s0.toFixed(0)}`);
+    });
+    check(
+      `${id}: recovery point at s = 0 listed, and one between every two hazards`,
+      t.def.recovery?.[0] === 0 && missing.length === 0 && hz.length >= 2,
+      missing.join(", ") || hz.map((h) => `${h.what} ${h.s0.toFixed(0)}..${h.s1.toFixed(0)}`).join(", "),
+    );
+    check(`${id}: every hole has r <= 38 (the renderer's cull)`, t.holes.every((h) => h.r <= 38), t.holes.map((h) => h.r).join(","));
+    // Every jump lands on the asphalt past its gap at any take-off speed from the one the bot
+    // aims for up to top speed, on the bot lanes; just below the bare minimum it falls short.
+    const top = speedAfter(0, 20_000, MAX_UPGRADES);
+    for (const r of t.ramps) {
+      const lip = r.s + r.len;
+      const need = takeoffSpeedFor(t, r);
+      const bad: string[] = [];
+      let n = 0;
+      for (let v = need; v <= top + 1; v += 5) {
+        for (const lat of [-40, -24, 0, 24, 40]) {
+          n++;
+          const f = flyFrom(t, lip, v, lat);
+          if (f.fell || f.landDist > t.def.halfWidth || gapAtT4(t, f.landS)) bad.push(`${v}@${lat}: ${f.fell ? "fell" : `lands ${f.landDist.toFixed(0)} off`} at ${f.landS.toFixed(0)}`);
+        }
+      }
+      check(
+        `${id}: the jump at s=${r.s} lands on the asphalt for every take-off from ${need} to ${top.toFixed(0)} u/s, lanes -40..40`,
+        n > 20 && bad.length === 0,
+        bad.slice(0, 4).join("; ") || `${n} flights`,
+      );
+    }
+  }
+  // The start straight is measured from the track (startStraightEnd), not a fixed 300 units:
+  // the first Crusher Run layout (2cb0eed), whose scrap jumps sat on a ~1970-unit start
+  // straight, is rejected for exactly those four features; the shipped tracks keep theirs clear.
+  {
+    const first = buildTrack({
+      id: "crusher-run-2cb0eed",
+      name: "Crusher Run (first layout)",
+      control: [
+        [900, 500], [1400, 500], [1900, 500], [2400, 500], [2900, 500], [3400, 500], [3800, 700],
+        [3950, 1150], [3850, 1650], [3450, 2000], [2900, 2150], [2400, 2150], [1900, 2150],
+        [1400, 2150], [950, 2100], [650, 1850], [750, 1450], [450, 1150], [300, 750], [500, 500],
+      ],
+      halfWidth: 64,
+      verge: 44,
+      features: [
+        { k: "ramp", s: 620, len: 80 }, { k: "gap", s0: 700, s1: 830, scrap: true },
+        { k: "ramp", s: 1680, len: 80 }, { k: "gap", s0: 1760, s1: 1900, scrap: true },
+        { k: "hole", s: 3350, lat: -10, r: 24 },
+        { k: "ramp", s: 5800, len: 80 }, { k: "gap", s0: 5880, s1: 6100 },
+      ],
+      recovery: [0, 1300, 2950, 5300],
+    });
+    const errs = validateTrack(first);
+    const onStraight = errs.filter((m) => m.includes("start straight"));
+    check(
+      "validation: features on a long start straight are rejected (the first Crusher Run's two scrap jumps)",
+      startStraightEnd(first) > 1900 && onStraight.length === 4 && errs.length === 4 &&
+        ["ramp at s=620.0", "gap 700.0..830.0", "ramp at s=1680.0", "gap 1760.0..1900.0"].every((w) => onStraight.some((m) => m.startsWith(w))),
+      `start straight 0..${startStraightEnd(first).toFixed(0)}; ${errs.join("; ")}`,
+    );
+    const ends = ["rust-bowl", ...T4_TRACKS].map((id) => {
+      const t = trackById(id);
+      const firstFeature = Math.min(...t.ramps.map((r) => r.s), ...t.gaps.map((g) => g.s0), ...t.holes.map((h) => h.s - h.r));
+      return { id, end: startStraightEnd(t), first: firstFeature };
+    });
+    check(
+      "validation: the start straight of every shipped track is measured, and its first feature lies past it",
+      ends.every((e) => e.end >= START_ZONE && e.first > e.end) && ends.find((e) => e.id === "crusher-run")!.end > 1900,
+      ends.map((e) => `${e.id} straight 0..${e.end.toFixed(0)}, first feature ${Number.isFinite(e.first) ? e.first.toFixed(0) : "-"}`).join("; "),
+    );
+  }
+
+  // Overpass Knot really crosses itself: the passes meet at (2000, 1400), the upper one (gap) over the lower one (ground).
+  {
+    const t = trackById("overpass-knot");
+    const up = queryTrackNear(t, 2000, 1400, 21 * 16), low = queryTrackNear(t, 2000, 1400, 8 * 16);
+    check(
+      "overpass-knot: a crossing; the upper pass is a gap over it, the lower pass is ground",
+      up.dist < 1 && low.dist < 1 && Math.abs(up.s - low.s) > t.length / 4 && !!gapAtT4(t, up.s) && !gapAtT4(t, low.s),
+      `upper s=${up.s.toFixed(0)} (gap ${gapAtT4(t, up.s)?.s0}..${gapAtT4(t, up.s)?.s1}), lower s=${low.s.toFixed(0)}`,
+    );
+  }
+}
+
+function botDriver(): void {
+  const knot = trackById("overpass-knot");
+  const crossRamp = knot.ramps[0];
+  const lip = crossRamp.s + crossRamp.len;
+  const need = takeoffSpeedFor(knot, crossRamp);
+  const bare = flyFrom(knot, lip, need - 30, 0);
+  check(
+    "bot: knows the take-off speed a jump needs (over the crossing: above MIN_TAKEOFF_SPEED; 30 u/s less falls short)",
+    need > MIN_TAKEOFF_SPEED + 100 && need < 420 && bare.fell && !flyFrom(knot, lip, need, 0).fell,
+    `${need} u/s`,
+  );
+  check("bot: a ramp with no gap behind it asks for no speed", takeoffSpeedFor(knot, { k: "ramp", s: 3000, len: 60 }) === 0);
+
+  // Slow at the foot of the crossing ramp (a mine, a bump): the bot backs up for a longer run-up
+  // and then clears the gap. Full throttle from there instead falls short.
+  const run = (backUp: boolean) => {
+    const p = pointAt(knot, lip - 160);
+    const car: CarState = { x: p.x, y: p.y, h: p.h, vx: Math.cos(p.h) * 120, vy: Math.sin(p.h) * 120, seg: p.seg, wreck: 0, air: 0, fall: 0 };
+    const bot = new BotDriver(stubGame(knot, car), 0);
+    bot.weapons = false;
+    let reversed = false, fell = false, took = 0;
+    for (let i = 0; i < 60 * 20 && !fell; i++) {
+      const ctl = backUp ? bot.controls() : { throttle: 1, steer: 0 };
+      if (ctl.throttle < 0 && speedOf(car) > 5 && car.vx * Math.cos(car.h) + car.vy * Math.sin(car.h) < 0) reversed = true;
+      const v0 = speedOf(car);
+      const ev = stepRaceCar(car, ctl, BASE_STATS, knot);
+      if (ev === "takeoff") took = v0;
+      if (ev === "fall") fell = true;
+      if (took && car.air === 0) break;
+    }
+    return { reversed, fell, took };
+  };
+  const naive = run(false), smart = run(true);
+  check(
+    "bot: too slow before the crossing ramp, it backs up and then clears the gap (full throttle from there falls short)",
+    naive.fell && smart.reversed && !smart.fell && smart.took >= need - 12,
+    `full throttle: ${naive.fell ? "falls" : "clears"} (took off at ${naive.took.toFixed(0)}); bot: reversed ${smart.reversed}, took off at ${smart.took.toFixed(0)}, ${smart.fell ? "fell" : "landed"}`,
+  );
+
+  // Holes: 100 before each Crusher Run pit the lane clears it; across the field the lane moves
+  // from one side of the road to the other. With no hole near, it is the preferred lane.
+  const crusher = trackById("crusher-run");
+  const pits = crusher.holes;
+  const lanes = pits.map((h) => holeLane(crusher, h.s - 100, 300, 0).lane);
+  check(
+    "bot: the hole lane keeps the car's centre clear of each pit and moves across the field",
+    pits.length === 3 && lanes.every((l, i) => Math.abs(l - pits[i].lat) > pits[i].r + CAR_WIDTH / 2) &&
+      Math.sign(lanes[1]) === -Math.sign(lanes[2]) && holeLane(crusher, 1000, 300, 12).lane === 12,
+    `pits ${pits.map((h) => `${h.s}@${h.lat} r${h.r}`).join(", ")}; lanes 100 before them: ${lanes.join(", ")}`,
+  );
+
+  // Away from holes the bot holds its own racing line: one solo Rust Bowl lap per lane (after
+  // 2 s off the grid), the share of steps more than 12 units off the lane stays small.
+  {
+    const rust = trackById("rust-bowl");
+    const hold = [-24, 0, 24].map((lane) => {
+      const g = gridSlot(rust, 0);
+      const car: CarState = { x: g.x, y: g.y, h: g.h, vx: 0, vy: 0, seg: g.seg, wreck: 0, air: 0, fall: 0 };
+      const bot = new BotDriver(stubGame(rust, car), lane);
+      bot.weapons = false;
+      let off = 0, n = 0, dist = 0, prev = queryTrackNear(rust, car.x, car.y, car.seg).s;
+      for (let i = 0; i < 60 * 60 && dist < rust.length; i++) {
+        stepRaceCar(car, bot.controls(), BASE_STATS, rust);
+        const q = queryTrackNear(rust, car.x, car.y, car.seg);
+        let ds = q.s - prev;
+        if (ds < -rust.length / 2) ds += rust.length;
+        dist += ds;
+        prev = q.s;
+        if (i < 120) continue;
+        const p = pointAt(rust, q.s);
+        const lat = (car.x - p.x) * -Math.sin(p.h) + (car.y - p.y) * Math.cos(p.h);
+        n++;
+        if (Math.abs(lat - lane) > 12) off++;
+      }
+      return { lane, share: off / n, lap: dist >= rust.length };
+    });
+    check(
+      "bot: holds its lane on Rust Bowl (no holes): under 10% of a lap more than 12 off the lane",
+      hold.every((h) => h.lap && h.share < 0.1),
+      hold.map((h) => `lane ${h.lane}: ${(100 * h.share).toFixed(1)}%`).join(", "),
+    );
+  }
+
+  // Weapons: never at an airborne or falling car (the server ignores those shots).
+  const p = pointAt(knot, 3000);
+  const me: CarState = { x: p.x, y: p.y, h: p.h, vx: 0, vy: 0, seg: p.seg, wreck: 0, air: 0, fall: 0 };
+  const ahead = { id: "x", x: p.x + Math.cos(p.h) * 200, y: p.y + Math.sin(p.h) * 200, h: p.h };
+  const fires = (snap: Partial<CarSnap>) => {
+    const b = new BotDriver(stubGame(knot, cloneCar(me), [{ pose: ahead, snap }]), 0);
+    return b.controls().fire;
+  };
+  const fire = { grounded: fires({}), air: fires({ air: 20 }), fall: fires({ fall: 40 }), ghost: fires({ ghost: true }) };
+  check("bot: fires at a grounded car ahead, not at an airborne, falling or ghosted one", fire.grounded && !fire.air && !fire.fall && !fire.ghost, JSON.stringify(fire));
+
+  // A fall is not "stuck": after the recovery the bot drives on instead of reversing.
+  const fc: CarState = { ...me, fall: 90 };
+  const fb = new BotDriver(stubGame(knot, fc), 0);
+  fb.weapons = false;
+  for (let i = 0; i < 90; i++) {
+    fb.controls();
+    stepRaceCar(fc, NO_COMMAND, BASE_STATS, knot);
+  }
+  const after = fb.controls();
+  check("bot: no reversing after a fall's 90 frozen ticks", fc.fall === 0 && after.throttle === 1, `throttle ${after.throttle}`);
+}
+
+/** A reconciliation error this big is "large": a visible snap. */
+const LARGE_ERR = 1;
+
+/**
+ * Deterministic headless bot laps: three bots (lanes -24, 0, 24, no weapons) race one lap on
+ * a track through the real client Game against a Rooms server on the sim clock (no sockets,
+ * no lag). Returns each bot's finish tick, take-offs and falls (the server's car state).
+ */
+function botLap(id: string): {
+  ticks: number[]; jumps: number[]; falls: number[]; stateErrs: number; samples: number; large: number; over01: number; maxErr: number;
+} {
+  const realNow = performance.now.bind(performance);
+  const clock = { now: 1_000_000 };
+  performance.now = () => clock.now;
+  try {
+    const rooms = new Rooms(1);
+    const lanes = [-24, 0, 24];
+    const ws = lanes.map(() => wiredGame(rooms, clock));
+    ws[0].game.create("Bot0");
+    ws[0].open();
+    ws[0].flush();
+    ws[0].game.pickTrack(id);
+    ws[0].flush();
+    const room = [...rooms.rooms.values()][0];
+    ws.slice(1).forEach((w, i) => {
+      w.game.join(room.code, `Bot${i + 1}`);
+      w.open();
+    });
+    for (const w of ws) w.flush();
+    for (const w of ws.slice(1)) {
+      w.game.setReady(true);
+      w.flush();
+    }
+    ws[0].game.start();
+    ws[0].flush();
+    const drivers = ws.map((w, i) => {
+      const d = new BotDriver(w.game, lanes[i]);
+      d.weapons = false;
+      return d;
+    });
+    const n = ws.length;
+    const ticks = Array(n).fill(0), jumps = Array(n).fill(0), falls = Array(n).fill(0);
+    const prev = ws.map(() => ({ air: 0, fall: 0 }));
+    let raceTicks = 0;
+    for (let i = 0; i < 60 * 120 && ticks.some((x) => x === 0); i++) {
+      clock.now += 1000 / 60;
+      rooms.step(clock.now);
+      for (const w of ws) w.flush();
+      ws.forEach((w, k) => w.game.step(drivers[k].controls(), 1000 / 60));
+      if (room.phase === "racing") raceTicks++;
+      ws.forEach((w, k) => {
+        const c = room.players.get(w.game.you)?.car;
+        if (!c) return;
+        if (c.air > 0 && prev[k].air === 0) jumps[k]++;
+        if (c.fall > 0 && prev[k].fall === 0) falls[k]++;
+        prev[k] = { air: c.air, fall: c.fall };
+        if (!ticks[k] && room.players.get(w.game.you)!.progress?.fin) ticks[k] = raceTicks;
+      });
+    }
+    const errs = ws.flatMap((w) => w.game.recErrors);
+    return {
+      ticks, jumps, falls,
+      stateErrs: ws.reduce((a, w) => a + w.game.recStateErrors, 0),
+      samples: errs.length,
+      large: errs.filter((x) => x > LARGE_ERR).length,
+      over01: errs.filter((x) => x > 0.1).length,
+      maxErr: errs.length ? Math.max(...errs) : NaN,
+    };
+  } finally {
+    performance.now = realNow;
+  }
+}
+
+function botLaps(): void {
+  // Bounds per track (measured 2026-11-17: Crusher Run ~34 s, Overpass Knot ~29 s, Rust Bowl ~32 s, 0 falls).
+  const limits: Record<string, { ticks: number; falls: number }> = {
+    "rust-bowl": { ticks: 40 * 60, falls: 0 },
+    "crusher-run": { ticks: 42 * 60, falls: 1 },
+    "overpass-knot": { ticks: 38 * 60, falls: 1 },
+  };
+  for (const e of trackList().filter((x) => x.id in limits)) {
+    const t = trackById(e.id);
+    const lim = limits[e.id];
+    const a = botLap(e.id);
+    const b = botLap(e.id);
+    const secs = a.ticks.map((x) => (x / 60).toFixed(2)).join("/");
+    const falls = a.falls.reduce((x, y) => x + y, 0);
+    check(
+      `bot laps on ${e.id}: 3 bots finish within ${lim.ticks / 60} s with <= ${lim.falls} falls`,
+      a.ticks.every((x) => x > 0 && x <= lim.ticks) && falls <= lim.falls,
+      `finish ${secs} s, falls ${a.falls.join("/")}, take-offs ${a.jumps.join("/")}`,
+    );
+    check(
+      `bot laps on ${e.id}: every bot takes every jump (${t.ramps.length} per lap) and the run is deterministic`,
+      a.jumps.every((j) => j >= t.ramps.length) && JSON.stringify(a) === JSON.stringify(b),
+      `take-offs ${a.jumps.join("/")}; rerun finish ${b.ticks.join("/")} vs ${a.ticks.join("/")}`,
+    );
+    // Bumps between the bots are predicted only approximately, which is why socket races bound
+    // the count of large errors, not the max (advisor change 9). This run has no lag and is
+    // deterministic, so it can ask for no large error at all: in effect a max bound.
+    check(
+      `bot laps on ${e.id}: prediction matches the server (no air/fall state mismatch, no error > ${LARGE_ERR})`,
+      a.samples > 1000 && a.stateErrs === 0 && a.large === 0,
+      `${a.stateErrs} state mismatches; ${a.large} errors > ${LARGE_ERR}, ${a.over01} > 0.1 of ${a.samples}; max ${a.maxErr.toFixed(3)}`,
+    );
+  }
+}
+
+for (const t of [rivets, gating, mines, wrecks, finishing, garage, armDelay, engine, readyCheck, collisions, trackFeatures, roomTrack, jumpsWired, shippedTracks, botDriver, botLaps]) {
   console.log(`\n# ${t.name}`);
   try {
     t();

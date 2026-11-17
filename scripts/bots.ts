@@ -15,10 +15,10 @@ import {
   type ResultRow,
   type ServerMsg,
 } from "../shared/protocol";
-import { AMMO, PLACE_PAYOUT, WRECK_BONUS } from "../shared/shop";
-import { minSelfClearance, pointAt, queryTrackNear, validateTrack, type Track, type TrackDef } from "../shared/track";
-import { DEFAULT_TRACK_ID, registerTestTrack, trackById } from "../shared/tracks";
-import { angleDiff, capsuleGap, clamp, speedOf, type CarState } from "../shared/physics";
+import { AMMO, PLACE_PAYOUT, statsFor, WRECK_BONUS } from "../shared/shop";
+import { pointAt, queryTrackNear, validateTrack, type Track, type TrackDef } from "../shared/track";
+import { DEFAULT_TRACK_ID, registerTestTrack, trackById, trackList } from "../shared/tracks";
+import { angleDiff, BASE_STATS, capsuleGap, clamp, speedOf, type CarState } from "../shared/physics";
 import { BTN_RIVET, validateRunUps, WEAPONS_ARM_MS } from "../shared/weapons";
 import { startServer, type RunningServer } from "../server/index";
 import { BotDriver } from "./bot-ai";
@@ -378,6 +378,7 @@ async function run(ctx: Ctx, bots: Bot[]): Promise<void> {
   await runContact(ctx, bots);
   await runTrackSwitch(ctx, bots);
   await runJumpFall(ctx, bots);
+  await runOverpass(ctx, bots);
 }
 
 const lost = new Map<string, (ConnReason | undefined)[]>();
@@ -393,9 +394,20 @@ function watch(b: Bot): void {
 
 async function runGame(ctx: Ctx, bots: Bot[]): Promise<void> {
   const url = ctx.url;
-  // Track sanity.
-  const clearance = minSelfClearance(track);
-  check("track: minSelfClearance > 2 * wall", clearance > 2 * track.wall, `${clearance.toFixed(1)} > ${2 * track.wall}`);
+  // Track sanity: every shipped track passes the layout check and the run-up check, with no
+  // upgrades and with max upgrades (faster take-offs, longer jumps). minSelfClearance no
+  // longer applies: Overpass Knot crosses itself by design.
+  const maxUp = statsFor({ engine: 3, tyres: 3, welder: 3 });
+  const shipped = trackList().filter((e) => e.id !== TEST_TRACK_ID && e.id !== JUMPS_TRACK_ID);
+  const trackErrs = shipped.flatMap((e) => {
+    const t = trackById(e.id);
+    return [...validateTrack(t), ...validateRunUps(t, BASE_STATS), ...validateRunUps(t, maxUp)].map((m) => `${e.id}: ${m}`);
+  });
+  check(
+    "tracks: every shipped track passes validateTrack and validateRunUps (no upgrades, max upgrades)",
+    shipped.length >= 3 && trackErrs.length === 0,
+    trackErrs.join("; ") || shipped.map((e) => e.id).join(", "),
+  );
 
   // Unknown code is refused.
   const stray = new Bot("Stray", url, 0);
@@ -933,8 +945,10 @@ async function runTrackSwitch(ctx: Ctx, bots: Bot[]): Promise<void> {
  */
 async function runJumpFall(ctx: Ctx, bots: Bot[]): Promise<void> {
   const jumps = trackById(JUMPS_TRACK_ID);
-  const tErr = [...validateTrack(jumps), ...validateRunUps(jumps)];
-  check("jumps track: validates (track and run-ups)", tErr.length === 0, tErr.join("; "));
+  // A test straight: its features sit on the start straight on purpose (s = x), so that one
+  // rule (startStraightEnd) is not asked of it; everything else is.
+  const tErr = [...validateTrack(jumps).filter((m) => !m.includes("start straight")), ...validateRunUps(jumps)];
+  check("jumps track: validates (track and run-ups; its features are on the start straight by design)", tErr.length === 0, tErr.join("; "));
   const J = new Bot("Juliett", ctx.url, 0, { lag: 80, jitter: 10 });
   const P = new Bot("Papa", ctx.url, 0);
   bots.push(J, P);
@@ -1016,6 +1030,82 @@ async function runJumpFall(ctx: Ctx, bots: Bot[]): Promise<void> {
     J.script = null;
     J.afterStep = null;
     for (const b of [J, P]) b.game.leave();
+  }
+}
+
+// Overpass Knot over sockets (M3-T4): measured 2026-11-17 (see the log line); bounds with room.
+/** Reconciliation errors above this are "large" (about one tick of top-speed travel). */
+const KNOT_LARGE_ERR = 7;
+const KNOT_LARGE_MAX = 3; // large errors allowed for the lagged bot over the race
+const KNOT_FALLS_MAX = 2; // falls allowed over the whole field
+
+/**
+ * A four-bot race on Overpass Knot over real sockets, one bot lagged (80±10 ms), no weapons:
+ * every bot finishes, takes off over the crossing, stays on its own road (never snapped onto
+ * the other pass), and few fall. In a multi-car race bumps are predicted only approximately,
+ * so the lagged bot's large reconciliation errors are bounded by count, not by the max.
+ */
+async function runOverpass(ctx: Ctx, bots: Bot[]): Promise<void> {
+  const KNOT_ID = "overpass-knot";
+  const knot = trackById(KNOT_ID);
+  const Q = new Bot("Quebec", ctx.url, -24);
+  const R = new Bot("Romeo", ctx.url, 24, { lag: 80, jitter: 10 });
+  const S = new Bot("Sierra", ctx.url, 0);
+  const T = new Bot("Tango", ctx.url, 12);
+  const field = [Q, R, S, T];
+  bots.push(...field);
+  for (const b of field) b.weapons = false;
+  Q.game.create(Q.name);
+  await waitFor("Q welcome", () => !!Q.game.you, 3000);
+  for (const b of [R, S, T]) b.game.join(Q.game.code, b.name);
+  await waitFor("4 in Q's room", () => field.every((b) => b.game.players.length === 4), 3000);
+  Q.game.pickTrack(KNOT_ID);
+  await waitFor("all on Overpass Knot", () => field.every((b) => b.game.trackId === KNOT_ID), 2000);
+  check("knot: the host picks Overpass Knot; everyone's Game.track is it", field.every((b) => b.game.track === knot), field.map((b) => b.game.trackId).join(","));
+
+  const name = (id: string) => Q.game.player(id)?.name ?? id;
+  const flew = new Set<string>();
+  const falls = new Map<string, number>();
+  const wasFalling = new Map<string, boolean>();
+  let samples = 0, offTrack = 0;
+  Q.afterStep = () => {
+    if (Q.game.phase !== "racing") return;
+    for (const c of Q.game.latest?.cars.values() ?? []) {
+      samples++;
+      if (c.air > 0) flew.add(c.id);
+      if (c.fall > 0 && !wasFalling.get(c.id)) falls.set(c.id, (falls.get(c.id) ?? 0) + 1);
+      wasFalling.set(c.id, c.fall > 0);
+      // Own section only (queryTrackNear around the car's segment): a car snapped onto the
+      // other pass at the crossing would show up as far off its road.
+      if (!c.fall && queryTrackNear(knot, c.x, c.y, c.seg).dist > knot.wall) offTrack++;
+    }
+  };
+  const e0 = R.game.recErrors.length, st0 = R.game.recStateErrors;
+  try {
+    const rows = await runRace("knot", bots, Q, field);
+    const nFalls = [...falls.values()].reduce((a, b) => a + b, 0);
+    const s = stats(R.game.recErrors.slice(e0));
+    const large = R.game.recErrors.slice(e0).filter((x) => x > KNOT_LARGE_ERR).length;
+    console.log(
+      `      knot: ${rows.map((r) => `${r.name} ${(r.timeMs / 1000).toFixed(2)}s`).join(", ")}; falls ${nFalls}; ` +
+        `Romeo rec err n=${s.n} median=${s.median.toFixed(3)} p95=${s.p95.toFixed(3)} max=${s.max.toFixed(2)} large(>${KNOT_LARGE_ERR})=${large} ` +
+        `state mismatches ${R.game.recStateErrors - st0}; rtt=${R.game.rtt.toFixed(1)}ms`,
+    );
+    check(
+      "knot: every bot takes off over the crossing (server snapshots show it airborne)",
+      field.every((b) => flew.has(b.game.you)),
+      `airborne: ${[...flew].map(name).join(", ") || "-"}`,
+    );
+    check(`knot: at most ${KNOT_FALLS_MAX} falls over the field`, nFalls <= KNOT_FALLS_MAX, [...falls].map(([id, n]) => `${name(id)} ${n}`).join(", ") || "none");
+    check("knot: every car stays on its own road (no snap onto the other pass)", samples > 500 && offTrack === 0, `${offTrack} of ${samples} samples off`);
+    check(
+      `knot: lagged bot median reconciliation error < 0.5 and at most ${KNOT_LARGE_MAX} errors > ${KNOT_LARGE_ERR} (count, not max)`,
+      s.n > 500 && s.median < 0.5 && large <= KNOT_LARGE_MAX,
+      `median ${s.median.toFixed(3)}, ${large} large of ${s.n}, max ${s.max.toFixed(2)}`,
+    );
+  } finally {
+    Q.afterStep = null;
+    for (const b of field) b.game.leave();
   }
 }
 
