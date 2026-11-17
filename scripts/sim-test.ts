@@ -58,7 +58,7 @@ class Sim {
   tickNo = 0;
 
   constructor(laps = 1, hp?: number) {
-    this.room = new Room("TEST", track, laps, hp);
+    this.room = new Room("TEST", laps, hp); // the default track: Rust Bowl, as `track` above
   }
 
   add(name: string): Player {
@@ -1088,7 +1088,148 @@ function engine(): void {
   );
 }
 
-for (const t of [rivets, gating, mines, wrecks, finishing, garage, armDelay, engine, readyCheck, collisions]) {
+// ---- per-room track (M3-T2) ----------------------------------------------------------
+
+// This section's imports (hoisted like the ones at the top).
+import { gridSlot, queryTrack, type Track } from "../shared/track";
+import { DEFAULT_TRACK_ID, registerTestTrack, trackById } from "../shared/tracks";
+
+/** Sim.place on any track (Sim.place uses the default track). */
+function placeOn(t: Track, p: Player, s: number, lateral = 0, speed = 0): void {
+  const pt = pointAt(t, s);
+  const x = pt.x - Math.sin(pt.h) * lateral;
+  const y = pt.y + Math.cos(pt.h) * lateral;
+  p.car = { x, y, h: pt.h, vx: Math.cos(pt.h) * speed, vy: Math.sin(pt.h) * speed, seg: pt.seg, wreck: 0 };
+  p.progress = { s: queryTrackNear(t, x, y, pt.seg).s, cp: 1, lap: 0, fin: 0 };
+}
+
+function roomTrack(): void {
+  // A second track for this test only (the shipped registry has one), far away from Rust
+  // Bowl: a car, a shot or a lap on it cannot pass by accident on the default track.
+  const LOOP = "test-loop";
+  const loopDef: TrackDef = {
+    name: "Test Loop",
+    control: [[5000, 400], [5600, 400], [6050, 650], [6050, 1250], [5600, 1500], [4600, 1500], [4150, 1250], [4150, 650], [4500, 400]],
+    halfWidth: 64,
+    verge: 44,
+  };
+  registerTestTrack(LOOP, loopDef.name, loopDef);
+  const loop = trackById(LOOP);
+  const rust = trackById(DEFAULT_TRACK_ID);
+  check("track: the test loop is nowhere near Rust Bowl", loop.pts.every((q) => queryTrack(rust, q.x, q.y).dist > 4 * rust.wall));
+
+  // A new room: the default track, built from the registry, in the room message.
+  const sim = new Sim();
+  const a = sim.add("A");
+  const b = sim.add("B");
+  const c = sim.add("C");
+  check(
+    "track: a new room races on rust-bowl from the registry; the room message says so",
+    sim.room.trackId === DEFAULT_TRACK_ID && sim.room.track === rust && [a, b, c].every((p) => sim.lastRoom(p)?.trackId === DEFAULT_TRACK_ID),
+  );
+
+  // Host only; unknown ids refused; the current track again changes nothing.
+  sim.room.setReady(b, true);
+  sim.room.setReady(c, true);
+  let e = sim.room.setTrack(b, LOOP);
+  check("track: refused from a non-host", e === "Only the host can pick the track" && sim.room.trackId === DEFAULT_TRACK_ID && b.ready, e ?? "");
+  const bad: unknown[] = ["no-such-track", "", "RUST-BOWL", " rust-bowl", "__proto__", "toString", 7, null, undefined, {}, ["rust-bowl"]];
+  const refusals = bad.map((id) => sim.room.setTrack(a, id));
+  check(
+    "track: unknown ids refused (also non-strings and object keys)",
+    refusals.every((x) => x === "Unknown track") && sim.room.trackId === DEFAULT_TRACK_ID && sim.room.track === rust && b.ready && c.ready,
+    refusals.join(", "),
+  );
+  const nMsgs = sim.conns.get(b.id)!.msgs.length;
+  e = sim.room.setTrack(a, DEFAULT_TRACK_ID);
+  check("track: picking the current track keeps ready and sends nothing", e === null && b.ready && c.ready && sim.conns.get(b.id)!.msgs.length === nMsgs);
+
+  // The switch: everyone hears the new trackId and readies again.
+  e = sim.room.setTrack(a, LOOP);
+  check(
+    "track: the host switches in the lobby; every room message carries the new trackId",
+    e === null && sim.room.trackId === LOOP && sim.room.track === loop && [a, b, c].every((p) => sim.lastRoom(p)?.trackId === LOOP),
+    e ?? "",
+  );
+  check("track: the switch resets everyone's ready flag", !b.ready && !c.ready && sim.lastRoom(a)!.players.every((p) => !p.ready));
+  e = sim.room.start(a, sim.now);
+  check("track: Start waits for everyone again after a switch", e === "Waiting for 2 players to get ready", e ?? "");
+
+  // Rejoin and a fresh joiner both get the room's track.
+  sim.room.unbind(c, sim.now);
+  sim.rebind(c);
+  const d = sim.add("D");
+  check("track: a rejoin and a new joiner get trackId in their room message", sim.lastRoom(c)?.trackId === LOOP && sim.lastRoom(d)?.trackId === LOOP);
+
+  // Race on it: the grid, walls, shots and laps are the test loop's.
+  sim.startRace(a);
+  const racers = [a, b, c, d];
+  const onGrid = racers.every((p) => [0, 1, 2, 3].some((slot) => {
+    const g = gridSlot(loop, slot);
+    return Math.hypot(p.car!.x - g.x, p.car!.y - g.y) < 1e-6;
+  }));
+  check("track: the race starts on the test loop's grid", onGrid, racers.map((p) => `${p.car!.x.toFixed(0)},${p.car!.y.toFixed(0)}`).join(" "));
+  e = sim.room.setTrack(a, DEFAULT_TRACK_ID);
+  check("track: refused outside the lobby (racing)", e === "The track can only be changed in the lobby" && sim.room.trackId === LOOP, e ?? "");
+
+  sim.armWeapons();
+  for (const [i, p] of racers.entries()) placeOn(loop, p, 2000 + i * 400, 0); // spread out, nobody in the line of fire
+  placeOn(loop, a, 100, 0); // the start straight
+  sim.run(1, (p) => (p === a ? { buttons: sim.rivet(a) } : {}));
+  sim.run(10);
+  check("track: a rivet flies along the test loop (combat uses the room's track)", sim.room.combat.shots.length === 1, `${sim.room.combat.shots.length} shots`);
+  sim.run(60);
+  placeOn(loop, a, 300, 0);
+  a.car!.h += Math.PI / 2;
+  sim.run(1, (p) => (p === a ? { buttons: sim.rivet(a) } : {}));
+  sim.run(1);
+  const fired = sim.room.combat.shots.length;
+  sim.run(12);
+  check("track: a rivet stops at the test loop's wall", fired === 1 && sim.room.combat.shots.length === 0, `fired=${fired}`);
+
+  for (const p of racers) {
+    placeOn(loop, p, loop.length - 40, 0, 300);
+    p.progress!.cp = 3;
+    sim.run(15, (q) => (q === p ? { throttle: 1 } : {}));
+  }
+  const finishes = sim.eventsOf("finish");
+  check(
+    "track: every car finishes its lap on the test loop",
+    finishes.length === 4 && racers.every((p) => p.progress!.fin > 0) && sim.room.phase === "results",
+    `${finishes.length} finishes, phase ${sim.room.phase}`,
+  );
+  e = sim.room.setTrack(a, DEFAULT_TRACK_ID);
+  check("track: refused outside the lobby (results)", e === "The track can only be changed in the lobby", e ?? "");
+  const phase = (): string => sim.room.phase; // not narrowed by the check above
+  while (phase() !== "lobby") sim.run(1);
+  check("track: the room stays on its track after a race", sim.room.trackId === LOOP && sim.lastRoom(b)?.trackId === LOOP);
+
+  // The same through the message handler.
+  const rooms = new Rooms(1);
+  const conn1 = new FakeConn();
+  const conn2 = new FakeConn();
+  const s1: Session = { conn: conn1, room: null, player: null };
+  const s2: Session = { conn: conn2, room: null, player: null };
+  rooms.onMessage(s1, { t: "create", name: "W1" }, 1000);
+  rooms.onMessage(s2, { t: "join", code: s1.room!.code, name: "W2" }, 1000);
+  const room = s1.room!;
+  const lastErr = (cn: FakeConn) => (cn.msgs.filter((m) => m.t === "err").pop() as Extract<ServerMsg, { t: "err" }> | undefined)?.msg;
+  const lastRoom = (cn: FakeConn) => cn.msgs.filter((m) => m.t === "room").pop() as Extract<ServerMsg, { t: "room" }> | undefined;
+  check("wire: a created room is on the default track", room.trackId === DEFAULT_TRACK_ID && lastRoom(conn2)?.trackId === DEFAULT_TRACK_ID);
+  rooms.onMessage(s2, { t: "ready", ready: true }, 1000);
+  rooms.onMessage(s2, { t: "track", id: LOOP }, 1000);
+  check("wire: {t:'track'} from a non-host is refused", lastErr(conn2) === "Only the host can pick the track" && room.trackId === DEFAULT_TRACK_ID, lastErr(conn2));
+  rooms.onMessage(s1, { t: "track", id: "nope" }, 1000);
+  rooms.onMessage(s1, { t: "track" } as unknown as ClientMsg, 1000);
+  check("wire: unknown or missing id is refused", lastErr(conn1) === "Unknown track" && room.trackId === DEFAULT_TRACK_ID, lastErr(conn1));
+  rooms.onMessage(s1, { t: "track", id: LOOP }, 1000);
+  check(
+    "wire: the host's {t:'track'} switches; both get trackId and the ready flag drops",
+    room.trackId === LOOP && lastRoom(conn1)?.trackId === LOOP && lastRoom(conn2)?.trackId === LOOP && !s2.player!.ready,
+  );
+}
+
+for (const t of [rivets, gating, mines, wrecks, finishing, garage, armDelay, engine, readyCheck, collisions, roomTrack]) {
   console.log(`\n# ${t.name}`);
   try {
     t();
