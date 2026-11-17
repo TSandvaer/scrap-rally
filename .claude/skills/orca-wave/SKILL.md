@@ -81,8 +81,9 @@ STEP 2 (ship): `npm run check` and `npm test` green. Commit in small commits (en
 STEP 3: worker_done with --outcome succeeded|failed, a 3-sentence summary, branch name, head
   SHA, per-criterion evidence, what you did NOT test, and --files-modified. Then stop.
 RULES: never fabricate values; `npm run dev`/`npm start` only on PORT=<3001|3002> (3000 is the
-  user's; `npm test` uses free ports itself); agent-browser sessions named after your slug;
-  keep the game original.
+  user's; `npm test` uses free ports itself); stop only processes you started, by PID, never
+  pkill/killall by pattern (it kills the user's dev server); agent-browser sessions named after
+  your slug; keep the game original.
 ```
 
 ## 3. Supervise

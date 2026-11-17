@@ -1,6 +1,6 @@
-// Track registry: every track a room can race on, by id. The server builds a room's track
-// from here and the client builds the same one from the room's trackId, so both sides run
-// the same geometry. Add a track by adding one entry to SHIPPED.
+// Track registry: every track a room can race on, by TrackDef.id. The server builds a room's
+// track from here and the client builds the same one from the room's trackId, so both sides
+// run the same geometry. Add a track by adding its TrackDef (with an id) to SHIPPED.
 
 import { buildTrack, RUST_BOWL, type Track, type TrackDef } from "./track";
 
@@ -12,9 +12,14 @@ export interface TrackEntry {
 
 export const DEFAULT_TRACK_ID = "rust-bowl";
 
-const SHIPPED: TrackEntry[] = [{ id: DEFAULT_TRACK_ID, name: RUST_BOWL.name, def: RUST_BOWL }];
+const SHIPPED: TrackDef[] = [RUST_BOWL];
 
-const entries = new Map<string, TrackEntry>(SHIPPED.map((e) => [e.id, e]));
+function entryOf(def: TrackDef): TrackEntry {
+  if (!def.id) throw new Error(`Track ${def.name} has no id`);
+  return { id: def.id, name: def.name, def };
+}
+
+const entries = new Map<string, TrackEntry>(SHIPPED.map(entryOf).map((e) => [e.id, e]));
 const built = new Map<string, Track>(); // built once per id; a Track is never mutated
 
 /** Every selectable track, in lobby order. */
@@ -51,10 +56,11 @@ export function trackById(id: string): Track {
 }
 
 /**
- * Tests only: add a track to the registry of this process (an in-process server and its
- * bots see it too). The shipped registry is SHIPPED above.
+ * Tests only: add a track (by its def.id) to the registry of this process (an in-process
+ * server and its bots see it too). The shipped registry is SHIPPED above.
  */
-export function registerTestTrack(id: string, name: string, def: TrackDef): void {
-  if (entries.has(id)) throw new Error(`Track ${id} is already registered`);
-  entries.set(id, { id, name, def });
+export function registerTestTrack(def: TrackDef): void {
+  const e = entryOf(def);
+  if (entries.has(e.id)) throw new Error(`Track ${e.id} is already registered`);
+  entries.set(e.id, e);
 }

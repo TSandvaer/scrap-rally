@@ -36,12 +36,13 @@ const track = trackById(DEFAULT_TRACK_ID);
 // away from it, so a car on it cannot be on Rust Bowl too.
 const TEST_TRACK_ID = "test-loop";
 const TEST_LOOP: TrackDef = {
+  id: TEST_TRACK_ID,
   name: "Test Loop",
   control: [[5000, 400], [5600, 400], [6050, 650], [6050, 1250], [5600, 1500], [4600, 1500], [4150, 1250], [4150, 650], [4500, 400]],
   halfWidth: 64,
   verge: 44,
 };
-registerTestTrack(TEST_TRACK_ID, TEST_LOOP.name, TEST_LOOP);
+registerTestTrack(TEST_LOOP);
 
 // ---- tiny assertion log -------------------------------------------------------------
 

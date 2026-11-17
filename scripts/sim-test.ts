@@ -25,6 +25,18 @@ import { CAR_RESTITUTION, capsuleGap, carContact, collideCarOneSided, collideCar
 import type { CarSnap } from "../shared/protocol";
 import { Contacts, drawnPose, IMPACT_MIN_SPEED, PREDICT_MAX_MS, predicted } from "../client/contact";
 import { JerkMeter } from "../client/jerk";
+import { angleDiff, clamp } from "../shared/physics";
+import { LIP_ZONE, queryTrack, recoveryAt, validateTrack, type Track } from "../shared/track";
+import {
+  airHeight,
+  airTicksFor,
+  FALL_TICKS,
+  MIN_TAKEOFF_SPEED,
+  NO_COMMAND,
+  validateRunUps,
+  wreckCar,
+  type RaceStepEvent,
+} from "../shared/weapons";
 
 const track = buildTrack(RUST_BOWL);
 const L = track.length;
@@ -1088,11 +1100,395 @@ function engine(): void {
   );
 }
 
+// ---- M3-T1a: track features, jumps, falls, recovery, track validation ------------------
+// Pure shared code on small synthetic tracks (no Room): stepRaceCar, validateTrack and
+// validateRunUps. Lateral offsets are + = right of travel; on the test straight (heading
+// +x) that is +y.
+
+/** The test straight (as in the engine test): x = 1000..11000 lies exactly on y = 0. */
+const JUMPS_BASE: TrackDef = {
+  id: "test-jumps",
+  name: "Test Jumps",
+  control: [...Array.from({ length: 13 }, (_, i): [number, number] => [i * 1000, 0]), [12000, 3000], [0, 3000]],
+  halfWidth: 64,
+  verge: 44,
+};
+
+function trackFeatures(): void {
+  const plain = buildTrack(JUMPS_BASE);
+  const sx = (x: number) => queryTrack(plain, x, 0).s; // s of a point on the straight
+  // A ramp ending at x = 2500 straight into a 200-unit gap, a hole at x = 4000 on the
+  // centerline, recovery points at the start line, x = 2000 (before the jump) and 3500.
+  const jumpsDef = (gapLen = 200, recovery = [0, sx(2000), sx(3500)]): TrackDef => ({
+    ...JUMPS_BASE,
+    features: [
+      { k: "ramp", s: sx(2400), len: 100 },
+      { k: "gap", s0: sx(2500), s1: sx(2500 + gapLen) },
+      { k: "hole", s: sx(4000), lat: 0, r: 30 },
+    ],
+    recovery,
+  });
+  const jt = buildTrack(jumpsDef());
+  const carAt = (t: Track, x: number, y: number, speed: number, h = 0): CarState => ({
+    x, y, h, vx: Math.cos(h) * speed, vy: Math.sin(h) * speed, seg: queryTrack(t, x, y).seg, wreck: 0, air: 0, fall: 0,
+  });
+  type Ev = { i: number; ev: RaceStepEvent; x: number; y: number; v: number };
+  /** Step n ticks; returns the events with the pose after the step and the speed before it. */
+  const run = (t: Track, c: CarState, n: number, input = { throttle: 1, steer: 0 }, until?: (e: Ev) => boolean) => {
+    const evs: Ev[] = [];
+    for (let i = 0; i < n; i++) {
+      const v = speedOf(c);
+      const ev = stepRaceCar(c, input, BASE_STATS, t);
+      if (ev) {
+        const e = { i, ev, x: c.x, y: c.y, v };
+        evs.push(e);
+        if (until?.(e)) break;
+      }
+    }
+    return evs;
+  };
+  const kinds = (evs: Ev[]) => evs.map((e) => e.ev).join(",");
+  const lipStart = 2500; // the ramp's end, in x
+
+  // 1. A full-throttle run from rest at the recovery point clears the jump.
+  {
+    const c = carAt(jt, 2000, 0, 0);
+    const evs = run(jt, c, 200, undefined, (e) => e.ev === "takeoff");
+    const off = evs[0];
+    const air0 = c.air!;
+    const frozen = { vx: c.vx, vy: c.vy, h: c.h };
+    // Committed flight: a twin fed full brake and full lock flies exactly the same.
+    const twin = cloneCar(c);
+    let same = true, frozenOk = true, peak = 0;
+    let ticks = 0;
+    while (c.air! > 0 && ticks < 200) {
+      stepRaceCar(c, { throttle: 1, steer: 0 }, BASE_STATS, jt);
+      stepRaceCar(twin, { throttle: -1, steer: 1 }, BASE_STATS, jt);
+      ticks++;
+      peak = Math.max(peak, airHeight(c));
+      same &&= c.x === twin.x && c.y === twin.y && c.h === twin.h && c.vx === twin.vx && c.air === twin.air;
+      frozenOk &&= c.vx === frozen.vx && c.vy === frozen.vy && c.h === frozen.h;
+    }
+    const landX = c.x;
+    const q = queryTrackNear(jt, c.x, c.y, c.seg);
+    check(
+      "jump: full throttle from rest at the recovery point takes off in the lip zone",
+      evs.length === 1 && off.ev === "takeoff" && off.x >= lipStart && off.x < lipStart + LIP_ZONE + 8 && off.v >= MIN_TAKEOFF_SPEED,
+      `take-off after ${off?.i} ticks at x=${off?.x.toFixed(1)}, ${off?.v.toFixed(1)} u/s`,
+    );
+    check(
+      "jump: air time = airTicksFor(speed); the car flies that many ticks",
+      air0 === airTicksFor(speedOf(c)) - 1 && ticks === air0,
+      `air ${air0 + 1} ticks for ${speedOf(c).toFixed(1)} u/s`,
+    );
+    check("jump: committed flight (velocity and heading frozen, input ignored)", same && frozenOk && ticks > 0);
+    check("jump: airHeight rises to ~1 mid-flight and is 0 on the ground", peak > 0.95 && peak <= 1 && airHeight(c) === 0, `peak ${peak.toFixed(3)}`);
+    const after = run(jt, c, 60);
+    check(
+      "jump: lands on the road past the gap and drives on",
+      landX > 2700 && q.dist <= jt.def.halfWidth && c.fall === 0 && after.length === 0 && speedOf(c) > 300,
+      `landed at x=${landX.toFixed(1)}, ${q.dist.toFixed(2)} from the centerline`,
+    );
+  }
+
+  // 2. Just over the minimum speed: takes off, falls short into the gap.
+  let fallX = 0;
+  {
+    const c = carAt(jt, 2490, 0, MIN_TAKEOFF_SPEED + 20);
+    const evs = run(jt, c, 120, undefined, (e) => e.ev === "fall");
+    fallX = evs[1]?.x ?? 0;
+    check(
+      "jump: just over the minimum speed it takes off and falls short",
+      kinds(evs) === "takeoff,fall" && fallX > 2500 && fallX < 2700 && c.fall === FALL_TICKS && c.air === 0 && c.vx === 0 && c.vy === 0,
+      `${kinds(evs)} at x=${fallX.toFixed(1)}`,
+    );
+    // Fall timing and the recovery point.
+    const at = { x: c.x, y: c.y };
+    let still = true, ticks = 0, ev: RaceStepEvent | null = null;
+    const counts: number[] = [];
+    while (!ev && ticks < 200) {
+      ev = stepRaceCar(c, { throttle: 1, steer: 1 }, BASE_STATS, jt);
+      ticks++;
+      if (!ev) {
+        counts.push(c.fall!);
+        still &&= c.x === at.x && c.y === at.y && c.vx === 0 && c.vy === 0;
+      }
+    }
+    const rec = pointAt(jt, sx(2000));
+    check(
+      "fall: frozen for FALL_TICKS ticks, then 'recover'",
+      ev === "recover" && ticks === FALL_TICKS && still && counts[0] === FALL_TICKS - 1 && counts[counts.length - 1] === 1,
+      `recovered after ${ticks} ticks`,
+    );
+    check(
+      "fall: placed at the last recovery point before it, facing along the track, speed 0",
+      Math.abs(c.x - rec.x) < 1e-9 && Math.abs(c.y - rec.y) < 1e-9 && c.h === rec.h && c.vx === 0 && c.vy === 0 && c.air === 0 && c.fall === 0 && c.seg === rec.seg,
+      `at x=${c.x.toFixed(1)} y=${c.y.toFixed(2)} h=${c.h.toFixed(3)}`,
+    );
+  }
+
+  // 3. Too slow at the lip: rolls off the end into the gap (no take-off).
+  {
+    const c = carAt(jt, 2470, 0, 100);
+    const evs = run(jt, c, 120, undefined, (e) => e.ev === "fall");
+    check(
+      "jump: below the minimum speed it rolls off the ramp into the gap",
+      kinds(evs) === "fall" && evs[0].x >= 2500 && evs[0].x < 2520 && evs[0].v < MIN_TAKEOFF_SPEED,
+      `${kinds(evs)} at x=${evs[0]?.x.toFixed(1)}, ${evs[0]?.v.toFixed(1)} u/s`,
+    );
+    // Level-triggered: a fast car already inside the lip zone takes off on its next step;
+    // the same car moving backward through it does not.
+    const fwd = carAt(jt, 2503, 0, 300);
+    const back = carAt(jt, 2503, 0, 300, Math.PI);
+    const ef = stepRaceCar(fwd, NO_COMMAND, BASE_STATS, jt), eb = stepRaceCar(back, NO_COMMAND, BASE_STATS, jt);
+    check("jump: take-off is level-triggered in the lip zone, forward only", ef === "takeoff" && eb === "fall", `forward ${ef}, backward ${eb}`);
+  }
+
+  // 4. Holes.
+  {
+    const inLine = carAt(jt, 3800, 0, 200);
+    const e1 = run(jt, inLine, 120, { throttle: 0.5, steer: 0 }, (e) => e.ev === "fall");
+    const beside = carAt(jt, 3800, 45, 200);
+    const e2 = run(jt, beside, 120, { throttle: 0.5, steer: 0 });
+    check(
+      "hole: a grounded car whose centre enters the pit falls",
+      kinds(e1) === "fall" && Math.hypot(e1[0].x - 4000, e1[0].y) < 30,
+      `fell at x=${e1[0]?.x.toFixed(1)}`,
+    );
+    check("hole: a car passing beside it (45 off the line) drives on", e2.length === 0 && beside.x > 4100, `x=${beside.x.toFixed(0)} y=${beside.y.toFixed(1)}`);
+  }
+
+  // 5. Lost: no global snap; further than 2 * wall from its own section = falls.
+  {
+    const c = carAt(jt, 6000, 0, 0);
+    c.y = 2 * jt.wall + 10;
+    const q = queryTrackNear(jt, c.x, c.y, c.seg);
+    const ev = stepRaceCar(c, { throttle: 1, steer: 0 }, BASE_STATS, jt);
+    check("lost: > 2 * wall from its own section falls", ev === "fall" && c.fall === FALL_TICKS && Math.abs(q.dist - (2 * jt.wall + 10)) < 1e-6, `dist ${q.dist.toFixed(1)}`);
+    // A sideways jump that lands beyond the walls falls.
+    const side = carAt(jt, 2503, 0, 380, 0.5);
+    const evs = run(jt, side, 100, undefined, (e) => e.ev === "fall");
+    check("lost: a jump that lands outside the walls falls", kinds(evs) === "takeoff,fall" && Math.abs(evs[1].y) > jt.wall, `landed y=${evs[1]?.y.toFixed(1)}`);
+  }
+
+  // 6. Recovery point choice, wrapping to the last point of the lap before.
+  {
+    const wrapT = buildTrack(jumpsDef(200, [sx(3500), sx(2000)]));
+    const rs = [recoveryAt(jt, sx(2600)), recoveryAt(jt, sx(2000)), recoveryAt(jt, sx(1999)), recoveryAt(jt, sx(5000)), recoveryAt(jt, jt.length - 1)];
+    check(
+      "recovery: last point at or before s",
+      rs[0] === sx(2000) && rs[1] === sx(2000) && rs[2] === 0 && rs[3] === sx(3500) && rs[4] === sx(3500),
+      rs.map((r) => r.toFixed(1)).join(" "),
+    );
+    const c = carAt(wrapT, 1500, 0, 0);
+    c.y = 300; // lost before the first recovery point
+    const evs = run(wrapT, c, FALL_TICKS + 5, undefined, (e) => e.ev === "recover");
+    const p = pointAt(wrapT, sx(3500));
+    check(
+      "recovery: before the first point it wraps to the last one (defs need not list s = 0)",
+      kinds(evs) === "fall,recover" && wrapT.recovery[0] === sx(2000) && Math.abs(c.x - p.x) < 1e-9 && Math.abs(c.y - p.y) < 1e-9,
+      `${kinds(evs)}, recovered at x=${c.x.toFixed(1)}`,
+    );
+  }
+
+  // 7. Precedence: wreck > fall > air > drive.
+  {
+    const c = carAt(jt, 3000, 0, 0);
+    c.wreck = 3;
+    c.fall = 50;
+    c.air = 10;
+    const ev = stepRaceCar(c, { throttle: 1, steer: 0 }, BASE_STATS, jt);
+    check("precedence: a wreck beats fall and air (only the wreck counts down)", ev === null && c.wreck === 2 && c.fall === 50 && c.air === 10 && c.x === 3000);
+    stepRaceCar(c, { throttle: 1, steer: 0 }, BASE_STATS, jt);
+    stepRaceCar(c, { throttle: 1, steer: 0 }, BASE_STATS, jt);
+    check("precedence: the respawn clears fall and air", c.wreck === 0 && c.fall === 0 && c.air === 0 && Math.abs(c.y) < 1e-9);
+    const f = carAt(jt, 3000, 0, 200);
+    f.fall = 10;
+    f.air = 10;
+    const e2 = stepRaceCar(f, { throttle: 1, steer: 0 }, BASE_STATS, jt);
+    check("precedence: a fall beats air (frozen, no flight)", e2 === null && f.fall === 9 && f.air === 10 && f.x === 3000 && f.vx === 0);
+    // A wreck respawn over a gap goes to the recovery point; on the road it stays put.
+    const w = carAt(jt, 2600, 0, 0);
+    wreckCar(w);
+    for (let i = 0; i < WRECK_TICKS; i++) stepRaceCar(w, NO_COMMAND, BASE_STATS, jt);
+    const rec = pointAt(jt, sx(2000));
+    const r = carAt(jt, 3000, 20, 0);
+    wreckCar(r);
+    for (let i = 0; i < WRECK_TICKS; i++) stepRaceCar(r, NO_COMMAND, BASE_STATS, jt);
+    check(
+      "wreck respawn onto a gap goes to the recovery point",
+      w.wreck === 0 && Math.abs(w.x - rec.x) < 1e-9 && Math.abs(r.x - 3000) < 1e-6 && Math.abs(r.y) < 1e-9,
+      `gap wreck -> x=${w.x.toFixed(1)}, road wreck -> x=${r.x.toFixed(1)}`,
+    );
+    const a = carAt(jt, 2503, 0, 300);
+    stepRaceCar(a, NO_COMMAND, BASE_STATS, jt);
+    const wasAir = a.air!;
+    wreckCar(a);
+    check("wreckCar ends a jump or a fall", wasAir > 0 && a.air === 0 && a.fall === 0 && a.wreck === WRECK_TICKS);
+  }
+
+  // 8. Prediction parity: a clone taken at any tick and stepped with the same inputs gives
+  // exactly the reference states (take-off, flight, landing, fall, recovery).
+  {
+    const ref = carAt(jt, 2000, 0, 0);
+    const inputs: { throttle: number; steer: number }[] = [];
+    const states: CarState[] = [cloneCar(ref)];
+    const evs: RaceStepEvent[] = [];
+    for (let i = 0; i < 800; i++) {
+      // Drive the jump, then brake back and roll the wrong way into the gap.
+      const inp = i < 200 ? { throttle: 1, steer: Math.sin(i / 30) * 0.05 } : { throttle: -1, steer: 0 };
+      inputs.push(inp);
+      const ev = stepRaceCar(ref, inp, BASE_STATS, jt);
+      if (ev) evs.push(ev);
+      states.push(cloneCar(ref));
+    }
+    const fields = ["x", "y", "h", "vx", "vy", "seg", "wreck", "air", "fall"] as const;
+    let mismatches = 0, starts = 0;
+    for (let k = 0; k < inputs.length; k += 7) {
+      const c = cloneCar(states[k]);
+      starts++;
+      for (let i = k; i < inputs.length; i++) {
+        stepRaceCar(c, inputs[i], BASE_STATS, jt);
+        if (fields.some((f) => c[f] !== states[i + 1][f])) mismatches++;
+      }
+    }
+    check(
+      "prediction parity: stepRaceCar on a clone == reference run through jump, fall and recovery",
+      mismatches === 0 && evs.includes("takeoff") && evs.includes("fall") && evs.includes("recover"),
+      `${starts} clones, events ${evs.join(",")}, ${mismatches} mismatches`,
+    );
+    const src: CarState = { x: 1, y: 2, h: 3, vx: 4, vy: 5, seg: 6, wreck: 0, air: 7, fall: 8 };
+    const cl = cloneCar(src);
+    check("cloneCar copies air and fall", cl.air === 7 && cl.fall === 8 && cl !== src);
+  }
+
+  // 9. A crossing: a figure-eight whose upper pass jumps over the lower road.
+  const N = 16, A = 2400;
+  const eightBase: TrackDef = {
+    id: "test-eight",
+    name: "Test Eight",
+    halfWidth: 64,
+    verge: 44,
+    control: Array.from({ length: N }, (_, k): [number, number] => {
+      const t = Math.PI / 2 + (2 * Math.PI * k) / N;
+      return [Math.round(A * Math.sin(t)), Math.round(A * Math.sin(t) * Math.cos(t))];
+    }),
+  };
+  const e0 = buildTrack(eightBase);
+  const upperSeg = 64, lowerSeg = 192; // the two passes through the origin
+  const sUp = queryTrackNear(e0, 0, 0, upperSeg).s;
+  const eightDef = (half: number, runUp = 400): TrackDef => ({
+    ...eightBase,
+    features: [
+      { k: "ramp", s: sUp - half - 60, len: 60 },
+      { k: "gap", s0: sUp - half, s1: sUp + half },
+    ],
+    recovery: [0, sUp - half - 60 - runUp],
+  });
+  {
+    const plainErr = validateTrack(e0);
+    const shortErr = validateTrack(buildTrack(eightDef(60)));
+    const good = buildTrack(eightDef(125));
+    const goodErr = validateTrack(good);
+    check("validation: a crossing without a gap is caught", plainErr.some((e) => e.includes("ground corridors overlap")), plainErr[0]);
+    check("validation: a crossing whose gap is too short is caught", shortErr.some((e) => e.includes("ground corridors overlap")), shortErr[0]);
+    check("validation: a crossing covered by a 250-unit gap validates", goodErr.length === 0, goodErr.join("; "));
+    const runUps = validateRunUps(good);
+    const tooShort = validateRunUps(buildTrack(eightDef(125, 200)));
+    check("run-up: the crossing jump can be made from its recovery point", runUps.length === 0, runUps.join("; "));
+    check("run-up: a 200-unit run-up to the crossing jump is caught", tooShort.length === 1 && tooShort[0].includes("lands short"), tooShort[0]);
+
+    // Jump over the lower road: the car keeps its own section all the way (no snap).
+    const rec = pointAt(good, good.recovery[1]);
+    const c: CarState = { x: rec.x, y: rec.y, h: rec.h, vx: 0, vy: 0, seg: rec.seg, wreck: 0, air: 0, fall: 0 };
+    const segs: number[] = [];
+    const evs: RaceStepEvent[] = [];
+    for (let i = 0; i < 300; i++) {
+      const q = queryTrackNear(good, c.x, c.y, c.seg);
+      const t = pointAt(good, q.s + 60 + speedOf(c) * 0.25);
+      const steer = clamp(angleDiff(c.h, Math.atan2(t.y - c.y, t.x - c.x)) * 2.2, -1, 1);
+      const ev = stepRaceCar(c, { throttle: 1, steer }, BASE_STATS, good);
+      if (ev) evs.push(ev);
+      if (c.air! > 0) segs.push(c.seg);
+    }
+    const n = good.pts.length;
+    const cyc = (a: number, b: number) => Math.min(Math.abs(a - b), n - Math.abs(a - b));
+    const passedOver = segs.some((s) => cyc(s, upperSeg) <= 1);
+    check(
+      "crossing: a car jumping over the lower road keeps its own section and lands beyond",
+      evs.join(",") === "takeoff" && passedOver && segs.every((s) => cyc(s, upperSeg) < 12) && cyc(c.seg, lowerSeg) > 40,
+      `events ${evs.join(",")}, flight segs ${segs[0]}..${segs[segs.length - 1]}`,
+    );
+    // No global fallback: a point on the lower road, searched around a hint on the upper
+    // section, stays on the upper section (lost) instead of snapping onto the lower road.
+    const lowPt = pointAt(good, queryTrackNear(good, 0, 0, lowerSeg).s + 400);
+    const qLow = queryTrackNear(good, lowPt.x, lowPt.y, upperSeg);
+    check(
+      "queryTrackNear never snaps to another section (no global fallback)",
+      cyc(qLow.seg, upperSeg) <= 13 && qLow.dist > 2 * good.wall && queryTrack(good, lowPt.x, lowPt.y).dist < 1e-6,
+      `seg ${qLow.seg}, dist ${qLow.dist.toFixed(1)}`,
+    );
+    // The lower road runs under the gap: a car on it drives straight through.
+    const lp = pointAt(good, queryTrackNear(good, 0, 0, lowerSeg).s - 300);
+    const d: CarState = { x: lp.x, y: lp.y, h: lp.h, vx: Math.cos(lp.h) * 250, vy: Math.sin(lp.h) * 250, seg: lp.seg, wreck: 0, air: 0, fall: 0 };
+    const devs: RaceStepEvent[] = [];
+    const dsegs: number[] = [];
+    for (let i = 0; i < 150; i++) {
+      const q = queryTrackNear(good, d.x, d.y, d.seg);
+      const t = pointAt(good, q.s + 60 + speedOf(d) * 0.25);
+      const ev = stepRaceCar(d, { throttle: 0.6, steer: clamp(angleDiff(d.h, Math.atan2(t.y - d.y, t.x - d.x)) * 2.2, -1, 1) }, BASE_STATS, good);
+      if (ev) devs.push(ev);
+      dsegs.push(d.seg);
+    }
+    check(
+      "crossing: a car on the lower road drives under the gap without falling",
+      devs.length === 0 && dsegs.some((s) => cyc(s, lowerSeg) <= 1) && dsegs.every((s) => cyc(s, lowerSeg) < 20),
+      `events [${devs.join(",")}], segs ${dsegs[0]}..${dsegs[dsegs.length - 1]}`,
+    );
+  }
+
+  // 10. Validation: near sections must be far apart in segment index; start zone; recovery.
+  {
+    const clip = buildTrack({ name: "Test Clip", halfWidth: 64, verge: 44, control: [[0, 0], [3000, 0], [3000, 200], [0, 200]] });
+    const clipErr = validateTrack(clip);
+    check("validation: sections that come near within too few segment indices are caught", clipErr.some((e) => e.includes("segments apart")), clipErr.find((e) => e.includes("segments apart")));
+    const L = plain.length;
+    const grid = validateTrack(buildTrack({ ...jumpsDef(), features: [...jumpsDef().features!, { k: "hole", s: L - 150, lat: 0, r: 20 }] }));
+    const start = validateTrack(buildTrack({ ...jumpsDef(), features: [...jumpsDef().features!, { k: "ramp", s: 120, len: 60 }] }));
+    check("validation: a feature in the grid zone is caught", grid.length === 1 && grid[0].includes("start zone"), grid.join("; "));
+    check("validation: a feature on the start straight is caught", start.length === 1 && start[0].includes("start zone"), start.join("; "));
+    const badRec = validateTrack(buildTrack(jumpsDef(200, [0, sx(2600)])));
+    check("validation: a recovery point inside a gap is caught", badRec.length === 1 && badRec[0].includes("recovery point"), badRec.join("; "));
+    const okErr = validateTrack(jt);
+    check("validation: the jump test track validates", okErr.length === 0, okErr.join("; "));
+  }
+
+  // 11. The run-up validator.
+  {
+    const ok = validateRunUps(jt);
+    const long = validateRunUps(buildTrack(jumpsDef(300)));
+    const slow = validateRunUps(buildTrack(jumpsDef(200, [0, sx(2470), sx(3500)])));
+    check("run-up: every recovery point of the jump test track gets past its hazard", ok.length === 0, ok.join("; "));
+    check("run-up: an impossible jump (300-unit gap after a 500-unit run-up) is caught", long.length === 1 && long[0].includes("lands short"), long.join("; "));
+    check("run-up: a recovery point too close to the ramp to reach take-off speed is caught", slow.length === 1 && slow[0].includes("rolls into a gap"), slow.join("; "));
+  }
+
+  // 12. Rust Bowl: still valid, no features, behaviour unchanged (the tests above this section).
+  {
+    const errs = [...validateTrack(track), ...validateRunUps(track)];
+    check(
+      "Rust Bowl validates (no features, recovery = start line)",
+      errs.length === 0 && RUST_BOWL.id === "rust-bowl" && track.ramps.length + track.gaps.length + track.holes.length === 0 && track.recovery.join() === "0",
+      errs.join("; "),
+    );
+  }
+}
+
 // ---- per-room track (M3-T2) ----------------------------------------------------------
 
-// This section's imports (hoisted like the ones at the top).
-import { gridSlot, queryTrack, type Track } from "../shared/track";
-import { DEFAULT_TRACK_ID, registerTestTrack, trackById } from "../shared/tracks";
+// This section's imports (hoisted like the ones at the top; queryTrack and Track come from there).
+import { gridSlot } from "../shared/track";
+import { DEFAULT_TRACK_ID, registerTestTrack, trackById, trackList } from "../shared/tracks";
 
 /** Sim.place on any track (Sim.place uses the default track). */
 function placeOn(t: Track, p: Player, s: number, lateral = 0, speed = 0): void {
@@ -1108,15 +1504,24 @@ function roomTrack(): void {
   // Bowl: a car, a shot or a lap on it cannot pass by accident on the default track.
   const LOOP = "test-loop";
   const loopDef: TrackDef = {
+    id: LOOP,
     name: "Test Loop",
     control: [[5000, 400], [5600, 400], [6050, 650], [6050, 1250], [5600, 1500], [4600, 1500], [4150, 1250], [4150, 650], [4500, 400]],
     halfWidth: 64,
     verge: 44,
   };
-  registerTestTrack(LOOP, loopDef.name, loopDef);
+  registerTestTrack(loopDef);
   const loop = trackById(LOOP);
   const rust = trackById(DEFAULT_TRACK_ID);
   check("track: the test loop is nowhere near Rust Bowl", loop.pts.every((q) => queryTrack(rust, q.x, q.y).dist > 4 * rust.wall));
+  check(
+    "track: the registry ships rust-bowl only, keyed by TrackDef.id",
+    trackList().map((e) => e.id).join() === `${DEFAULT_TRACK_ID},${LOOP}` && rust.def === RUST_BOWL && trackList()[0].name === RUST_BOWL.name,
+    trackList().map((e) => e.id).join(),
+  );
+  // Every registered track (the shipped one and the test loop) passes T1a's validators.
+  const invalid = trackList().flatMap((e) => [...validateTrack(trackById(e.id)), ...validateRunUps(trackById(e.id))].map((m) => `${e.id}: ${m}`));
+  check("track: every registered track passes validateTrack and validateRunUps", invalid.length === 0, invalid.join("; "));
 
   // A new room: the default track, built from the registry, in the room message.
   const sim = new Sim();
@@ -1229,7 +1634,7 @@ function roomTrack(): void {
   );
 }
 
-for (const t of [rivets, gating, mines, wrecks, finishing, garage, armDelay, engine, readyCheck, collisions, roomTrack]) {
+for (const t of [rivets, gating, mines, wrecks, finishing, garage, armDelay, engine, readyCheck, collisions, trackFeatures, roomTrack]) {
   console.log(`\n# ${t.name}`);
   try {
     t();
