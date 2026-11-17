@@ -1,6 +1,14 @@
 # STATE — Scrap Rally coordination
 
-**Resume (2026-11-16, latest):** main 0dec6c9 (local, 15 ahead of origin) = ready check + engine
+**Resume (2026-11-17, latest):** local main 0060d31 (not pushed; origin/main 4f9ef51; live d912583) = ready check +
+engine + easier-start + solid collisions incl. the near-car fix (user approved at re-test with ?lag=80; collisions
+workspace removed). Milestone 3 wave 1 in flight on run `run_c58bb5836634`: M3-T1a ctx_0a4724b3a60b (workspace
+~/orca/workspaces/scrap-rally/m3-t1a, branch TSandvaer/m3-t1a, port 3001) and M3-T2 ctx_ed4c152e2a67 (workspace
+~/orca/workspaces/scrap-rally/m3-t2, branch TSandvaer/m3-t2, port 3002). File split: T2's registry goes in a new
+shared/tracks.ts (T1a owns shared/track.ts); both append their own scripts/sim-test.ts section, so the second to merge
+merges main first. Next: on worker_done verify, reviewer, merge; then M3-T1b + M3-T3. Ask before any push.
+
+**Resume (2026-11-16):** main 0dec6c9 (local, 15 ahead of origin) = ready check + engine
 (pushed 4f9ef51) + easier-start (merged locally, user-approved, reviews APPROVE). Deploys are batched:
 live is still d912583; ask before the next push. In flight on run `run_c58bb5836634`: dispatch
 `ctx_c8a5662fcae7` on ClickUp 123jpnbf6cy "Solid collisions" (workspace
@@ -45,8 +53,8 @@ Manual Deploy only on the user's go-ahead. The user's own dev server runs on :30
 
 | Ticket | Dispatch | Workspace | Branch | Port | Started |
 | --- | --- | --- | --- | --- | --- |
-| 123jpnbf6cy Solid collisions | ctx_c8a5662fcae7 | ~/orca/workspaces/scrap-rally/solid-collisions | TSandvaer/solid-collisions | 3002 | 2026-11-16 |
-| 123jpnbf6cy review of 0ca2619 | ctx_d881cd9c7151 (run run_3bffa6014793) | main checkout (read-only) | — | — | 2026-11-16 |
+| 123jpnbf6e6 M3-T1a | ctx_0a4724b3a60b | ~/orca/workspaces/scrap-rally/m3-t1a | TSandvaer/m3-t1a | 3001 | 2026-11-17 |
+| 123jpnbf6e7 M3-T2 | ctx_ed4c152e2a67 | ~/orca/workspaces/scrap-rally/m3-t2 | TSandvaer/m3-t2 | 3002 | 2026-11-17 |
 
 ## Queued (milestone 3, PLAN-M3.md; start after solid collisions 123jpnbf6cy and easier-start 123jpnbf3xa merge)
 
