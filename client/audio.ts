@@ -6,6 +6,7 @@
 // For sounds (SND-2): connect voices to `engine.buses.sfx`, reuse `engine.noise`, and play
 // only while `engine.running()` (nothing before the unlock, nothing while hidden).
 
+import { VIEW_W } from "./render";
 import { DEFAULT_SOUND, isMuteKey, parseSoundSettings, type SoundSettings } from "./soundlogic";
 
 const STORE_KEY = "scrap-rally:sound";
@@ -164,8 +165,16 @@ export class AudioEngine {
 
 // ---- speaker button, popover, M key ---------------------------------------------------
 
+const BUTTON_PX = 34; // .sound-btn (client/style.css)
+const EDGE_PX = 10; // from the screen edge when the button sits in a letterbox bar
+const MAP_LEFT = VIEW_W - 112; // the minimap's box in view pixels (client/render.ts minimap())
+const MAP_TOP = 4;
+const MAP_GAP_PX = 6; // between the button and the minimap
+
 export interface SoundControlEls {
-  root: HTMLElement; // holds the button and the popover
+  root: HTMLElement; // holds the button and the popover, placed by layout()
+  stage: HTMLElement; // root's positioned parent
+  view: HTMLCanvasElement; // the game view (the minimap is in its top right corner)
   button: HTMLButtonElement;
   pop: HTMLElement;
   music: HTMLInputElement; // range 0..100
@@ -177,7 +186,8 @@ export interface SoundControlEls {
  * The speaker button opens a popover with the music and effects sliders and a mute toggle;
  * M toggles mute anywhere but in a text field. Range inputs swallow the driving keys
  * (client/input.ts) and arrows move them, so every control gives its focus back after use,
- * and close() (at the countdown) drops it too.
+ * and close() (at the countdown) drops it too. The slider captions are not <label>s: a click
+ * on one would focus its slider with no pointerup or change to blur it.
  */
 export class SoundControls {
   constructor(
@@ -213,6 +223,34 @@ export class SoundControls {
     });
     engine.onChange(() => this.render());
     this.render();
+    const relayout = () => this.layout();
+    const ro = new ResizeObserver(relayout);
+    ro.observe(els.view);
+    ro.observe(els.stage); // the letterbox bars change without the view changing size
+    window.addEventListener("resize", relayout);
+    this.layout();
+  }
+
+  /**
+   * The button never covers the minimap or the HUD: in a letterbox bar beside or above the
+   * view when one has room for it (wide desktop windows, phones), else over the view just left
+   * of the minimap and level with its top, where the HUD draws nothing (the lap box is top
+   * left, the race time and notices top centre).
+   */
+  private layout(): void {
+    const { root, stage, view } = this.els;
+    const s = stage.getBoundingClientRect();
+    const v = view.getBoundingClientRect();
+    let top = EDGE_PX;
+    let right = EDGE_PX;
+    const room = BUTTON_PX + 2 * EDGE_PX;
+    if (s.right - v.right < room && v.top - s.top < room) {
+      const scale = v.width / VIEW_W;
+      right = s.right - (v.left + MAP_LEFT * scale) + MAP_GAP_PX;
+      top = v.top - s.top + MAP_TOP * scale;
+    }
+    root.style.top = `${Math.round(top)}px`;
+    root.style.right = `${Math.round(right)}px`;
   }
 
   close(): void {

@@ -93,6 +93,8 @@ audio.attach();
 const music = new MusicPlayer(audio);
 const soundControls = new SoundControls(audio, {
   root: $("sound"),
+  stage: $("stage"),
+  view: $<HTMLCanvasElement>("view"),
   button: $<HTMLButtonElement>("sound-btn"),
   pop: $("sound-pop"),
   music: $<HTMLInputElement>("vol-music"),

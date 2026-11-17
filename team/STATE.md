@@ -72,7 +72,22 @@ DEPLOYED 2026-11-17 (user): live serves 19d759b (bundle has chatlog / Crusher Ru
 ctx_eb48b9676708 (spec tmp/spec-qa-live-3.md) on 8 'ready for qa test' tickets.
 LIVE QA 2026-11-17: all 8 PASS, no bugs (smoke x3: 30 snap/s, RTT median 25-40 ms, largest gap <= 83 ms; wss; no console
 errors). Not checked live: Start anyway, half damage, a bot in the air. All 8 tickets -> complete. Report: tmp/qa3/QA3-REPORT.md.
-Nothing in flight; all workspaces removed (chat workspace removed after the user's :3002 server stopped). Still pending: remove m3-t4 workspace once the
+Nothing in flight; all workspaces removed (chat workspace removed after the user's :3002 server stopped).
+SOUND (plan PLAN-SOUND.md approved 2026-11-17): SND-1 123jpnbf9be in flight, ctx_af130886dcb7 (~/orca/workspaces/scrap-rally/snd1,
+TSandvaer/snd1, :3002; taste gate: the user listens to the music). SND-2 123jpnbf9bf (race effects) queued until SND-1 merges.
+SND-1 done: 7074946 (verified clean; sim 297/297, bots 82/82, build ok; song "Rust Bucket Shuffle" 122 BPM, 32 bars); 30 s WAV
+copied to tmp/snd1/scrap-rally-music-30s.wav; reviewer ctx_114b837e377f; AT THE TASTE GATE (the user listens).
+SND-1 review 1: REQUEST_CHANGES (label click leaves a range slider focused -> blocks driving/chat; speaker button over the
+minimap). Sent to the author as ctx_2d61c5070ddf (author uses :3003); reviewer kept for re-review. Music APPROVED by the user.
+SND-2 123jpnbf9bf started early on top of TSandvaer/snd1 (7074946): ctx_98dd2f7f0f8c (~/orca/workspaces/scrap-rally/snd2,
+TSandvaer/snd2, :3004); it must not edit client/audio.ts, index.html, client/style.css (SND-1's fix round); it merges SND-1's final head
+or main before its own review/merge.
+SND-1 fix round: da6a69a (captions no longer <label>; speaker button placed clear of minimap/HUD via layout()); re-review
+ctx_8dad4e11ceee. Note: the fix also touched client/main.ts (+2) and client/soundboard.ts, which SND-2 owns: SND-2's merge of snd1
+may conflict there (small).
+SND-1 MERGED 2026-11-17: re-review APPROVE, music approved by the user; main 2c4777a (check clean, sim 297/297, bots 82/82,
+build ok); workers released, snd1 workspace removed. SND-2 told to `git merge main` before worker_done (msg_c8b362515d6d); its
+no-edit rule on audio.ts/index.html/style.css is lifted. Still pending: remove m3-t4 workspace once the
 user stops :3001 (PID 16470).
 
 **Resume (2026-11-16):** main 0dec6c9 (local, 15 ahead of origin) = ready check + engine
@@ -120,6 +135,7 @@ Manual Deploy only on the user's go-ahead. The user's own dev server runs on :30
 
 | Ticket | Dispatch | Workspace | Branch | Port | Started |
 | --- | --- | --- | --- | --- | --- |
+| 123jpnbf9bf SND-2 | ctx_98dd2f7f0f8c | ~/orca/workspaces/scrap-rally/snd2 | TSandvaer/snd2 | 3004 | 2026-11-17 |
 
 ## Queued (milestone 3, PLAN-M3.md; start after solid collisions 123jpnbf6cy and easier-start 123jpnbf3xa merge)
 

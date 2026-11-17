@@ -119,8 +119,8 @@ const CSS = `
 .sboard .row{display:flex;flex-wrap:wrap;gap:4px}
 .sboard button,.sboard a{font:inherit;color:#efe6d2;background:#2a2119;border:1px solid #4a3a2b;padding:3px 7px;cursor:pointer;text-decoration:none}
 .sboard button.on{border-color:#e8752d;color:#e8752d}
-.sboard label{display:flex;align-items:center;gap:6px;margin:2px 0}
-.sboard label span{width:56px}
+.sboard .vol{display:flex;align-items:center;gap:6px;margin:2px 0}
+.sboard .vol span{width:56px}
 .sboard input{flex:1}
 .sboard .st{white-space:pre;color:#9fe08a;font-size:11px}
 `;
@@ -177,15 +177,19 @@ export function mountSoundBoard(audio: AudioEngine, music: MusicPlayer): SoundBo
 
   el("h4", "Volume");
   const slider = (label: string, key: "music" | "effects") => {
-    const l = el("label");
+    // A div, not a <label>: a click on the text would focus the slider and hold the driving keys.
+    const l = el("div");
+    l.className = "vol";
     el("span", label, l);
     const r = el("input", "", l);
     r.type = "range";
     r.min = "0";
     r.max = "100";
     r.step = "5";
+    r.setAttribute("aria-label", label);
     r.addEventListener("input", () => audio.set({ [key]: Number(r.value) / 100 }));
     r.addEventListener("change", () => r.blur());
+    r.addEventListener("pointerup", () => r.blur());
     return r;
   };
   const vMusic = slider("Music", "music");
