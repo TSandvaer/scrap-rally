@@ -32,7 +32,9 @@ export const UPGRADES: Record<UpgradeId, { name: string; blurb: string; prices: 
 
 export const AMMO: Record<AmmoId, { name: string; pack: number; price: number; cap: number }> = {
   rivets: { name: "Rivets", pack: 20, price: 150, cap: 100 },
-  mines: { name: "Scrap mines", pack: 3, price: 200, cap: 9 },
+  // Mines: hold at most 3 at a time (user request 2026-11-17; was 9). Mines are only bought in
+  // the garage between races, so this is also at most 3 mines per race.
+  mines: { name: "Scrap mines", pack: 3, price: 200, cap: 3 },
 };
 
 export const UPGRADE_IDS: UpgradeId[] = ["engine", "tyres", "welder"];
@@ -88,6 +90,15 @@ export function buy(w: Wallet, item: ItemId): string | null {
     w.levels[item]++;
   }
   return null;
+}
+
+/**
+ * Clamp every ammo count to its cap. A wallet can only go over a cap from outside `buy` (for
+ * example one kept from before a cap was lowered); the room calls this before a race starts,
+ * so nobody races with more than the cap.
+ */
+export function clampAmmo(w: Wallet): void {
+  for (const id of AMMO_IDS) w.ammo[id] = Math.min(AMMO[id].cap, w.ammo[id]);
 }
 
 /**

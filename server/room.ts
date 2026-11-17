@@ -23,7 +23,7 @@ import {
   type ResultRow,
   type ServerMsg,
 } from "../shared/protocol";
-import { buy, isItem, payouts, startingWallet, statsFor, type Wallet } from "../shared/shop";
+import { buy, clampAmmo, isItem, payouts, startingWallet, statsFor, type Wallet } from "../shared/shop";
 import { gridSlot, type Track } from "../shared/track";
 import { DEFAULT_TRACK_ID, isTrackId, trackById } from "../shared/tracks";
 import { BTN_RIVET, CAR_HP, GHOST_TICKS, mineCount, NO_COMMAND, stepRaceCar, WEAPONS_ARM_MS, type Command } from "../shared/weapons";
@@ -260,6 +260,7 @@ export class Room {
       q.ghost = 0;
       q.cooldown = 0;
       q.stats = statsFor(q.wallet.levels);
+      clampAmmo(q.wallet); // e.g. an old wallet over the mine cap: nobody races with more
       resetQueue(q);
     });
     this.finishers = 0;
