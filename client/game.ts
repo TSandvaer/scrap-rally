@@ -4,9 +4,12 @@
 
 import { angleDiff, BASE_STATS, CAR_RADIUS, cloneCar, TICK_HZ, type CarState, type CarStats, type Input } from "../shared/physics";
 import {
+  CHAT_HISTORY,
+  CHAT_MAX,
   INPUT_REDUNDANCY,
   round,
   type CarSnap,
+  type ChatLine,
   type ClientMsg,
   type GameEvent,
   type InputTuple,
@@ -135,6 +138,10 @@ export interface GameHandlers {
   garage(): void;
   event(ev: GameEvent): void;
   results(rows: ResultRow[]): void;
+  /** A live chat line (already in game.chat). */
+  chat(line: ChatLine): void;
+  /** game.chat was replaced (the room's history after a welcome) or cleared. */
+  chatlog(): void;
   error(msg: string): void;
   /**
    * reason: for "reconnecting", "restarting" when the server announced a restart; for
@@ -160,6 +167,9 @@ export class Game {
   results: ResultRow[] | null = null;
   connected = false;
   rtt = 0;
+  /** Room chat, oldest first: replaced by every chatlog, cleared on leave and in a new room. */
+  chat: ChatLine[] = [];
+  private chatCode = ""; // the room `chat` belongs to
 
   // Garage (server-confirmed only: never updated optimistically)
   scrap = 0;
@@ -238,18 +248,25 @@ export class Game {
     this.send({ t: "track", id });
   }
 
+  /** Say something in the room chat. The server cleans it; it comes back as a chat line. */
+  say(text: string): void {
+    const t = [...text.trim()].slice(0, CHAT_MAX).join("");
+    if (t) this.send({ t: "chat", text: t });
+  }
+
   /** Drop the connection as a network failure would; the client then reconnects. */
   simulateDrop(): void {
     const tr = this.transport;
     tr?.close();
   }
 
-  /** Leave for good (no reconnect). */
+  /** Leave for good (no reconnect): the server removes us at once, the chat is cleared. */
   leave(): void {
     this.intent = null;
     this.cancelReconnect();
     const tr = this.transport;
     this.transport = null;
+    if (this.connected) tr?.send({ t: "leave" });
     tr?.close();
     this.connected = false;
     this.restarting = false;
@@ -265,6 +282,14 @@ export class Game {
     this.snaps = [];
     this.latest = null;
     this.useTrack(DEFAULT_TRACK_ID);
+    this.setChat([], "");
+  }
+
+  private setChat(lines: ChatLine[], code: string): void {
+    const changed = this.chat.length > 0 || lines.length > 0;
+    this.chat = lines.slice(-CHAT_HISTORY);
+    this.chatCode = code;
+    if (changed) this.on.chatlog?.();
   }
 
   /**
@@ -372,6 +397,7 @@ export class Game {
           this.latest = null;
           this.results = null;
         }
+        if (msg.code !== this.chatCode) this.setChat([], msg.code); // the chatlog follows
         this.code = msg.code;
         this.you = msg.you;
         this.laps = msg.laps;
@@ -437,6 +463,14 @@ export class Game {
       case "results":
         this.results = msg.rows;
         this.on.results?.(msg.rows);
+        return;
+      case "chatlog":
+        this.setChat(msg.lines, this.code);
+        return;
+      case "chat":
+        this.chat.push(msg.line);
+        if (this.chat.length > CHAT_HISTORY) this.chat.splice(0, this.chat.length - CHAT_HISTORY);
+        this.on.chat?.(msg.line);
         return;
       case "pong": {
         const sample = now - msg.c;

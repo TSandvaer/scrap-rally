@@ -28,6 +28,15 @@ export class Keyboard {
     target.addEventListener("blur", () => this.down.clear());
   }
 
+  /**
+   * Forget every held key, e.g. when the chat input takes focus: typing only blocks new
+   * keydowns, so a key held at that moment would otherwise keep driving until its keyup.
+   */
+  clear(): void {
+    this.down.clear();
+    this.minePressed = false;
+  }
+
   read(): Controls {
     const any = (keys: Set<string>) => [...keys].some((k) => this.down.has(k));
     const mine = this.minePressed;
