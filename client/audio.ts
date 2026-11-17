@@ -19,7 +19,7 @@ export interface Buses {
 }
 
 /** music + sfx -> compressor -> master -> dest. Used live and for offline renders. */
-export function buildBuses(ctx: BaseAudioContext, s: SoundSettings, dest: AudioNode = ctx.destination): Buses {
+export function buildBuses(ctx: BaseAudioContext, s: Volumes, dest: AudioNode = ctx.destination): Buses {
   const music = ctx.createGain();
   const sfx = ctx.createGain();
   const comp = ctx.createDynamicsCompressor();
@@ -38,7 +38,9 @@ export function buildBuses(ctx: BaseAudioContext, s: SoundSettings, dest: AudioN
   return buses;
 }
 
-function applyGains(b: Buses, s: SoundSettings, now: number, instant = false): void {
+type Volumes = Pick<SoundSettings, "music" | "effects" | "muted">;
+
+function applyGains(b: Buses, s: Volumes, now: number, instant = false): void {
   const set = (p: AudioParam, v: number) => (instant ? (p.value = v) : p.setTargetAtTime(v, now, GAIN_SMOOTH_S));
   set(b.music.gain, s.music);
   set(b.sfx.gain, s.effects);
@@ -93,7 +95,13 @@ export class AudioEngine {
       const ctx = this.ctx;
       if (!ctx) return;
       if (document.hidden) void ctx.suspend().catch(() => {});
-      else void ctx.resume().catch(() => {});
+      else {
+        // The suspend's statechange came while hidden, so nothing re-armed the unlock then. If
+        // this resume() does not bring the context back, the next gesture must (stateChanged()
+        // disarms once it runs).
+        if (ctx.state !== "running") this.arm();
+        void ctx.resume().then(() => this.stateChanged(), () => {});
+      }
       this.changed();
     });
   }
