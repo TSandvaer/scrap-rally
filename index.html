@@ -111,8 +111,14 @@
           </svg>
         </button>
         <div id="sound-pop" class="sound-pop hidden" role="group" aria-label="Sound">
-          <label class="vol"><span>Music</span><input id="vol-music" type="range" min="0" max="100" step="5" /></label>
-          <label class="vol"><span>Effects</span><input id="vol-effects" type="range" min="0" max="100" step="5" /></label>
+          <div class="vol">
+            <span id="vol-music-label">Music</span>
+            <input id="vol-music" type="range" min="0" max="100" step="5" aria-labelledby="vol-music-label" />
+          </div>
+          <div class="vol">
+            <span id="vol-effects-label">Effects</span>
+            <input id="vol-effects" type="range" min="0" max="100" step="5" aria-labelledby="vol-effects-label" />
+          </div>
           <button id="sound-mute" type="button" class="btn small" aria-pressed="false">Mute (M)</button>
         </div>
       </div>
