@@ -1065,6 +1065,7 @@ function engine(): void {
   // A long closed loop whose bottom edge is a 12 000 u straight (collinear control points keep
   // the spline exactly on y = 0 there). The car starts at x = 1500 on the centerline, heading +x.
   const straight: TrackDef = {
+    id: "test-straight",
     name: "Test Straight",
     control: [...Array.from({ length: 13 }, (_, i): [number, number] => [i * 1000, 0]), [12000, 3000], [0, 3000]],
     halfWidth: 64,
@@ -1449,7 +1450,7 @@ function trackFeatures(): void {
 
   // 10. Validation: near sections must be far apart in segment index; start zone; recovery.
   {
-    const clip = buildTrack({ name: "Test Clip", halfWidth: 64, verge: 44, control: [[0, 0], [3000, 0], [3000, 200], [0, 200]] });
+    const clip = buildTrack({ id: "test-clip", name: "Test Clip", halfWidth: 64, verge: 44, control: [[0, 0], [3000, 0], [3000, 200], [0, 200]] });
     const clipErr = validateTrack(clip);
     check("validation: sections that come near within too few segment indices are caught", clipErr.some((e) => e.includes("segments apart")), clipErr.find((e) => e.includes("segments apart")));
     const L = plain.length;

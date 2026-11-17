@@ -15,7 +15,6 @@ export const DEFAULT_TRACK_ID = "rust-bowl";
 const SHIPPED: TrackDef[] = [RUST_BOWL];
 
 function entryOf(def: TrackDef): TrackEntry {
-  if (!def.id) throw new Error(`Track ${def.name} has no id`);
   return { id: def.id, name: def.name, def };
 }
 

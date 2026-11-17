@@ -30,8 +30,8 @@ export interface Hole { k: "hole"; s: number; lat: number; r: number }
 export type Feature = Ramp | Gap | Hole;
 
 export interface TrackDef {
-  /** Registry id (e.g. "rust-bowl"). Optional so older defs keep compiling. */
-  id?: string;
+  /** Registry id (e.g. "rust-bowl"): the key in shared/tracks.ts and on the wire. */
+  id: string;
   name: string;
   control: [number, number][];
   halfWidth: number; // asphalt half-width
