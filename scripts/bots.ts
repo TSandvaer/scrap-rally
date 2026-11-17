@@ -846,10 +846,14 @@ async function runTrackSwitch(ctx: Ctx, bots: Bot[]): Promise<void> {
   const e0 = O2.game.recErrors.length;
   try {
     const rows = await runRace("track switch", bots, N, [N, O2]);
+    // runRace returns on its own poll; the sampler runs on the next game step.
+    await waitFor("both finish distances sampled", () => rdAtFinish.size === 2, 1000);
+    const seen = [...rdAtFinish].map(([id, rd]) => `${N.game.player(id)?.name ?? id} ${rd.toFixed(0)}`).join(", ");
+    const latest = [...(N.game.latest?.cars.values() ?? [])].map((c) => `${N.game.player(c.id)?.name ?? c.id} fin=${c.fin} rd=${c.rd.toFixed(0)}`).join(", ");
     check(
       "track: the race ran on the test loop (server race distance at the finish = its length)",
       rows.length === 2 && rdAtFinish.size === 2 && [...rdAtFinish.values()].every((rd) => Math.abs(rd - loop.length) < 200),
-      `loop ${loop.length.toFixed(0)}, Rust Bowl ${track.length.toFixed(0)}; at the finish ${[...rdAtFinish.values()].map((rd) => rd.toFixed(0)).join(", ")}`,
+      `loop ${loop.length.toFixed(0)}, Rust Bowl ${track.length.toFixed(0)}; at the finish ${seen}` + (rdAtFinish.size === 2 ? "" : `; latest: ${latest}`),
     );
     check("track: every car stayed inside the test loop's walls", samples > 500 && offTrack === 0, `${offTrack} of ${samples} samples outside`);
     const s = stats(O2.game.recErrors.slice(e0));
