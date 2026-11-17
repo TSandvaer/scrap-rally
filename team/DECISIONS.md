@@ -40,3 +40,4 @@
 - 2026-11-17 — M3-T3 taste gate (user, on the screenshot sheet + the review): "screenshots look good also looked at the review. all looks good". Rendering approved as drawn; merge.
 - 2026-11-17 — M3-T4 review found Crusher Run's two scrap jumps on the start straight (breaks binding advisor change 2). User (popup): move them past the start straight; the validator also learns the real start straight instead of a fixed 300 units.
 - 2026-11-17 — M3-T4 taste feedback (user, driving Crusher Run): "the holes in the road is two many too close". Hole field thinned to about 3 holes with more room between them (worker's call within that), in the same fix round as the review fixes.
+- 2026-11-17 — M3-T4 drive verdict (user): "it looks good to merge". Crusher Run (moved jumps, 3 pits) and Overpass Knot approved; merge. Milestone 3 complete locally.
