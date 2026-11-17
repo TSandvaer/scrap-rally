@@ -9,7 +9,7 @@ import { Game, lostMessage, type TokenStore } from "./game";
 import { Keyboard } from "./input";
 import { JerkMeter } from "./jerk";
 import { connectWs } from "./net";
-import { Renderer, type CarView, type HudView, type WorldFx } from "./render";
+import { Renderer, type CarView, type DrawPose, type HudView, type WorldFx } from "./render";
 
 const STEP_MS = 1000 / 60;
 const MAX_CATCH_UP = 5;
@@ -18,6 +18,9 @@ const params = new URLSearchParams(location.search);
 const debug = params.get("debug") === "1";
 // Debug only: ?autopilot=1 drives the own car with the bot AI (weapons off), lane = ?lane=.
 const autopilot = debug && params.get("autopilot") === "1";
+// Debug only: ?preview=1 draws a synthetic track with every feature and scripted cars
+// (client/preview.ts, loaded only then) instead of the game.
+const preview = debug && params.get("preview") === "1";
 const lag = Number(params.get("lag")) || 0;
 const jitter = Number(params.get("jitter")) || 0;
 const wsUrl = `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`;
@@ -486,17 +489,22 @@ function syncRenderer(): void {
 function draw(alpha: number, elapsed: number): void {
   syncRenderer();
   const cars: CarView[] = [];
-  const view = (id: string, x: number, y: number, h: number, me: boolean): CarView => {
+  // `at` places the car; `st` carries its airborne / fall / ghost state (game.ts poses).
+  const view = (at: DrawPose, st: DrawPose, me: boolean): CarView => {
+    const id = at.id;
     const p = game.player(id);
     const s = game.latest?.cars.get(id);
     const wreck = me ? (game.car?.wreck ?? 0) > 0 : !!s?.wreck;
-    return { id, x, y, h, me, color: p?.color ?? "#888", name: p?.name ?? "?", wreck, ghost: !!s?.ghost };
+    const ghost = !!(st.ghost || s?.ghost);
+    const { x, y, h } = at;
+    return { id, x, y, h, me, color: p?.color ?? "#888", name: p?.name ?? "?", wreck, ghost, height: st.height, falling: st.falling };
   };
   // Other cars at the interpolation time; near ones are drawn at their predicted pose,
-  // where the own car bumps into them (client/contact.ts).
-  const others = game.otherPoses();
+  // where the own car bumps into them (client/contact.ts). The state stays the pose's.
+  const others: DrawPose[] = game.otherPoses();
+  const state = new Map(others.map((o) => [o.id, o]));
   const drawn = game.contact.blend(others, game.car, game.pending.length - 1 + alpha, elapsed);
-  for (const o of drawn) cars.push(view(o.id, o.x, o.y, o.h, false));
+  for (const o of drawn) cars.push(view(o, state.get(o.id) ?? o, false));
   game.contact.diagOn = debug && game.phase === "racing";
   if (debug && game.phase === "racing" && measuredPhase !== "racing") {
     jerk.reset(); // one race per measurement
@@ -514,8 +522,8 @@ function draw(alpha: number, elapsed: number): void {
       elapsed,
     );
   }
-  const own = game.ownPose(alpha);
-  if (own) cars.push(view(own.id, own.x, own.y, own.h, true));
+  const own: DrawPose | null = game.ownPose(alpha);
+  if (own) cars.push(view(own, own, true));
 
   // Camera: own car with a little look-ahead; else the leader; else a slow tour.
   let target: { x: number; y: number } | null = null;
@@ -561,5 +569,10 @@ function draw(alpha: number, elapsed: number): void {
   renderer.frame(cars, fx, hudView());
 }
 
-updatePanels();
-requestAnimationFrame(frame);
+if (preview) {
+  ui.menu.classList.add("hidden");
+  void import("./preview").then((m) => m.runPreview($<HTMLCanvasElement>("view"), params));
+} else {
+  updatePanels();
+  requestAnimationFrame(frame);
+}
