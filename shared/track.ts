@@ -80,6 +80,67 @@ export const RUST_BOWL: TrackDef = {
   verge: 44,
 };
 
+// Original layout: a scrapyard run. The start straight jumps two scrap piles that block the
+// road, a sweeping right-hander goes through a field of holes (a cluster on the left of the
+// road, then one on the right, so the line moves across), the bottom straight jumps a chasm,
+// and a twisty left section leads back to the start. Recovery points before each hazard.
+export const CRUSHER_RUN: TrackDef = {
+  id: "crusher-run",
+  name: "Crusher Run",
+  control: [
+    [900, 500], [1400, 500], [1900, 500], [2400, 500], [2900, 500], [3400, 500], [3800, 700],
+    [3950, 1150], [3850, 1650], [3450, 2000], [2900, 2150], [2400, 2150], [1900, 2150],
+    [1400, 2150], [950, 2100], [650, 1850], [750, 1450], [450, 1150], [300, 750], [500, 500],
+  ],
+  halfWidth: 64,
+  verge: 44,
+  features: [
+    // Scrap piles across the start straight: a ramp onto each.
+    { k: "ramp", s: 620, len: 80 },
+    { k: "gap", s0: 700, s1: 830, scrap: true },
+    { k: "ramp", s: 1680, len: 80 },
+    { k: "gap", s0: 1760, s1: 1900, scrap: true },
+    // The field of holes (r <= 38: the renderer's cull assumes it).
+    { k: "hole", s: 3250, lat: -40, r: 22 },
+    { k: "hole", s: 3350, lat: -10, r: 24 },
+    { k: "hole", s: 3450, lat: -44, r: 20 },
+    { k: "hole", s: 3700, lat: 40, r: 22 },
+    { k: "hole", s: 3800, lat: 8, r: 24 },
+    { k: "hole", s: 3900, lat: 44, r: 20 },
+    // The chasm: 220 units, a take-off at ~340 u/s or more.
+    { k: "ramp", s: 5800, len: 80 },
+    { k: "gap", s0: 5880, s1: 6100 },
+  ],
+  recovery: [0, 1300, 2950, 5300],
+};
+
+// Original layout: a figure-eight. Two diagonal straights cross at right angles at
+// (2000, 1400); the second one (s ~ 7893 there) is the upper pass: a ramp and a gap of
+// +-118 around the crossing jump it over the first one (s ~ 2818). A clockwise lobe on the
+// right with a pit, a counter-clockwise lobe on the left with the start straight.
+export const OVERPASS_KNOT: TrackDef = {
+  id: "overpass-knot",
+  name: "Overpass Knot",
+  control: [
+    [300, 1150], [300, 1450], [330, 1750], [520, 2060], [880, 2230],
+    // the lower pass, heading up and to the right
+    [1258, 2142], [1505, 1895], [1753, 1647], [2000, 1400], [2247, 1153], [2495, 905], [2742, 658],
+    [3120, 520], [3500, 640], [3700, 1000], [3680, 1450], [3480, 1850], [3120, 2110],
+    // the upper pass, heading up and to the left
+    [2742, 2142], [2495, 1895], [2247, 1647], [2000, 1400], [1753, 1153], [1505, 905], [1258, 658],
+    [880, 520], [520, 600], [330, 850],
+  ],
+  halfWidth: 64,
+  verge: 44,
+  features: [
+    { k: "hole", s: 5300, lat: 0, r: 32 },
+    // Over the crossing: a take-off at ~350 u/s or more clears the 236-unit gap.
+    { k: "ramp", s: 7695, len: 80 },
+    { k: "gap", s0: 7775, s1: 8011 },
+  ],
+  recovery: [0, 4950, 7193],
+};
+
 const SAMPLES_PER_SEGMENT = 16;
 export const LOCAL_WINDOW = 12; // segments searched either side of the hint
 
