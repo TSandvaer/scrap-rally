@@ -98,7 +98,8 @@ without the sessionStorage token joined a new seat, the old one ran out its 20 s
 healthy; likely half-edited code hot-reloaded). Told the user to wait for worker_done, then restart. Rule added to orca-wave (3b).
 SND-2 round 2 done: 895b985 (audio.ts re-arm fix + taste: buggy/4-cyl/V8 engines, machine-gun rivets, explosion, metal
 crashes car+wall, gravel; kerb dropped; sim 319/319, bots 82/82, build ok). Re-review ctx_5057f654f962. FROZEN TASTE COPY for the
-user: ~/orca/workspaces/scrap-rally/snd2-taste (detached at 895b985, npm ci done); remove with `git worktree remove` after the verdict. Still pending: remove m3-t4 workspace once the
+user: ~/orca/workspaces/scrap-rally/snd2-taste (detached at 895b985, npm ci done); remove with `git worktree remove` after the verdict.
+SND-2 re-review APPROVE (no findings). Merge waits ONLY for the user's race verdict (frozen copy on :3004). Still pending: remove m3-t4 workspace once the
 user stops :3001 (PID 16470).
 
 **Resume (2026-11-16):** main 0dec6c9 (local, 15 ahead of origin) = ready check + engine
