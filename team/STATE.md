@@ -67,12 +67,14 @@ CHAT-1 MERGED 2026-11-17 (user: "looks good"): main 972fac5 (check clean, sim 28
 Chat workspace KEPT while the user's dev server runs from it (:3002, PID 44275); then tmp/cleanup-chat.sh. m3-t4 workspace removed
 (its :3001 server is gone). origin/main 274f052 (pushed, deploy pending the user's Manual Deploy); local main 17 commits ahead
 (chat + team notes): push again before the deploy if the chat should go live in the same deploy.
-PUSHED AGAIN 2026-11-17 (user): origin/main = 19d759b (incl. chat). Waiting for the user's Manual Deploy; then the QA worker. Still pending: remove m3-t4 workspace once the
+PUSHED AGAIN 2026-11-17 (user): origin/main = 19d759b (incl. chat). Waiting for the user's Manual Deploy; then the QA worker.
+DEPLOYED 2026-11-17 (user): live serves 19d759b (bundle has chatlog / Crusher Run / Overpass Knot; /healthz ok). QA worker
+ctx_eb48b9676708 (spec tmp/spec-qa-live-3.md) on 8 'ready for qa test' tickets. Still pending: remove m3-t4 workspace once the
 user stops :3001 (PID 16470).
 
 **Resume (2026-11-16):** main 0dec6c9 (local, 15 ahead of origin) = ready check + engine
 (pushed 4f9ef51) + easier-start (merged locally, user-approved, reviews APPROVE). Deploys are batched:
-live is still d912583; ask before the next push. In flight on run `run_c58bb5836634`: dispatch
+live is 19d759b; ask before the next push. In flight on run `run_c58bb5836634`: dispatch
 `ctx_c8a5662fcae7` on ClickUp 123jpnbf6cy "Solid collisions" (workspace
 ~/orca/workspaces/scrap-rally/solid-collisions, branch TSandvaer/solid-collisions, port 3002; must merge main
 before its own merge). Taste test moved AFTER merge (user, 2026-11-16): merge on reviewer APPROVE + gate,
