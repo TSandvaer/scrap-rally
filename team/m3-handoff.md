@@ -24,3 +24,12 @@ For T4 (tracks + bots):
 7. A recovery point at s=0 is not enforced (PLAN-M3 design 1 says "plus the start line"): T4 tracks list 0
    explicitly.
 - T3 review note (non-blocking): hole culling at client/render.ts:494 (T3 branch) uses r*1.8 but cracks reach ~2.32r; holes with r > ~38 could pop in at the screen edge. Keep T4 holes r <= 38 or widen the cull.
+
+## From the M3-T1b review (ctx_5f98910a53ce, 2026-11-17, on cec3be6)
+
+- For the T4 taste gate: server/combat.ts:145 holds the ghost with no time limit while the car overlaps
+  another car, for every ghost (wreck respawns too, also on Rust Bowl). A player could stay ghosted by keeping
+  inside another car: immune to hits but unable to fire; the ghost ends the tick they separate. Meets the spec;
+  raise only if the user cares when driving.
+- Known: the own car's ghost after a predicted recovery comes from the snapshot, so for ~1 RTT the client
+  fires cosmetic rivets the server drops and predicts bumps the server skips (same as the wreck respawn).

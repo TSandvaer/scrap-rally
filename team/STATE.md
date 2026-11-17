@@ -29,6 +29,8 @@ for T4 track design). T3 merge waits for the user's screenshot verdict. T1b done
 bots 68/68; rec err 0.011 jump / 0.012 fall); reviewer ctx_5f98910a53ce. No file overlap T1b/T3; T3's preview tracks have ids.
 T3 MERGED 2026-11-17 after the user's OK on the screenshots: main e653afc (check clean, sim 184/184, bots 61/61, build ok);
 T3 workers released, workspace removed. T1b merges next (review pending), then M3-T4.
+T1b review 1: REQUEST_CHANGES (otherPoses freezes far cars at a wreck/fall START: new 33 ms hitch, also on Rust Bowl;
+plus a test that cannot fail). Sent to the author with `git merge main` (e653afc) as ctx_0274dcaa4905; reviewer kept for re-review.
 
 **Resume (2026-11-16):** main 0dec6c9 (local, 15 ahead of origin) = ready check + engine
 (pushed 4f9ef51) + easier-start (merged locally, user-approved, reviews APPROVE). Deploys are batched:
