@@ -17,6 +17,8 @@ sim-test.ts -> aborted; T2 author merging main into its branch (ctx_72c21d106231
 T2 merged main as 95197b9 (verified clean; sim 184/184, bots 61/61); merge review ctx_ac3c76591fb9 (same reviewer).
 Next wave prepared: tmp/spec-m3-t1b.md (port 3001) + tmp/spec-m3-t3.md (port 3002), with a shared draw contract
 (Pose gains optional height/falling/ghost; T1b fills them in game.ts, T3 reads them in render.ts). Dispatch both after T2 merges.
+T2 MERGED 2026-11-17: merge review APPROVE; main d0858a4 (check clean, sim 184/184, bots 61/61); ticket ready for qa test;
+T2 workers released, workspace removed. Wave 2 (T1b + T3) dispatching now.
 
 **Resume (2026-11-16):** main 0dec6c9 (local, 15 ahead of origin) = ready check + engine
 (pushed 4f9ef51) + easier-start (merged locally, user-approved, reviews APPROVE). Deploys are batched:
@@ -63,7 +65,6 @@ Manual Deploy only on the user's go-ahead. The user's own dev server runs on :30
 
 | Ticket | Dispatch | Workspace | Branch | Port | Started |
 | --- | --- | --- | --- | --- | --- |
-| 123jpnbf6e7 M3-T2 | ctx_ed4c152e2a67 | ~/orca/workspaces/scrap-rally/m3-t2 | TSandvaer/m3-t2 | 3002 | 2026-11-17 |
 
 ## Queued (milestone 3, PLAN-M3.md; start after solid collisions 123jpnbf6cy and easier-start 123jpnbf3xa merge)
 
