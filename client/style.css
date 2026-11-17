@@ -777,3 +777,80 @@ h2 {
     opacity: 1;
   }
 }
+
+/* Sound: the speaker button (top right, over everything but the sound board) and its
+   popover with the music / effects sliders (client/audio.ts SoundControls). */
+.sound {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 8;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+}
+
+.sound-btn {
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  color: var(--muted-solid);
+  background: rgba(18, 14, 11, 0.75);
+  border: 2px solid var(--line);
+  cursor: pointer;
+  opacity: 0.8;
+}
+
+.sound-btn:hover,
+.sound-btn[aria-expanded="true"] {
+  opacity: 1;
+  color: var(--text);
+  border-color: var(--steel);
+}
+
+.sound-btn:focus-visible {
+  outline: 2px solid var(--rust);
+  outline-offset: 2px;
+}
+
+.sound-btn.muted {
+  color: var(--rust);
+}
+
+.sound-btn.muted .waves,
+.sound-btn:not(.muted) .cross {
+  display: none;
+}
+
+.sound-pop {
+  width: 220px;
+  padding: 12px;
+  background: var(--panel);
+  border: 2px solid var(--line);
+  box-shadow: 4px 4px 0 rgba(0, 0, 0, 0.55);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  font-size: 13px;
+}
+
+.sound-pop .vol {
+  display: grid;
+  grid-template-columns: 60px 1fr;
+  align-items: center;
+  gap: 8px;
+}
+
+.sound-pop input[type="range"] {
+  width: 100%;
+  margin: 0;
+  accent-color: var(--rust);
+}
+
+.sound-pop .btn {
+  align-self: flex-start;
+  padding: 6px 10px;
+}
