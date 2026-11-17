@@ -26,7 +26,7 @@ import {
 import { buy, isItem, payouts, startingWallet, statsFor, type Wallet } from "../shared/shop";
 import { gridSlot, type Track } from "../shared/track";
 import { DEFAULT_TRACK_ID, isTrackId, trackById } from "../shared/tracks";
-import { BTN_RIVET, CAR_HP, mineCount, NO_COMMAND, stepRaceCar, WEAPONS_ARM_MS, type Command } from "../shared/weapons";
+import { BTN_RIVET, CAR_HP, GHOST_TICKS, mineCount, NO_COMMAND, stepRaceCar, WEAPONS_ARM_MS, type Command } from "../shared/weapons";
 import { Combat, solid, type Fighter } from "./combat";
 import { advance, compareStanding, newProgress, raceDistance, type Progress } from "./race";
 
@@ -252,7 +252,7 @@ export class Room {
     this.combat.reset();
     this.gridOrder().forEach((q, slot) => {
       const g = gridSlot(this.track, slot);
-      q.car = { x: g.x, y: g.y, h: g.h, vx: 0, vy: 0, seg: g.seg, wreck: 0 };
+      q.car = { x: g.x, y: g.y, h: g.h, vx: 0, vy: 0, seg: g.seg, wreck: 0, air: 0, fall: 0 };
       q.progress = newProgress(this.track, q.car);
       q.inRace = true;
       q.finished = false;
@@ -334,12 +334,18 @@ export class Room {
     const armed = racing && now >= this.raceStart + WEAPONS_ARM_MS;
     const racers = [...this.players.values()].filter((p) => p.car);
     const prev = new Map<string, { x: number; y: number }>();
+    const recovered = new Set<Player>();
     for (const p of racers) {
       const c = p.car!;
       prev.set(p.id, { x: c.x, y: c.y });
       // Consumed every tick, wrecked or not, so ack keeps moving.
       const { cmd, minePress } = consumeInput(p);
-      stepRaceCar(c, racing ? cmd : NO_INPUT, p.stats, this.track);
+      // A car put back at a recovery point after a fall is ghosted (as after a wreck), from
+      // this tick's car-car pass on.
+      if (stepRaceCar(c, racing ? cmd : NO_INPUT, p.stats, this.track) === "recover") {
+        p.ghost = GHOST_TICKS;
+        recovered.add(p);
+      }
       this.combat.act(p, cmd, minePress, armed);
     }
     for (let i = 0; i < racers.length; i++) {
@@ -349,8 +355,11 @@ export class Room {
     }
 
     if (racing) {
-      this.combat.step(racers, prev);
+      this.combat.step(racers, prev, recovered);
       for (const p of racers) {
+        // No progress while falling: the car sits where it fell (possibly lost, off its own
+        // section) until it is put back, and moving back to the recovery point never counts.
+        if (p.car!.fall > 0) continue;
         if (!advance(this.track, p.progress!, p.car!) || p.progress!.fin) continue;
         const pr = p.progress!;
         if (pr.lap < this.laps) {
@@ -441,6 +450,8 @@ export class Room {
         hp: Math.ceil(p.hp),
         maxHp: p.maxHp,
         wreck: c.wreck,
+        air: c.air,
+        fall: c.fall,
         ghost: p.ghost > 0 || p.finished,
       });
     }

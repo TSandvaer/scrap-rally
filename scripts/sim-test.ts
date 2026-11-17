@@ -153,7 +153,7 @@ class Sim {
     const pt = pointAt(track, s);
     const x = pt.x - Math.sin(pt.h) * lateral;
     const y = pt.y + Math.cos(pt.h) * lateral;
-    p.car = { x, y, h: pt.h, vx: Math.cos(pt.h) * speed, vy: Math.sin(pt.h) * speed, seg: pt.seg, wreck: 0 };
+    p.car = { x, y, h: pt.h, vx: Math.cos(pt.h) * speed, vy: Math.sin(pt.h) * speed, seg: pt.seg, wreck: 0, air: 0, fall: 0 };
     p.progress = { s: queryTrackNear(track, x, y, pt.seg).s, cp: 1, lap: 0, fin: 0 };
   }
 
@@ -285,7 +285,7 @@ function mines(): void {
   if (!m) return;
   // B parks 2 units off the mine, before it arms.
   const pt = pointAt(track, 0);
-  b.car = { x: m.x, y: m.y + 2, h: pt.h, vx: 0, vy: 0, seg: a.car!.seg, wreck: 0 };
+  b.car = { x: m.x, y: m.y + 2, h: pt.h, vx: 0, vy: 0, seg: a.car!.seg, wreck: 0, air: 0, fall: 0 };
   const h0 = b.car.h;
   let hitAt = -1;
   for (let i = 0; i < 40 && hitAt < 0; i++) {
@@ -311,7 +311,7 @@ function mines(): void {
   check("an armed mine also hits its owner", a.hp === 85, `a.hp=${a.hp}`);
   check("no wreck credit for hurting yourself", !sim.room.combat.wrecksCaused.has(a.id));
 
-  const c = { x: 0, y: 0, h: 0, vx: 100, vy: 0, seg: 0, wreck: 0 };
+  const c = { x: 0, y: 0, h: 0, vx: 100, vy: 0, seg: 0, wreck: 0, air: 0, fall: 0 };
   spinOut(c, 0, 10);
   check("spin-out is deterministic: away from the mine, speed x0.3", c.h === -SPIN_KICK && Math.abs(c.vx - 30) < 1e-9);
 }
@@ -601,7 +601,7 @@ function garage(): void {
 
 // ---- solid car collisions -------------------------------------------------------------
 
-const body = (x: number, y: number, h: number, vx = 0, vy = 0): CarState => ({ x, y, h, vx, vy, seg: 0, wreck: 0 });
+const body = (x: number, y: number, h: number, vx = 0, vy = 0): CarState => ({ x, y, h, vx, vy, seg: 0, wreck: 0, air: 0, fall: 0 });
 
 /** b relative to a, in a's frame: along a's heading and sideways. */
 function relPos(a: CarState, b: CarState): { along: number; lat: number } {
@@ -632,7 +632,7 @@ function drive(a: CarState, b: CarState, n: number): { overlap: number; touched:
 
 /** Snapshot-shaped car (what the client's prediction sees). */
 function snapCar(id: string, c: CarState, extra: Partial<CarSnap> = {}): CarSnap {
-  return { k: "car", id, x: c.x, y: c.y, h: c.h, vx: c.vx, vy: c.vy, seg: 0, lap: 0, rd: 0, fin: 0, hp: 100, maxHp: 100, wreck: c.wreck, ghost: false, ...extra };
+  return { k: "car", id, x: c.x, y: c.y, h: c.h, vx: c.vx, vy: c.vy, seg: 0, lap: 0, rd: 0, fin: 0, hp: 100, maxHp: 100, wreck: c.wreck, air: c.air, fall: c.fall, ghost: false, ...extra };
 }
 
 function collisions(): void {
@@ -1074,7 +1074,7 @@ function engine(): void {
   const SECONDS = 8;
   const drive = (level: number) => {
     const stats = statsFor({ engine: level, tyres: 0, welder: 0 });
-    const c: CarState = { x: 1500, y: 0, h: 0, vx: 0, vy: 0, seg: 0, wreck: 0 };
+    const c: CarState = { x: 1500, y: 0, h: 0, vx: 0, vy: 0, seg: 0, wreck: 0, air: 0, fall: 0 };
     let t300 = -1;
     for (let i = 1; i <= SECONDS * TICK_HZ; i++) {
       stepCar(c, { throttle: 1, steer: 0 }, stats, flat);
@@ -1495,7 +1495,7 @@ function placeOn(t: Track, p: Player, s: number, lateral = 0, speed = 0): void {
   const pt = pointAt(t, s);
   const x = pt.x - Math.sin(pt.h) * lateral;
   const y = pt.y + Math.cos(pt.h) * lateral;
-  p.car = { x, y, h: pt.h, vx: Math.cos(pt.h) * speed, vy: Math.sin(pt.h) * speed, seg: pt.seg, wreck: 0 };
+  p.car = { x, y, h: pt.h, vx: Math.cos(pt.h) * speed, vy: Math.sin(pt.h) * speed, seg: pt.seg, wreck: 0, air: 0, fall: 0 };
   p.progress = { s: queryTrackNear(t, x, y, pt.seg).s, cp: 1, lap: 0, fin: 0 };
 }
 

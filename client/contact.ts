@@ -11,6 +11,7 @@
 
 import { angleDiff, collideCarOneSided, DT, TICK_HZ, type CarContact, type CarState } from "../shared/physics";
 import type { CarSnap } from "../shared/protocol";
+import { airHeight } from "../shared/weapons";
 
 // How far ahead of the newest snapshot other cars are predicted. It must cover how far the
 // own car runs ahead (round trip + the server's input buffer + up to one snapshot
@@ -53,6 +54,7 @@ interface Pose {
   x: number;
   y: number;
   h: number;
+  height?: number; // 0..1 (shared/weapons.ts airHeight); absent = on the ground
 }
 
 interface Near {
@@ -123,7 +125,9 @@ export class Contacts {
     const turns = new Map<string, number>();
     for (const [id, b] of snap.cars) {
       const a = old?.cars.get(id);
-      const turn = a && dt > 0.005 && dt < 0.2 && !a.wreck && !b.wreck ? angleDiff(a.h, b.h) / dt : 0;
+      // Airborne and falling cars do not turn; a recovery or a respawn is a jump, not a turn.
+      const steady = a && !a.wreck && !b.wreck && !a.fall && !b.fall && !b.air;
+      const turn = steady && dt > 0.005 && dt < 0.2 ? angleDiff(a.h, b.h) / dt : 0;
       turns.set(id, Math.abs(turn) <= MAX_TURN ? turn : 0);
     }
     const oldTurns = this.turns;
@@ -145,7 +149,7 @@ export class Contacts {
       const pb = drawnPose(b, kNew, turns.get(id) ?? 0);
       const dx = pa.x - pb.x, dy = pa.y - pb.y;
       if (this.diagOn && n.w > 0 && this.diag.nearJumps.length < 20000) this.diag.nearJumps.push(Math.hypot(dx, dy));
-      if (Math.hypot(dx, dy) > SNAP_DISTANCE || a.wreck > 0 !== b.wreck > 0) {
+      if (Math.hypot(dx, dy) > SNAP_DISTANCE || a.wreck > 0 !== b.wreck > 0 || a.fall > 0 !== b.fall > 0) {
         n.ox = n.oy = n.oh = n.vx = n.vy = n.vh = 0;
         continue;
       }
@@ -158,16 +162,18 @@ export class Contacts {
   /**
    * Bump the own car c, just stepped to step k after the base snapshot, against every
    * other solid car's predicted pose (the pose near cars are drawn at): c takes exactly its
-   * half of each push and impulse. Returns the hardest contact. Wrecked or ghosted (incl.
-   * finished) cars are skipped; the own car does not collide at all while it is wrecked or
-   * ghosted, or runs further ahead than PREDICT_MAX_MS.
+   * half of each push and impulse. Returns the hardest contact. Wrecked, ghosted (incl.
+   * finished) and falling cars are skipped, and so are airborne ones still in the air at
+   * step k (flight is committed: the snapshot's air ticks say when it lands). The own car
+   * does not collide at all while it is wrecked, airborne, falling or ghosted, or runs
+   * further ahead than PREDICT_MAX_MS. Mirrors the server's solid().
    */
   collide(c: CarState, k: number): CarContact | null {
     const base = this.base;
-    if (!base || c.wreck > 0 || base.cars.get(this.you)?.ghost || this.ahead || k > CAP_STEPS) return null;
+    if (!base || c.wreck > 0 || c.air > 0 || c.fall > 0 || base.cars.get(this.you)?.ghost || this.ahead || k > CAP_STEPS) return null;
     let hardest: CarContact | null = null;
     for (const [id, s] of base.cars) {
-      if (id === this.you || s.ghost || s.wreck > 0) continue;
+      if (id === this.you || s.ghost || s.wreck > 0 || s.fall > 0 || s.air > k) continue;
       const p = drawnPose(s, k, this.turns.get(id) ?? 0);
       const hit = collideCarOneSided(c, { x: p.x, y: p.y, h: p.h, vx: s.vx, vy: s.vy });
       if (hit && (!hardest || hit.impact > hardest.impact)) hardest = hit;
@@ -202,9 +208,10 @@ export class Contacts {
    * (fractional, between the last two steps). A car within NEAR_ON_DIST of the own car
    * eases over BLEND_MS to its predicted pose (plus its offset), and back once it is
    * beyond NEAR_OFF_DIST, or while the own car runs further ahead than PREDICT_MAX_MS
-   * (no prediction then). dtMs: time since the last frame.
+   * (no prediction then). dtMs: time since the last frame. Other fields of a pose are kept;
+   * a near car's height eases to its predicted height at step k with its position.
    */
-  blend(interp: Pose[], own: CarState | null, k: number, dtMs: number): Pose[] {
+  blend<P extends Pose>(interp: P[], own: CarState | null, k: number, dtMs: number): P[] {
     const base = this.base;
     if (!own || !base) {
       this.near.clear();
@@ -233,7 +240,9 @@ export class Contacts {
       }
       const f = n.w * n.w * (3 - 2 * n.w); // smoothstep
       const px = p.x + n.ox, py = p.y + n.oy, ph = p.h + n.oh;
-      return { id: o.id, x: o.x + (px - o.x) * f, y: o.y + (py - o.y) * f, h: o.h + angleDiff(o.h, ph) * f };
+      const h0 = o.height ?? 0;
+      const height = h0 + (drawnHeight(s, k) - h0) * f;
+      return { ...o, x: o.x + (px - o.x) * f, y: o.y + (py - o.y) * f, h: o.h + angleDiff(o.h, ph) * f, height };
     });
   }
 
@@ -260,6 +269,11 @@ function predictSeconds(k: number): number {
 export function drawnPose(s: CarSnap, k: number, turn: number): { x: number; y: number; h: number } {
   const p = predicted(s, k);
   return { x: p.x, y: p.y, h: s.h + turn * predictSeconds(k) };
+}
+
+/** The height (airHeight) of another car k steps after its snapshot: its flight is committed. */
+export function drawnHeight(s: CarSnap, k: number): number {
+  return s.air > 0 ? airHeight({ ...s, air: Math.max(0, s.air - Math.max(0, k)) }) : 0;
 }
 
 /** Spring a near car's offset back towards 0 (critically damped), dtMs of frame time. */

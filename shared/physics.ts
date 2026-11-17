@@ -26,10 +26,9 @@ export interface CarState {
   vy: number;
   seg: number; // last track segment, the search hint for track queries
   wreck: number; // ticks left wrecked (frozen), 0 = driving; see shared/weapons.ts
-  // Jumps and falls (shared/weapons.ts stepRaceCar). Optional so older car literals keep
-  // compiling; missing = 0.
-  air?: number; // ticks left in the air (committed flight: velocity and heading frozen), 0 = grounded
-  fall?: number; // ticks left falling (frozen, blinking), then the car is placed at a recovery point
+  // Jumps and falls (shared/weapons.ts stepRaceCar).
+  air: number; // ticks left in the air (committed flight: velocity and heading frozen), 0 = grounded
+  fall: number; // ticks left falling (frozen, blinking), then the car is placed at a recovery point
 }
 
 /** Per-car tuning. The upgrade shop will modify these. */
@@ -59,7 +58,7 @@ const WALL_BOUNCE = 0.35;
 const WALL_SCRAPE = 0.97;
 
 export function cloneCar(c: CarState): CarState {
-  return { x: c.x, y: c.y, h: c.h, vx: c.vx, vy: c.vy, seg: c.seg, wreck: c.wreck, air: c.air ?? 0, fall: c.fall ?? 0 };
+  return { x: c.x, y: c.y, h: c.h, vx: c.vx, vy: c.vy, seg: c.seg, wreck: c.wreck, air: c.air, fall: c.fall };
 }
 
 export function speedOf(c: { vx: number; vy: number }): number {

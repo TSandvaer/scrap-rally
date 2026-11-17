@@ -1,7 +1,7 @@
 // Shots, mines, damage, wrecks, ghosting and repair for one room. Server-only: the client
 // learns about hits from events and snapshots (it only predicts its own car's movement).
 
-import type { CarState } from "../shared/physics";
+import { capsuleGap, type CarState } from "../shared/physics";
 import type { GameEvent, MineSnap, ShotSnap } from "../shared/protocol";
 import { regenPerTick, type Ammo, type Levels } from "../shared/shop";
 import type { Track } from "../shared/track";
@@ -38,9 +38,19 @@ export interface Fighter {
   levels: Levels;
 }
 
-/** Can be hit and can collide with other cars. */
+/**
+ * Can be hit, can collide with other cars and can fire or drop mines: on the ground and not
+ * wrecked, falling, ghosted or finished. Airborne cars pass over mines, rivets and cars.
+ */
 export function solid(f: Fighter): boolean {
-  return !!f.car && f.car.wreck === 0 && f.ghost === 0 && !f.finished;
+  const c = f.car;
+  return !!c && c.wreck === 0 && c.air === 0 && c.fall === 0 && f.ghost === 0 && !f.finished;
+}
+
+/** Does f's car overlap another fighter's car (car-car capsules)? */
+function overlapsAnother(f: Fighter, fighters: Fighter[]): boolean {
+  const c = f.car;
+  return !!c && fighters.some((o) => o !== f && !!o.car && capsuleGap(c, o.car) < 0);
 }
 
 export class Combat {
@@ -80,8 +90,13 @@ export class Combat {
     }
   }
 
-  /** Move shots and mines, apply hits, run wreck/ghost/repair timers. Racing phase only. */
-  step(fighters: Fighter[], prev: Map<string, { x: number; y: number }>): void {
+  /**
+   * Move shots and mines, apply hits, run wreck/ghost/repair timers. Racing phase only.
+   * recovered: fighters whose car stepRaceCar placed at a recovery point this tick (the room
+   * gave them GHOST_TICKS before the car-car pass; it starts counting down next tick, like
+   * the ghost after a wreck respawn).
+   */
+  step(fighters: Fighter[], prev: Map<string, { x: number; y: number }>, recovered: ReadonlySet<Fighter> = new Set()): void {
     const live: Shot[] = [];
     for (const s of this.shots) {
       const x0 = s.x, y0 = s.y;
@@ -127,7 +142,9 @@ export class Combat {
         // stepRaceCar respawned it this tick
         f.hp = f.maxHp;
         f.ghost = GHOST_TICKS;
-      } else if (f.ghost > 0) {
+      } else if (f.ghost > 0 && !recovered.has(f) && (f.ghost > 1 || !overlapsAnother(f, fighters))) {
+        // A ghost never runs out while the car still overlaps another car (two cars put at
+        // the same spot would otherwise be shoved apart the moment it ends).
         f.ghost--;
       }
       if (c.wreck === 0 && f.hp > 0 && f.hp < f.maxHp) {
