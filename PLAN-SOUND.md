@@ -115,8 +115,8 @@ Out of scope: chat sounds, voice lines, per-track music, music during races, aud
 - Engine: a petrol engine with three presets (4-cyl, V8, buggy); buggy is the default, the others selectable on the
   sound board.
 - Rivet = machine-gun round (crack + thump, per-shot variation); mine hit/blast = explosion (boom, crack, rumble tail).
-- Surface sounds for the own car, as persistent per-frame voices from the predicted pose: a kerb rumble pulsing per
-  22-unit stripe while the car overlaps the kerb band (halfWidth..halfWidth+5), and a gravel crunch while off the
-  asphalt (q.dist > halfWidth, as the physics' off-road test).
+- Surface sound for the own car, as a persistent per-frame voice from the predicted pose: a gravel crunch while off
+  the asphalt (q.dist > halfWidth, as the physics' off-road test). (A kerb rumble was asked for, then dropped by the
+  user the same day.)
 - Crash: car-car contacts and own-car wall hits sound like bending metal, scaled by impact speed; wall impacts derived
   in step() (never in replays) from the velocity into the wall, with a threshold and a ~200 ms refractory.
