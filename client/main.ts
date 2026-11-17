@@ -500,11 +500,12 @@ function draw(alpha: number, elapsed: number): void {
     return { id, x, y, h, me, color: p?.color ?? "#888", name: p?.name ?? "?", wreck, ghost, height: st.height, falling: st.falling };
   };
   // Other cars at the interpolation time; near ones are drawn at their predicted pose,
-  // where the own car bumps into them (client/contact.ts). The state stays the pose's.
+  // where the own car bumps into them (client/contact.ts). The state stays the pose's, except
+  // the height: the blend eases a near car's height toward its predicted flight too.
   const others: DrawPose[] = game.otherPoses();
   const state = new Map(others.map((o) => [o.id, o]));
   const drawn = game.contact.blend(others, game.car, game.pending.length - 1 + alpha, elapsed);
-  for (const o of drawn) cars.push(view(o, state.get(o.id) ?? o, false));
+  for (const o of drawn) cars.push(view(o, { ...(state.get(o.id) ?? o), height: o.height }, false));
   game.contact.diagOn = debug && game.phase === "racing";
   if (debug && game.phase === "racing" && measuredPhase !== "racing") {
     jerk.reset(); // one race per measurement
