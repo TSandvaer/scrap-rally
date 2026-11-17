@@ -171,9 +171,9 @@ export class BotDriver {
     const lat = (c.x - p.x) * -Math.sin(dir) + (c.y - p.y) * Math.cos(dir); // + = right of travel
 
     // Holes: the lane nearest the car's line that clears the next ones; slower among them.
-    const pref = clamp(lat, this.lateral - 24, this.lateral + 24);
-    const hole = holeLane(track, q.s, 140 + v * 0.6, pref);
-    const lane = hole.lane;
+    // With no holes ahead the bot holds its own racing line (this.lateral).
+    const hole = holeLane(track, q.s, 140 + v * 0.6, clamp(lat, this.lateral - 24, this.lateral + 24));
+    const lane = hole.holes ? hole.lane : this.lateral;
     const look = hole.holes ? 40 + v * 0.25 : 55 + v * 0.3;
 
     // A ramp coming up: full throttle, straight at it.

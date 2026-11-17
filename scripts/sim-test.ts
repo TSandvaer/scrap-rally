@@ -2272,6 +2272,38 @@ function botDriver(): void {
     `lanes at 3150/3300/3575/3650/3750: ${lanes.join(", ")}`,
   );
 
+  // Away from holes the bot holds its own racing line: one solo Rust Bowl lap per lane (after
+  // 2 s off the grid), the share of steps more than 12 units off the lane stays small.
+  {
+    const rust = trackById("rust-bowl");
+    const hold = [-24, 0, 24].map((lane) => {
+      const g = gridSlot(rust, 0);
+      const car: CarState = { x: g.x, y: g.y, h: g.h, vx: 0, vy: 0, seg: g.seg, wreck: 0, air: 0, fall: 0 };
+      const bot = new BotDriver(stubGame(rust, car), lane);
+      bot.weapons = false;
+      let off = 0, n = 0, dist = 0, prev = queryTrackNear(rust, car.x, car.y, car.seg).s;
+      for (let i = 0; i < 60 * 60 && dist < rust.length; i++) {
+        stepRaceCar(car, bot.controls(), BASE_STATS, rust);
+        const q = queryTrackNear(rust, car.x, car.y, car.seg);
+        let ds = q.s - prev;
+        if (ds < -rust.length / 2) ds += rust.length;
+        dist += ds;
+        prev = q.s;
+        if (i < 120) continue;
+        const p = pointAt(rust, q.s);
+        const lat = (car.x - p.x) * -Math.sin(p.h) + (car.y - p.y) * Math.cos(p.h);
+        n++;
+        if (Math.abs(lat - lane) > 12) off++;
+      }
+      return { lane, share: off / n, lap: dist >= rust.length };
+    });
+    check(
+      "bot: holds its lane on Rust Bowl (no holes): under 10% of a lap more than 12 off the lane",
+      hold.every((h) => h.lap && h.share < 0.1),
+      hold.map((h) => `lane ${h.lane}: ${(100 * h.share).toFixed(1)}%`).join(", "),
+    );
+  }
+
   // Weapons: never at an airborne or falling car (the server ignores those shots).
   const p = pointAt(knot, 3000);
   const me: CarState = { x: p.x, y: p.y, h: p.h, vx: 0, vy: 0, seg: p.seg, wreck: 0, air: 0, fall: 0 };
