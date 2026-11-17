@@ -72,7 +72,9 @@ DEPLOYED 2026-11-17 (user): live serves 19d759b (bundle has chatlog / Crusher Ru
 ctx_eb48b9676708 (spec tmp/spec-qa-live-3.md) on 8 'ready for qa test' tickets.
 LIVE QA 2026-11-17: all 8 PASS, no bugs (smoke x3: 30 snap/s, RTT median 25-40 ms, largest gap <= 83 ms; wss; no console
 errors). Not checked live: Start anyway, half damage, a bot in the air. All 8 tickets -> complete. Report: tmp/qa3/QA3-REPORT.md.
-Nothing in flight; all workspaces removed (chat workspace removed after the user's :3002 server stopped). Still pending: remove m3-t4 workspace once the
+Nothing in flight; all workspaces removed (chat workspace removed after the user's :3002 server stopped).
+SOUND (plan PLAN-SOUND.md approved 2026-11-17): SND-1 123jpnbf9be in flight, ctx_af130886dcb7 (~/orca/workspaces/scrap-rally/snd1,
+TSandvaer/snd1, :3002; taste gate: the user listens to the music). SND-2 123jpnbf9bf (race effects) queued until SND-1 merges. Still pending: remove m3-t4 workspace once the
 user stops :3001 (PID 16470).
 
 **Resume (2026-11-16):** main 0dec6c9 (local, 15 ahead of origin) = ready check + engine
@@ -120,6 +122,7 @@ Manual Deploy only on the user's go-ahead. The user's own dev server runs on :30
 
 | Ticket | Dispatch | Workspace | Branch | Port | Started |
 | --- | --- | --- | --- | --- | --- |
+| 123jpnbf9be SND-1 | ctx_af130886dcb7 | ~/orca/workspaces/scrap-rally/snd1 | TSandvaer/snd1 | 3002 | 2026-11-17 |
 
 ## Queued (milestone 3, PLAN-M3.md; start after solid collisions 123jpnbf6cy and easier-start 123jpnbf3xa merge)
 
