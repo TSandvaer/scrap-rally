@@ -11,6 +11,9 @@ T1a done 2026-11-17: 2e3c752 (verified clean; sim 162/162, bots 50/50); reviewer
 worker pkill'ed all `tsx server/index.ts` processes (user's :3000 server gone; user told; template now says kill by PID).
 T2 done 2026-11-17: a4eeb9e (verified clean; sim 142/142, bots 61/61); reviewer ctx_6c8fe004a7e1 on it. Only shared file
 with T1a: scripts/sim-test.ts (both appended; T2 also changed one harness line for the new Room signature).
+T1a MERGED 2026-11-17: review APPROVE; main c4d18fc (check clean, sim 162/162, bots 50/50); review notes for T1b/T4
+in team/m3-handoff.md. T2 review APPROVE (ctx_6c8fe004a7e1, kept for the merge review); T2 merge into main conflicted in
+sim-test.ts -> aborted; T2 author merging main into its branch (ctx_72c21d106231).
 
 **Resume (2026-11-16):** main 0dec6c9 (local, 15 ahead of origin) = ready check + engine
 (pushed 4f9ef51) + easier-start (merged locally, user-approved, reviews APPROVE). Deploys are batched:
@@ -57,7 +60,6 @@ Manual Deploy only on the user's go-ahead. The user's own dev server runs on :30
 
 | Ticket | Dispatch | Workspace | Branch | Port | Started |
 | --- | --- | --- | --- | --- | --- |
-| 123jpnbf6e6 M3-T1a | ctx_0a4724b3a60b | ~/orca/workspaces/scrap-rally/m3-t1a | TSandvaer/m3-t1a | 3001 | 2026-11-17 |
 | 123jpnbf6e7 M3-T2 | ctx_ed4c152e2a67 | ~/orca/workspaces/scrap-rally/m3-t2 | TSandvaer/m3-t2 | 3002 | 2026-11-17 |
 
 ## Queued (milestone 3, PLAN-M3.md; start after solid collisions 123jpnbf6cy and easier-start 123jpnbf3xa merge)
