@@ -15,7 +15,9 @@ the user plays from the main checkout (:3000; try ?lag=80 too, prediction goes i
 Author worker + workspace kept until the verdict (restitution tuning goes to it). Then: cleanup, start M3-T1a + M3-T2.
 VERDICT 2026-11-17: collisions good, but near cars stutter (only near own car, small jumps). Fix sent to the author
 as follow-up dispatch ctx_15dbcec1753f (run run_c58bb5836634; spec tmp/fix-near-car-stutter.md: measure jerk near vs far,
-lag 0/80, fix, before/after numbers). Then reviewer, merge, user re-test, then M3. Milestone 3 queued (below), starts after collisions merge.
+lag 0/80, fix, before/after numbers). Then reviewer, merge, user re-test, then M3.
+Stutter fix done 2026-11-17: fa93f5f (verified clean; one commit on main 23455cf; sim 119/119, bots 50/50; near
+stutter 74% -> 0.014% at lag 80). Reviewer ctx_2cb05dd0f689 (run run_c58bb5836634) on fa93f5f. Milestone 3 queued (below), starts after collisions merge.
 
 **Resume (2026-11-15):** Live: https://scrap-rally.onrender.com at d912583. In flight on run
 `run_c58bb5836634`: dispatch `ctx_a40ce564286f` (task task_3736690503f4) on ClickUp 123jpnbf3xa "Easier
