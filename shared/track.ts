@@ -80,38 +80,37 @@ export const RUST_BOWL: TrackDef = {
   verge: 44,
 };
 
-// Original layout: a scrapyard run. The start straight jumps two scrap piles that block the
-// road, a sweeping right-hander goes through a field of holes (a cluster on the left of the
-// road, then one on the right, so the line moves across), the bottom straight jumps a chasm,
-// and a twisty left section leads back to the start. Recovery points before each hazard.
+// Original layout: a scrapyard run. A long start straight, then past the first bend a straight
+// down the right side that jumps two scrap piles blocking the road, a sweeping right-hander
+// with three pits to steer between, a chasm jump on the bottom straight, and a twisty climb
+// back to the start. Recovery points before each hazard.
 export const CRUSHER_RUN: TrackDef = {
   id: "crusher-run",
   name: "Crusher Run",
   control: [
-    [900, 500], [1400, 500], [1900, 500], [2400, 500], [2900, 500], [3400, 500], [3800, 700],
-    [3950, 1150], [3850, 1650], [3450, 2000], [2900, 2150], [2400, 2150], [1900, 2150],
-    [1400, 2150], [950, 2100], [650, 1850], [750, 1450], [450, 1150], [300, 750], [500, 500],
+    [900, 500], [1400, 500], [1900, 500], [2400, 500], [2900, 500], [3350, 560], [3700, 800],
+    [3850, 1150], [3850, 1500], [3850, 1850], [3850, 2200], [3850, 2550], [3700, 2900],
+    [3350, 3080], [2900, 3130], [2400, 3130], [1900, 3130], [1400, 3130], [950, 3080],
+    [650, 2830], [700, 2400], [450, 2050], [600, 1700], [750, 1350], [450, 1100], [300, 750],
+    [500, 500],
   ],
   halfWidth: 64,
   verge: 44,
   features: [
-    // Scrap piles across the start straight: a ramp onto each.
-    { k: "ramp", s: 620, len: 80 },
-    { k: "gap", s0: 700, s1: 830, scrap: true },
-    { k: "ramp", s: 1680, len: 80 },
-    { k: "gap", s0: 1760, s1: 1900, scrap: true },
-    // The field of holes (r <= 38: the renderer's cull assumes it).
-    { k: "hole", s: 3250, lat: -40, r: 22 },
-    { k: "hole", s: 3350, lat: -10, r: 24 },
-    { k: "hole", s: 3450, lat: -44, r: 20 },
-    { k: "hole", s: 3700, lat: 40, r: 22 },
-    { k: "hole", s: 3800, lat: 8, r: 24 },
-    { k: "hole", s: 3900, lat: 44, r: 20 },
+    // Scrap piles across the right-side straight: a ramp onto each.
+    { k: "ramp", s: 3420, len: 80 },
+    { k: "gap", s0: 3500, s1: 3630, scrap: true },
+    { k: "ramp", s: 4060, len: 80 },
+    { k: "gap", s0: 4140, s1: 4280, scrap: true },
+    // Three pits, 300 apart: one mid-road, then one on each side (r <= 38: the renderer's cull).
+    { k: "hole", s: 5250, lat: 0, r: 30 },
+    { k: "hole", s: 5550, lat: -34, r: 26 },
+    { k: "hole", s: 5850, lat: 34, r: 26 },
     // The chasm: 220 units, a take-off at ~340 u/s or more.
-    { k: "ramp", s: 5800, len: 80 },
-    { k: "gap", s0: 5880, s1: 6100 },
+    { k: "ramp", s: 6650, len: 80 },
+    { k: "gap", s0: 6730, s1: 6950 },
   ],
-  recovery: [0, 1300, 2950, 5300],
+  recovery: [0, 3150, 3880, 4800, 6150],
 };
 
 // Original layout: a figure-eight. Two diagonal straights cross at right angles at
@@ -148,8 +147,14 @@ export const LOCAL_WINDOW = 12; // segments searched either side of the hint
 export const LIP_ZONE = 12;
 /** No feature may lie this far behind the start line (the starting grid). */
 export const GRID_ZONE = 400;
-/** ... or this far past it (the start straight). */
+/**
+ * ... or on the start straight past it, measured from the track (startStraightEnd): from the
+ * line until the road's heading turns more than START_STRAIGHT_TOLERANCE away from the
+ * heading at the line, and never shorter than START_ZONE (a start just out of a bend still
+ * keeps its first stretch clear).
+ */
 export const START_ZONE = 300;
+export const START_STRAIGHT_TOLERANCE = 0.05; // radians (~3 degrees)
 /** Near sections must be more than 2 * LOCAL_WINDOW + this many segment indices apart. */
 export const SECTION_INDEX_MARGIN = 4;
 
@@ -328,6 +333,21 @@ export function gridSlot(track: Track, slot: number): { x: number; y: number; h:
 }
 
 /**
+ * End of the start straight, as a distance past the start line: the start of the first
+ * segment whose heading differs from the heading at s = 0 by more than
+ * START_STRAIGHT_TOLERANCE, but at least START_ZONE.
+ */
+export function startStraightEnd(track: Track): number {
+  const h0 = pointAt(track, 0).h;
+  for (let i = 0; i < track.pts.length; i++) {
+    const d = segDir(track, i);
+    const dh = Math.atan2(d.y, d.x) - h0;
+    if (Math.abs(Math.atan2(Math.sin(dh), Math.cos(dh))) > START_STRAIGHT_TOLERANCE) return Math.max(START_ZONE, track.cum[i]);
+  }
+  return track.length;
+}
+
+/**
  * Smallest gap between two parts of the track that are far apart along the route.
  * If this is below 2 * wall the walls of the two parts overlap.
  */
@@ -418,7 +438,7 @@ function quadsOverlap(a: Vec[], b: Vec[]): boolean {
 /**
  * Everything wrong with a track's layout, features and recovery points; empty = valid.
  * - Features lie inside the track (no wrap past s = 0), off the starting grid (GRID_ZONE
- *   behind the line) and the start straight (START_ZONE past it); holes inside the walls.
+ *   behind the line) and the start straight (startStraightEnd past it); holes inside the walls.
  * - Recovery points are on solid ground (not in a gap, a hole or a take-off zone).
  * - The ground corridors (centerline +-wall, outside gaps) of two sections never overlap: the
  *   track may cross itself only where one of the two sections is a gap.
@@ -432,10 +452,11 @@ export function validateTrack(track: Track): string[] {
   const errors: string[] = [];
   const L = track.length;
   const f1 = (v: number) => v.toFixed(1);
+  const straight = startStraightEnd(track);
   const zone = (what: string, lo: number, hi: number) => {
     if (!(lo >= 0 && hi <= L && lo <= hi)) errors.push(`${what}: outside 0..${f1(L)} (or wraps past the start line)`);
-    else if (lo < START_ZONE || hi > L - GRID_ZONE) {
-      errors.push(`${what}: in the start zone (grid ${f1(L - GRID_ZONE)}..${f1(L)} or start straight 0..${START_ZONE})`);
+    else if (lo < straight || hi > L - GRID_ZONE) {
+      errors.push(`${what}: in the start zone (grid ${f1(L - GRID_ZONE)}..${f1(L)} or start straight 0..${f1(straight)})`);
     }
   };
   for (const r of track.ramps) {

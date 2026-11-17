@@ -1722,8 +1722,10 @@ function wiredGame(rooms: Rooms, clock: { now: number }): { game: Game; open(): 
 function jumpsWired(): void {
   registerTestTrack(T1B_DEF);
   const t = trackById(T1B_ID);
-  const tErr = [...validateTrack(t), ...validateRunUps(t)];
-  check("t1b track: validates (track and run-ups)", tErr.length === 0, tErr.join("; "));
+  // A test straight: its features sit on the start straight on purpose (s = x), so that one
+  // rule (startStraightEnd) is not asked of it; everything else is.
+  const tErr = [...validateTrack(t).filter((m) => !m.includes("start straight")), ...validateRunUps(t)];
+  check("t1b track: validates (track and run-ups; its features are on the start straight by design)", tErr.length === 0, tErr.join("; "));
   const lastSnap = (sim: Sim, to: Player, of: Player): CarSnap | undefined => {
     const m = sim.conns.get(to.id)!.msgs.filter((x) => x.t === "snap").pop() as Extract<ServerMsg, { t: "snap" }> | undefined;
     return m?.ents.find((e): e is CarSnap => e.k === "car" && e.id === of.id);
@@ -2110,7 +2112,7 @@ function jumpsWired(): void {
 
 // This section's imports (hoisted like the ones at the top).
 import { BotDriver, holeLane, speedAfter, takeoffSpeedFor } from "./bot-ai";
-import { gapAt as gapAtT4 } from "../shared/track";
+import { gapAt as gapAtT4, START_ZONE, startStraightEnd } from "../shared/track";
 import { CAR_WIDTH } from "../shared/physics";
 import type { Pose } from "../client/game";
 
@@ -2211,6 +2213,48 @@ function shippedTracks(): void {
       );
     }
   }
+  // The start straight is measured from the track (startStraightEnd), not a fixed 300 units:
+  // the first Crusher Run layout (2cb0eed), whose scrap jumps sat on a ~1970-unit start
+  // straight, is rejected for exactly those four features; the shipped tracks keep theirs clear.
+  {
+    const first = buildTrack({
+      id: "crusher-run-2cb0eed",
+      name: "Crusher Run (first layout)",
+      control: [
+        [900, 500], [1400, 500], [1900, 500], [2400, 500], [2900, 500], [3400, 500], [3800, 700],
+        [3950, 1150], [3850, 1650], [3450, 2000], [2900, 2150], [2400, 2150], [1900, 2150],
+        [1400, 2150], [950, 2100], [650, 1850], [750, 1450], [450, 1150], [300, 750], [500, 500],
+      ],
+      halfWidth: 64,
+      verge: 44,
+      features: [
+        { k: "ramp", s: 620, len: 80 }, { k: "gap", s0: 700, s1: 830, scrap: true },
+        { k: "ramp", s: 1680, len: 80 }, { k: "gap", s0: 1760, s1: 1900, scrap: true },
+        { k: "hole", s: 3350, lat: -10, r: 24 },
+        { k: "ramp", s: 5800, len: 80 }, { k: "gap", s0: 5880, s1: 6100 },
+      ],
+      recovery: [0, 1300, 2950, 5300],
+    });
+    const errs = validateTrack(first);
+    const onStraight = errs.filter((m) => m.includes("start straight"));
+    check(
+      "validation: features on a long start straight are rejected (the first Crusher Run's two scrap jumps)",
+      startStraightEnd(first) > 1900 && onStraight.length === 4 && errs.length === 4 &&
+        ["ramp at s=620.0", "gap 700.0..830.0", "ramp at s=1680.0", "gap 1760.0..1900.0"].every((w) => onStraight.some((m) => m.startsWith(w))),
+      `start straight 0..${startStraightEnd(first).toFixed(0)}; ${errs.join("; ")}`,
+    );
+    const ends = ["rust-bowl", ...T4_TRACKS].map((id) => {
+      const t = trackById(id);
+      const firstFeature = Math.min(...t.ramps.map((r) => r.s), ...t.gaps.map((g) => g.s0), ...t.holes.map((h) => h.s - h.r));
+      return { id, end: startStraightEnd(t), first: firstFeature };
+    });
+    check(
+      "validation: the start straight of every shipped track is measured, and its first feature lies past it",
+      ends.every((e) => e.end >= START_ZONE && e.first > e.end) && ends.find((e) => e.id === "crusher-run")!.end > 1900,
+      ends.map((e) => `${e.id} straight 0..${e.end.toFixed(0)}, first feature ${Number.isFinite(e.first) ? e.first.toFixed(0) : "-"}`).join("; "),
+    );
+  }
+
   // Overpass Knot really crosses itself: the passes meet at (2000, 1400), the upper one (gap) over the lower one (ground).
   {
     const t = trackById("overpass-knot");
@@ -2262,14 +2306,16 @@ function botDriver(): void {
     `full throttle: ${naive.fell ? "falls" : "clears"} (took off at ${naive.took.toFixed(0)}); bot: reversed ${smart.reversed}, took off at ${smart.took.toFixed(0)}, ${smart.fell ? "fell" : "landed"}`,
   );
 
-  // Holes: the lane clears the next hole; inside the Crusher Run field the lane moves across.
+  // Holes: 100 before each Crusher Run pit the lane clears it; across the field the lane moves
+  // from one side of the road to the other. With no hole near, it is the preferred lane.
   const crusher = trackById("crusher-run");
-  const lanes = [3150, 3300, 3575, 3650, 3750].map((s) => holeLane(crusher, s, 300, 0).lane);
-  const h0 = crusher.holes[0];
+  const pits = crusher.holes;
+  const lanes = pits.map((h) => holeLane(crusher, h.s - 100, 300, 0).lane);
   check(
-    "bot: the hole lane keeps the car's centre clear of the next hole and moves across the field",
-    Math.abs(lanes[0] - h0.lat) > h0.r + CAR_WIDTH / 2 && lanes[1] > 0 && lanes[4] < 0 && holeLane(crusher, 1000, 300, 12).lane === 12,
-    `lanes at 3150/3300/3575/3650/3750: ${lanes.join(", ")}`,
+    "bot: the hole lane keeps the car's centre clear of each pit and moves across the field",
+    pits.length === 3 && lanes.every((l, i) => Math.abs(l - pits[i].lat) > pits[i].r + CAR_WIDTH / 2) &&
+      Math.sign(lanes[1]) === -Math.sign(lanes[2]) && holeLane(crusher, 1000, 300, 12).lane === 12,
+    `pits ${pits.map((h) => `${h.s}@${h.lat} r${h.r}`).join(", ")}; lanes 100 before them: ${lanes.join(", ")}`,
   );
 
   // Away from holes the bot holds its own racing line: one solo Rust Bowl lap per lane (after
@@ -2327,14 +2373,14 @@ function botDriver(): void {
   check("bot: no reversing after a fall's 90 frozen ticks", fc.fall === 0 && after.throttle === 1, `throttle ${after.throttle}`);
 }
 
+/** A reconciliation error this big is "large": a visible snap. */
+const LARGE_ERR = 1;
+
 /**
  * Deterministic headless bot laps: three bots (lanes -24, 0, 24, no weapons) race one lap on
  * a track through the real client Game against a Rooms server on the sim clock (no sockets,
  * no lag). Returns each bot's finish tick, take-offs and falls (the server's car state).
  */
-/** A reconciliation error this big is "large": a visible snap. */
-const LARGE_ERR = 1;
-
 function botLap(id: string): {
   ticks: number[]; jumps: number[]; falls: number[]; stateErrs: number; samples: number; large: number; over01: number; maxErr: number;
 } {
@@ -2401,10 +2447,10 @@ function botLap(id: string): {
 }
 
 function botLaps(): void {
-  // Bounds per track (measured 2026-11-17: Crusher Run ~27 s, Overpass Knot ~29 s, Rust Bowl ~30 s, 0 falls).
+  // Bounds per track (measured 2026-11-17: Crusher Run ~34 s, Overpass Knot ~29 s, Rust Bowl ~32 s, 0 falls).
   const limits: Record<string, { ticks: number; falls: number }> = {
     "rust-bowl": { ticks: 40 * 60, falls: 0 },
-    "crusher-run": { ticks: 36 * 60, falls: 1 },
+    "crusher-run": { ticks: 42 * 60, falls: 1 },
     "overpass-knot": { ticks: 38 * 60, falls: 1 },
   };
   for (const e of trackList().filter((x) => x.id in limits)) {
@@ -2424,8 +2470,9 @@ function botLaps(): void {
       a.jumps.every((j) => j >= t.ramps.length) && JSON.stringify(a) === JSON.stringify(b),
       `take-offs ${a.jumps.join("/")}; rerun finish ${b.ticks.join("/")} vs ${a.ticks.join("/")}`,
     );
-    // Bumps between the bots are predicted only approximately, so bound the count of large
-    // errors in this multi-car race, not the max (advisor change 9).
+    // Bumps between the bots are predicted only approximately, which is why socket races bound
+    // the count of large errors, not the max (advisor change 9). This run has no lag and is
+    // deterministic, so it can ask for no large error at all: in effect a max bound.
     check(
       `bot laps on ${e.id}: prediction matches the server (no air/fall state mismatch, no error > ${LARGE_ERR})`,
       a.samples > 1000 && a.stateErrs === 0 && a.large === 0,
