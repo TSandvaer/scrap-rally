@@ -5,6 +5,7 @@ import type { GameEvent, ResultRow } from "../shared/protocol";
 import { AMMO, AMMO_IDS, priceOf, UPGRADE_IDS, UPGRADES, type ItemId, type Wallet } from "../shared/shop";
 import { trackList, trackName } from "../shared/tracks";
 import { BotDriver } from "../scripts/bot-ai";
+import { ChatPanel, fitViewport } from "./chat";
 import { Game, lostMessage, type TokenStore } from "./game";
 import { Keyboard } from "./input";
 import { JerkMeter } from "./jerk";
@@ -71,6 +72,16 @@ const ui = {
 
 const game = new Game(() => connectWs(wsUrl, { lag, jitter }), tokens);
 const keyboard = new Keyboard(window);
+fitViewport();
+const chat = new ChatPanel({
+  root: $("chat"),
+  dock: $("lobby-chat"),
+  stage: $("stage"),
+  view: $<HTMLCanvasElement>("view"),
+  me: () => game.you,
+  send: (text) => game.say(text),
+  onFocus: () => keyboard.clear(), // a key held as the chat opens must not keep driving
+});
 // Rebuilt whenever the room's track changes (it caches the track's paths and decor).
 let renderer = new Renderer($<HTMLCanvasElement>("view"), game.track);
 let rendererTrack = game.track;
@@ -170,6 +181,8 @@ game.on.welcome = () => {
 game.on.room = () => updatePanels();
 game.on.results = () => updatePanels();
 game.on.garage = () => renderGarage();
+game.on.chat = (line) => chat.add(line);
+game.on.chatlog = () => chat.reset(game.chat);
 game.on.error = (msg) => {
   if (!game.you) ui.menuErr.textContent = msg;
   else toast(msg);
@@ -221,6 +234,7 @@ function updatePanels(): void {
   ui.menu.classList.toggle("hidden", inRoom);
   ui.lobby.classList.toggle("hidden", !inRoom || game.phase !== "lobby");
   ui.results.classList.toggle("hidden", !inRoom || game.phase !== "results" || !game.results);
+  chat.setMode(!inRoom ? "off" : game.phase === "lobby" ? "docked" : "overlay", debug);
   if (!inRoom) return;
 
   ui.lobbyCode.textContent = game.code;

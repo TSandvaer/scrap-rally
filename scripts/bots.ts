@@ -10,6 +10,7 @@ import {
   CODE_LENGTH,
   decode,
   RESULTS_MS,
+  type ChatLine,
   type GameEvent,
   type Phase,
   type ResultRow,
@@ -379,6 +380,7 @@ async function run(ctx: Ctx, bots: Bot[]): Promise<void> {
   await runTrackSwitch(ctx, bots);
   await runJumpFall(ctx, bots);
   await runOverpass(ctx, bots);
+  await runChat(ctx, bots);
 }
 
 const lost = new Map<string, (ConnReason | undefined)[]>();
@@ -551,6 +553,17 @@ async function runGame(ctx: Ctx, bots: Bot[]): Promise<void> {
 
   const rows1 = await race1;
   check("results: mid-race joiner not listed", !rows1.some((r) => r.id === D.game.you));
+  // Chat: the race's result line reaches everyone; the rejoined C and the mid-race joiner D
+  // hold exactly the host's log (chatlog on every bind, then live lines).
+  const resultText = resultLineFor(rows1);
+  await waitFor("result line everywhere", () => [A, B, C, D].every((b) => b.game.chat.some((l) => l.kind === "result")), 3000);
+  check(
+    "chat: one result line per race reaches everyone; a rejoiner and a mid-race joiner hold the host's log",
+    [A, B, C, D].every((b) => b.game.chat.filter((l) => l.kind === "result").map((l) => l.text).join() === resultText) &&
+      [B, C, D].every((b) => chatKeys(b) === chatKeys(A)) &&
+      A.game.chat.filter((l) => l.kind === "join").length === 4,
+    `${resultText}; lines ${[A, B, C, D].map((b) => `${b.name} ${b.game.chat.length}`).join(", ")}`,
+  );
   const expect1 = expectedEarnings(A.events.slice(ev1From), [A, B, C].map((b) => b.game.you));
   await waitFor("garage after payouts", () => [A, B, C].every((b) => b.game.scrap !== scrapBefore1.get(b.game.you) || expect1.get(b.game.you) === 0), 3000);
   const scrapOk = [A, B, C].every((b) => b.game.scrap === scrapBefore1.get(b.game.you)! + expect1.get(b.game.you)!);
@@ -622,6 +635,8 @@ async function runGame(ctx: Ctx, bots: Bot[]): Promise<void> {
 
   // ---- seat taken over (a duplicated tab shares the token) ---------------------------
   [A, B, C, D].forEach(watch);
+  const comings = () => A.game.chat.filter((l) => l.kind === "join" || l.kind === "leave").length;
+  const comingsBefore = comings();
   const dId = D.game.you;
   const E = new Bot("Echo", url, 0, undefined, D.tokens);
   bots.push(E);
@@ -633,6 +648,11 @@ async function runGame(ctx: Ctx, bots: Bot[]): Promise<void> {
     "seat taken over in another tab: old client stops, no ping-pong",
     lost.get("Delta")!.join() === "taken" && !D.game.connected && E.game.connected && E.game.you === dId && A.game.players.length === 4,
     `Delta lost: ${lost.get("Delta")!.join() || "-"}, Echo connected: ${E.game.connected}, players ${A.game.players.length}`,
+  );
+  check(
+    "chat: a takeover writes no join or leave line; the new tab gets the room's log",
+    comings() === comingsBefore && chatKeys(E) === chatKeys(A),
+    `${comings() - comingsBefore} new join/leave lines, Echo ${E.game.chat.length} lines, Alpha ${A.game.chat.length}`,
   );
 
   // ---- server restart: rooms are gone ------------------------------------------------
@@ -1122,3 +1142,80 @@ main().catch((e) => {
   console.error(e);
   process.exit(1);
 });
+
+// ---- room chat (CHAT-1) ---------------------------------------------------------------
+
+function chatKeys(b: Bot): string {
+  return b.game.chat.map((l: ChatLine) => `${l.n}:${l.kind}:${l.name}:${l.text}`).join("|");
+}
+
+/** The result line the server writes for these rows (finishers only). */
+function resultLineFor(rows: ResultRow[]): string {
+  const fin = rows.filter((r) => r.timeMs > 0);
+  const places = ["2nd", "3rd", "4th", "5th", "6th"];
+  const tail = fin.slice(1).map((r, i) => `${places[i]} ${r.name}`).join(", ");
+  return `Race won by ${fin[0]?.name}${tail ? ` — ${tail}` : ""}`;
+}
+
+/**
+ * Room chat over real sockets: two bots (one lagged) chat both ways in the lobby and during a
+ * race while they keep driving, a late joiner gets the whole log, and Leave removes a player
+ * at once with one leave line. Bots never act on chat.
+ */
+async function runChat(ctx: Ctx, bots: Bot[]): Promise<void> {
+  const P = new Bot("Papa", ctx.url, -20);
+  const Q = new Bot("Quebec", ctx.url, 20, { lag: 60, jitter: 10 });
+  const R = new Bot("Romeo", ctx.url, 0);
+  bots.push(P, Q, R);
+  try {
+    for (const b of [P, Q]) b.weapons = false;
+    P.game.create(P.name);
+    await waitFor("P welcome", () => !!P.game.you, 3000);
+    Q.game.join(P.game.code, Q.name);
+    await waitFor("Q in P's room", () => P.game.players.length === 2 && !!Q.game.you, 3000);
+    P.game.say("lobby hello from Papa");
+    await waitFor("Q sees P's lobby line", () => Q.game.chat.some((l) => l.text === "lobby hello from Papa"), 3000);
+    await readyUp("chat", P, [P, Q]);
+    P.game.start();
+    await waitFor("chat: racing", () => P.game.phase === "racing" && !!P.game.car && !!Q.game.car, 6000);
+    await sleep(1500);
+    const rd0 = [P, Q].map((b) => b.game.ownSnap()?.rd ?? 0);
+    P.game.say("Papa: go go go");
+    Q.game.say("Quebec: catch me if you can");
+    const both = (b: Bot) => ["Papa: go go go", "Quebec: catch me if you can"].every((t) => b.game.chat.some((l) => l.kind === "say" && l.text === t));
+    await waitFor("both race lines on both", () => both(P) && both(Q), 3000);
+    await sleep(1000);
+    const rd1 = [P, Q].map((b) => b.game.ownSnap()?.rd ?? 0);
+    check(
+      "chat over sockets: two clients chat both ways during a race (one lagged), and keep driving",
+      P.game.phase === "racing" && both(P) && both(Q) && chatKeys(P) === chatKeys(Q) && rd1.every((d, i) => d > rd0[i] + 100) && P.errors.length + Q.errors.length === 0,
+      `rd ${rd0.map((d) => d.toFixed(0)).join("/")} -> ${rd1.map((d) => d.toFixed(0)).join("/")}, errors ${[...P.errors, ...Q.errors].join("; ") || "-"}`,
+    );
+
+    // A late joiner (mid-race) receives the whole conversation, its own join line once.
+    R.game.join(P.game.code, R.name);
+    await waitFor("R welcome + log", () => !!R.game.you && R.game.chat.length > 0, 3000);
+    await waitFor("P sees R join", () => P.game.chat.some((l) => l.kind === "join" && l.name === R.name), 2000);
+    await sleep(200);
+    check(
+      "chat over sockets: a late joiner receives the full log, with its own join line once",
+      chatKeys(R) === chatKeys(P) && R.game.chat.filter((l) => l.kind === "join" && l.name === R.name).length === 1 && R.game.chat.length >= 6,
+      `${R.game.chat.length} lines: ${R.game.chat.map((l) => `${l.kind}:${l.text}`).join(" | ")}`,
+    );
+
+    // Leave: removed at once (not after the 20 s reconnect grace), one leave line for everyone.
+    const rId = R.game.you;
+    const t0 = performance.now();
+    R.game.leave();
+    await waitFor("R gone for P", () => !P.game.player(rId) && P.game.chat.some((l) => l.kind === "leave" && l.name === R.name), 2000);
+    const took = performance.now() - t0;
+    await sleep(300);
+    check(
+      "chat over sockets: Leave removes the player at once with one leave line; the leaver's list is cleared",
+      !P.game.player(rId) && took < 1500 && P.game.chat.filter((l) => l.kind === "leave").length === 1 && R.game.chat.length === 0,
+      `gone after ${took.toFixed(0)} ms, players ${P.game.players.length}`,
+    );
+  } finally {
+    for (const b of [P, Q, R]) b.game.leave();
+  }
+}

@@ -21,6 +21,22 @@ export const RECONNECT_GRACE_MS = 20000;
 export const FORCE_START_MS = 60000;
 export const CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"; // no 0/O, 1/I/L
 export const CODE_LENGTH = 4;
+// Room chat (PLAN-CHAT.md): the server keeps the last CHAT_HISTORY lines per room, in memory
+// only; a message is cut to CHAT_MAX code points; each player may send CHAT_BURST messages
+// at once, then one more per CHAT_REFILL_MS.
+export const CHAT_HISTORY = 300;
+export const CHAT_MAX = 200;
+export const CHAT_BURST = 5;
+export const CHAT_REFILL_MS = 1000;
+// Room-wide budgets, so a join / say / leave churn (a fresh player bucket every seat) cannot
+// flush a room's history: every say line also takes one of CHAT_ROOM_BURST, CHAT_ROOM_PER_SEC
+// back per second (over it: "Slow down"); join and leave lines take one of CHAT_COMINGS_BURST,
+// CHAT_COMINGS_PER_SEC back per second, and are not written when it is empty (the player
+// still joins or leaves).
+export const CHAT_ROOM_BURST = 15;
+export const CHAT_ROOM_PER_SEC = 3;
+export const CHAT_COMINGS_BURST = 12;
+export const CHAT_COMINGS_PER_SEC = 0.5;
 
 export type Phase = "lobby" | "countdown" | "racing" | "results";
 
@@ -44,7 +60,24 @@ export type ClientMsg =
   | { t: "track"; id: string } // host only, lobby only; an unknown id is refused (shared/tracks.ts)
   | { t: "in"; i: InputTuple[] } // oldest first, newest last
   | { t: "ping"; c: number }
-  | { t: "buy"; item: string };
+  | { t: "buy"; item: string }
+  | { t: "chat"; text: string } // any phase, from a bound player; cleaned and rate-limited by the server
+  | { t: "leave" }; // leave the room for good: removed at once (no reconnect grace)
+
+/**
+ * One line of room chat. say = a player's message (from = their id); join / leave = a player
+ * came or went for good, result = a race's finish order (game lines: no `from`; `name` = the
+ * player the line is about, "" for results). name and color are as of the moment the line was
+ * written (colours are reassigned once a player is removed). n counts up per room, from 1.
+ */
+export interface ChatLine {
+  n: number;
+  kind: "say" | "join" | "leave" | "result";
+  from?: string;
+  name: string;
+  color: string;
+  text: string;
+}
 
 export interface CarSnap {
   k: "car";
@@ -134,6 +167,8 @@ export type ServerMsg =
   | { t: "ev"; tick: number; ev: GameEvent }
   | { t: "results"; rows: ResultRow[] }
   | { t: "garage"; scrap: number; levels: Levels } // to one player
+  | { t: "chat"; line: ChatLine } // live, to everyone in the room
+  | { t: "chatlog"; lines: ChatLine[] } // the room's history, to one player right after every welcome
   | { t: "pong"; c: number; s: number };
 
 export function encode(msg: ClientMsg | ServerMsg): string {

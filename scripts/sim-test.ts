@@ -2541,7 +2541,521 @@ function mineCap(): void {
   check("mine cap: five taps from a clamped wallet drop 3 mines", dropped === 3 && a.ammo.mines === 0, `${dropped} dropped, ${a.ammo.mines} left`);
 }
 
-for (const t of [rivets, gating, mines, wrecks, finishing, garage, armDelay, engine, readyCheck, collisions, trackFeatures, roomTrack, jumpsWired, shippedTracks, botDriver, botLaps, mineCap]) {
+// ---- room chat (CHAT-1, PLAN-CHAT.md, 2026-11-17) --------------------------------------
+
+// This section's imports (hoisted like the ones at the top).
+import {
+  CHAT_COMINGS_BURST,
+  CHAT_COMINGS_PER_SEC,
+  CHAT_HISTORY,
+  CHAT_ROOM_BURST,
+  CHAT_ROOM_PER_SEC,
+  FINISH_GRACE_MS,
+  type ChatLine,
+} from "../shared/protocol";
+import { cleanChat } from "../server/room";
+import { Keyboard } from "../client/input";
+
+type ChatMsg = Extract<ServerMsg, { t: "chat" }>;
+type ChatlogMsg = Extract<ServerMsg, { t: "chatlog" }>;
+
+/** FakeConn that remembers being closed. */
+class ClosingConn extends FakeConn {
+  closed = false;
+  close(): void {
+    this.closed = true;
+  }
+}
+
+/** Live chat lines a connection received. */
+function liveLines(c: FakeConn): ChatLine[] {
+  return c.msgs.filter((m): m is ChatMsg => m.t === "chat").map((m) => m.line);
+}
+
+/** The last chatlog a connection received. */
+function lastChatlog(c: FakeConn): ChatLine[] | undefined {
+  return (c.msgs.filter((m): m is ChatlogMsg => m.t === "chatlog").pop() as ChatlogMsg | undefined)?.lines;
+}
+
+function errsOf(c: FakeConn): string[] {
+  return c.msgs.filter((m) => m.t === "err").map((m) => (m as Extract<ServerMsg, { t: "err" }>).msg);
+}
+
+const lineKey = (l: ChatLine) => `${l.n}:${l.kind}:${l.name}:${l.text}`;
+
+/** Put p just before the line on its last lap, so full throttle finishes within 15 ticks. */
+function nearFinish(sim: Sim, p: Player): void {
+  sim.place(p, L - 40, 0, 300);
+  p.progress = { s: queryTrackNear(track, p.car!.x, p.car!.y, p.car!.seg).s, cp: 3, lap: 0, fin: 0 };
+}
+
+function chatRoom(): void {
+  // ---- every phase, and the result line ----
+  let sim = new Sim(1);
+  const a = sim.add("Ann");
+  const b = sim.add("Bo");
+  const cb = sim.conns.get(b.id)!;
+  const say = (p: Player, text: unknown) => sim.room.chat(p, text, sim.now);
+  say(a, "in the lobby");
+  sim.readyAll(a);
+  sim.room.start(a, sim.now);
+  const countdown: string = sim.room.phase;
+  say(b, "in the countdown");
+  while (sim.room.phase !== "racing") sim.run(1);
+  say(a, "in the race");
+  nearFinish(sim, a);
+  sim.run(15, (p) => (p === a ? { throttle: 1 } : {}));
+  nearFinish(sim, b);
+  sim.run(15, (p) => (p === b ? { throttle: 1 } : {}));
+  const resultsPhase: string = sim.room.phase;
+  say(b, "in the results");
+  const saidTexts = liveLines(cb).filter((l) => l.kind === "say").map((l) => `${l.name}: ${l.text}`);
+  check(
+    "chat: accepted in the lobby, the countdown, the race and the results, sent to everyone",
+    countdown === "countdown" &&
+      resultsPhase === "results" &&
+      saidTexts.join("|") === "Ann: in the lobby|Bo: in the countdown|Ann: in the race|Bo: in the results",
+    saidTexts.join("|"),
+  );
+  const sayA = sim.room.chatLines.find((l) => l.text === "in the lobby");
+  check(
+    "chat: a say line carries from, name and colour",
+    !!sayA && sayA.kind === "say" && sayA.from === a.id && sayA.name === "Ann" && sayA.color === a.color,
+    JSON.stringify(sayA),
+  );
+  const results1 = sim.room.chatLines.filter((l) => l.kind === "result");
+  check(
+    "chat: one result line from endRace, winner first (game line: no from, empty name)",
+    results1.length === 1 && results1[0].text === "Race won by Ann — 2nd Bo" && results1[0].name === "" && !("from" in results1[0]),
+    results1.map((l) => l.text).join("; "),
+  );
+  while ((sim.room.phase as string) !== "lobby") sim.run(1);
+  check("chat: no second result line on the way back to the lobby", sim.room.chatLines.filter((l) => l.kind === "result").length === 1);
+  // A race that ends on the finish grace: the DNF is left out.
+  sim.startRace(a);
+  nearFinish(sim, b);
+  sim.run(15, (p) => (p === b ? { throttle: 1 } : {}));
+  sim.now += FINISH_GRACE_MS;
+  sim.run(1);
+  const results2 = sim.room.chatLines.filter((l) => l.kind === "result");
+  check(
+    "chat: a DNF is left out of the result line",
+    (sim.room.phase as string) === "results" && results2.length === 2 && results2[1].text === "Race won by Bo",
+    results2.map((l) => l.text).join("; "),
+  );
+
+  // ---- no result line when the race ends through toLobby ----
+  sim = new Sim(1);
+  const solo = sim.add("Solo");
+  sim.startRace(solo);
+  const late = sim.add("Late"); // joins mid-race: no car
+  sim.room.leave(solo, sim.now);
+  sim.run(2);
+  check(
+    "chat: a race ended through toLobby (every racer gone) writes no result line",
+    sim.room.phase === "lobby" && !late.car && sim.room.chatLines.every((l) => l.kind !== "result"),
+    `${sim.room.phase}; ${sim.room.chatLines.map((l) => l.kind).join(",")}`,
+  );
+
+  // ---- cleaning ----
+  const zwj = "👩‍🚀 and ‌x"; // ZWJ emoji, ZWNJ
+  const cleaned: [unknown, string][] = [
+    ["  hello \n\t world  ", "hello world"],
+    ["line1\r\nline2", "line1 line2"],
+    ["a\u0000b‮c​d\u0007", "abcd"],
+    ["a \u0007 b", "a b"],
+    [zwj, zwj],
+    ["   \n ", ""],
+    ["\u0000\u0001‮", ""],
+    [42, ""],
+    [null, ""],
+    [["x"], ""],
+  ];
+  const bad = cleaned.filter(([raw, want]) => cleanChat(raw) !== want);
+  check(
+    "chat cleaning: whitespace collapsed first, \\p{C} stripped except ZWNJ/ZWJ, trimmed; non-strings and empty give ''",
+    bad.length === 0,
+    bad.map(([raw]) => `${JSON.stringify(raw)} -> ${JSON.stringify(cleanChat(raw))}`).join("; "),
+  );
+  const emoji = cleanChat("😀".repeat(250));
+  const plain = cleanChat("x".repeat(500));
+  check(
+    "chat cleaning: cut to 200 code points (not UTF-16 units)",
+    [...emoji].length === 200 && emoji.length === 400 && plain.length === 200,
+    `${[...emoji].length} emoji, ${plain.length} x`,
+  );
+  sim = new Sim(1);
+  const c1 = sim.add("C1");
+  const before = sim.room.chatLines.length;
+  sim.room.chat(c1, "  \n\u0000  ", sim.now);
+  sim.room.chat(c1, 12345, sim.now);
+  sim.room.chat(c1, { text: "x" }, sim.now);
+  sim.room.chat(c1, "y".repeat(300), sim.now);
+  const kept = sim.room.chatLines.slice(before);
+  check(
+    "chat: empty and non-string text ignored (no line, no token spent), a long one cut to 200",
+    kept.length === 1 && kept[0].text.length === 200 && c1.chatBucket.tokens === 4,
+    `${kept.length} lines, tokens ${c1.chatBucket.tokens}`,
+  );
+
+  // ---- rate limit ----
+  sim = new Sim(1);
+  const r = sim.add("R");
+  const rc = sim.conns.get(r.id)!;
+  const t0 = sim.now;
+  const count = () => sim.room.chatLines.filter((l) => l.kind === "say").length;
+  for (let i = 1; i <= 7; i++) sim.room.chat(r, `burst ${i}`, t0);
+  const afterBurst = count();
+  const errs1 = errsOf(rc).length;
+  sim.room.chat(r, "too soon", t0 + 500);
+  const errs2 = errsOf(rc).length;
+  sim.room.chat(r, "refilled", t0 + 1100);
+  const afterRefill = count();
+  sim.room.chat(r, "again too soon", t0 + 1150);
+  check(
+    "chat rate limit: 5 in a burst, the 6th and 7th refused with one 'Slow down'",
+    afterBurst === 5 && errs1 === 1 && errsOf(rc)[0] === "Slow down",
+    `${afterBurst} accepted, ${errs1} errs`,
+  );
+  check(
+    "chat rate limit: 'Slow down' at most about once a second; one message back after a second",
+    errs2 === 1 && afterRefill === 6 && errsOf(rc).length === 2 && count() === 6,
+    `errs ${errs2} -> ${errsOf(rc).length}, accepted ${afterRefill}`,
+  );
+  // The bucket is on the player: a rejoin does not refill it.
+  const q = sim.add("Q");
+  for (let i = 0; i < 5; i++) sim.room.chat(q, `q ${i}`, t0);
+  sim.room.unbind(q, t0);
+  sim.rebind(q);
+  const n0 = count();
+  sim.room.chat(q, "after the rejoin", t0);
+  check("chat rate limit: the bucket survives a rejoin", count() === n0 && errsOf(sim.conns.get(q.id)!).includes("Slow down"), `${count() - n0} accepted`);
+
+  // ---- room-wide budgets: a join / say / leave churn cannot flush the history ----
+  // Each new seat brings a full player bucket and the leave message frees the seat at once,
+  // so one client could otherwise write 5 lines (plus join and leave) per cycle.
+  const churnRoom = (t: number) => {
+    const rs = new Rooms(1);
+    const hostConn = new FakeConn();
+    const hs: Session = { conn: hostConn, room: null, player: null };
+    rs.onMessage(hs, { t: "create", name: "Host" }, t);
+    rs.onMessage(hs, { t: "chat", text: "real line before the churn" }, t);
+    const room = hs.room!;
+    const cycle = (i: number, now: number) => {
+      const s: Session = { conn: new FakeConn(), room: null, player: null };
+      rs.onMessage(s, { t: "join", code: room.code, name: "Spam" }, now);
+      for (let k = 0; k < 5; k++) rs.onMessage(s, { t: "chat", text: `spam ${i}.${k}` }, now);
+      rs.onMessage(s, { t: "leave" }, now);
+    };
+    const spam = () => room.chatLines.filter((l) => l.name === "Spam");
+    const kept = () =>
+      room.chatLines[0]?.kind === "join" && room.chatLines[0].name === "Host" && room.chatLines.some((l) => l.text === "real line before the churn");
+    return { rs, hs, hostConn, room, cycle, spam, kept };
+  };
+  const ch = churnRoom(10_000);
+  for (let i = 0; i < 100; i++) ch.cycle(i, 10_000);
+  const spamSays = ch.spam().filter((l) => l.kind === "say").length;
+  const spamComings = ch.spam().filter((l) => l.kind === "join" || l.kind === "leave").length;
+  check(
+    "chat budget: 100 join/say/leave cycles at one instant keep the history (host's join and earlier lines stay, spam bounded)",
+    ch.kept() &&
+      ch.room.players.size === 1 &&
+      spamSays === CHAT_ROOM_BURST - 1 && // the host's line took one
+      spamComings === CHAT_COMINGS_BURST - 1 && // the host's join took one
+      ch.room.chatLines.length === 2 + spamSays + spamComings,
+    `${ch.room.chatLines.length} lines: ${spamSays} spam says, ${spamComings} spam join/leave`,
+  );
+  ch.rs.onMessage(ch.hs, { t: "chat", text: "host during the churn" }, 10_000);
+  const blocked = !ch.room.chatLines.some((l) => l.text === "host during the churn") && errsOf(ch.hostConn).includes("Slow down");
+  ch.rs.onMessage(ch.hs, { t: "chat", text: "host a second later" }, 11_000);
+  check(
+    "chat budget: over the room budget a say gets 'Slow down'; a second later the room can talk again",
+    blocked && ch.room.chatLines[ch.room.chatLines.length - 1]?.text === "host a second later",
+  );
+  // Sustained churn, 10 cycles a second for 10 s: lines grow at the budgets' rates only.
+  const ch2 = churnRoom(50_000);
+  for (let i = 0; i < 100; i++) ch2.cycle(i, 50_000 + i * 100);
+  const says2 = ch2.spam().filter((l) => l.kind === "say").length;
+  const comings2 = ch2.spam().length - says2;
+  const maxSays = CHAT_ROOM_BURST + CHAT_ROOM_PER_SEC * 10;
+  const maxComings = CHAT_COMINGS_BURST + CHAT_COMINGS_PER_SEC * 10;
+  check(
+    `chat budget: 10 s of churn writes at most ${maxSays} says and ${maxComings} join/leave lines; the history keeps its start`,
+    ch2.kept() && says2 <= maxSays && comings2 <= maxComings && ch2.room.chatLines.length < CHAT_HISTORY,
+    `${says2} says, ${comings2} join/leave, ${ch2.room.chatLines.length} lines`,
+  );
+
+  // Normal chat by a full room stays inside the budgets: nothing refused, nothing skipped.
+  const full = new Sim(1);
+  const six = ["N1", "N2", "N3", "N4", "N5", "N6"].map((n) => full.add(n)); // six joins at once
+  let tn = full.now;
+  for (const p of six) for (let k = 0; k < 2; k++) full.room.chat(p, `${p.name} hello ${k}`, tn); // 12 at once
+  for (let round = 0; round < 8; round++) {
+    tn += 2500; // then each player once every 2.5 s: 2.4 lines a second for the room
+    for (const p of six) full.room.chat(p, `${p.name} round ${round}`, tn);
+  }
+  for (const p of six) full.room.leave(p, tn);
+  const fullLines = full.room.chatLines;
+  check(
+    "chat budget: six players chatting normally (12 at once, then 2.4/s for 20 s), joining and leaving lose nothing",
+    fullLines.filter((l) => l.kind === "join").length === 6 &&
+      fullLines.filter((l) => l.kind === "say").length === 12 + 6 * 8 &&
+      fullLines.filter((l) => l.kind === "leave").length === 6 &&
+      six.every((p) => errsOf(full.conns.get(p.id)!).length === 0),
+    `${fullLines.filter((l) => l.kind === "say").length} says, errors ${six.map((p) => errsOf(full.conns.get(p.id)!).length).join("/")}`,
+  );
+
+  // ---- join / leave lines, chatlog order, takeover, the leave message (over Rooms) ----
+  const rooms = new Rooms(1);
+  const conn1 = new ClosingConn();
+  const conn2 = new ClosingConn();
+  const s1: Session = { conn: conn1, room: null, player: null };
+  const s2: Session = { conn: conn2, room: null, player: null };
+  let now = 5000;
+  rooms.onMessage(s1, { t: "create", name: "Host" }, now);
+  const room = s1.room!;
+  rooms.onMessage(s1, { t: "chat", text: "hello early" }, now);
+  rooms.onMessage(s2, { t: "join", code: room.code, name: "Guest" }, now);
+  const guest = s2.player!;
+  const iWelcome = conn2.msgs.findIndex((m) => m.t === "welcome");
+  const iLog = conn2.msgs.findIndex((m) => m.t === "chatlog");
+  const log2 = lastChatlog(conn2) ?? [];
+  const guestJoins = [...log2, ...liveLines(conn2)].filter((l) => l.kind === "join" && l.name === "Guest");
+  check(
+    "chat: the chatlog comes right after the welcome, with the joiner's own join line exactly once",
+    iWelcome >= 0 && iLog === iWelcome + 1 && guestJoins.length === 1 && log2[log2.length - 1]?.kind === "join" && log2.map((l) => l.text).includes("hello early"),
+    `welcome@${iWelcome} chatlog@${iLog}, join lines ${guestJoins.length}, log ${log2.map(lineKey).join(" | ")}`,
+  );
+  check(
+    "chat: the others get the join line live (game line: name and colour of the joiner, no from)",
+    liveLines(conn1).filter((l) => l.kind === "join" && l.name === "Guest" && l.color === guest.color && !("from" in l)).length === 1,
+  );
+  check("chat: a session without a room cannot chat", (() => {
+    const stray: Session = { conn: new FakeConn(), room: null, player: null };
+    const n = room.chatLines.length;
+    rooms.onMessage(stray, { t: "chat", text: "let me in" }, now);
+    return room.chatLines.length === n;
+  })());
+
+  // A dropped connection and a rejoin with the token: no join, no leave; same log in order.
+  rooms.onClose(s2, now);
+  const conn2b = new ClosingConn();
+  const s2b: Session = { conn: conn2b, room: null, player: null };
+  now += 2000;
+  rooms.onMessage(s2b, { t: "join", code: room.code, name: "Guest", token: guest.token }, now);
+  check(
+    "chat: a reconnect writes no join or leave line; the rejoin gets the whole log again, in order",
+    s2b.player === guest &&
+      room.chatLines.filter((l) => l.name === "Guest" && (l.kind === "join" || l.kind === "leave")).length === 1 &&
+      (lastChatlog(conn2b) ?? []).map(lineKey).join() === room.chatLines.map(lineKey).join(),
+    room.chatLines.map(lineKey).join(" | "),
+  );
+
+  // Takeover by another tab with the same token: no join, no leave; the old session is out.
+  const conn2c = new ClosingConn();
+  const s2c: Session = { conn: conn2c, room: null, player: null };
+  const nLines = room.chatLines.length;
+  rooms.onMessage(s2c, { t: "join", code: room.code, name: "Guest", token: guest.token }, now);
+  rooms.onMessage(s2b, { t: "chat", text: "from the old tab" }, now);
+  check(
+    "chat: a 'taken' takeover writes no join or leave line, and the old session can no longer chat",
+    errsOf(conn2b).length === 1 && // just the "taken" notice
+      conn2b.msgs.some((m) => m.t === "err" && m.code === "taken") &&
+      conn2b.closed &&
+      room.chatLines.length === nLines,
+    `${room.chatLines.length - nLines} new lines`,
+  );
+  rooms.onMessage(s2c, { t: "chat", text: "from the new tab" }, now);
+  check("chat: the new tab chats as the same player", room.chatLines[room.chatLines.length - 1]?.from === guest.id);
+
+  // The leave message: removed at once, one leave line, the socket closed; nothing more later.
+  rooms.onMessage(s2c, { t: "leave" }, now);
+  const leaves = () => room.chatLines.filter((l) => l.kind === "leave" && l.name === "Guest");
+  const goneAtOnce = !room.players.has(guest.id) && s2c.room === null && conn2c.closed;
+  const hostView = (conn1.msgs.filter((m) => m.t === "room").pop() as Extract<ServerMsg, { t: "room" }> | undefined)?.players.length;
+  rooms.onClose(s2c, now);
+  rooms.step(now + RECONNECT_GRACE_MS + 1);
+  check(
+    "chat: the leave message removes the player at once and writes exactly one leave line",
+    goneAtOnce && hostView === 1 && leaves().length === 1 && liveLines(conn1).filter((l) => l.kind === "leave").length === 1,
+    `gone ${goneAtOnce}, host sees ${hostView} players, ${leaves().length} leave lines`,
+  );
+
+  // A dropped player whose grace runs out: one leave line.
+  const conn3 = new FakeConn();
+  const s3: Session = { conn: conn3, room: null, player: null };
+  rooms.onMessage(s3, { t: "join", code: room.code, name: "Drop" }, now);
+  const drop = s3.player!;
+  rooms.onClose(s3, now);
+  rooms.step(now + RECONNECT_GRACE_MS / 2);
+  const leftEarly = room.chatLines.some((l) => l.kind === "leave" && l.name === "Drop");
+  rooms.step(now + RECONNECT_GRACE_MS + 1);
+  rooms.step(now + RECONNECT_GRACE_MS + 50);
+  check(
+    "chat: a dropped player gets one leave line when the reconnect grace runs out (not before)",
+    !leftEarly && !room.players.has(drop.id) && room.chatLines.filter((l) => l.kind === "leave" && l.name === "Drop").length === 1,
+  );
+
+  // ---- colour kept after the sender is removed ----
+  sim = new Sim(1);
+  const k1 = sim.add("K1");
+  const k2 = sim.add("K2");
+  const k2Color = k2.color;
+  sim.room.chat(k2, "bye all", sim.now);
+  sim.room.leave(k2, sim.now);
+  const k3 = sim.add("K3"); // takes K2's freed colour
+  const byeLine = lastChatlog(sim.conns.get(k3.id)!)?.find((l) => l.text === "bye all");
+  check(
+    "chat: a line keeps its sender's colour after the sender is gone and the colour is reassigned",
+    k3.color === k2Color && byeLine?.color === k2Color && byeLine.from === k2.id && !sim.room.players.has(k2.id) && k1.color !== k2Color,
+    `K3 ${k3.color}, line ${byeLine?.color}`,
+  );
+
+  // ---- history capped at 300, sent on join and on rejoin ----
+  sim = new Sim(1);
+  const h1 = sim.add("H1");
+  const h2 = sim.add("H2");
+  let t = sim.now;
+  for (let i = 0; i < 320; i++) {
+    t += 1000; // one a second: never rate-limited
+    sim.room.chat(i % 2 ? h1 : h2, `msg ${i}`, t);
+  }
+  const hist = sim.room.chatLines;
+  const ordered = hist.every((l, i) => i === 0 || l.n === hist[i - 1].n + 1);
+  check(
+    "chat: history capped at 300, oldest dropped first",
+    hist.length === CHAT_HISTORY && hist[hist.length - 1].text === "msg 319" && hist[0].text === "msg 20" && ordered,
+    `${hist.length} lines, ${hist[0].text} .. ${hist[hist.length - 1].text}`,
+  );
+  const h3 = sim.add("H3");
+  const log3 = lastChatlog(sim.conns.get(h3.id)!) ?? [];
+  sim.room.unbind(h1, t);
+  sim.rebind(h1);
+  const logRe = lastChatlog(sim.conns.get(h1.id)!) ?? [];
+  check(
+    "chat: a joiner and a rejoin get the full 300 lines, the same lines in the same order",
+    log3.length === CHAT_HISTORY &&
+      log3[log3.length - 1].kind === "join" &&
+      log3.map(lineKey).join() === sim.room.chatLines.map(lineKey).join() &&
+      logRe.map(lineKey).join() === log3.map(lineKey).join(),
+    `joiner ${log3.length}, rejoin ${logRe.length}`,
+  );
+
+  // ---- a deleted room's code, reused, starts empty ----
+  const rooms2 = new Rooms(1);
+  const sa: Session = { conn: new FakeConn(), room: null, player: null };
+  rooms2.onMessage(sa, { t: "create", name: "Old" }, 1000);
+  const code = sa.room!.code;
+  rooms2.onMessage(sa, { t: "chat", text: "remember me" }, 1000);
+  rooms2.onMessage(sa, { t: "leave" }, 1000);
+  rooms2.step(1100);
+  const deleted = !rooms2.rooms.has(code);
+  (rooms2 as unknown as { newCode: () => string }).newCode = () => code;
+  const cn = new FakeConn();
+  const sn: Session = { conn: cn, room: null, player: null };
+  rooms2.onMessage(sn, { t: "create", name: "New" }, 2000);
+  const freshLog = lastChatlog(cn) ?? [];
+  check(
+    "chat: a deleted room's code reused starts with an empty history",
+    deleted && sn.room?.code === code && freshLog.length === 1 && freshLog[0].kind === "join" && freshLog[0].name === "New" && freshLog[0].n === 1,
+    freshLog.map(lineKey).join(" | "),
+  );
+}
+
+/** The client side: Game keeps the room's lines; Keyboard.clear() drops held keys. */
+function chatClient(): void {
+  const rooms = new Rooms(1);
+  const clock = { now: 1000 };
+  const A = wiredGame(rooms, clock);
+  const B = wiredGame(rooms, clock);
+  let chatlogs = 0;
+  const live: ChatLine[] = [];
+  B.game.on.chatlog = () => chatlogs++;
+  B.game.on.chat = (l) => live.push(l);
+  A.game.create("Ann");
+  A.open();
+  A.flush();
+  A.game.say("  first  ");
+  A.flush();
+  B.game.join(A.game.code, "Bo");
+  B.open();
+  B.flush();
+  check(
+    "chat client: a joiner's list is the room's log (with its own join line once)",
+    B.game.chat.map((l) => l.text).join("|") === "joined the room|first|joined the room" && chatlogs === 1,
+    B.game.chat.map(lineKey).join(" | "),
+  );
+  A.game.say("x".repeat(250));
+  B.game.say("hi Ann");
+  A.flush();
+  B.flush();
+  check(
+    "chat client: live lines are appended for everyone; say() trims and cuts to 200",
+    live.length === 2 && live[0].text.length === 200 && A.game.chat[A.game.chat.length - 1]?.text === "hi Ann",
+    live.map((l) => `${l.name}:${l.text.length}`).join(", "),
+  );
+  // A chatlog replaces the list (a rejoin's log holds the lines already shown).
+  const room = rooms.rooms.get(A.game.code)!;
+  const player = room.players.get(B.game.you)!;
+  const s: Session = { conn: { send: () => {}, close() {} }, room: null, player: null };
+  room.bind(player, s); // the server sends B's old socket "taken"; B ignores it here
+  B.game["handle"]({ t: "chatlog", lines: [...room.chatLines] });
+  check("chat client: a chatlog replaces the list (no duplicates)", B.game.chat.length === room.chatLines.length, `${B.game.chat.length} vs ${room.chatLines.length}`);
+  // A welcome to another room clears it; the leave message clears it and removes us at once.
+  const before = A.game.chat.length;
+  const annId = A.game.you;
+  A.game.leave();
+  check(
+    "chat client: leave() sends the leave message (removed at once) and clears the list",
+    before > 0 && A.game.chat.length === 0 && !room.players.has(annId) && room.players.size === 1 && room.chatLines[room.chatLines.length - 1]?.kind === "leave",
+    `players left ${room.players.size}`,
+  );
+  const C = wiredGame(rooms, clock);
+  C.game.create("Cy");
+  C.open();
+  C.flush();
+  const cyCode = C.game.code;
+  C.game["handle"]({ t: "chatlog", lines: [{ n: 9, kind: "say", from: "z", name: "Z", color: "#fff", text: "old room" }] });
+  C.game["handle"]({ t: "welcome", code: cyCode === "ABCD" ? "WXYZ" : "ABCD", you: "y", token: "t", laps: 1 });
+  check("chat client: a welcome to a different room clears the list", C.game.chat.length === 0, `${C.game.chat.length}`);
+
+  // Keyboard: typing blocks new keydowns only, so a key held as the chat opens kept driving
+  // until its keyup. clear() (on the chat input's focus) drops it.
+  const g = globalThis as unknown as Record<string, unknown>;
+  const stubbed = !g.HTMLInputElement;
+  if (stubbed) {
+    g.HTMLInputElement = class {};
+    g.HTMLTextAreaElement = class {};
+  }
+  try {
+    const handlers = new Map<string, (e: unknown) => void>();
+    const target = { addEventListener: (type: string, fn: (e: unknown) => void) => handlers.set(type, fn) } as unknown as Window;
+    const kb = new Keyboard(target);
+    const key = (type: string, code: string, on: unknown = null) =>
+      handlers.get(type)!({ code, key: code, repeat: false, target: on, preventDefault() {} });
+    const field = new (g.HTMLInputElement as new () => object)();
+    key("keydown", "ArrowUp");
+    const driving = kb.read().throttle;
+    key("keydown", "KeyX", field); // typed into the chat: ignored
+    const held = kb.read();
+    kb.clear();
+    const cleared = kb.read();
+    key("keydown", "KeyW", field);
+    const stillTyping = kb.read();
+    check(
+      "chat client: a key held when the chat opens stops driving (Keyboard.clear)",
+      driving === 1 && held.throttle === 1 && !held.mine && cleared.throttle === 0 && stillTyping.throttle === 0,
+      `before ${driving}, while typing ${held.throttle}, after clear ${cleared.throttle}`,
+    );
+  } finally {
+    if (stubbed) {
+      delete g.HTMLInputElement;
+      delete g.HTMLTextAreaElement;
+    }
+  }
+}
+
+for (const t of [rivets, gating, mines, wrecks, finishing, garage, armDelay, engine, readyCheck, collisions, trackFeatures, roomTrack, jumpsWired, shippedTracks, botDriver, botLaps, mineCap, chatRoom, chatClient]) {
   console.log(`\n# ${t.name}`);
   try {
     t();
