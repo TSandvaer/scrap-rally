@@ -2544,7 +2544,15 @@ function mineCap(): void {
 // ---- room chat (CHAT-1, PLAN-CHAT.md, 2026-11-17) --------------------------------------
 
 // This section's imports (hoisted like the ones at the top).
-import { CHAT_HISTORY, FINISH_GRACE_MS, type ChatLine } from "../shared/protocol";
+import {
+  CHAT_COMINGS_BURST,
+  CHAT_COMINGS_PER_SEC,
+  CHAT_HISTORY,
+  CHAT_ROOM_BURST,
+  CHAT_ROOM_PER_SEC,
+  FINISH_GRACE_MS,
+  type ChatLine,
+} from "../shared/protocol";
 import { cleanChat } from "../server/room";
 import { Keyboard } from "../client/input";
 
@@ -2641,7 +2649,7 @@ function chatRoom(): void {
   const solo = sim.add("Solo");
   sim.startRace(solo);
   const late = sim.add("Late"); // joins mid-race: no car
-  sim.room.leave(solo);
+  sim.room.leave(solo, sim.now);
   sim.run(2);
   check(
     "chat: a race ended through toLobby (every racer gone) writes no result line",
@@ -2686,8 +2694,8 @@ function chatRoom(): void {
   const kept = sim.room.chatLines.slice(before);
   check(
     "chat: empty and non-string text ignored (no line, no token spent), a long one cut to 200",
-    kept.length === 1 && kept[0].text.length === 200 && c1.chatTokens === 4,
-    `${kept.length} lines, tokens ${c1.chatTokens}`,
+    kept.length === 1 && kept[0].text.length === 200 && c1.chatBucket.tokens === 4,
+    `${kept.length} lines, tokens ${c1.chatBucket.tokens}`,
   );
 
   // ---- rate limit ----
@@ -2722,6 +2730,80 @@ function chatRoom(): void {
   const n0 = count();
   sim.room.chat(q, "after the rejoin", t0);
   check("chat rate limit: the bucket survives a rejoin", count() === n0 && errsOf(sim.conns.get(q.id)!).includes("Slow down"), `${count() - n0} accepted`);
+
+  // ---- room-wide budgets: a join / say / leave churn cannot flush the history ----
+  // Each new seat brings a full player bucket and the leave message frees the seat at once,
+  // so one client could otherwise write 5 lines (plus join and leave) per cycle.
+  const churnRoom = (t: number) => {
+    const rs = new Rooms(1);
+    const hostConn = new FakeConn();
+    const hs: Session = { conn: hostConn, room: null, player: null };
+    rs.onMessage(hs, { t: "create", name: "Host" }, t);
+    rs.onMessage(hs, { t: "chat", text: "real line before the churn" }, t);
+    const room = hs.room!;
+    const cycle = (i: number, now: number) => {
+      const s: Session = { conn: new FakeConn(), room: null, player: null };
+      rs.onMessage(s, { t: "join", code: room.code, name: "Spam" }, now);
+      for (let k = 0; k < 5; k++) rs.onMessage(s, { t: "chat", text: `spam ${i}.${k}` }, now);
+      rs.onMessage(s, { t: "leave" }, now);
+    };
+    const spam = () => room.chatLines.filter((l) => l.name === "Spam");
+    const kept = () =>
+      room.chatLines[0]?.kind === "join" && room.chatLines[0].name === "Host" && room.chatLines.some((l) => l.text === "real line before the churn");
+    return { rs, hs, hostConn, room, cycle, spam, kept };
+  };
+  const ch = churnRoom(10_000);
+  for (let i = 0; i < 100; i++) ch.cycle(i, 10_000);
+  const spamSays = ch.spam().filter((l) => l.kind === "say").length;
+  const spamComings = ch.spam().filter((l) => l.kind === "join" || l.kind === "leave").length;
+  check(
+    "chat budget: 100 join/say/leave cycles at one instant keep the history (host's join and earlier lines stay, spam bounded)",
+    ch.kept() &&
+      ch.room.players.size === 1 &&
+      spamSays === CHAT_ROOM_BURST - 1 && // the host's line took one
+      spamComings === CHAT_COMINGS_BURST - 1 && // the host's join took one
+      ch.room.chatLines.length === 2 + spamSays + spamComings,
+    `${ch.room.chatLines.length} lines: ${spamSays} spam says, ${spamComings} spam join/leave`,
+  );
+  ch.rs.onMessage(ch.hs, { t: "chat", text: "host during the churn" }, 10_000);
+  const blocked = !ch.room.chatLines.some((l) => l.text === "host during the churn") && errsOf(ch.hostConn).includes("Slow down");
+  ch.rs.onMessage(ch.hs, { t: "chat", text: "host a second later" }, 11_000);
+  check(
+    "chat budget: over the room budget a say gets 'Slow down'; a second later the room can talk again",
+    blocked && ch.room.chatLines[ch.room.chatLines.length - 1]?.text === "host a second later",
+  );
+  // Sustained churn, 10 cycles a second for 10 s: lines grow at the budgets' rates only.
+  const ch2 = churnRoom(50_000);
+  for (let i = 0; i < 100; i++) ch2.cycle(i, 50_000 + i * 100);
+  const says2 = ch2.spam().filter((l) => l.kind === "say").length;
+  const comings2 = ch2.spam().length - says2;
+  const maxSays = CHAT_ROOM_BURST + CHAT_ROOM_PER_SEC * 10;
+  const maxComings = CHAT_COMINGS_BURST + CHAT_COMINGS_PER_SEC * 10;
+  check(
+    `chat budget: 10 s of churn writes at most ${maxSays} says and ${maxComings} join/leave lines; the history keeps its start`,
+    ch2.kept() && says2 <= maxSays && comings2 <= maxComings && ch2.room.chatLines.length < CHAT_HISTORY,
+    `${says2} says, ${comings2} join/leave, ${ch2.room.chatLines.length} lines`,
+  );
+
+  // Normal chat by a full room stays inside the budgets: nothing refused, nothing skipped.
+  const full = new Sim(1);
+  const six = ["N1", "N2", "N3", "N4", "N5", "N6"].map((n) => full.add(n)); // six joins at once
+  let tn = full.now;
+  for (const p of six) for (let k = 0; k < 2; k++) full.room.chat(p, `${p.name} hello ${k}`, tn); // 12 at once
+  for (let round = 0; round < 8; round++) {
+    tn += 2500; // then each player once every 2.5 s: 2.4 lines a second for the room
+    for (const p of six) full.room.chat(p, `${p.name} round ${round}`, tn);
+  }
+  for (const p of six) full.room.leave(p, tn);
+  const fullLines = full.room.chatLines;
+  check(
+    "chat budget: six players chatting normally (12 at once, then 2.4/s for 20 s), joining and leaving lose nothing",
+    fullLines.filter((l) => l.kind === "join").length === 6 &&
+      fullLines.filter((l) => l.kind === "say").length === 12 + 6 * 8 &&
+      fullLines.filter((l) => l.kind === "leave").length === 6 &&
+      six.every((p) => errsOf(full.conns.get(p.id)!).length === 0),
+    `${fullLines.filter((l) => l.kind === "say").length} says, errors ${six.map((p) => errsOf(full.conns.get(p.id)!).length).join("/")}`,
+  );
 
   // ---- join / leave lines, chatlog order, takeover, the leave message (over Rooms) ----
   const rooms = new Rooms(1);
@@ -2820,7 +2902,7 @@ function chatRoom(): void {
   const k2 = sim.add("K2");
   const k2Color = k2.color;
   sim.room.chat(k2, "bye all", sim.now);
-  sim.room.leave(k2);
+  sim.room.leave(k2, sim.now);
   const k3 = sim.add("K3"); // takes K2's freed colour
   const byeLine = lastChatlog(sim.conns.get(k3.id)!)?.find((l) => l.text === "bye all");
   check(

@@ -159,7 +159,10 @@ shake (150 ms cooldown; replays never fire it). There is no server bump event.
   cleaned on the server (whitespace collapsed, `\p{C}` stripped except ZWNJ/ZWJ, trimmed,
   cut to 200 code points; empty or non-string ignored) and rate-limited per player (5 at
   once, one more per second; over that a plain `err` "Slow down", at most about once a
-  second). Game lines: "join" before the joiner's bind (so the joiner sees it once, in its
+  second). Room-wide budgets stop a join / say / leave churn (every new seat has a full
+  bucket and Leave frees it at once) from flushing the history: say lines also share 15 at
+  once, 3 more per second per room (over it: "Slow down"); join and leave lines share 12, one
+  more per 2 s, and are skipped when it is empty. Game lines: "join" before the joiner's bind (so the joiner sees it once, in its
   log), "leave" only when a player is removed for good, one "result" per race from the end
   of the race (none when a race ends because every racer left). The client replaces its list
   on `chatlog` and clears it on leave and in another room.
