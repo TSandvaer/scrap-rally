@@ -55,7 +55,9 @@ workers released, workspace removed. Nothing in flight. Local main is 92 commits
 Next: ask the user about push + Manual Deploy; then the QA worker on the live site.
 PUSHED 2026-11-17: origin/main = 274f052 (user approved). Waiting for the user's Manual Deploy in Render; then the QA worker.
 CHAT-1 in flight (plan PLAN-CHAT.md approved): ClickUp 123jpnbf8ry, ctx_8f67ea39effb (~/orca/workspaces/scrap-rally/chat, TSandvaer/chat, :3002);
-taste gate: the user tries it in two browser windows before merge. Still pending: remove m3-t4 workspace once the
+taste gate: the user tries it in two browser windows before merge.
+CHAT-1 done: 2209777 (verified clean; sim 284/284, bots 82/82, build ok); reviewer ctx_f4e3ad0a7720; user taste test from the
+chat workspace on :3002 in parallel. Still pending: remove m3-t4 workspace once the
 user stops :3001 (PID 16470).
 
 **Resume (2026-11-16):** main 0dec6c9 (local, 15 ahead of origin) = ready check + engine
