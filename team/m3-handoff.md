@@ -23,3 +23,4 @@ For T4 (tracks + bots):
    so also validate with max upgrades.
 7. A recovery point at s=0 is not enforced (PLAN-M3 design 1 says "plus the start line"): T4 tracks list 0
    explicitly.
+- T3 review note (non-blocking): hole culling at client/render.ts:494 (T3 branch) uses r*1.8 but cracks reach ~2.32r; holes with r > ~38 could pop in at the screen edge. Keep T4 holes r <= 38 or widen the cull.
