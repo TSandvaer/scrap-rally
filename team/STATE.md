@@ -90,7 +90,10 @@ build ok); workers released, snd1 workspace removed. SND-2 told to `git merge ma
 no-edit rule on audio.ts/index.html/style.css is lifted.
 SND-2 done: 8838ace (main 2c4777a merged in; sim 311/311, bots 82/82, build ok; trigger-log checks pass); WAV + report copied to
 tmp/snd2/; reviewer ctx_d357bd4d32ab (also asked about an unexplained one-off seat loss and a context staying suspended);
-AT THE TASTE GATE: the user plays a race from the snd2 workspace on :3004. Still pending: remove m3-t4 workspace once the
+AT THE TASTE GATE: the user plays a race from the snd2 workspace on :3004.
+SND-2 review 1: REQUEST_CHANGES (audio.ts resume-on-visible never re-arms the gesture unlock if resume() fails -> silent until
+reload). Sent to the author (uses :3005). Seat-loss note: nothing in SND-1/2 sends leave (reviewer's untested guess: a reload
+without the sessionStorage token joined a new seat, the old one ran out its 20 s grace). Still pending: remove m3-t4 workspace once the
 user stops :3001 (PID 16470).
 
 **Resume (2026-11-16):** main 0dec6c9 (local, 15 ahead of origin) = ready check + engine
