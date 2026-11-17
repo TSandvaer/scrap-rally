@@ -7,6 +7,8 @@
 
 export const STUTTER_DV = 120; // units/s change between two frames counted as a stutter
 export const STUTTER_DW = 1.5; // rad/s change of turning speed between two frames, the same for heading
+const MAX_SAMPLES = 20000; // per bucket; the meter is reset at every race start
+const TEXT_EVERY = 30; // frames between two recomputations of the overlay text (sorting)
 
 interface Track {
   x: number;
@@ -24,20 +26,27 @@ export class Bucket {
   turnStutters = 0; // heading: turning-speed change > STUTTER_DW
   private readonly dvs: number[] = [];
   private readonly dws: number[] = [];
+  private text_ = "";
+  private textAt = -Infinity;
 
   add(dv: number, dw: number): void {
     this.frames++;
     if (dv > STUTTER_DV) this.stutters++;
     if (dw > STUTTER_DW) this.turnStutters++;
-    if (this.dvs.length < 50000) {
+    if (this.dvs.length < MAX_SAMPLES) {
       this.dvs.push(dv);
       this.dws.push(dw);
     }
   }
 
+  /** Overlay line; the percentiles are recomputed at most every TEXT_EVERY frames. */
   text(): string {
-    const s = this.stats();
-    return `n ${s.frames} pos ${s.stutterPct.toFixed(1)}% p95 ${s.p95.toFixed(0)}  turn ${s.turnStutterPct.toFixed(1)}% p95 ${s.turnP95.toFixed(2)}`;
+    if (this.frames - this.textAt >= TEXT_EVERY || this.frames < this.textAt) {
+      const s = this.stats();
+      this.text_ = `n ${s.frames} pos ${s.stutterPct.toFixed(1)}% p95 ${s.p95.toFixed(0)}  turn ${s.turnStutterPct.toFixed(1)}% p95 ${s.turnP95.toFixed(2)}`;
+      this.textAt = this.frames;
+    }
+    return this.text_;
   }
 
   stats(): { frames: number; stutterPct: number; p95: number; p99: number; max: number; turnStutterPct: number; turnP95: number; turnP99: number } {

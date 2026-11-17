@@ -1,21 +1,29 @@
 // Own-car bump prediction and near-car drawing. The server resolves every car-car contact;
 // the client predicts its own car's half of each bump with the shared one-sided resolver,
 // against where the other cars will be when the server applies the predicted step: the
-// latest snapshot's pose moved on by its velocity, k steps after that snapshot. Cars near
-// the own car are drawn at that same predicted position, so a bump is seen where it
-// happens, with the heading turned on at the car's turning speed. Moving smoothly matters
+// latest snapshot's pose moved on by its velocity and turned on at its turning speed, k
+// steps after that snapshot. Cars near the own car are drawn at that same predicted pose,
+// so a bump is seen where it happens. Moving smoothly matters
 // as much as being exact there: the switch to and from the predicted pose eases over
 // BLEND_MS, and the small jump of the prediction at each new snapshot is taken out by a
 // critically damped offset, so a near car's velocity never jumps (no stutter).
 // No DOM access: the headless bot test runs this code too.
 
-import { angleDiff, collideCarOneSided, DT, type CarContact, type CarState } from "../shared/physics";
+import { angleDiff, collideCarOneSided, DT, TICK_HZ, type CarContact, type CarState } from "../shared/physics";
 import type { CarSnap } from "../shared/protocol";
 
-// Other cars are never extrapolated further than this. It must cover how far the own car
-// runs ahead of the newest snapshot (round trip + the server's input buffer + up to one
-// snapshot interval: ~10 steps at 80 ms RTT); past it the prediction stands still.
-export const PREDICT_MAX_MS = 250;
+// How far ahead of the newest snapshot other cars are predicted. It must cover how far the
+// own car runs ahead (round trip + the server's input buffer + up to one snapshot
+// interval: ~10 steps at 80 ms RTT, ~15 at 150 ms, ~17 at 180 ms). Past it there is no
+// prediction at all: no predicted bumps (the server's arrive through the reconcile) and
+// near cars go back to interpolation. Whether the own car is past it is decided once per
+// snapshot cycle, from the furthest it ran ahead in that cycle, with AHEAD_HYST_STEPS of
+// hysteresis, so the switch cannot flicker while the lead swings a couple of steps each
+// cycle.
+export const PREDICT_MAX_MS = 300;
+const CAP_STEPS = Math.round((PREDICT_MAX_MS * TICK_HZ) / 1000);
+const AHEAD_HYST_STEPS = 2;
+const DRAW_MAX_S = 1; // drawing never stands still at the cap; this only bounds nonsense
 const NEAR_ON_DIST = 150; // a car this close is drawn at its predicted pose ...
 const NEAR_OFF_DIST = 220; // ... until it is this far away again
 // The predicted pose runs ~100 ms + k steps ahead of the interpolated one (70-120 units
@@ -56,13 +64,14 @@ interface Near {
   vx: number;
   vy: number;
   vh: number;
-  turn: number; // heading change per second, from the last two snapshots
 }
 
 export class Contacts {
   private base: CarsSnap | null = null;
   private you = "";
   private readonly near = new Map<string, Near>();
+  private turns = new Map<string, number>(); // heading change per second, from the last two snapshots
+  private ahead = false; // the own car runs further ahead than CAP_STEPS (see PREDICT_MAX_MS)
   private impacts: Impact[] = [];
   private cooldown = 0;
   /** performance.now() of the last predicted own contact (live step or replay). */
@@ -72,12 +81,20 @@ export class Contacts {
    * moved (ms; 0 when the server's clock and our acked steps advance together), and per
    * near car the jump of its predicted pose that the offset has to hide (units).
    */
-  readonly diag = { rebases: 0, clockShiftMs: [] as number[], nearJumps: [] as number[], kOld: [] as number[], nearFrames: 0, clampedFrames: 0 };
+  readonly diag = { rebases: 0, clockShiftMs: [] as number[], nearJumps: [] as number[], kOld: [] as number[], nearFrames: 0, pastCapFrames: 0, aheadCycles: 0 };
   diagOn = false; // collect diag (the debug overlay turns it on while racing)
+
+  resetDiag(): void {
+    const d = this.diag;
+    d.rebases = d.nearFrames = d.pastCapFrames = d.aheadCycles = 0;
+    d.clockShiftMs.length = d.nearJumps.length = d.kOld.length = 0;
+  }
 
   reset(): void {
     this.base = null;
     this.near.clear();
+    this.turns.clear();
+    this.ahead = false;
     this.impacts = [];
     this.cooldown = 0;
   }
@@ -91,13 +108,26 @@ export class Contacts {
   /**
    * A new snapshot the own car was reconciled to. kOld / kNew: the step index of the own
    * car's current state after the old and the new base (pending inputs before and after
-   * dropping the acked ones). The jump of each other car's drawn pose at that moment goes
-   * into its offset; the offset's velocity is kept, so the drawn motion stays smooth.
+   * dropping the acked ones; kOld is also the furthest the own car ran ahead of the old
+   * base). The jump of each other car's drawn pose at that moment goes into its offset;
+   * the offset's velocity is kept, so the drawn motion stays smooth.
    */
   rebase(snap: CarsSnap, you: string, kOld: number, kNew: number): void {
     const old = this.base;
     this.base = snap;
     this.you = you;
+    if (kOld > CAP_STEPS) this.ahead = true;
+    else if (kOld <= CAP_STEPS - AHEAD_HYST_STEPS) this.ahead = false;
+    if (this.diagOn && this.ahead) this.diag.aheadCycles++;
+    const dt = old?.time !== undefined && snap.time !== undefined ? (snap.time - old.time) / 1000 : 0;
+    const turns = new Map<string, number>();
+    for (const [id, b] of snap.cars) {
+      const a = old?.cars.get(id);
+      const turn = a && dt > 0.005 && dt < 0.2 && !a.wreck && !b.wreck ? angleDiff(a.h, b.h) / dt : 0;
+      turns.set(id, Math.abs(turn) <= MAX_TURN ? turn : 0);
+    }
+    const oldTurns = this.turns;
+    this.turns = turns;
     if (this.diagOn && old?.time !== undefined && snap.time !== undefined && this.diag.clockShiftMs.length < 20000) {
       this.diag.rebases++;
       this.diag.clockShiftMs.push(snap.time + kNew * DT * 1000 - (old.time + kOld * DT * 1000));
@@ -111,11 +141,8 @@ export class Contacts {
         continue;
       }
       if (!a) continue;
-      const pa = drawnPose(a, kOld, n.turn);
-      const dt = old?.time !== undefined && snap.time !== undefined ? (snap.time - old.time) / 1000 : 0;
-      const turn = dt > 0.005 && dt < 0.2 && !a.wreck && !b.wreck ? angleDiff(a.h, b.h) / dt : 0;
-      n.turn = Math.abs(turn) <= MAX_TURN ? turn : 0;
-      const pb = drawnPose(b, kNew, n.turn);
+      const pa = drawnPose(a, kOld, oldTurns.get(id) ?? 0);
+      const pb = drawnPose(b, kNew, turns.get(id) ?? 0);
       const dx = pa.x - pb.x, dy = pa.y - pb.y;
       if (this.diagOn && n.w > 0 && this.diag.nearJumps.length < 20000) this.diag.nearJumps.push(Math.hypot(dx, dy));
       if (Math.hypot(dx, dy) > SNAP_DISTANCE || a.wreck > 0 !== b.wreck > 0) {
@@ -130,18 +157,19 @@ export class Contacts {
 
   /**
    * Bump the own car c, just stepped to step k after the base snapshot, against every
-   * other solid car's predicted pose: c takes exactly its half of each push and impulse.
-   * Returns the hardest contact. Wrecked or ghosted (incl. finished) cars are skipped,
-   * and the own car does not collide at all while it is wrecked or ghosted.
+   * other solid car's predicted pose (the pose near cars are drawn at): c takes exactly its
+   * half of each push and impulse. Returns the hardest contact. Wrecked or ghosted (incl.
+   * finished) cars are skipped; the own car does not collide at all while it is wrecked or
+   * ghosted, or runs further ahead than PREDICT_MAX_MS.
    */
   collide(c: CarState, k: number): CarContact | null {
     const base = this.base;
-    if (!base || c.wreck > 0 || base.cars.get(this.you)?.ghost) return null;
+    if (!base || c.wreck > 0 || base.cars.get(this.you)?.ghost || this.ahead || k > CAP_STEPS) return null;
     let hardest: CarContact | null = null;
     for (const [id, s] of base.cars) {
       if (id === this.you || s.ghost || s.wreck > 0) continue;
-      const p = predicted(s, k);
-      const hit = collideCarOneSided(c, { x: p.x, y: p.y, h: s.h, vx: s.vx, vy: s.vy });
+      const p = drawnPose(s, k, this.turns.get(id) ?? 0);
+      const hit = collideCarOneSided(c, { x: p.x, y: p.y, h: p.h, vx: s.vx, vy: s.vy });
       if (hit && (!hardest || hit.impact > hardest.impact)) hardest = hit;
     }
     if (hardest) this.lastContact = performance.now();
@@ -173,8 +201,8 @@ export class Contacts {
    * own: the own car, null when spectating. k: the step index the own car is drawn at
    * (fractional, between the last two steps). A car within NEAR_ON_DIST of the own car
    * eases over BLEND_MS to its predicted pose (plus its offset), and back once it is
-   * beyond NEAR_OFF_DIST, or when the own car runs further ahead than PREDICT_MAX_MS
-   * (the prediction would stand still). dtMs: time since the last frame.
+   * beyond NEAR_OFF_DIST, or while the own car runs further ahead than PREDICT_MAX_MS
+   * (no prediction then). dtMs: time since the last frame.
    */
   blend(interp: Pose[], own: CarState | null, k: number, dtMs: number): Pose[] {
     const base = this.base;
@@ -183,17 +211,17 @@ export class Contacts {
       return interp;
     }
     const ease = dtMs / BLEND_MS;
-    const ahead = k * DT * 1000 > PREDICT_MAX_MS;
+    const ahead = this.ahead;
     return interp.map((o) => {
       const s = base.cars.get(o.id);
       if (!s) return o;
       let n = this.near.get(o.id);
       if (!n) {
-        n = { on: false, w: 0, ox: 0, oy: 0, oh: 0, vx: 0, vy: 0, vh: 0, turn: 0 };
+        n = { on: false, w: 0, ox: 0, oy: 0, oh: 0, vx: 0, vy: 0, vh: 0 };
         this.near.set(o.id, n);
       }
       settle(n, dtMs);
-      const p = drawnPose(s, k, n.turn);
+      const p = drawnPose(s, k, this.turns.get(o.id) ?? 0);
       const d = Math.hypot(p.x - own.x, p.y - own.y);
       if (d < NEAR_ON_DIST && !ahead) n.on = true;
       else if (d > NEAR_OFF_DIST || ahead) n.on = false;
@@ -201,7 +229,7 @@ export class Contacts {
       if (n.w === 0) return o;
       if (this.diagOn) {
         this.diag.nearFrames++;
-        if (k * DT * 1000 > PREDICT_MAX_MS) this.diag.clampedFrames++;
+        if (k > CAP_STEPS) this.diag.pastCapFrames++;
       }
       const f = n.w * n.w * (3 - 2 * n.w); // smoothstep
       const px = p.x + n.ox, py = p.y + n.oy, ph = p.h + n.oh;
@@ -215,17 +243,20 @@ export class Contacts {
   }
 }
 
-/** A car k steps after its snapshot: moved on by its velocity, at most PREDICT_MAX_MS. */
+/** A car k steps after its snapshot: moved on by its velocity (heading as in the snapshot). */
 export function predicted(s: CarSnap, k: number): { x: number; y: number; h: number } {
   const t = predictSeconds(k);
   return { x: s.x + s.vx * t, y: s.y + s.vy * t, h: s.h };
 }
 
 function predictSeconds(k: number): number {
-  return Math.min(Math.max(0, k) * DT, PREDICT_MAX_MS / 1000);
+  return Math.min(Math.max(0, k) * DT, DRAW_MAX_S);
 }
 
-/** Where a near car is drawn: the predicted position, the heading turned on by `turn`. */
+/**
+ * The predicted pose of another car: its position moved on by its velocity and its heading
+ * turned on at `turn` (rad/s). Near cars are drawn here and the own car bumps into it.
+ */
 export function drawnPose(s: CarSnap, k: number, turn: number): { x: number; y: number; h: number } {
   const p = predicted(s, k);
   return { x: p.x, y: p.y, h: s.h + turn * predictSeconds(k) };

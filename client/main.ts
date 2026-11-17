@@ -67,6 +67,7 @@ const game = new Game(() => connectWs(wsUrl, { lag, jitter }), tokens);
 const keyboard = new Keyboard(window);
 const renderer = new Renderer($<HTMLCanvasElement>("view"), track);
 const jerk = new JerkMeter();
+let measuredPhase = "";
 const pilot = autopilot ? new BotDriver(game, Number(params.get("lane")) || 0) : null;
 if (pilot) pilot.weapons = false;
 if (debug) (window as unknown as { scrapDebug: unknown }).scrapDebug = { game, jerk };
@@ -458,6 +459,11 @@ function draw(alpha: number, elapsed: number): void {
   const drawn = game.contact.blend(others, game.car, game.pending.length - 1 + alpha, elapsed);
   for (const o of drawn) cars.push(view(o.id, o.x, o.y, o.h, false));
   game.contact.diagOn = debug && game.phase === "racing";
+  if (debug && game.phase === "racing" && measuredPhase !== "racing") {
+    jerk.reset(); // one race per measurement
+    game.contact.resetDiag();
+  }
+  measuredPhase = game.phase;
   if (debug && game.car && game.phase === "racing") {
     jerk.frame(
       drawn,
