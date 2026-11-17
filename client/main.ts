@@ -7,12 +7,13 @@ import { trackList, trackName } from "../shared/tracks";
 import { BotDriver } from "../scripts/bot-ai";
 import { AudioEngine, SoundControls } from "./audio";
 import { ChatPanel, fitViewport } from "./chat";
-import { Game, lostMessage, type TokenStore } from "./game";
+import { Game, lostMessage, NO_CONTROLS, type Controls, type TokenStore } from "./game";
 import { Keyboard } from "./input";
 import { JerkMeter } from "./jerk";
 import { MusicPlayer } from "./music";
 import { connectWs } from "./net";
 import { Renderer, type CarView, type DrawPose, type HudView, type WorldFx } from "./render";
+import { RaceSounds } from "./sfx";
 
 const STEP_MS = 1000 / 60;
 const MAX_CATCH_UP = 5;
@@ -99,6 +100,7 @@ const soundControls = new SoundControls(audio, {
   mute: $<HTMLButtonElement>("sound-mute"),
 });
 let soundPhase = "";
+let lastControls: Controls = NO_CONTROLS; // the engine's throttle: what the last step drove with
 // Rebuilt whenever the room's track changes (it caches the track's paths and decor).
 let renderer = new Renderer($<HTMLCanvasElement>("view"), game.track);
 let rendererTrack = game.track;
@@ -106,7 +108,6 @@ const jerk = new JerkMeter();
 let measuredPhase = "";
 const pilot = autopilot ? new BotDriver(game, Number(params.get("lane")) || 0) : null;
 if (pilot) pilot.weapons = false;
-if (debug) (window as unknown as { scrapDebug: unknown }).scrapDebug = { game, jerk, audio, music };
 
 let connState: "connected" | "reconnecting" | "lost" = "connected";
 let restartNotice = false;
@@ -114,6 +115,9 @@ let restartNotice = false;
 let sparks: { id: string; start: number; x?: number; y?: number }[] = [];
 const SPARK_MS = 260;
 const INTERP_DELAY_MS = 100;
+// Race effects (client/sfx.ts); other cars' event sounds wait out the same delay as the sparks.
+const sounds = new RaceSounds(audio, game, INTERP_DELAY_MS);
+if (debug) (window as unknown as { scrapDebug: unknown }).scrapDebug = { game, jerk, audio, music, sounds };
 const BUMP_SHAKE_MAX = 3; // screen shake of a bump, 1..3 px of the 640x360 view ...
 const BUMP_SHAKE_PER = 120; // ... 1 px per this much closing speed (units/s)
 let flash = { text: "", until: 0 };
@@ -192,6 +196,7 @@ if (roomParam && tokens.get(roomParam)) game.join(roomParam, storedName() || "Dr
 // ---- game callbacks ---------------------------------------------------------------
 
 game.on.welcome = () => {
+  sounds.reset(); // a new room or a rejoin: what is on the track already makes no sound
   setRoomInUrl(game.code);
   updatePanels();
 };
@@ -219,7 +224,8 @@ game.on.connection = (state, reason) => {
     updatePanels();
   }
 };
-game.on.event = (ev: GameEvent) => {
+game.on.event = (ev: GameEvent, tick: number) => {
+  sounds.event(ev, tick);
   const who = game.player(ev.id)?.name ?? "?";
   const mine = ev.id === game.you;
   if (ev.k === "lap" && mine) flashText(`LAP ${ev.lap + 1}/${game.laps}`);
@@ -495,7 +501,8 @@ function frame(now: number): void {
   acc += elapsed;
   let steps = 0;
   while (acc >= STEP_MS && steps < MAX_CATCH_UP) {
-    game.step(pilot ? pilot.controls() : keyboard.read(), STEP_MS);
+    lastControls = pilot ? pilot.controls() : keyboard.read();
+    game.step(lastControls, STEP_MS);
     acc -= STEP_MS;
     steps++;
   }
@@ -513,10 +520,12 @@ function frame(now: number): void {
  * Music follows the room's phase, polled every frame since snapshots change it without a
  * room message: on in the lobby (garage) and results, off in the countdown and the race,
  * never on the menu. The sound popover closes as the countdown starts, so a slider cannot
- * keep the driving keys.
+ * keep the driving keys. Race effects: countdown, own-car cues, other cars from the drawn
+ * snapshot, held server events, and the engine from the controls the steps used.
  */
 function soundFrame(): void {
   music.update(!!game.you, game.phase);
+  sounds.frame(lastControls, renderer.cam);
   if (game.phase === "countdown" && soundPhase !== "countdown") soundControls.close();
   soundPhase = game.phase;
 }
@@ -593,6 +602,7 @@ function draw(alpha: number, elapsed: number): void {
   for (const im of game.contact.takeImpacts()) {
     sparks.push({ id: "", start: now, x: im.x, y: im.y });
     renderer.shake(Math.max(1, Math.min(BUMP_SHAKE_MAX, im.speed / BUMP_SHAKE_PER)));
+    sounds.bump(im.speed, im.x, im.y, renderer.cam);
   }
   sparks = sparks.filter((s) => now < s.start + SPARK_MS);
   const fx: WorldFx = {
@@ -614,7 +624,7 @@ function draw(alpha: number, elapsed: number): void {
   renderer.frame(cars, fx, hudView());
 }
 
-if (soundBoard) void import("./soundboard").then((m) => m.mountSoundBoard(audio, music));
+if (soundBoard) void import("./soundboard").then((m) => m.mountEffects(m.mountSoundBoard(audio, music), audio));
 if (preview) {
   ui.menu.classList.add("hidden");
   void import("./preview").then((m) => m.runPreview($<HTMLCanvasElement>("view"), params));
