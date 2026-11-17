@@ -18,7 +18,8 @@ import {
   type ShotSnap,
 } from "../shared/protocol";
 import { statsFor, type Levels } from "../shared/shop";
-import { buildTrack, RUST_BOWL } from "../shared/track";
+import type { Track } from "../shared/track";
+import { DEFAULT_TRACK_ID, findTrack, trackById } from "../shared/tracks";
 import {
   BTN_RIVET,
   makeButtons,
@@ -32,8 +33,6 @@ import {
 } from "../shared/weapons";
 import { Contacts } from "./contact";
 import type { Transport } from "./net";
-
-export const track = buildTrack(RUST_BOWL);
 
 const INTERP_DELAY_MS = 100; // other cars are drawn this far in the past
 const EXTRAP_MAX_MS = 100; // how far past the newest snapshot we dare to extrapolate
@@ -128,6 +127,8 @@ export class Game {
   phaseEnds = 0;
   raceStart = 0;
   forceStartAt = 0; // server time from which the host may "Start anyway", 0 outside the lobby
+  trackId = DEFAULT_TRACK_ID; // the room's track (room message); the default outside a room
+  track: Track = trackById(DEFAULT_TRACK_ID); // built from trackId: prediction, shots, bots, renderer
   results: ResultRow[] | null = null;
   connected = false;
   rtt = 0;
@@ -202,6 +203,11 @@ export class Game {
     this.send({ t: "buy", item });
   }
 
+  /** Host only, in the lobby: race on another track (an id from shared/tracks.ts). */
+  pickTrack(id: string): void {
+    this.send({ t: "track", id });
+  }
+
   /** Drop the connection as a network failure would; the client then reconnects. */
   simulateDrop(): void {
     const tr = this.transport;
@@ -228,6 +234,19 @@ export class Game {
     this.resetOwnCar();
     this.snaps = [];
     this.latest = null;
+    this.useTrack(DEFAULT_TRACK_ID);
+  }
+
+  /**
+   * Race on the room's track from now on. Only changes in the lobby (no cars), but a car
+   * predicted on the old track is dropped anyway: the next snapshot seeds it again. An id
+   * this build does not know (client older than the server) falls back to the default.
+   */
+  private useTrack(id: string): void {
+    if (id === this.trackId) return;
+    this.trackId = id;
+    this.track = findTrack(id) ?? trackById(DEFAULT_TRACK_ID);
+    this.resetOwnCar();
   }
 
   private resetOwnCar(): void {
@@ -343,6 +362,7 @@ export class Game {
         this.phase = msg.phase;
         this.raceStart = msg.raceStart;
         this.forceStartAt = msg.forceStartAt;
+        this.useTrack(msg.trackId);
         this.players = msg.players;
         if (msg.phase !== "results") this.results = null;
         this.on.room?.();
@@ -466,7 +486,7 @@ export class Game {
     const old = this.car!;
     const c = cloneCar(server);
     this.pending.forEach((p, i) => {
-      stepRaceCar(c, p.cmd, this.stats, track);
+      stepRaceCar(c, p.cmd, this.stats, this.track);
       this.contact.collide(c, i + 1);
       this.history.set(p.seq, cloneCar(c));
     });
@@ -559,7 +579,7 @@ export class Game {
     const before = this.car;
     this.prevCar = cloneCar(before);
     if (this.cooldown > 0) this.cooldown--;
-    stepRaceCar(this.car, cmd, this.stats, track);
+    stepRaceCar(this.car, cmd, this.stats, this.track);
     this.contact.step(this.car, this.pending.length + 1); // the server applies it then
     if (this.prevCar.wreck > 0 && this.car.wreck === 0) this.prevCar = cloneCar(this.car); // respawn: no slide
 
@@ -591,7 +611,7 @@ export class Game {
     });
     const r = CAR_RADIUS + 2;
     this.localShots = this.localShots.filter((s) => {
-      if (!moveShot(s, track)) return false;
+      if (!moveShot(s, this.track)) return false;
       return !targets.some((t) => (t.x - s.x) ** 2 + (t.y - s.y) ** 2 <= r * r);
     });
   }

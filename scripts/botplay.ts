@@ -10,6 +10,7 @@
 import { Game, type TokenStore } from "../client/game";
 import { connectWs } from "../client/net";
 import { AMMO, priceOf, UPGRADE_IDS, type ItemId } from "../shared/shop";
+import { trackName } from "../shared/tracks";
 import { BotDriver } from "./bot-ai";
 
 const NAMES = ["Sprocket", "Gasket", "Lugnut", "Piston", "Bolt"];
@@ -79,7 +80,12 @@ for (let i = 0; i < count; i++) {
     }
   };
   game.on.welcome = () => console.log(`${name} joined ${game.code}`);
-  game.on.room = () => (bot.readyDue = true);
+  let trackId = "";
+  game.on.room = () => {
+    bot.readyDue = true; // also after the host picks another track (that resets ready)
+    if (i === 0 && game.trackId !== trackId) console.log(`  track: ${trackName(game.trackId)}`);
+    trackId = game.trackId;
+  };
   game.on.event = (ev) => {
     if (i !== 0) return; // log each event once
     const who = (id: string) => game.player(id)?.name ?? "?";

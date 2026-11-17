@@ -1,7 +1,7 @@
 // Bot driver used by the end-to-end test (scripts/bots.ts) and by `npm run botplay`.
 // It plays through the real client Game, so it sees exactly what a player's browser sees.
 
-import { NO_CONTROLS, track, type Controls, type Game } from "../client/game";
+import { NO_CONTROLS, type Controls, type Game } from "../client/game";
 import { angleDiff, clamp, speedOf } from "../shared/physics";
 import { pointAt, queryTrackNear } from "../shared/track";
 
@@ -26,6 +26,7 @@ export class BotDriver {
       return NO_CONTROLS;
     }
     if (g.raceOn()) this.raceSteps++;
+    const track = g.track; // the room's track
     const q = queryTrackNear(track, c.x, c.y, c.seg);
     const v = speedOf(c);
     const t = pointAt(track, q.s + 55 + v * 0.3);
