@@ -55,6 +55,7 @@
             </div>
             <ul id="shop" class="shop"></ul>
             <p class="muted fine">Upgrades fit from the next race. Earn scrap by finishing high and wrecking rivals.</p>
+            <div id="lobby-chat" class="lobby-chat"></div>
           </div>
         </div>
       </section>
@@ -63,6 +64,33 @@
         <h2>Results</h2>
         <ol id="results-rows" class="players results"></ol>
         <p id="results-scrap" class="muted"></p>
+      </section>
+
+      <section id="chat" class="chat hidden" aria-label="Room chat">
+        <div class="chat-feed" aria-hidden="true"></div>
+        <div class="chat-box">
+          <div class="chat-head">
+            <span class="label">Chat</span>
+            <button type="button" class="btn link small chat-close" aria-label="Close chat">Close ✕</button>
+          </div>
+          <div class="chat-scroll">
+            <ol class="chat-log" role="log" aria-live="polite"></ol>
+            <button type="button" class="chat-pill hidden">New messages ↓</button>
+          </div>
+          <div class="chat-row">
+            <input
+              class="chat-input"
+              maxlength="200"
+              autocomplete="off"
+              spellcheck="false"
+              enterkeyhint="send"
+              placeholder="Say something…"
+              aria-label="Chat message"
+            />
+            <button type="button" class="btn chat-send">Send</button>
+          </div>
+        </div>
+        <button type="button" class="chat-open"><kbd>Enter</kbd> Chat <b class="chat-unread hidden">0</b></button>
       </section>
 
       <div id="toast" class="toast hidden" role="status"></div>

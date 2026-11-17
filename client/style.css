@@ -25,16 +25,21 @@ body {
   overflow: hidden;
 }
 
+/* The stage follows the visual viewport (client/chat.ts fitViewport), so a phone's on-screen
+   keyboard shrinks it instead of covering the chat input. */
 #stage {
-  position: relative;
+  position: fixed;
+  left: 0;
+  top: var(--app-top, 0px);
   width: 100vw;
   height: 100vh;
+  height: var(--app-h, 100dvh);
   display: grid;
   place-items: center;
 }
 
 #view {
-  width: min(100vw, calc(100vh * 16 / 9));
+  width: min(100vw, calc(var(--app-h, 100dvh) * 16 / 9));
   height: auto;
   aspect-ratio: 16 / 9;
   image-rendering: pixelated;
@@ -45,7 +50,7 @@ body {
 .panel {
   position: absolute;
   width: min(360px, calc(100vw - 32px));
-  max-height: calc(100vh - 32px);
+  max-height: calc(100% - 32px);
   overflow: auto;
   padding: 24px 24px 20px;
   background: var(--panel);
@@ -514,4 +519,261 @@ h2 {
   color: var(--muted-solid);
   box-shadow: none;
   transform: none;
+}
+
+/* ---- room chat (client/chat.ts) ---------------------------------------------------- */
+
+.chat {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+  min-width: 0;
+}
+
+.chat-box {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-height: 0;
+}
+
+.chat-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.chat-head .label {
+  text-align: left;
+}
+
+.chat-scroll {
+  position: relative;
+  min-height: 0;
+}
+
+.chat-log {
+  list-style: none;
+  margin: 0;
+  padding: 6px 8px;
+  background: #0b0907;
+  border: 2px solid var(--line);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* One line: clipped, so stacked combining marks cannot spill over the neighbours. */
+.chat-line {
+  overflow: hidden;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+  flex: none;
+}
+
+.chat-name {
+  font-weight: 700;
+  unicode-bidi: isolate;
+}
+
+.chat-line.say .chat-name::after {
+  content: ":";
+}
+
+.chat-text {
+  unicode-bidi: isolate;
+}
+
+.chat-line.game {
+  color: var(--muted-solid);
+  font-style: italic;
+}
+
+.chat-line.me .chat-text {
+  color: #fff6e4;
+}
+
+.chat-pill {
+  position: absolute;
+  left: 50%;
+  bottom: 8px;
+  transform: translateX(-50%);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  color: #1a0f08;
+  background: var(--rust);
+  border: 2px solid #ffb27a;
+  padding: 3px 10px;
+  cursor: pointer;
+  box-shadow: 2px 2px 0 rgba(0, 0, 0, 0.6);
+  white-space: nowrap;
+}
+
+.chat-row {
+  display: flex;
+  gap: 6px;
+}
+
+.chat-input {
+  flex: 1;
+  font-size: 16px; /* 16px: no zoom on focus in mobile Safari */
+  padding: 7px 9px;
+}
+
+.chat-send {
+  padding: 6px 12px;
+  font-size: 13px;
+}
+
+.chat-open {
+  align-self: flex-start;
+  font: inherit;
+  font-size: 12px;
+  color: var(--muted-solid);
+  background: rgba(18, 14, 11, 0.75);
+  border: 2px solid var(--line);
+  padding: 4px 9px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  opacity: 0.75;
+}
+
+.chat-open:hover,
+.chat-open.has-unread {
+  opacity: 1;
+  color: var(--text);
+}
+
+.chat-open kbd {
+  font-size: 10px;
+}
+
+.chat-unread {
+  min-width: 18px;
+  padding: 0 4px;
+  text-align: center;
+  color: #1a0f08;
+  background: var(--rust);
+}
+
+/* Lobby / garage: docked under the shop, log and input always shown. */
+.lobby-chat {
+  margin-top: 4px;
+}
+
+.chat.docked .chat-feed,
+.chat.docked .chat-open,
+.chat.docked .chat-close {
+  display: none;
+}
+
+.chat.docked .chat-log {
+  height: 150px;
+}
+
+/* Countdown, race, results: over the race view, bottom-left above the banner strip. */
+.chat.overlay {
+  position: absolute;
+  left: calc(var(--view-left, 0px) + 8px);
+  bottom: calc(var(--view-bottom, 0px) + 4px);
+  width: min(380px, calc(var(--view-w, 100vw) * 0.42));
+  z-index: 5;
+  pointer-events: none; /* the fading lines never take a click */
+}
+
+.chat.overlay .chat-box,
+.chat.overlay .chat-open {
+  pointer-events: auto;
+}
+
+.chat.overlay:not(.open) .chat-box,
+.chat.overlay.open .chat-feed,
+.chat.overlay.open .chat-open {
+  display: none;
+}
+
+.chat.overlay .chat-box {
+  padding: 8px;
+  background: var(--panel);
+  border: 2px solid var(--line);
+  box-shadow: 4px 4px 0 rgba(0, 0, 0, 0.55);
+}
+
+.chat.overlay .chat-log {
+  max-height: min(240px, calc(var(--view-h, 360px) * 0.5));
+  min-height: 72px;
+}
+
+.chat-feed {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+}
+
+.chat-feed .chat-line {
+  max-width: 100%;
+  padding: 2px 7px;
+  background: rgba(18, 14, 11, 0.72);
+  text-shadow: 1px 1px 0 #000;
+}
+
+.chat-feed .chat-line.fade {
+  animation: chat-fade 8s linear forwards;
+}
+
+@keyframes chat-fade {
+  0% {
+    opacity: 0;
+  }
+  3% {
+    opacity: 1;
+  }
+  85% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+/* Phones held upright: the race view is a strip in the middle; the chat sits under it. */
+@media (max-width: 600px) and (orientation: portrait) {
+  .chat.overlay {
+    left: 8px;
+    right: 8px;
+    bottom: 8px;
+    width: auto;
+  }
+
+  /* The log fits the space under the view (the box around it takes ~120px). */
+  .chat.overlay .chat-log {
+    max-height: max(96px, min(240px, calc((var(--app-h, 100dvh) - var(--view-h, 0px)) / 2 - 120px)));
+  }
+}
+
+/* Touch screens: no Enter key to hint at, bigger targets. */
+@media (hover: none) and (pointer: coarse) {
+  .chat-open kbd {
+    display: none;
+  }
+
+  .chat-open,
+  .chat-send,
+  .chat-close {
+    min-height: 44px;
+  }
+
+  .chat-open {
+    font-size: 14px;
+    padding: 8px 14px;
+    opacity: 1;
+  }
 }
