@@ -3,7 +3,7 @@
 // Two races in a row with weapons, the garage and a reverse grid. Run: npm run bots
 
 import net from "node:net";
-import { Game, lostMessage, track, type ConnReason, type Controls, type TokenStore } from "../client/game";
+import { Game, lostMessage, type ConnReason, type Controls, type TokenStore } from "../client/game";
 import { connectWs, type LagSim } from "../client/net";
 import {
   CODE_ALPHABET,
@@ -16,7 +16,8 @@ import {
   type ServerMsg,
 } from "../shared/protocol";
 import { AMMO, PLACE_PAYOUT, WRECK_BONUS } from "../shared/shop";
-import { minSelfClearance } from "../shared/track";
+import { minSelfClearance, queryTrackNear, type TrackDef } from "../shared/track";
+import { DEFAULT_TRACK_ID, registerTestTrack, trackById } from "../shared/tracks";
 import { angleDiff, capsuleGap, clamp } from "../shared/physics";
 import { BTN_RIVET, WEAPONS_ARM_MS } from "../shared/weapons";
 import { startServer, type RunningServer } from "../server/index";
@@ -28,6 +29,20 @@ const BOT_HP = 12; // low HP so wrecks really happen in a one-lap race (3 rivets
 const AMMO_PRICE = AMMO.rivets.price + AMMO.mines.price; // one pack of each
 // Measured 2026-11-16 over 7 runs: 0.12-0.27 with bump prediction (0.23-0.35 without).
 const CONTACT_P95_MAX = 0.5;
+const track = trackById(DEFAULT_TRACK_ID);
+
+// A second track for the track-switch race, registered in this process only (the in-process
+// server and the bots share the registry). A plain loop half as long as Rust Bowl and far
+// away from it, so a car on it cannot be on Rust Bowl too.
+const TEST_TRACK_ID = "test-loop";
+const TEST_LOOP: TrackDef = {
+  id: TEST_TRACK_ID,
+  name: "Test Loop",
+  control: [[5000, 400], [5600, 400], [6050, 650], [6050, 1250], [5600, 1500], [4600, 1500], [4150, 1250], [4150, 650], [4500, 400]],
+  halfWidth: 64,
+  verge: 44,
+};
+registerTestTrack(TEST_LOOP);
 
 // ---- tiny assertion log -------------------------------------------------------------
 
@@ -308,6 +323,7 @@ async function run(ctx: Ctx, bots: Bot[]): Promise<void> {
   await runServerFull(bots);
   await runArmDelayLagged(bots);
   await runContact(ctx, bots);
+  await runTrackSwitch(ctx, bots);
 }
 
 const lost = new Map<string, (ConnReason | undefined)[]>();
@@ -751,6 +767,105 @@ async function runArmDelayLagged(bots: Bot[]): Promise<void> {
     K.afterStep = null;
     K.game.leave();
     await srv.close();
+  }
+}
+
+/**
+ * Per-room track: the host switches the lobby to the test loop (refusals for a non-host and an
+ * unknown id, ready reset), a reloaded tab rejoins onto it, and the room races a lap there.
+ * The server's race distance at the finish is the test loop's length, every car stays inside
+ * its walls, and the lagged bot predicts on it (small reconciliation errors).
+ */
+async function runTrackSwitch(ctx: Ctx, bots: Bot[]): Promise<void> {
+  const loop = trackById(TEST_TRACK_ID);
+  const N = new Bot("November", ctx.url, -24);
+  const O = new Bot("Oscar", ctx.url, 24, { lag: 80, jitter: 10 });
+  bots.push(N, O);
+  for (const b of [N, O]) b.weapons = false;
+  N.game.create(N.name);
+  await waitFor("N welcome", () => !!N.game.you, 3000);
+  O.game.join(N.game.code, O.name);
+  await waitFor("O in N's room", () => N.game.players.length === 2 && O.game.players.length === 2, 3000);
+  check(
+    "track: a new room races on the default track",
+    [N, O].every((b) => b.game.trackId === DEFAULT_TRACK_ID && b.game.track === track),
+    [N, O].map((b) => `${b.name} ${b.game.trackId}`).join(", "),
+  );
+
+  O.game.setReady(true);
+  await waitFor("N sees O ready", () => !!N.game.player(O.game.you)?.ready, 2000);
+  const eO = O.errors.length;
+  O.game.pickTrack(TEST_TRACK_ID);
+  await waitFor("O's pick refused", () => O.errors.length > eO, 2000);
+  const eN = N.errors.length;
+  N.game.pickTrack("no-such-track");
+  await waitFor("unknown id refused", () => N.errors.length > eN, 2000);
+  check(
+    "track: refused from a non-host and for an unknown id",
+    O.errors[eO] === "Only the host can pick the track" && N.errors[eN] === "Unknown track" && N.game.trackId === DEFAULT_TRACK_ID,
+    `${O.errors[eO] ?? "-"}; ${N.errors[eN] ?? "-"}`,
+  );
+
+  N.game.pickTrack(TEST_TRACK_ID);
+  await waitFor("both on the test loop", () => [N, O].every((b) => b.game.trackId === TEST_TRACK_ID), 2000);
+  check(
+    "track: the host's pick reaches everyone; Game.track is the picked track",
+    [N, O].every((b) => b.game.trackId === TEST_TRACK_ID && b.game.track === loop),
+    [N, O].map((b) => `${b.name} ${b.game.trackId}`).join(", "),
+  );
+  check("track: the switch resets the ready flag", !N.game.player(O.game.you)?.ready && O.game.me()?.ready === false);
+
+  // A reload: a fresh Game (default track) with the same token takes the seat back.
+  const oId = O.game.you;
+  O.game.leave();
+  await waitFor("O offline", () => N.game.player(oId)?.connected === false, 2000);
+  const O2 = new Bot("Oscar", ctx.url, 24, { lag: 80, jitter: 10 }, O.tokens);
+  bots.push(O2);
+  O2.weapons = false;
+  const before = O2.game.trackId;
+  O2.game.join(N.game.code, O2.name);
+  await waitFor("O2 rejoined", () => O2.game.you === oId && O2.game.trackId === TEST_TRACK_ID, 3000);
+  check(
+    "track: a rejoin gets the room's track",
+    before === DEFAULT_TRACK_ID && O2.game.you === oId && O2.game.trackId === TEST_TRACK_ID && O2.game.track === loop,
+    `${before} -> ${O2.game.trackId}`,
+  );
+
+  // Race a lap on it. Sample the server's view of every car while it runs.
+  let samples = 0;
+  let offTrack = 0;
+  const rdAtFinish = new Map<string, number>();
+  N.afterStep = () => {
+    for (const c of N.game.latest?.cars.values() ?? []) {
+      // The last finisher's first snapshot already says "results" (the race ends that tick).
+      if (c.fin && !rdAtFinish.has(c.id)) rdAtFinish.set(c.id, c.rd);
+      if (N.game.phase !== "racing") continue;
+      samples++;
+      if (queryTrackNear(loop, c.x, c.y, c.seg).dist > loop.wall) offTrack++;
+    }
+  };
+  const e0 = O2.game.recErrors.length;
+  try {
+    const rows = await runRace("track switch", bots, N, [N, O2]);
+    // runRace returns on its own poll; the sampler runs on the next game step.
+    await waitFor("both finish distances sampled", () => rdAtFinish.size === 2, 1000);
+    const seen = [...rdAtFinish].map(([id, rd]) => `${N.game.player(id)?.name ?? id} ${rd.toFixed(0)}`).join(", ");
+    const latest = [...(N.game.latest?.cars.values() ?? [])].map((c) => `${N.game.player(c.id)?.name ?? c.id} fin=${c.fin} rd=${c.rd.toFixed(0)}`).join(", ");
+    check(
+      "track: the race ran on the test loop (server race distance at the finish = its length)",
+      rows.length === 2 && rdAtFinish.size === 2 && [...rdAtFinish.values()].every((rd) => Math.abs(rd - loop.length) < 200),
+      `loop ${loop.length.toFixed(0)}, Rust Bowl ${track.length.toFixed(0)}; at the finish ${seen}` + (rdAtFinish.size === 2 ? "" : `; latest: ${latest}`),
+    );
+    check("track: every car stayed inside the test loop's walls", samples > 500 && offTrack === 0, `${offTrack} of ${samples} samples outside`);
+    const s = stats(O2.game.recErrors.slice(e0));
+    check(
+      "track: the lagged bot predicts on the new track (median < 0.5, max <= 50)",
+      s.n > 100 && s.median < 0.5 && s.max <= 50,
+      `n=${s.n} median ${s.median.toFixed(3)} max ${s.max.toFixed(2)}`,
+    );
+  } finally {
+    N.afterStep = null;
+    for (const b of [N, O2]) b.game.leave();
   }
 }
 

@@ -3,8 +3,9 @@
 import { pointAt } from "../shared/track";
 import type { GameEvent, ResultRow } from "../shared/protocol";
 import { AMMO, AMMO_IDS, priceOf, UPGRADE_IDS, UPGRADES, type ItemId, type Wallet } from "../shared/shop";
+import { trackList, trackName } from "../shared/tracks";
 import { BotDriver } from "../scripts/bot-ai";
-import { Game, lostMessage, track, type TokenStore } from "./game";
+import { Game, lostMessage, type TokenStore } from "./game";
 import { Keyboard } from "./input";
 import { JerkMeter } from "./jerk";
 import { connectWs } from "./net";
@@ -50,6 +51,8 @@ const ui = {
   lobbyCode: $("lobby-code"),
   copy: $<HTMLButtonElement>("copy"),
   players: $("lobby-players"),
+  trackSelect: $<HTMLSelectElement>("track-select"),
+  trackName: $("track-name"),
   start: $<HTMLButtonElement>("start"),
   startAnyway: $<HTMLButtonElement>("start-anyway"),
   ready: $<HTMLButtonElement>("ready"),
@@ -65,7 +68,9 @@ const ui = {
 
 const game = new Game(() => connectWs(wsUrl, { lag, jitter }), tokens);
 const keyboard = new Keyboard(window);
-const renderer = new Renderer($<HTMLCanvasElement>("view"), track);
+// Rebuilt whenever the room's track changes (it caches the track's paths and decor).
+let renderer = new Renderer($<HTMLCanvasElement>("view"), game.track);
+let rendererTrack = game.track;
 const jerk = new JerkMeter();
 let measuredPhase = "";
 const pilot = autopilot ? new BotDriver(game, Number(params.get("lane")) || 0) : null;
@@ -123,6 +128,15 @@ const doJoin = () => {
 ui.join.addEventListener("click", doJoin);
 ui.code.addEventListener("keydown", (e) => e.key === "Enter" && doJoin());
 ui.name.addEventListener("keydown", (e) => e.key === "Enter" && (ui.code.value ? doJoin() : ui.create.click()));
+ui.trackSelect.replaceChildren(
+  ...trackList().map((t) => {
+    const o = document.createElement("option");
+    o.value = t.id;
+    o.textContent = t.name;
+    return o;
+  }),
+);
+ui.trackSelect.addEventListener("change", () => game.pickTrack(ui.trackSelect.value));
 ui.start.addEventListener("click", () => game.start());
 ui.startAnyway.addEventListener("click", () => game.start(true));
 ui.ready.addEventListener("click", () => game.setReady(!game.me()?.ready));
@@ -156,6 +170,7 @@ game.on.garage = () => renderGarage();
 game.on.error = (msg) => {
   if (!game.you) ui.menuErr.textContent = msg;
   else toast(msg);
+  if (game.you) renderTrackPick(); // a refused pick shows the room's track again
 };
 game.on.connection = (state, reason) => {
   connState = state;
@@ -218,9 +233,23 @@ function updatePanels(): void {
       return li;
     }),
   );
+  renderTrackPick();
   renderLobbyButtons();
   if (game.results) renderResults(game.results);
   if (game.phase === "lobby") renderGarage(true);
+}
+
+/**
+ * The host picks the track next to Start; everyone else sees its name. Runs on room
+ * messages only (not every frame), so the host's pick is not reset before the server's
+ * confirmation arrives.
+ */
+function renderTrackPick(): void {
+  const host = game.isHost();
+  show(ui.trackSelect, host);
+  show(ui.trackName, !host);
+  if (ui.trackSelect.value !== game.trackId) ui.trackSelect.value = game.trackId;
+  setText(ui.trackName, trackName(game.trackId));
 }
 
 /**
@@ -445,7 +474,17 @@ function frame(now: number): void {
   requestAnimationFrame(frame);
 }
 
+/** A new room track gets a new Renderer; the camera tour restarts at its start line. */
+function syncRenderer(): void {
+  if (game.track === rendererTrack) return;
+  rendererTrack = game.track;
+  renderer = new Renderer($<HTMLCanvasElement>("view"), rendererTrack);
+  attract = 0;
+  hadTarget = false;
+}
+
 function draw(alpha: number, elapsed: number): void {
+  syncRenderer();
   const cars: CarView[] = [];
   const view = (id: string, x: number, y: number, h: number, me: boolean): CarView => {
     const p = game.player(id);
@@ -492,7 +531,7 @@ function draw(alpha: number, elapsed: number): void {
     hadTarget = true;
   } else {
     attract += elapsed / 1000;
-    const p = pointAt(track, attract * 90);
+    const p = pointAt(game.track, attract * 90);
     renderer.follow(p.x, p.y, elapsed, !hadTarget && attract < 0.05);
     hadTarget = false;
   }

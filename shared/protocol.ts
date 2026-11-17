@@ -41,6 +41,7 @@ export type ClientMsg =
   | { t: "join"; code: string; name: string; token?: string }
   | { t: "start"; force?: boolean } // force: "Start anyway", allowed from forceStartAt
   | { t: "ready"; ready: boolean } // lobby only; ignored from the host and outside the lobby
+  | { t: "track"; id: string } // host only, lobby only; an unknown id is refused (shared/tracks.ts)
   | { t: "in"; i: InputTuple[] } // oldest first, newest last
   | { t: "ping"; c: number }
   | { t: "buy"; item: string };
@@ -114,6 +115,7 @@ export type ServerMsg =
       phase: Phase;
       raceStart: number; // server time the current race starts/started, 0 = no race
       forceStartAt: number; // server time from which the host may start anyway, 0 outside the lobby
+      trackId: string; // the room's track, an id in shared/tracks.ts
       players: PlayerInfo[];
     }
   | { t: "err"; msg: string; code?: ErrCode }

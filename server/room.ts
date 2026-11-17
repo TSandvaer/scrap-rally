@@ -24,7 +24,8 @@ import {
   type ServerMsg,
 } from "../shared/protocol";
 import { buy, isItem, payouts, startingWallet, statsFor, type Wallet } from "../shared/shop";
-import { buildTrack, gridSlot, RUST_BOWL, type Track } from "../shared/track";
+import { gridSlot, type Track } from "../shared/track";
+import { DEFAULT_TRACK_ID, isTrackId, trackById } from "../shared/tracks";
 import { BTN_RIVET, CAR_HP, mineCount, NO_COMMAND, stepRaceCar, WEAPONS_ARM_MS, type Command } from "../shared/weapons";
 import { Combat, solid, type Fighter } from "./combat";
 import { advance, compareStanding, newProgress, raceDistance, type Progress } from "./race";
@@ -76,8 +77,6 @@ export interface Player extends Fighter {
   mineBase: number | null; // mine counter of the last real input consumed
 }
 
-const sharedTrack = buildTrack(RUST_BOWL);
-
 function newId(bytes: number): string {
   return randomBytes(bytes).toString("base64url");
 }
@@ -89,7 +88,9 @@ function cleanName(raw: unknown): string {
 
 export class Room {
   readonly players = new Map<string, Player>();
-  readonly combat: Combat;
+  private _trackId: string;
+  private _track: Track;
+  private _combat: Combat;
   hostId = "";
   phase: Phase = "lobby";
   phaseEnds = 0;
@@ -102,11 +103,31 @@ export class Room {
 
   constructor(
     readonly code: string,
-    readonly track: Track,
     readonly laps: number,
     readonly hp: number = CAR_HP,
+    trackId: string = DEFAULT_TRACK_ID,
   ) {
-    this.combat = new Combat(track, (ev) => this.event(this.tickNo, ev));
+    this._trackId = trackId;
+    this._track = trackById(trackId);
+    this._combat = this.newCombat();
+  }
+
+  /** The room's track id (shared/tracks.ts); changed only through setTrack. */
+  get trackId(): string {
+    return this._trackId;
+  }
+
+  /** The room's track, built from the registry. */
+  get track(): Track {
+    return this._track;
+  }
+
+  get combat(): Combat {
+    return this._combat;
+  }
+
+  private newCombat(): Combat {
+    return new Combat(this._track, (ev) => this.event(this.tickNo, ev));
   }
 
   get empty(): boolean {
@@ -244,6 +265,23 @@ export class Room {
     this.finishers = 0;
     this.raceStart = now + COUNTDOWN_MS;
     this.setPhase("countdown", this.raceStart);
+    return null;
+  }
+
+  /**
+   * Host only, lobby only: race on another track. Picking a different track resets everyone's
+   * ready flag (they agreed to the old one); picking the current one changes nothing.
+   */
+  setTrack(p: Player, id: unknown): string | null {
+    if (p.id !== this.hostId) return "Only the host can pick the track";
+    if (this.phase !== "lobby") return "The track can only be changed in the lobby";
+    if (!isTrackId(id)) return "Unknown track";
+    if (id === this._trackId) return null;
+    this._trackId = id;
+    this._track = trackById(id);
+    this._combat = this.newCombat(); // no shots or mines exist in the lobby
+    for (const q of this.players.values()) q.ready = false;
+    this.broadcastRoom();
     return null;
   }
 
@@ -440,6 +478,7 @@ export class Room {
       phase: this.phase,
       raceStart: this.raceStart,
       forceStartAt: this.forceStartAt,
+      trackId: this._trackId,
       players: this.info(),
     });
   }
@@ -510,7 +549,7 @@ export class Rooms {
       case "create": {
         if (session.room) return err("Already in a room");
         if (this.rooms.size >= this.maxRooms) return err("The server is full right now, try again later", "busy");
-        const room = new Room(this.newCode(), sharedTrack, this.laps, this.hp);
+        const room = new Room(this.newCode(), this.laps, this.hp);
         this.rooms.set(room.code, room);
         room.addPlayer(cleanName(msg.name), session, now);
         return;
@@ -535,6 +574,12 @@ export class Rooms {
       case "ready":
         if (session.room && session.player) session.room.setReady(session.player, msg.ready);
         return;
+      case "track": {
+        if (!session.room || !session.player) return;
+        const e = session.room.setTrack(session.player, msg.id);
+        if (e) err(e);
+        return;
+      }
       case "buy": {
         if (!session.room || !session.player) return;
         const e = session.room.buy(session.player, msg.item);
