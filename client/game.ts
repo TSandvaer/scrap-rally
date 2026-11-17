@@ -560,7 +560,7 @@ export class Game {
     this.prevCar = cloneCar(before);
     if (this.cooldown > 0) this.cooldown--;
     stepRaceCar(this.car, cmd, this.stats, track);
-    this.contact.step(this.car, this.pending.length + 1, stepMs); // the server applies it then
+    this.contact.step(this.car, this.pending.length + 1); // the server applies it then
     if (this.prevCar.wreck > 0 && this.car.wreck === 0) this.prevCar = cloneCar(this.car); // respawn: no slide
 
     // Same order as the server: step, then fire from the new pose.

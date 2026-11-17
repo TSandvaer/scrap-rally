@@ -3,8 +3,10 @@
 import { pointAt } from "../shared/track";
 import type { GameEvent, ResultRow } from "../shared/protocol";
 import { AMMO, AMMO_IDS, priceOf, UPGRADE_IDS, UPGRADES, type ItemId, type Wallet } from "../shared/shop";
+import { BotDriver } from "../scripts/bot-ai";
 import { Game, lostMessage, track, type TokenStore } from "./game";
 import { Keyboard } from "./input";
+import { JerkMeter } from "./jerk";
 import { connectWs } from "./net";
 import { Renderer, type CarView, type HudView, type WorldFx } from "./render";
 
@@ -13,6 +15,8 @@ const MAX_CATCH_UP = 5;
 
 const params = new URLSearchParams(location.search);
 const debug = params.get("debug") === "1";
+// Debug only: ?autopilot=1 drives the own car with the bot AI (weapons off), lane = ?lane=.
+const autopilot = debug && params.get("autopilot") === "1";
 const lag = Number(params.get("lag")) || 0;
 const jitter = Number(params.get("jitter")) || 0;
 const wsUrl = `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`;
@@ -62,6 +66,11 @@ const ui = {
 const game = new Game(() => connectWs(wsUrl, { lag, jitter }), tokens);
 const keyboard = new Keyboard(window);
 const renderer = new Renderer($<HTMLCanvasElement>("view"), track);
+const jerk = new JerkMeter();
+let measuredPhase = "";
+const pilot = autopilot ? new BotDriver(game, Number(params.get("lane")) || 0) : null;
+if (pilot) pilot.weapons = false;
+if (debug) (window as unknown as { scrapDebug: unknown }).scrapDebug = { game, jerk };
 
 let connState: "connected" | "reconnecting" | "lost" = "connected";
 let restartNotice = false;
@@ -401,6 +410,9 @@ function hudView(): HudView | null {
       `pending ${game.pending.length}  ack ${game.lastAck}  seq ${game.seq}`,
       `rec err last ${(errs[errs.length - 1] ?? 0).toFixed(2)}  med ${median(errs).toFixed(2)}  max ${Math.max(0, ...errs).toFixed(2)}`,
       `smooth ${Math.hypot(game.smooth.x, game.smooth.y).toFixed(2)}  snaps ${game.snaps.length}`,
+      `jerk near ${jerk.near.text()}`,
+      `jerk ramp ${jerk.ramp.text()}`,
+      `jerk far  ${jerk.far.text()}`,
       `near ${game.players.filter((p) => game.contact.weight(p.id) > 0).map((p) => `${p.name} ${game.contact.weight(p.id).toFixed(2)}`).join(", ") || "-"}`,
     ];
   }
@@ -420,7 +432,7 @@ function frame(now: number): void {
   acc += elapsed;
   let steps = 0;
   while (acc >= STEP_MS && steps < MAX_CATCH_UP) {
-    game.step(keyboard.read(), STEP_MS);
+    game.step(pilot ? pilot.controls() : keyboard.read(), STEP_MS);
     acc -= STEP_MS;
     steps++;
   }
@@ -446,6 +458,23 @@ function draw(alpha: number, elapsed: number): void {
   const others = game.otherPoses();
   const drawn = game.contact.blend(others, game.car, game.pending.length - 1 + alpha, elapsed);
   for (const o of drawn) cars.push(view(o.id, o.x, o.y, o.h, false));
+  game.contact.diagOn = debug && game.phase === "racing";
+  if (debug && game.phase === "racing" && measuredPhase !== "racing") {
+    jerk.reset(); // one race per measurement
+    game.contact.resetDiag();
+  }
+  measuredPhase = game.phase;
+  if (debug && game.car && game.phase === "racing") {
+    jerk.frame(
+      drawn,
+      (id) => game.contact.weight(id),
+      (id) => {
+        const s = game.latest?.cars.get(id);
+        return !s || s.wreck > 0 || s.ghost;
+      },
+      elapsed,
+    );
+  }
   const own = game.ownPose(alpha);
   if (own) cars.push(view(own.id, own.x, own.y, own.h, true));
 
