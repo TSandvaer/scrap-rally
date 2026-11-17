@@ -798,7 +798,7 @@ function collisions(): void {
   const ps = snapCar("o", body(100, 50, 0.3, 300, -120));
   const p3 = predicted(ps, 3), p50 = predicted(ps, 50);
   check(
-    "predicted pose = snapshot + v*k*DT, clamped to 150 ms",
+    `predicted pose = snapshot + v*k*DT, clamped to ${PREDICT_MAX_MS} ms`,
     Math.abs(p3.x - (100 + 300 * 3 * DT)) < 1e-9 && Math.abs(p3.y - (50 - 120 * 3 * DT)) < 1e-9 &&
       Math.abs(p50.x - (100 + 300 * PREDICT_MAX_MS / 1000)) < 1e-9 && p50.h === 0.3,
     `k=3 (${p3.x.toFixed(2)}, ${p3.y.toFixed(2)}), k=50 x ${p50.x.toFixed(2)}`,
@@ -810,12 +810,12 @@ function collisions(): void {
     const fx = new Contacts();
     fx.setBase(snap, "me");
     const hard = body(70, 0, 0, 300, 0); // nose 1 unit into o's tail, closing at 300
-    fx.step(hard, 1, 1000 / 60);
+    fx.step(hard, 1);
     const first = fx.takeImpacts();
     let again = 0;
     for (let i = 0; i < 5; i++) {
       const c = body(70, 0, 0, 300, 0);
-      fx.step(c, 1, 1000 / 60);
+      fx.step(c, 1);
       again += fx.takeImpacts().length;
     }
     const replay = new Contacts();
@@ -823,7 +823,7 @@ function collisions(): void {
     const replayHit = replay.collide(body(70, 0, 0, 300, 0), 1);
     const slow = new Contacts();
     slow.setBase(snap, "me");
-    slow.step(body(70, 0, 0, IMPACT_MIN_SPEED * 0.5, 0), 1, 1000 / 60);
+    slow.step(body(70, 0, 0, IMPACT_MIN_SPEED * 0.5, 0), 1);
     check(
       "impact effect: one for a hard live contact, at the contact point",
       first.length === 1 && Math.abs(first[0].x - 85) < 1e-6 && Math.abs(first[0].y) < 1e-9 && first[0].speed === 300, // nose 77.5, tail 92.5
@@ -841,13 +841,47 @@ function collisions(): void {
     const interp = [{ id: "n", x: 30, y: 20, h: 0.5 }, { id: "f", x: 380, y: 0, h: 0 }];
     let out = draw.blend(interp, body(0, 0, 0), 4.5, 16);
     const early = out[0].x;
-    for (let i = 0; i < 12; i++) out = draw.blend(interp, body(0, 0, 0), 4.5, 16);
+    for (let i = 0; i < 40; i++) out = draw.blend(interp, body(0, 0, 0), 4.5, 16);
     const want = predicted(near, 4.5);
     check(
-      "drawing: a near car eases (~150 ms) to exactly its predicted pose; a far car stays interpolated",
+      "drawing: a near car eases (~500 ms) to exactly its predicted pose; a far car stays interpolated",
       early > 30 && early < want.x && out[0].x === want.x && out[0].y === want.y && out[1].x === 380,
-      `first frame x ${early.toFixed(2)}, after 13 frames (${out[0].x.toFixed(2)}, ${out[0].y.toFixed(2)}) want (${want.x.toFixed(2)}, ${want.y.toFixed(2)}), far x ${out[1].x}`,
+      `first frame x ${early.toFixed(2)}, after 41 frames (${out[0].x.toFixed(2)}, ${out[0].y.toFixed(2)}) want (${want.x.toFixed(2)}, ${want.y.toFixed(2)}), far x ${out[1].x}`,
     );
+
+    // A new snapshot that disagrees with the prediction by 2 units: no jump on screen and
+    // no velocity jump either (the offset springs back; it does not decay from a kick).
+    const t0 = 1000;
+    const s1 = { time: t0, cars: new Map([["n", snapCar("n", body(50, 20, 0, 200, 0))], ["me", snapCar("me", body(0, 0, 0))]]) };
+    const sm = new Contacts();
+    sm.setBase(s1, "me");
+    const iv = [{ id: "n", x: 30, y: 20, h: 0 }];
+    for (let i = 0; i < 40; i++) sm.blend(iv, body(0, 0, 0), 4, 16);
+    const before = sm.blend(iv, body(0, 0, 0), 4, 0)[0];
+    const s2 = { time: t0 + 2000 / 60, cars: new Map([["n", snapCar("n", body(50 + (200 * 2) / 60, 22, 0, 200, 0))], ["me", snapCar("me", body(0, 0, 0))]]) };
+    sm.rebase(s2, "me", 4, 2);
+    const after = sm.blend(iv, body(0, 0, 0), 2, 0)[0];
+    const xs = [after];
+    for (let i = 1; i <= 10; i++) xs.push(sm.blend(iv, body(0, 0, 0), 2 + (i * 16) / (1000 / 60), 16)[0]); // k stays < cap
+    let maxDv = 0;
+    for (let i = 2; i < xs.length; i++) {
+      const v2x = (xs[i].x - xs[i - 1].x) / 0.016, v2y = (xs[i].y - xs[i - 1].y) / 0.016;
+      const v1x = (xs[i - 1].x - xs[i - 2].x) / 0.016, v1y = (xs[i - 1].y - xs[i - 2].y) / 0.016;
+      maxDv = Math.max(maxDv, Math.hypot(v2x - v1x, v2y - v1y));
+    }
+    const settled = predicted(s2.cars.get("n")!, 2 + (10 * 16) / (1000 / 60));
+    check(
+      "drawing: a snapshot jump of a near car is hidden without a jump in its velocity",
+      Math.hypot(after.x - before.x, after.y - before.y) < 1e-9 && maxDv < 25 && Math.abs(xs[10].y - settled.y) < 0.3,
+      `jump on screen ${Math.hypot(after.x - before.x, after.y - before.y).toExponential(1)}, max velocity change ${maxDv.toFixed(1)} u/s per frame, y after 160 ms ${xs[10].y.toFixed(3)} (target ${settled.y})`,
+    );
+
+    // The own car running further ahead than PREDICT_MAX_MS: near cars ease back to the
+    // interpolated pose instead of standing still at the cap.
+    const kFar = (PREDICT_MAX_MS / 1000 / DT) * 1.2;
+    let o2 = draw.blend(interp, body(0, 0, 0), kFar, 16);
+    for (let i = 0; i < 40; i++) o2 = draw.blend(interp, body(0, 0, 0), kFar, 16);
+    check("drawing: past the prediction cap near cars go back to the interpolated pose", o2[0].x === 30 && draw.weight("n") === 0, `x ${o2[0].x}`);
   }
 }
 

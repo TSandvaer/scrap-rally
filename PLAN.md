@@ -96,11 +96,17 @@ The client predicts its own car's bumps (`client/contact.ts`): after each own st
 `step()` and in every replayed step of the reconcile, a one-sided resolver moves only the
 own car by exactly its half of the push and impulse, against each other solid car's pose
 = latest snapshot + v·k·DT, k = the step index after that snapshot (the tick the server
-applies that input), clamped to 150 ms. Nothing collides while the own car is wrecked or
-ghosted. Other cars within ~90 units (until ~130) ease over 150 ms to that same predicted
-pose, so a bump is seen where it happens; their snapshot-to-snapshot jumps decay like the
-own car's correction. Further away they stay interpolated 100 ms in the past, and rivets
-and hit sparks stay at the interpolation time. A live predicted contact above
+applies that input), clamped to 250 ms (the own car runs ~10 steps ahead at 80 ms RTT; a
+lower cap froze the prediction). Nothing collides while the own car is wrecked or
+ghosted. Other cars within ~150 units (until ~220) ease over 500 ms to that same predicted
+position, so a bump is seen where it happens; the drawn heading also turns on at the
+car's turning speed (from its last two snapshots). The small jump of that prediction at
+each new snapshot goes into a critically damped offset, so a near car's velocity never
+jumps; past the 250 ms cap near cars ease back to interpolation. Further away they stay
+interpolated 100 ms in the past, and rivets and hit sparks stay at the interpolation
+time. `?debug=1` shows a jerk meter (velocity change between frames of each other car,
+near / easing / far); `?debug=1&autopilot=1` drives the own car with the bot AI for
+measuring with `npm run botplay`. A live predicted contact above
 `IMPACT_MIN_SPEED` closing speed shows sparks at the contact point and a small screen
 shake (150 ms cooldown; replays never fire it). There is no server bump event.
 
