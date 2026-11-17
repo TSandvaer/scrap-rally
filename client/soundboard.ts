@@ -321,19 +321,23 @@ export interface EffectStats {
   audibleMs: number; // until the last sample above -50 dBFS
 }
 
-/** Each effect alone, offline at effects volume 1 through the live chain. */
+/**
+ * Each effect alone, offline at effects volume 1 through the live chain. It starts at
+ * LEAD s: the compressor is still settling at the very start of a render and reads low.
+ */
 async function checkEffects(): Promise<EffectStats[]> {
+  const LEAD = 0.3;
   return Promise.all(
     SFX_KINDS.map(async (kind) => {
       const sr = 44100;
-      const ctx = new OfflineAudioContext(2, Math.ceil((SFX_DUR[kind] + 0.3) * sr), sr);
-      new SfxVoices(ctx, buildBuses(ctx, { music: 0, effects: 1, muted: false }).sfx, makeNoise(ctx)).play(kind, 0.01);
+      const ctx = new OfflineAudioContext(2, Math.ceil((LEAD + SFX_DUR[kind] + 0.3) * sr), sr);
+      new SfxVoices(ctx, buildBuses(ctx, { music: 0, effects: 1, muted: false }).sfx, makeNoise(ctx)).play(kind, LEAD);
       const buf = await ctx.startRendering();
       const l = levels(buf);
       let lastLoud = 0;
       const d = buf.getChannelData(0);
       for (let i = 0; i < d.length; i++) if (Math.abs(d[i]) > 0.00316) lastLoud = i;
-      return { kind, peak: Math.round(l.peak * 1000) / 1000, peakDb: db(l.peak), rmsDb: db(l.rms), clipped: l.clipped, audibleMs: Math.round((lastLoud / sr) * 1000) };
+      return { kind, peak: Math.round(l.peak * 1000) / 1000, peakDb: db(l.peak), rmsDb: db(l.rms), clipped: l.clipped, audibleMs: Math.round((lastLoud / sr - LEAD) * 1000) };
     }),
   );
 }

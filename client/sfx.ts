@@ -22,41 +22,41 @@ import type { GameEvent } from "../shared/protocol";
 
 /** Peak level of each effect at gain 1, before the effects volume. */
 const LEVEL: Record<SfxKind, number> = {
-  beep: 0.32,
-  go: 0.36,
-  rivet: 0.3,
-  drop: 0.42,
-  blast: 0.75,
-  hit: 0.34,
-  wreck: 0.7,
-  bump: 0.55,
-  takeoff: 0.34,
-  land: 0.5,
+  beep: 0.25,
+  go: 0.16,
+  rivet: 0.19,
+  drop: 0.25,
+  blast: 0.26,
+  hit: 0.18,
+  wreck: 0.43,
+  bump: 0.22,
+  takeoff: 0.39,
+  land: 0.22,
   fall: 0.3,
-  recover: 0.26,
-  lap: 0.3,
-  finish: 0.32,
+  recover: 0.245,
+  lap: 0.25,
+  finish: 0.4,
 };
 
 /** How long each effect sounds (s): its sources stop then; also what the per-kind caps count. */
 export const SFX_DUR: Record<SfxKind, number> = {
-  beep: 0.18,
-  go: 0.6,
-  rivet: 0.12,
+  beep: 0.26,
+  go: 0.85,
+  rivet: 0.16,
   drop: 0.42,
   blast: 1.3,
   hit: 0.3,
   wreck: 1.3,
   bump: 0.25,
-  takeoff: 0.55,
+  takeoff: 0.75,
   land: 0.35,
-  fall: 1.15,
+  fall: 1.3,
   recover: 0.32,
-  lap: 0.45,
-  finish: 1.1,
+  lap: 0.75,
+  finish: 1.4,
 };
 
-const ENGINE_LEVEL = 0.13;
+const ENGINE_LEVEL = 0.11;
 const ENGINE_MULT = [1, 1.006, 0.5]; // two saws (one detuned) and the square sub-octave
 
 type Src = AudioScheduledSourceNode;
@@ -78,7 +78,7 @@ class Voice {
     o.type = type;
     o.frequency.setValueAtTime(hz, at);
     o.start(at);
-    o.stop(stop);
+    o.stop(Math.min(stop, this.end)); // every source ends with the voice
     this.sources.push(o);
     return o;
   }
@@ -88,7 +88,7 @@ class Voice {
     n.buffer = this.noiseBuf;
     n.loop = true;
     n.start(at, offset % this.noiseBuf.duration);
-    n.stop(stop);
+    n.stop(Math.min(stop, this.end));
     this.sources.push(n);
     return n;
   }
@@ -231,7 +231,7 @@ const RECIPES: Record<SfxKind, (v: Voice, s: SfxVoices) => void> = {
     lp.frequency.setValueAtTime(4200, t);
     lp.frequency.exponentialRampToValueAtTime(160, t + 0.8);
     v.chain(v.noise(t, v.end, Math.random()), lp, s.shaper(v), v.env(1, 0.28, t, 0.002, 0.03));
-    blip(v, "sine", 110, t, 1, 0.2, 0.02, 30);
+    blip(v, "sine", 110, t, 0.75, 0.2, 0.02, 30);
     v.chain(v.noise(t, t + 0.4, Math.random()), v.filter("highpass", 2600), v.env(0.35, 0.05, t + 0.01, 0.001));
   },
   // Rivet hit: a metal clang and a click.
@@ -281,7 +281,7 @@ const RECIPES: Record<SfxKind, (v: Voice, s: SfxVoices) => void> = {
   // Fall: a long falling whistle over a little wind.
   fall(v) {
     const t = v.t;
-    blip(v, "sine", 1000, t, 0.8, 0.3, 0.45, 140);
+    blip(v, "sine", 1000, t, 0.8, 0.2, 0.4, 140);
     const bp = v.filter("bandpass", 900, 0.9);
     bp.frequency.setValueAtTime(900, t);
     bp.frequency.exponentialRampToValueAtTime(260, t + 0.9);
@@ -378,6 +378,8 @@ export interface TriggerLogEntry {
   kind: SfxKind;
   own: boolean;
   src: Trigger["src"];
+  out: "played" | "far" | "capped"; // far: beyond FAR_UNITS (or nowhere); capped: per-kind cap
+  ent?: number; // the shot or mine id (snapshot triggers)
   at: number; // performance.now(), ms
   gain: number;
   race: number; // the race it belongs to (raceStart), 0 outside one
@@ -388,13 +390,14 @@ const LOG_MAX = 2000;
 /**
  * The live race sounds: frame() once per frame from the frame loop, event() per server
  * event, bump() per own predicted impact. Triggers are decided by SoundTriggers and dropped
- * entirely while audio is not running (locked, suspended, tab hidden). Every played trigger
- * goes to `log` (debug: scrapDebug.sounds.log) and every dropped one is counted.
+ * entirely while audio is not running (locked, suspended, tab hidden; counted in
+ * dropped.silent). Every trigger goes to `log` with what became of it (debug:
+ * scrapDebug.sounds.log).
  */
 export class RaceSounds {
   readonly triggers: SoundTriggers;
   readonly log: TriggerLogEntry[] = [];
-  readonly dropped = { silent: 0, far: 0, capped: 0 };
+  readonly dropped = { silent: 0 };
   private voices: SfxVoices | null = null;
   private engine: EngineVoice | null = null;
   private readonly caps = new SfxCaps();
@@ -458,25 +461,14 @@ export class RaceSounds {
     let pan = 0;
     if (!t.own) {
       const at = this.where(t);
-      if (!at) {
-        this.dropped.far++;
-        return;
-      }
       const ear = this.game.car ?? cam;
-      gain *= OTHER_GAIN * distanceGain(Math.hypot(at.x - ear.x, at.y - ear.y));
-      pan = panFor(at.x - cam.x);
-    }
-    if (gain < 0.01) {
-      this.dropped.far++;
-      return;
+      gain = at ? gain * OTHER_GAIN * distanceGain(Math.hypot(at.x - ear.x, at.y - ear.y)) : 0;
+      if (at) pan = panFor(at.x - cam.x);
     }
     const now = sv.ctx.currentTime;
-    if (!this.caps.tryStart(t.kind, now * 1000, SFX_DUR[t.kind] * 1000, t.own)) {
-      this.dropped.capped++;
-      return;
-    }
-    sv.play(t.kind, now, gain, pan);
-    this.log.push({ kind: t.kind, own: t.own, src: t.src, at: Math.round(performance.now()), gain: Math.round(gain * 100) / 100, race: this.game.raceStart });
+    const out = gain < 0.01 ? "far" : this.caps.tryStart(t.kind, now * 1000, SFX_DUR[t.kind] * 1000, t.own) ? "played" : "capped";
+    if (out === "played") sv.play(t.kind, now, gain, pan);
+    this.log.push({ kind: t.kind, own: t.own, src: t.src, out, ent: t.ent, at: Math.round(performance.now()), gain: Math.round(gain * 100) / 100, race: this.game.raceStart });
     if (this.log.length > LOG_MAX) this.log.splice(0, this.log.length - LOG_MAX);
   }
 

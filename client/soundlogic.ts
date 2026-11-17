@@ -321,6 +321,7 @@ export interface Trigger {
   own: boolean; // the own car (or a global cue: the countdown): full volume, no pan
   src: "step" | "snap" | "ev" | "bump" | "countdown";
   id?: string; // the car, for its position at play time when x/y are absent
+  ent?: number; // the shot or mine id (snapshot triggers; debug)
   x?: number;
   y?: number;
   vel?: number; // loudness 0..1 (a bump's closing speed), 1 if absent
@@ -355,12 +356,12 @@ export class SnapWatcher {
     const shots = new Set<number>();
     for (const [id, sh] of s.shots) {
       shots.add(id);
-      if (!quiet && sh.o !== you && !this.shots.has(id)) out.push({ kind: "rivet", own: false, src: "snap", id: sh.o, x: sh.x, y: sh.y });
+      if (!quiet && sh.o !== you && !this.shots.has(id)) out.push({ kind: "rivet", own: false, src: "snap", id: sh.o, ent: id, x: sh.x, y: sh.y });
     }
     const mines = new Set<number>();
     for (const m of s.mines) {
       mines.add(m.id);
-      if (!quiet && m.o !== you && !this.mines.has(m.id)) out.push({ kind: "drop", own: false, src: "snap", id: m.o, x: m.x, y: m.y });
+      if (!quiet && m.o !== you && !this.mines.has(m.id)) out.push({ kind: "drop", own: false, src: "snap", id: m.o, ent: m.id, x: m.x, y: m.y });
     }
     const cars = new Map<string, { air: boolean; fall: boolean }>();
     for (const [id, c] of s.cars) {
@@ -462,6 +463,8 @@ export class SoundTriggers {
   readonly watch = new SnapWatcher();
   readonly gate: EventGate;
   readonly refractory = new Refractory();
+  /** Own cues the refractory held back (a reconcile re-fire), for the debug checks. */
+  refractoryDrops = 0;
 
   constructor(delayMs: number) {
     this.gate = new EventGate(delayMs);
@@ -488,7 +491,10 @@ export class SoundTriggers {
     const cue = this.countdown.update(v.phase, v.raceStart, v.phaseEnds, v.serverNow, v.hasClock);
     if (cue !== null) out.push({ kind: cue === COUNTDOWN_CUES - 1 ? "go" : "beep", own: true, src: "countdown" });
     for (const s of v.own) {
-      if (REFRACTORY_KINDS.has(s) && !this.refractory.allow(s, nowMs)) continue;
+      if (REFRACTORY_KINDS.has(s) && !this.refractory.allow(s, nowMs)) {
+        this.refractoryDrops++;
+        continue;
+      }
       out.push({ kind: OWN_KIND[s], own: true, src: "step" });
     }
     this.watch.update(v.snap, v.you, out);
