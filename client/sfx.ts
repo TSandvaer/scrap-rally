@@ -14,12 +14,16 @@ import {
   panFor,
   SfxCaps,
   SoundTriggers,
+  gravelTarget,
+  onGravel,
   type EnginePreset,
+  type EngineState,
   type SfxKind,
   type SoundView,
   type Trigger,
 } from "./soundlogic";
 import type { GameEvent } from "../shared/protocol";
+import { queryTrackNear } from "../shared/track";
 
 /** Peak level of each effect at gain 1, before the effects volume. */
 const LEVEL: Record<SfxKind, number> = {
@@ -31,6 +35,8 @@ const LEVEL: Record<SfxKind, number> = {
   hit: 0.18,
   wreck: 0.43,
   bump: 0.22,
+  crash: 0.5,
+  wall: 0.45,
   takeoff: 0.39,
   land: 0.22,
   fall: 0.3,
@@ -49,6 +55,8 @@ export const SFX_DUR: Record<SfxKind, number> = {
   hit: 0.3,
   wreck: 1.3,
   bump: 0.25,
+  crash: 0.9,
+  wall: 0.9,
   takeoff: 0.75,
   land: 0.35,
   fall: 1.3,
@@ -70,6 +78,7 @@ class Voice {
     readonly t: number,
     readonly end: number,
     private readonly noiseBuf: AudioBuffer,
+    readonly force = 1, // 0..1: how hard (crashes)
   ) {}
 
   osc(type: OscillatorType, hz: number, at = this.t, stop = this.end): OscillatorNode {
@@ -142,14 +151,14 @@ export class SfxVoices {
     private readonly noiseBuf: AudioBuffer,
   ) {}
 
-  play(kind: SfxKind, t: number, gain = 1, pan = 0): void {
+  play(kind: SfxKind, t: number, gain = 1, pan = 0, force = 1): void {
     const c = this.ctx;
     const g = c.createGain();
     g.gain.value = gain * LEVEL[kind];
     const p = c.createStereoPanner();
     p.pan.value = pan;
     g.connect(p).connect(this.out);
-    const v = new Voice(c, g, t, t + SFX_DUR[kind], this.noiseBuf);
+    const v = new Voice(c, g, t, t + SFX_DUR[kind], this.noiseBuf, force);
     v.nodes.push(g, p);
     RECIPES[kind](v, this);
     let left = v.sources.length;
@@ -172,6 +181,13 @@ export class SfxVoices {
   engine(preset: EnginePreset): EngineVoice {
     return new EngineVoice(this.ctx, this.out, this.noiseBuf, preset, this.curve);
   }
+
+  private grainBuf: AudioBuffer | null = null;
+
+  gravel(): GravelVoice {
+    this.grainBuf ??= grainBuffer(this.ctx);
+    return new GravelVoice(this.ctx, this.out, this.noiseBuf, this.grainBuf);
+  }
 }
 
 /** A short metallic clang: two inharmonic squares through a ringing band-pass. */
@@ -181,6 +197,31 @@ function clang(v: Voice, at: number, f1: number, f2: number, band: number, peak:
   v.osc("square", f1, at, at + tau * 6).connect(f);
   v.osc("square", f2, at, at + tau * 6).connect(f);
   v.chain(f, e);
+}
+
+/** Bent metal: crunch noise, bending inharmonic partials, a groan when hard (crash / wall). */
+function metalCrash(v: Voice, s: SfxVoices, force: number, level: number): void {
+  const t = v.t;
+  const vary = () => 1 + (Math.random() * 2 - 1) * 0.07;
+  const sat = s.shaper(v);
+  const crunch = v.filter("bandpass", 1300 * vary(), 0.9);
+  v.chain(v.noise(t, v.end, Math.random()), crunch, v.env(level, 0.035 + 0.15 * force, t, 0.001, 0.01 + 0.04 * force), sat);
+  const band = v.filter("bandpass", 1900 * vary(), 2.2);
+  const env = v.env(0.55 * level, 0.05 + 0.2 * force, t, 0.001, 0.01);
+  [347, 589, 911, 1433].forEach((hz, i) => {
+    const at = t + i * (0.006 + 0.008 * force);
+    const f0 = hz * vary();
+    const o = v.osc(i % 2 ? "triangle" : "square", f0, at, v.end);
+    o.frequency.exponentialRampToValueAtTime(f0 * (0.9 - 0.08 * force), at + 0.08 + 0.1 * force); // bending
+    o.connect(band);
+  });
+  v.chain(band, env, sat);
+  blip(v, "sine", 130, t, 0.7 * level, 0.04 + 0.04 * force, 0, 50);
+  if (force > 0.45) {
+    const groan = v.osc("sawtooth", 430 * vary(), t + 0.02, v.end);
+    groan.frequency.exponentialRampToValueAtTime(205, t + 0.4);
+    v.chain(groan, v.filter("bandpass", 720, 6), v.env(0.4 * level * force, 0.14, t + 0.02, 0.01, 0.05));
+  }
 }
 
 /** A short pitched blip (square or triangle) with its own envelope. */
@@ -270,6 +311,22 @@ const RECIPES: Record<SfxKind, (v: Voice, s: SfxVoices) => void> = {
     clang(v, t + 0.14, 830, 1290, 1900, 0.4, 0.04);
     clang(v, t + 0.29, 1460, 2110, 2900, 0.3, 0.035);
     clang(v, t + 0.47, 610, 980, 1500, 0.25, 0.05);
+  },
+  // Crash into another car: bending metal. A crunch of saturated band-passed noise, four
+  // inharmonic metal partials starting a few ms apart that bend down in pitch, and from
+  // force ~0.5 a groaning resonant saw; force (0..1) sets length and weight.
+  crash(v, s) {
+    metalCrash(v, s, v.force, 1);
+  },
+  // The own car into a wall: the same bent metal on a heavier, lower concrete thump.
+  wall(v, s) {
+    const t = v.t;
+    const f = v.force;
+    const boom = v.osc("sine", 95, t, t + 0.5);
+    boom.frequency.exponentialRampToValueAtTime(38, t + 0.12 + 0.1 * f);
+    v.chain(boom, v.env(0.9, 0.06 + 0.06 * f, t, 0.002));
+    v.chain(v.noise(t, t + 0.25, Math.random()), v.filter("lowpass", 700), v.env(0.6, 0.04 + 0.04 * f, t, 0.001));
+    metalCrash(v, s, f, 0.8);
   },
   // Bump: a soft thud.
   bump(v) {
@@ -563,6 +620,105 @@ export class EngineVoice {
   }
 }
 
+/**
+ * Gravel grains: 2 s of short decaying noise ticks at random times (~70 a second, random
+ * strength and length), seeded so renders repeat. Built once per context.
+ */
+function grainBuffer(ctx: BaseAudioContext): AudioBuffer {
+  const sr = ctx.sampleRate;
+  const buf = ctx.createBuffer(1, sr * 2, sr);
+  const d = buf.getChannelData(0);
+  let x = 0x2545f491;
+  const rnd = () => {
+    x ^= x << 13;
+    x ^= x >>> 17;
+    x ^= x << 5;
+    return (x >>> 0) / 0xffffffff;
+  };
+  for (let t = 0; t < d.length; ) {
+    t += Math.floor((-Math.log(1 - rnd() * 0.999) / 70) * sr); // Poisson, ~70 a second
+    const len = Math.floor((0.002 + rnd() * 0.006) * sr);
+    const amp = 0.3 + rnd() * 0.7;
+    for (let i = 0; i < len && t + i < d.length; i++) d[t + i] += amp * (rnd() * 2 - 1) * Math.exp((-4 * i) / len);
+  }
+  return buf;
+}
+
+/**
+ * The own car's tyres on gravel: crackling grains (played faster with speed: denser) through a
+ * band-pass, over a gritty band of noise, under a low-pass that opens with speed. One persistent
+ * voice like the engine; set() only moves parameters.
+ */
+export class GravelVoice {
+  private readonly grains: AudioBufferSourceNode;
+  private readonly lp: BiquadFilterNode;
+  private readonly g: GainNode;
+  private readonly sources: AudioScheduledSourceNode[];
+  private readonly nodes: AudioNode[];
+  private stopped = false;
+
+  constructor(
+    private readonly c: BaseAudioContext,
+    out: AudioNode,
+    noise: AudioBuffer,
+    grainBuf: AudioBuffer,
+  ) {
+    const t = c.currentTime;
+    const filter = (type: BiquadFilterType, hz: number, q: number) => {
+      const f = c.createBiquadFilter();
+      f.type = type;
+      f.frequency.value = hz;
+      f.Q.value = q;
+      return f;
+    };
+    const gain = (v: number) => {
+      const g = c.createGain();
+      g.gain.value = v;
+      return g;
+    };
+    this.grains = c.createBufferSource();
+    this.grains.buffer = grainBuf;
+    this.grains.loop = true;
+    const bed = c.createBufferSource();
+    bed.buffer = noise;
+    bed.loop = true;
+    const grainBand = filter("bandpass", 2300, 0.7);
+    const grainLevel = gain(1);
+    const bedBand = filter("bandpass", 650, 0.6);
+    const bedLevel = gain(0.18);
+    this.lp = filter("lowpass", 2500, 0.7);
+    this.g = gain(0);
+    this.grains.connect(grainBand).connect(grainLevel).connect(this.lp);
+    bed.connect(bedBand).connect(bedLevel).connect(this.lp);
+    this.lp.connect(this.g).connect(out);
+    this.sources = [this.grains, bed];
+    this.nodes = [grainBand, grainLevel, bedBand, bedLevel, this.lp, this.g];
+    for (const s of this.sources) s.start(t);
+  }
+
+  /** gain 0..1 (0 = silent), density = grain rate (playback rate), open 0..1 (speed: brighter). */
+  set(gain: number, density: number, open: number, t = this.c.currentTime): void {
+    if (this.stopped) return;
+    this.grains.playbackRate.setTargetAtTime(density, t, 0.08);
+    this.lp.frequency.setTargetAtTime(1800 + 4500 * open, t, 0.08);
+    this.g.gain.setTargetAtTime(gain * GRAVEL_LEVEL, t, 0.04); // fades in and out at the asphalt edge
+  }
+
+  stop(t = this.c.currentTime): void {
+    if (this.stopped) return;
+    this.stopped = true;
+    this.g.gain.cancelScheduledValues(t);
+    this.g.gain.setTargetAtTime(0, t, 0.03);
+    for (const s of this.sources) s.stop(t + 0.25);
+    this.grains.addEventListener("ended", () => {
+      for (const s of this.sources) s.disconnect();
+      for (const n of this.nodes) n.disconnect();
+    });
+  }
+}
+
+const GRAVEL_LEVEL = 0.6;
+
 export interface TriggerLogEntry {
   kind: SfxKind;
   own: boolean;
@@ -589,6 +745,8 @@ export class RaceSounds {
   readonly dropped = { silent: 0 };
   private voices: SfxVoices | null = null;
   private engine: EngineVoice | null = null;
+  private gravel: GravelVoice | null = null;
+  private readonly carState: EngineState = { phase: "", hasCar: true, connected: true, wreck: 0, fall: 0, air: 0, finished: false, speed: 0, topSpeed: 1, throttle: 0 };
   private readonly caps = new SfxCaps();
   private readonly view: SoundView = { you: "", phase: "", raceStart: 0, phaseEnds: 0, serverNow: 0, hasClock: false, snapTick: 0, own: [], snap: null };
 
@@ -656,9 +814,24 @@ export class RaceSounds {
     }
     const now = sv.ctx.currentTime;
     const out = gain < 0.01 ? "far" : this.caps.tryStart(t.kind, now * 1000, SFX_DUR[t.kind] * 1000, t.own) ? "played" : "capped";
-    if (out === "played") sv.play(t.kind, now, gain, pan);
+    if (out === "played") sv.play(t.kind, now, gain, pan, t.force ?? 1);
     this.log.push({ kind: t.kind, own: t.own, src: t.src, out, ent: t.ent, at: Math.round(performance.now()), gain: Math.round(gain * 100) / 100, race: this.game.raceStart });
     if (this.log.length > LOG_MAX) this.log.splice(0, this.log.length - LOG_MAX);
+  }
+
+  /** Tyres on gravel: the own predicted pose off the asphalt (same query as the physics). */
+  private updateGravel(st: EngineState): void {
+    const g = this.game;
+    const car = g.car!;
+    const off = onGravel(queryTrackNear(g.track, car.x, car.y, car.seg).dist, g.track.def.halfWidth);
+    const target = gravelTarget(st, off);
+    if (!this.gravel) {
+      if (!target.on) return;
+      const sv = this.voicesNow();
+      if (!sv) return;
+      this.gravel = sv.gravel();
+    }
+    this.gravel.set(target.gain, target.density, Math.min(1, st.speed / Math.max(1, st.topSpeed)));
   }
 
   /** Where another car's sound is: its own x/y, else the car as drawn now (events). */
@@ -675,21 +848,23 @@ export class RaceSounds {
     if (!inRace) {
       this.engine?.stop();
       this.engine = null;
+      this.gravel?.stop();
+      this.gravel = null;
       return;
     }
     if (!audible) return; // the context is suspended: nothing moves
-    const target = engineTarget({
-      phase: g.phase,
-      hasCar: true,
-      connected: g.connected,
-      wreck: car.wreck,
-      fall: car.fall,
-      air: car.air,
-      finished: !!g.ownSnap()?.fin,
-      speed: Math.hypot(car.vx, car.vy),
-      topSpeed: g.stats.topSpeed,
-      throttle: ctl.throttle,
-    });
+    const st = this.carState;
+    st.phase = g.phase;
+    st.connected = g.connected;
+    st.wreck = car.wreck;
+    st.fall = car.fall;
+    st.air = car.air;
+    st.finished = !!g.ownSnap()?.fin;
+    st.speed = Math.hypot(car.vx, car.vy);
+    st.topSpeed = g.stats.topSpeed;
+    st.throttle = ctl.throttle;
+    this.updateGravel(st);
+    const target = engineTarget(st);
     const preset = this.audio.settings.engine;
     if (this.engine && this.engine.preset !== preset) {
       this.engine.stop(); // another engine was picked on the sound board

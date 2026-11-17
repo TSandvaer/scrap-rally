@@ -182,7 +182,7 @@ export class StepClock {
 // (takeOwnSounds) and exposes the snapshot other cars are drawn from (interpSnapshot).
 
 import type { GameEvent } from "../shared/protocol";
-import type { OwnSound } from "./game";
+import type { OwnCue, OwnSound } from "./game";
 
 export type SfxKind =
   | "beep" // countdown 3-2-1
@@ -192,7 +192,9 @@ export type SfxKind =
   | "blast" // mine went off
   | "hit" // rivet hit
   | "wreck"
-  | "bump"
+  | "bump" // a light touch: a soft thud
+  | "crash" // a car hit: bending metal (force from the closing speed)
+  | "wall" // the own car into a wall: metal on concrete
   | "takeoff"
   | "land"
   | "fall"
@@ -200,7 +202,7 @@ export type SfxKind =
   | "lap"
   | "finish";
 
-export const SFX_KINDS: readonly SfxKind[] = ["beep", "go", "rivet", "drop", "blast", "hit", "wreck", "bump", "takeoff", "land", "fall", "recover", "lap", "finish"];
+export const SFX_KINDS: readonly SfxKind[] = ["beep", "go", "rivet", "drop", "blast", "hit", "wreck", "bump", "crash", "wall", "takeoff", "land", "fall", "recover", "lap", "finish"];
 
 // Other cars: full volume within NEAR_UNITS of the own car (the camera when spectating),
 // silent beyond FAR_UNITS, a squared fall-off between; a little quieter than the own car.
@@ -237,6 +239,8 @@ export const SFX_CAPS: Readonly<Record<SfxKind, { cap: number; gapMs: number }>>
   hit: { cap: 4, gapMs: 30 },
   wreck: { cap: 2, gapMs: 100 },
   bump: { cap: 2, gapMs: 90 },
+  crash: { cap: 2, gapMs: 90 },
+  wall: { cap: 2, gapMs: 90 },
   takeoff: { cap: 3, gapMs: 60 },
   land: { cap: 3, gapMs: 60 },
   fall: { cap: 2, gapMs: 100 },
@@ -334,6 +338,7 @@ export interface Trigger {
   x?: number;
   y?: number;
   vel?: number; // loudness 0..1 (a bump's closing speed), 1 if absent
+  force?: number; // 0..1, how hard a crash is (its length and crunch), 1 if absent
 }
 
 /**
@@ -445,7 +450,23 @@ export class EventGate {
   }
 }
 
-const OWN_KIND: Record<OwnSound, SfxKind> = { takeoff: "takeoff", land: "land", fall: "fall", recover: "recover", shot: "rivet", mine: "drop" };
+// Impacts. Car contacts (closing speed, from IMPACT_MIN_SPEED 70) and wall hits (speed into
+// the wall, from WALL_HIT_MIN 50, client/game.ts) below the crash speed are a soft thud; from it
+// a metal crash whose force grows to 1 at the hard speed. One wall sound per 200 ms: a slide
+// along the wall keeps touching it.
+export const CRASH_MIN_SPEED = 150;
+export const CRASH_HARD_SPEED = 450;
+export const WALL_CRASH_SPEED = 110;
+export const WALL_HARD_SPEED = 350;
+export const WALL_REFRACTORY_MS = 200;
+
+export function impactSound(speed: number, crashAt: number, hardAt: number, crash: "crash" | "wall"): { kind: SfxKind; vel: number; force: number } {
+  if (speed < crashAt) return { kind: "bump", vel: Math.max(0.3, Math.min(1, speed / crashAt)), force: 0 };
+  const force = Math.min(1, (speed - crashAt) / (hardAt - crashAt));
+  return { kind: crash, vel: 0.45 + 0.55 * force, force };
+}
+
+const OWN_KIND: Record<OwnSound, SfxKind> = { takeoff: "takeoff", land: "land", fall: "fall", recover: "recover", shot: "rivet", mine: "drop", wall: "wall" };
 const REFRACTORY_KINDS: ReadonlySet<OwnSound> = new Set(["takeoff", "land", "fall", "recover"]);
 
 /** What the triggers read from the game each frame (client/sfx.ts fills it from client/game.ts). */
@@ -457,7 +478,7 @@ export interface SoundView {
   serverNow: number;
   hasClock: boolean;
   snapTick: number;
-  own: readonly OwnSound[]; // drained from Game.takeOwnSounds()
+  own: readonly OwnCue[]; // drained from Game.takeOwnSounds()
   snap: WatchedSnap | null; // Game.interpSnapshot()
 }
 
@@ -472,6 +493,7 @@ export class SoundTriggers {
   readonly watch = new SnapWatcher();
   readonly gate: EventGate;
   readonly refractory = new Refractory();
+  readonly wallRefractory = new Refractory(WALL_REFRACTORY_MS);
   /** Own cues the refractory held back (a reconcile re-fire), for the debug checks. */
   refractoryDrops = 0;
 
@@ -484,22 +506,30 @@ export class SoundTriggers {
     this.watch.reset();
     this.gate.clear();
     this.refractory.clear();
+    this.wallRefractory.clear();
   }
 
   event(ev: GameEvent, tick: number, you: string, nowMs: number, audible: boolean): void {
     if (audible) this.gate.event(ev, tick, you, nowMs);
   }
 
+  /** An own predicted car contact (client/contact.ts impacts): a thud, or a crash when hard. */
   bump(speed: number, x: number, y: number, audible: boolean): Trigger | null {
     if (!audible) return null;
-    return { kind: "bump", own: true, src: "bump", x, y, vel: Math.max(0.3, Math.min(1, speed / 300)) };
+    return { ...impactSound(speed, CRASH_MIN_SPEED, CRASH_HARD_SPEED, "crash"), own: true, src: "bump", x, y };
   }
 
   frame(v: SoundView, nowMs: number, audible: boolean): Trigger[] {
     const out: Trigger[] = [];
     const cue = this.countdown.update(v.phase, v.raceStart, v.phaseEnds, v.serverNow, v.hasClock);
     if (cue !== null) out.push({ kind: cue === COUNTDOWN_CUES - 1 ? "go" : "beep", own: true, src: "countdown" });
-    for (const s of v.own) {
+    for (const c of v.own) {
+      const s = c.k;
+      if (s === "wall") {
+        if (this.wallRefractory.allow(s, nowMs)) out.push({ ...impactSound(c.speed, WALL_CRASH_SPEED, WALL_HARD_SPEED, "wall"), own: true, src: "step" });
+        else this.refractoryDrops++;
+        continue;
+      }
       if (REFRACTORY_KINDS.has(s) && !this.refractory.allow(s, nowMs)) {
         this.refractoryDrops++;
         continue;
@@ -514,6 +544,28 @@ export class SoundTriggers {
     this.gate.take(nowMs, v.snapTick, out);
     return out;
   }
+}
+
+// ---- surface: gravel ----------------------------------------------------------------
+
+/** Off the asphalt: the car's centre beyond the tarmac half-width (the physics' off-road test). */
+export function onGravel(dist: number, halfWidth: number): boolean {
+  return dist > halfWidth;
+}
+
+export const GRAVEL_QUIET_SPEED = 15; // silent below this (nearly stopped)
+export const GRAVEL_FULL_SPEED = 300;
+
+/**
+ * The own car's tyres on gravel: on while a driving car's centre is off the asphalt and it
+ * rolls; silent in the air, wrecked, falling, finished, disconnected or outside races. gain
+ * rises with speed, density (the crackle rate) too.
+ */
+export function gravelTarget(e: EngineState, offRoad: boolean): { on: boolean; gain: number; density: number } {
+  const v = Math.max(0, e.speed);
+  const on = offRoad && e.hasCar && e.connected && (e.phase === "countdown" || e.phase === "racing") && e.wreck === 0 && e.fall === 0 && e.air === 0 && !e.finished && v > GRAVEL_QUIET_SPEED;
+  const f = Math.min(1, (v - GRAVEL_QUIET_SPEED) / (GRAVEL_FULL_SPEED - GRAVEL_QUIET_SPEED));
+  return { on, gain: on ? 0.25 + 0.75 * f : 0, density: 0.5 + 1.6 * Math.min(1, v / 430) };
 }
 
 // ---- engine -------------------------------------------------------------------------

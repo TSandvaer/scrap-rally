@@ -3470,7 +3470,7 @@ function raceSounds(): void {
   // Hidden / not running: nothing comes out, nothing is kept for later.
   const st = new SoundTriggers(100);
   st.event({ k: "hit", id: "o", by: "x", dmg: 4, w: "rivet" }, 1, "me", 0, false);
-  const view: SoundView = { you: "me", phase: "racing", raceStart: 1, phaseEnds: 0, serverNow: 5000, hasClock: true, snapTick: 99, own: ["shot", "takeoff"], snap: null };
+  const view: SoundView = { you: "me", phase: "racing", raceStart: 1, phaseEnds: 0, serverNow: 5000, hasClock: true, snapTick: 99, own: [{ k: "shot", speed: 0 }, { k: "takeoff", speed: 0 }], snap: null };
   const hiddenOut = st.frame(view, 0, false);
   st.event({ k: "hit", id: "o", by: "x", dmg: 4, w: "rivet" }, 2, "me", 10, true);
   st.frame({ ...view, own: [] }, 20, false); // hidden before it was due: dropped
@@ -3639,6 +3639,131 @@ function runTimers(): void {
   }
 }
 
+// ---- surface and crash sounds (SND-2 taste round): gravel band, impacts, wall hits -------
+
+import { CRASH_HARD_SPEED, CRASH_MIN_SPEED, gravelTarget, impactSound, onGravel, WALL_CRASH_SPEED, WALL_REFRACTORY_MS } from "../client/soundlogic";
+import { WALL_HIT_MIN, wallHitSpeed, type OwnCue } from "../client/game";
+import { wallLimit } from "../shared/physics";
+
+function surfaceSounds(): void {
+  // Gravel: the car's centre off the asphalt, at lateral offsets on a real (curved) track.
+  const half = track.def.halfWidth;
+  const at = (s: number, lat: number) => {
+    const p = pointAt(track, s);
+    const x = p.x - Math.sin(p.h) * lat;
+    const y = p.y + Math.cos(p.h) * lat;
+    return onGravel(queryTrackNear(track, x, y, p.seg).dist, half);
+  };
+  const lats = [0, half - 6, half - 1, half + 1, half + 4, track.wall - CAR_WIDTH / 2];
+  const sides = [-1, 1].map((side) => [L * 0.13, L * 0.41, L * 0.77].map((s0) => lats.map((l) => (at(s0, side * l) ? "G" : "a")).join("")).join(" "));
+  check(
+    "sfx gravel band: asphalt up to the tarmac half-width, gravel beyond it out to the wall, on both sides, on straights and bends",
+    sides.every((x) => x === "aaaGGG aaaGGG aaaGGG"),
+    `lateral ${lats.map((l) => l.toFixed(0)).join("/")}: ${sides.join(" | ")}`,
+  );
+  const st: EngineState = { phase: "racing", hasCar: true, connected: true, wreck: 0, fall: 0, air: 0, finished: false, speed: 250, topSpeed: 430, throttle: 1 };
+  const quiet: Partial<EngineState>[] = [{ air: 5 }, { wreck: 5 }, { fall: 5 }, { finished: true }, { phase: "results" }, { phase: "lobby" }, { hasCar: false }, { connected: false }, { speed: 10 }];
+  const slow = gravelTarget({ ...st, speed: 60 }, true);
+  const fast = gravelTarget({ ...st, speed: 350 }, true);
+  check(
+    "sfx gravel: on only off the asphalt while rolling; silent airborne, wrecked, falling, finished, outside races, nearly stopped; louder and denser with speed",
+    gravelTarget(st, true).on && !gravelTarget(st, false).on && gravelTarget(st, false).gain === 0 &&
+      quiet.every((q) => !gravelTarget({ ...st, ...q }, true).on && gravelTarget({ ...st, ...q }, true).gain === 0) &&
+      fast.gain > slow.gain && fast.density > slow.density,
+    `gain ${slow.gain.toFixed(2)} at 60 u/s, ${fast.gain.toFixed(2)} at 350; density ${slow.density.toFixed(2)} / ${fast.density.toFixed(2)}`,
+  );
+
+  // Impacts: a touch is a thud, harder a crash whose force grows.
+  const im = [100, CRASH_MIN_SPEED, 300, CRASH_HARD_SPEED, 900].map((v) => impactSound(v, CRASH_MIN_SPEED, CRASH_HARD_SPEED, "crash"));
+  const wl = [80, WALL_CRASH_SPEED, 400].map((v) => impactSound(v, WALL_CRASH_SPEED, 350, "wall"));
+  check(
+    "sfx impacts: a car contact below 150 u/s closing speed is a soft thud, from it a metal crash, force 0 -> 1 at 450; wall hits alike (thud below 110 u/s into the wall)",
+    im[0].kind === "bump" && im.slice(1).every((x) => x.kind === "crash") && im[1].force === 0 && im[2].force > 0 && im[2].force < 1 && im[3].force === 1 && im[4].force === 1 &&
+      im[3].vel > im[1].vel && wl[0].kind === "bump" && wl[1].kind === "wall" && wl[2].force === 1,
+    im.map((x) => `${x.kind} ${x.force.toFixed(2)}`).join(", "),
+  );
+
+  // Wall hits through the real physics on the T1b straight (centerline y = 0, heading +x).
+  const t1b = trackById(T1B_ID);
+  const limit = wallLimit(t1b);
+  const into = (vy: number) => {
+    const c: CarState = { x: 3000, y: limit - 1, h: 0.3, vx: 250, vy, seg: pointAt(t1b, 3000).seg, wreck: 0, air: 0, fall: 0 };
+    const before = cloneCar(c);
+    stepRaceCar(c, { throttle: 1, steer: 0 }, BASE_STATS, t1b);
+    return { speed: wallHitSpeed(before, c, t1b), vyAfter: c.vy, atWall: Math.abs(c.y - limit) < 0.02 };
+  };
+  const hard = into(180);
+  const soft = into(30);
+  const away = into(-80);
+  const free = { ...into(0) };
+  const mid: CarState = { x: 3000, y: 0, h: 0, vx: 250, vy: 120, seg: pointAt(t1b, 3000).seg, wreck: 0, air: 0, fall: 0 };
+  const midBefore = cloneCar(mid);
+  stepRaceCar(mid, { throttle: 1, steer: 0 }, BASE_STATS, t1b);
+  check(
+    "sfx wall hit: the speed into the wall that collideWalls removes (velocity before the step, wall normal after it); none away from the wall or moving off it; the 50 u/s threshold",
+    hard.atWall && Math.abs(hard.speed - 180) < 1 && hard.vyAfter < 0 && hard.speed >= WALL_HIT_MIN && soft.speed < WALL_HIT_MIN &&
+      away.speed === 0 && wallHitSpeed(midBefore, mid, t1b) === 0 && free.speed === 0,
+    `hard ${hard.speed.toFixed(1)} u/s (vy after ${hard.vyAfter.toFixed(1)}), soft ${soft.speed.toFixed(1)}, moving away ${away.speed}, mid-track 0`,
+  );
+
+  // Refractory: one wall sound per 200 ms while the car keeps touching the wall.
+  const tr = new SoundTriggers(100);
+  const wv = (own: OwnCue[]): SoundView => ({ you: "me", phase: "racing", raceStart: 1, phaseEnds: 0, serverNow: 1e6, hasClock: true, snapTick: 0, own, snap: null });
+  const walls: number[] = [];
+  for (const [ms, sp] of [[0, 200], [50, 120], [150, 300], [WALL_REFRACTORY_MS, 90], [WALL_REFRACTORY_MS + 100, 400], [WALL_REFRACTORY_MS * 2 + 10, 200]] as const) {
+    if (tr.frame(wv([{ k: "wall", speed: sp }]), ms, true).length) walls.push(ms);
+  }
+  check("sfx wall hit: at most one wall sound per 200 ms", walls.join() === `0,${WALL_REFRACTORY_MS},${WALL_REFRACTORY_MS * 2 + 10}`, walls.join());
+
+  // End to end on the wired room: steer into the wall with snapshots arriving 150 ms late, so
+  // reconcile replays the steps across the hit. Cues come from step() only.
+  const realNow = performance.now.bind(performance);
+  const clock = { now: realNow() };
+  performance.now = () => clock.now;
+  try {
+    const rooms = new Rooms(1);
+    const W = soundWired(rooms, clock);
+    W.game.create("Waller");
+    W.open();
+    W.flush();
+    W.game.pickTrack(T1B_ID);
+    W.flush();
+    W.game.start();
+    W.flush();
+    const room = [...rooms.rooms.values()][0];
+    let fromStep = 0;
+    let fromReplay = 0;
+    let speeds: number[] = [];
+    let flushes = 0;
+    let side = 1;
+    for (let i = 0; i < 60 * 16; i++) {
+      clock.now += 1000 / 60;
+      rooms.step(clock.now);
+      if (i % 9 === 0) {
+        W.flush(); // reconcile: rewinds to the server state and replays the pending steps
+        flushes++;
+        fromReplay += W.game.takeOwnSounds().filter((c) => c.k === "wall").length;
+      }
+      const racing = room.phase === "racing";
+      // Aim at one wall (0.45 rad off the straight's heading +x), then at the other once there.
+      const c = W.game.car;
+      if (c && Math.abs(c.y) > limit - 3) side = -Math.sign(c.y);
+      const steer = c ? clamp((side * 0.45 - angleDiff(0, c.h)) * 3, -1, 1) : 0;
+      W.game.step(racing ? { throttle: 0.75, steer, fire: false, mine: false } : NO_CONTROLS, 1000 / 60);
+      const cues = W.game.takeOwnSounds().filter((c) => c.k === "wall");
+      fromStep += cues.length;
+      speeds = speeds.concat(cues.map((c) => Math.round(c.speed)));
+    }
+    check(
+      "sfx wall hit end to end: a car weaving into both walls under 150 ms late snapshots queues its wall hits from step(); reconcile's replays across them queue none",
+      fromStep >= 3 && fromReplay === 0 && speeds.every((v) => v >= WALL_HIT_MIN) && W.game.recErrors.length > 20 && flushes > 30,
+      `${fromStep} wall cues from step (speeds ${speeds.join(", ")}), ${fromReplay} after replays, ${W.game.recErrors.length} acked steps over ${flushes} late flushes`,
+    );
+  } finally {
+    performance.now = realNow;
+  }
+}
+
 // ---- audio unlock after a hidden tab (SND-2 review fix, client/audio.ts) -----------------
 
 /**
@@ -3704,7 +3829,7 @@ function audioUnlock(): void {
   }
 }
 
-for (const t of [rivets, gating, mines, wrecks, finishing, garage, armDelay, engine, readyCheck, collisions, trackFeatures, roomTrack, jumpsWired, shippedTracks, botDriver, botLaps, mineCap, chatRoom, chatClient, sound, raceSounds, audioUnlock]) {
+for (const t of [rivets, gating, mines, wrecks, finishing, garage, armDelay, engine, readyCheck, collisions, trackFeatures, roomTrack, jumpsWired, shippedTracks, botDriver, botLaps, mineCap, chatRoom, chatClient, sound, raceSounds, surfaceSounds, audioUnlock]) {
   console.log(`\n# ${t.name}`);
   try {
     t();

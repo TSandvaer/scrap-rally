@@ -257,6 +257,16 @@ SND-2 (built 2026-11-17): race effects, all synthesized on the effects bus.
   on `ended`. The rivet is a machine-gun round (a noise crack on a falling sine thump, varied
   +-8% per shot); the mine blast an explosion (crack, 120 -> 35 Hz boom, a low-passed noise
   rumble closing over ~1.1 s, light saturation; other cars' blasts capped at 2 at once).
+- Impacts and surface (user feedback 2026-11-17): an own car contact (client/contact.ts impacts,
+  closing speed) below 150 u/s is a soft thud, from it a metal crash (crunch noise, four inharmonic
+  partials bending down, a groan when hard; force 0 -> 1 at 450 u/s). A wall hit is derived in
+  `Game.step()` only (`wallHitSpeed`: the velocity before the step into the wall normal, once the
+  step ends against the wall, `wallLimit()` in shared/physics.ts), from 50 u/s, one per 200 ms, a
+  thud below 110 u/s, else metal on a concrete thump. Gravel: while the own predicted car's centre
+  is off the asphalt (`queryTrackNear` dist > halfWidth, the physics' off-road test) and it rolls,
+  a persistent voice of crackling grains (denser and brighter with speed) over a noise band, faded
+  in and out at the edge; silent airborne, wrecked, falling, finished, outside races. (No kerb sound:
+  the user dropped it.)
 - Engine (user feedback 2026-11-17: "sounds electric"): a petrol engine, one persistent voice moved
   once a frame with setTargetAtTime: one oscillator plays a whole engine cycle (a PeriodicWave of
   decaying firing pulses at their positions and strengths, so uneven engines lope), a sub sine at

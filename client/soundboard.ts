@@ -248,8 +248,24 @@ export function mountSoundBoard(audio: AudioEngine, music: MusicPlayer): SoundBo
 // and an offline render of everything in a row: levels per effect and a WAV.
 // Browser checks: window.scrapSound.effects.check() and .wavBase64().
 
-import { ENGINES, EngineVoice, SFX_DUR, SfxVoices } from "./sfx";
-import { DEFAULT_SOUND, distanceGain, ENGINE_PRESETS, engineTarget, OTHER_GAIN, panFor, SFX_KINDS, type EnginePreset, type SfxKind } from "./soundlogic";
+import { ENGINES, EngineVoice, GravelVoice, SFX_DUR, SfxVoices } from "./sfx";
+import {
+  CRASH_HARD_SPEED,
+  CRASH_MIN_SPEED,
+  DEFAULT_SOUND,
+  distanceGain,
+  ENGINE_PRESETS,
+  engineTarget,
+  gravelTarget,
+  impactSound,
+  OTHER_GAIN,
+  panFor,
+  SFX_KINDS,
+  WALL_CRASH_SPEED,
+  WALL_HARD_SPEED,
+  type EnginePreset,
+  type SfxKind,
+} from "./soundlogic";
 import { BASE_STATS } from "../shared/physics";
 import { RIVET_COOLDOWN } from "../shared/weapons";
 
@@ -262,6 +278,8 @@ const EFFECT_LABEL: Record<SfxKind, string> = {
   hit: "Hit",
   wreck: "Wreck",
   bump: "Bump",
+  crash: "Car crash",
+  wall: "Wall crash",
   takeoff: "Take-off",
   land: "Landing",
   fall: "Fall",
@@ -314,18 +332,49 @@ function rivetBurst(play: Sched, t: number, seconds = 3, gain = 1, pan = 0): num
   return t + seconds + SFX_DUR.rivet;
 }
 
+/** An impact at this speed as the game plays it: a thud, or a crash with its force. */
+function impact(play: (k: SfxKind, t: number, g: number, p: number, force: number) => void, t: number, speed: number, wall: boolean): void {
+  const s = wall ? impactSound(speed, WALL_CRASH_SPEED, WALL_HARD_SPEED, "wall") : impactSound(speed, CRASH_MIN_SPEED, CRASH_HARD_SPEED, "crash");
+  play(s.kind, t, s.vel, 0, s.force);
+}
+const CRASH_LIGHT = 200; // closing speeds (units/s) for the previews
+const CRASH_HARD = 450;
+const WALL_HARD = 330;
+
+/** A gravel run: off the asphalt from a standstill to 350 u/s, held, then rolling to a stop. */
+const GRAVEL_RUN_S = 5;
+function gravelRun(v: GravelVoice, t: number): number {
+  const top = BASE_STATS.topSpeed;
+  for (let k = 0; k <= GRAVEL_RUN_S * 20; k++) {
+    const s = k / 20;
+    const speed = s < 2 ? 350 * (s / 2) : s < 3.5 ? 350 : 350 * Math.max(0, 1 - (s - 3.5) / 1.4);
+    const g = gravelTarget({ phase: "racing", hasCar: true, connected: true, wreck: 0, fall: 0, air: 0, finished: false, speed, topSpeed: top, throttle: 1 }, true);
+    v.set(g.gain, g.density, Math.min(1, speed / top), t + s);
+  }
+  v.stop(t + GRAVEL_RUN_S);
+  return t + GRAVEL_RUN_S + 0.3;
+}
+
 const MID_UNITS = 450; // "mid distance" for the previews
 const midGain = () => OTHER_GAIN * distanceGain(MID_UNITS);
 
-/** Offline previews: held rivet fire (own), a mine blast (own) and one at mid distance. */
-async function renderPreview(name: "rivetBurst" | "blastOwn" | "blastMid", sampleRate = 44100): Promise<AudioBuffer> {
-  const seconds = name === "rivetBurst" ? 3.5 : SFX_DUR.blast + 0.5;
+type Preview = "rivetBurst" | "blastOwn" | "blastMid" | "gravelRun" | "crashLight" | "crashHard" | "wallHard";
+const PREVIEWS: readonly Preview[] = ["rivetBurst", "blastOwn", "blastMid", "gravelRun", "crashLight", "crashHard", "wallHard"];
+
+/** Offline previews of single sounds, through the live chain. */
+async function renderPreview(name: Preview, sampleRate = 44100): Promise<AudioBuffer> {
+  const seconds = name === "rivetBurst" ? 3.5 : name === "gravelRun" ? GRAVEL_RUN_S + 0.5 : name.startsWith("blast") ? SFX_DUR.blast + 0.5 : 1.4;
   const ctx = new OfflineAudioContext(2, Math.ceil(seconds * sampleRate), sampleRate);
   const sv = new SfxVoices(ctx, buildBuses(ctx, { music: 0, effects: 1, muted: false }).sfx, makeNoise(ctx));
   const play: Sched = (k, at, g, p) => sv.play(k, at, g, p);
+  const hit = (k: SfxKind, at: number, g: number, p: number, f: number) => sv.play(k, at, g, p, f);
   if (name === "rivetBurst") rivetBurst(play, 0.2);
   else if (name === "blastOwn") play("blast", 0.2);
-  else play("blast", 0.2, midGain(), panFor(180));
+  else if (name === "blastMid") play("blast", 0.2, midGain(), panFor(180));
+  else if (name === "gravelRun") gravelRun(sv.gravel(), 0.2);
+  else if (name === "crashLight") impact(hit, 0.2, CRASH_LIGHT, false);
+  else if (name === "crashHard") impact(hit, 0.2, CRASH_HARD, false);
+  else impact(hit, 0.2, WALL_HARD, true);
   return ctx.startRendering();
 }
 
@@ -412,10 +461,10 @@ async function base64(buf: AudioBuffer): Promise<string> {
 
 const wavBase64 = async (preset?: EnginePreset) => base64(await renderEffects(preset));
 const engineWavBase64 = async (preset: EnginePreset) => base64(await renderEngine(preset));
-const previewWavBase64 = async (name: "rivetBurst" | "blastOwn" | "blastMid") => base64(await renderPreview(name));
+const previewWavBase64 = async (name: Preview) => base64(await renderPreview(name));
 async function previewLevels(): Promise<Record<string, { peakDb: number; rmsDb: number; clipped: number }>> {
   const out: Record<string, { peakDb: number; rmsDb: number; clipped: number }> = {};
-  for (const n of ["rivetBurst", "blastOwn", "blastMid"] as const) {
+  for (const n of PREVIEWS) {
     const l = levels(await renderPreview(n));
     out[n] = { peakDb: db(l.peak), rmsDb: db(l.rms), clipped: l.clipped };
   }
@@ -448,6 +497,20 @@ export function mountEffects(board: SoundBoard, audio: AudioEngine): void {
   board.addButton("Effects", "Rivet burst (3 s)", () => {
     const v = live();
     if (v) rivetBurst((k, t, g, p) => v.play(k, t, g, p), now(v));
+  });
+  const impactButton = (label: string, speed: number, wall: boolean) =>
+    board.addButton("Crashes", label, () => {
+      const v = live();
+      if (v) impact((k, t, g, p, f) => v.play(k, t, g, p, f), now(v), speed, wall);
+    });
+  impactButton("Touch (100)", 100, false);
+  impactButton(`Car crash light (${CRASH_LIGHT})`, CRASH_LIGHT, false);
+  impactButton(`Car crash hard (${CRASH_HARD})`, CRASH_HARD, false);
+  impactButton("Wall light (130)", 130, true);
+  impactButton(`Wall crash hard (${WALL_HARD})`, WALL_HARD, true);
+  board.addButton("Surface", "Gravel run (0 -> 350 -> 0)", () => {
+    const v = live();
+    if (v) gravelRun(v.gravel(), now(v));
   });
   // Engines: rev each preset (idle -> top -> idle), and pick the one the race uses.
   for (const p of ENGINE_PRESETS) {
