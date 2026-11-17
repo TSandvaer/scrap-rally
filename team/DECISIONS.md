@@ -45,3 +45,4 @@
 - 2026-11-17 — Deploy (user, popup): push now. main pushed to origin (4f9ef51..274f052); the user clicks Manual Deploy in Render; then a QA worker on the live site and the "ready for qa test" tickets close.
 - 2026-11-17 — Live room chat (user request): chat always open incl. races (Enter/Esc), joiners and rejoiners get the whole history, game lines = join/leave + race results, gone when the room closes (popup choices). Plan PLAN-CHAT.md: Fable "sound with changes", 10 binding changes folded in (incl. a real leave message: Leave removes at once). User approved the plan.
 - 2026-11-17 — CHAT-1 taste verdict (user): "looks good". Live room chat approved (incl. the room-wide budgets from review 1); merge.
+- 2026-11-17 — Push the chat too (user, popup): main pushed 274f052..19d759b so one Manual Deploy brings everything incl. the chat live; then the QA worker.

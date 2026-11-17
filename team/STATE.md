@@ -66,7 +66,8 @@ CHAT-1 re-review APPROVE (churn probe 27 lines, takeover churn within the room b
 CHAT-1 MERGED 2026-11-17 (user: "looks good"): main 972fac5 (check clean, sim 288/288, bots 82/82, build ok); workers released.
 Chat workspace KEPT while the user's dev server runs from it (:3002, PID 44275); then tmp/cleanup-chat.sh. m3-t4 workspace removed
 (its :3001 server is gone). origin/main 274f052 (pushed, deploy pending the user's Manual Deploy); local main 17 commits ahead
-(chat + team notes): push again before the deploy if the chat should go live in the same deploy. Still pending: remove m3-t4 workspace once the
+(chat + team notes): push again before the deploy if the chat should go live in the same deploy.
+PUSHED AGAIN 2026-11-17 (user): origin/main = 19d759b (incl. chat). Waiting for the user's Manual Deploy; then the QA worker. Still pending: remove m3-t4 workspace once the
 user stops :3001 (PID 16470).
 
 **Resume (2026-11-16):** main 0dec6c9 (local, 15 ahead of origin) = ready check + engine
