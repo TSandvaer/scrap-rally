@@ -81,7 +81,7 @@ export async function checkMusic(bars = 4, volume = 1, only?: readonly SongPart[
 }
 
 /** 16-bit PCM WAV. */
-function wav(buf: AudioBuffer): Blob {
+export function wav(buf: AudioBuffer): Blob {
   const ch = buf.numberOfChannels;
   const n = buf.length;
   const data = new DataView(new ArrayBuffer(44 + n * ch * 2));
@@ -236,4 +236,150 @@ export function mountSoundBoard(audio: AudioEngine, music: MusicPlayer): SoundBo
   const board: SoundBoard = { addButton };
   (window as unknown as { scrapSound: unknown }).scrapSound = { board, check: checkMusic };
   return board;
+}
+
+// ---- race effects (SND-2) ---------------------------------------------------------------
+//
+// A button per effect (live, on the effects bus), other cars at a distance, an engine rev,
+// and an offline render of everything in a row: levels per effect and a WAV.
+// Browser checks: window.scrapSound.effects.check() and .wavBase64().
+
+import { EngineVoice, SFX_DUR, SfxVoices } from "./sfx";
+import { distanceGain, engineTarget, OTHER_GAIN, panFor, SFX_KINDS, type SfxKind } from "./soundlogic";
+import { BASE_STATS } from "../shared/physics";
+
+const EFFECT_LABEL: Record<SfxKind, string> = {
+  beep: "Beep",
+  go: "GO",
+  rivet: "Rivet",
+  drop: "Mine drop",
+  blast: "Mine blast",
+  hit: "Hit",
+  wreck: "Wreck",
+  bump: "Bump",
+  takeoff: "Take-off",
+  land: "Landing",
+  fall: "Fall",
+  recover: "Recover",
+  lap: "Lap",
+  finish: "Finish",
+};
+
+type Sched = (kind: SfxKind, t: number, gain?: number, pan?: number) => void;
+
+/** Other cars' rivets 100, 400 and 700 units away, to the left, centre and right. */
+function distanceDemo(play: Sched, t: number): number {
+  [
+    [100, -300],
+    [400, 0],
+    [700, 300],
+  ].forEach(([d, dx], i) => play("rivet", t + i * 0.35, OTHER_GAIN * distanceGain(d), panFor(dx)));
+  return t + 1.1;
+}
+
+/** A scripted run: idle, full throttle to top speed, a jump (rev in the air), off the throttle. */
+function engineRun(e: EngineVoice, t: number, seconds = 6): number {
+  const top = BASE_STATS.topSpeed;
+  for (let k = 0; k <= seconds * 20; k++) {
+    const s = k / 20;
+    const throttle = s < 0.6 ? 0 : s < 4.6 ? 1 : 0;
+    const speed = s < 0.6 ? 0 : s < 4.6 ? top * Math.min(1, (s - 0.6) / 3) : top * Math.max(0, 1 - (s - 4.6) / 1.4);
+    const air = s > 3.6 && s < 4.2 ? 10 : 0;
+    const g = engineTarget({ phase: "racing", hasCar: true, connected: true, wreck: 0, fall: 0, air, finished: false, speed, topSpeed: top, throttle });
+    e.set(g.freq, s >= seconds - 0.05 ? 0 : g.gain, t + s);
+  }
+  e.stop(t + seconds);
+  return t + seconds + 0.3;
+}
+
+/** Every effect in a row, the distance demo and the engine run, offline through the live chain. */
+async function renderEffects(sampleRate = 44100): Promise<AudioBuffer> {
+  const gap = 0.3;
+  const seconds = SFX_KINDS.reduce((n, k) => n + SFX_DUR[k] + gap, 0.2) + 1.4 + 6.6;
+  const ctx = new OfflineAudioContext(2, Math.ceil(seconds * sampleRate), sampleRate);
+  const sv = new SfxVoices(ctx, buildBuses(ctx, { music: 0, effects: 1, muted: false }).sfx, makeNoise(ctx));
+  let t = 0.2;
+  for (const k of SFX_KINDS) {
+    sv.play(k, t);
+    t += SFX_DUR[k] + gap;
+  }
+  t = distanceDemo((k, at, g, p) => sv.play(k, at, g, p), t) + 0.3;
+  engineRun(sv.engine(), t);
+  return ctx.startRendering();
+}
+
+export interface EffectStats {
+  kind: SfxKind;
+  peak: number;
+  peakDb: number;
+  rmsDb: number;
+  clipped: number;
+  audibleMs: number; // until the last sample above -50 dBFS
+}
+
+/** Each effect alone, offline at effects volume 1 through the live chain. */
+async function checkEffects(): Promise<EffectStats[]> {
+  return Promise.all(
+    SFX_KINDS.map(async (kind) => {
+      const sr = 44100;
+      const ctx = new OfflineAudioContext(2, Math.ceil((SFX_DUR[kind] + 0.3) * sr), sr);
+      new SfxVoices(ctx, buildBuses(ctx, { music: 0, effects: 1, muted: false }).sfx, makeNoise(ctx)).play(kind, 0.01);
+      const buf = await ctx.startRendering();
+      const l = levels(buf);
+      let lastLoud = 0;
+      const d = buf.getChannelData(0);
+      for (let i = 0; i < d.length; i++) if (Math.abs(d[i]) > 0.00316) lastLoud = i;
+      return { kind, peak: Math.round(l.peak * 1000) / 1000, peakDb: db(l.peak), rmsDb: db(l.rms), clipped: l.clipped, audibleMs: Math.round((lastLoud / sr) * 1000) };
+    }),
+  );
+}
+
+async function wavBase64(): Promise<string> {
+  const bytes = new Uint8Array(await wav(await renderEffects()).arrayBuffer());
+  let s = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(s);
+}
+
+export function mountEffects(board: SoundBoard, audio: AudioEngine): void {
+  let voices: SfxVoices | null = null;
+  const live = (): SfxVoices | null => {
+    const { ctx, buses, noise } = audio;
+    if (!ctx || !buses || !noise) return null;
+    if (!voices || voices.ctx !== ctx) voices = new SfxVoices(ctx, buses.sfx, noise);
+    return voices;
+  };
+  const now = (v: SfxVoices) => v.ctx.currentTime + 0.02;
+  for (const kind of SFX_KINDS) {
+    board.addButton("Effects", EFFECT_LABEL[kind], () => {
+      const v = live();
+      if (v) v.play(kind, now(v));
+    });
+  }
+  board.addButton("Other cars", "Rivets 100 / 400 / 700 away", () => {
+    const v = live();
+    if (v) distanceDemo((k, t, g, p) => v.play(k, t, g, p), now(v));
+  });
+  board.addButton("Engine", "Rev: idle, flat out, jump, coast", () => {
+    const v = live();
+    if (v) engineRun(v.engine(), now(v));
+  });
+  const btn = board.addButton("Check", "Effects WAV", () => {
+    btn.textContent = "rendering…";
+    void renderEffects().then((buf) => {
+      let a = document.getElementById("sboard-sfx-wav") as HTMLAnchorElement | null;
+      if (!a) {
+        a = document.createElement("a");
+        a.id = "sboard-sfx-wav";
+        btn.after(a);
+      }
+      a.textContent = `Download effects WAV (${buf.duration.toFixed(1)} s)`;
+      a.download = "scrap-rally-effects.wav";
+      if (a.href) URL.revokeObjectURL(a.href);
+      a.href = URL.createObjectURL(wav(buf));
+      btn.textContent = "Effects WAV";
+    });
+  });
+  const w = window as unknown as { scrapSound?: Record<string, unknown> };
+  w.scrapSound = { ...w.scrapSound, effects: { check: checkEffects, render: renderEffects, wavBase64 } };
 }
