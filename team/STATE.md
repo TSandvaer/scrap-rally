@@ -23,7 +23,9 @@ pose past the cap; a vacuous spring test; debug meter sorts 50k samples per fram
 as ctx_713c5ec66cd1 (spec tmp/fix-stutter-review1.md, incl. a ?lag=140 measurement). Reviewer kept for the re-review;
 a second REQUEST_CHANGES goes to the user.
 Fix round done: 1d0bab5 (verified clean; cap 300 ms, no bumps past it; sim 122/122, bots 50/50; near stutter <= 0.10% up
-to RTT 210). Re-review ctx_6f083a1803ba on 1d0bab5. Milestone 3 queued (below), starts after collisions merge.
+to RTT 210). Re-review ctx_6f083a1803ba on 1d0bab5.
+MERGED 2026-11-17: re-review APPROVE; main 18ce581 (check clean, sim 122/122, bots 50/50); ticket ready for qa test;
+reviewer released. AT THE USER'S RE-TEST from main (:3000, also ?lag=80). Author worker + workspace kept until the verdict. Milestone 3 queued (below), starts after collisions merge.
 
 **Resume (2026-11-15):** Live: https://scrap-rally.onrender.com at d912583. In flight on run
 `run_c58bb5836634`: dispatch `ctx_a40ce564286f` (task task_3736690503f4) on ClickUp 123jpnbf3xa "Easier
