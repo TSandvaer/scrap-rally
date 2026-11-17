@@ -451,6 +451,15 @@ async function runGame(ctx: Ctx, bots: Bot[]): Promise<void> {
     [A, C].every((b) => b.game.scrap === 400 - AMMO_PRICE && b.game.serverAmmo.join() === kit),
     [A, C].map((b) => `${b.name} ${b.game.scrap} ${b.game.serverAmmo.join("/")}`).join(", "),
   );
+  // Mine cap 3 (2026-11-17): one pack fills it, so a second pack is refused over the socket.
+  const em = A.errors.length;
+  A.game.buy("mines");
+  await waitFor("A second mine pack refused", () => A.errors.length > em, 3000);
+  check(
+    "garage: a second mine pack is refused at the cap of 3 (Already maxed out)",
+    AMMO.mines.cap === AMMO.mines.pack && A.errors[em] === "Already maxed out" && A.game.scrap === 400 - AMMO_PRICE && A.game.serverAmmo[1] === 3,
+    `${A.errors[em] ?? "no error"}, scrap ${A.game.scrap}, mines ${A.game.serverAmmo[1]}`,
+  );
   const g0 = B.garages;
   B.game.buy("engine");
   await waitFor("B engine bought", () => B.garages > g0, 3000);
