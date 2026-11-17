@@ -101,6 +101,14 @@ message. Never poll or run watch scripts (a script's `check` would take the mail
   never proof a worker died: `orca orchestration worker-list --run <run> --json`, act on its
   `nextAction`. On resume after a restart: `run-use` the run from STATE.md, then `worker-list`.
 
+## 3b. Taste tests while a worker is still editing
+
+The user's dev server serves files live (Vite), so a taste test run from a workspace whose worker is still
+editing breaks the open page mid-race (2026-11-17: the SND-2 game froze while the worker rewrote sfx.ts).
+If the worker may still change files (a fix round, follow-up feedback), give the user a frozen copy:
+`git worktree add ~/orca/workspaces/scrap-rally/<slug>-taste <sha>` + `npm ci --ignore-scripts` there, and
+have them run the dev server from that copy; remove it with `git worktree remove` afterwards.
+
 ## 4. Review, merge, close
 
 Reviewer (runs in the orchestrator's workspace; it only reads):

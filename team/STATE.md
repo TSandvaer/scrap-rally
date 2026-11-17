@@ -93,7 +93,9 @@ tmp/snd2/; reviewer ctx_d357bd4d32ab (also asked about an unexplained one-off se
 AT THE TASTE GATE: the user plays a race from the snd2 workspace on :3004.
 SND-2 review 1: REQUEST_CHANGES (audio.ts resume-on-visible never re-arms the gesture unlock if resume() fails -> silent until
 reload). Sent to the author (uses :3005). Seat-loss note: nothing in SND-1/2 sends leave (reviewer's untested guess: a reload
-without the sessionStorage token joined a new seat, the old one ran out its 20 s grace). Still pending: remove m3-t4 workspace once the
+without the sessionStorage token joined a new seat, the old one ran out its 20 s grace).
+2026-11-17: the user's game on :3004 froze while the SND-2 worker edited sfx.ts/audio.ts/soundlogic.ts in that workspace (server
+healthy; likely half-edited code hot-reloaded). Told the user to wait for worker_done, then restart. Rule added to orca-wave (3b). Still pending: remove m3-t4 workspace once the
 user stops :3001 (PID 16470).
 
 **Resume (2026-11-16):** main 0dec6c9 (local, 15 ahead of origin) = ready check + engine
