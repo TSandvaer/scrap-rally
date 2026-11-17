@@ -5,9 +5,13 @@ import { randomBytes, randomInt } from "node:crypto";
 import { BASE_STATS, collideCars, NO_INPUT, type CarStats } from "../shared/physics";
 import {
   CHAT_BURST,
+  CHAT_COMINGS_BURST,
+  CHAT_COMINGS_PER_SEC,
   CHAT_HISTORY,
   CHAT_MAX,
   CHAT_REFILL_MS,
+  CHAT_ROOM_BURST,
+  CHAT_ROOM_PER_SEC,
   CODE_ALPHABET,
   CODE_LENGTH,
   COUNTDOWN_MS,
@@ -82,9 +86,20 @@ export interface Player extends Fighter {
   starved: number;
   mineBase: number | null; // mine counter of the last real input consumed
   // Chat rate bucket: on the player, not the socket, so a reconnect does not refill it.
-  chatTokens: number;
-  chatRefillAt: number; // server time chatTokens was last topped up
+  chatBucket: Bucket;
   chatErrAt: number; // server time "Slow down" was last sent
+}
+
+/** A token bucket: tokens left, and the server time it was last topped up. */
+export interface Bucket {
+  tokens: number;
+  at: number;
+}
+
+/** Top the bucket up to now: perSec tokens a second, at most burst. */
+function refill(b: Bucket, burst: number, perSec: number, now: number): void {
+  b.tokens = Math.min(burst, b.tokens + (Math.max(0, now - b.at) * perSec) / 1000);
+  b.at = now;
 }
 
 function newId(bytes: number): string {
@@ -112,15 +127,6 @@ export function cleanChat(raw: unknown): string {
   return [...s].slice(0, CHAT_MAX).join("").trimEnd();
 }
 
-/** Take one message from the player's chat bucket (CHAT_BURST, one back per CHAT_REFILL_MS). */
-function takeChatToken(p: Player, now: number): boolean {
-  p.chatTokens = Math.min(CHAT_BURST, p.chatTokens + Math.max(0, now - p.chatRefillAt) / CHAT_REFILL_MS);
-  p.chatRefillAt = now;
-  if (p.chatTokens < 1) return false;
-  p.chatTokens -= 1;
-  return true;
-}
-
 const PLACES = ["1st", "2nd", "3rd", "4th", "5th", "6th"]; // MAX_PLAYERS places
 
 export class Room {
@@ -139,6 +145,9 @@ export class Room {
   private lastJoinAt = 0; // server time the last new player joined (the creator included)
   private readonly chatLog: ChatLine[] = []; // the last CHAT_HISTORY lines; gone with the room
   private chatSeq = 0;
+  // Room-wide budgets (shared/protocol.ts CHAT_ROOM_*, CHAT_COMINGS_*); full at the start.
+  private readonly sayBudget: Bucket = { tokens: CHAT_ROOM_BURST, at: -Infinity };
+  private readonly comingsBudget: Bucket = { tokens: CHAT_COMINGS_BURST, at: -Infinity };
 
   constructor(
     readonly code: string,
@@ -214,15 +223,14 @@ export class Room {
       lastInput: NO_COMMAND,
       starved: 0,
       mineBase: null,
-      chatTokens: CHAT_BURST,
-      chatRefillAt: now,
+      chatBucket: { tokens: CHAT_BURST, at: now },
       chatErrAt: -Infinity,
     };
     this.players.set(p.id, p);
     if (!this.hostId) this.hostId = p.id;
     this.lastJoinAt = now; // only a new player moves forceStartAt, never a rebind
     // Before bind: the others get it live, the joiner once, in the chatlog after its welcome.
-    this.addLine("join", p.name, p.color, "joined the room");
+    this.comingLine("join", p, now);
     this.bind(p, session);
     return p;
   }
@@ -268,15 +276,15 @@ export class Room {
    * The player is gone for good: the Leave button, or the reconnect grace ran out. The only
    * place a "leave" line is written (a reconnect or a takeover writes neither join nor leave).
    */
-  private remove(p: Player): void {
+  private remove(p: Player, now: number): void {
     this.players.delete(p.id);
     if (this.hostId === p.id) this.hostId = this.players.keys().next().value ?? "";
-    this.addLine("leave", p.name, p.color, "left the room");
+    this.comingLine("leave", p, now);
     this.broadcastRoom();
   }
 
   /** The leave message: the player leaves at once, without the reconnect grace. */
-  leave(p: Player): void {
+  leave(p: Player, now: number): void {
     if (this.players.get(p.id) !== p) return;
     const s = p.session;
     if (s) {
@@ -284,21 +292,33 @@ export class Room {
       s.player = null;
     }
     p.session = null;
-    this.remove(p);
+    this.remove(p, now);
   }
 
   /** A player's chat message, in any phase: cleaned, rate-limited, then sent to everyone. */
   chat(p: Player, raw: unknown, now: number): void {
     const text = cleanChat(raw);
     if (!text) return;
-    if (!takeChatToken(p, now)) {
+    refill(p.chatBucket, CHAT_BURST, 1000 / CHAT_REFILL_MS, now);
+    refill(this.sayBudget, CHAT_ROOM_BURST, CHAT_ROOM_PER_SEC, now);
+    if (p.chatBucket.tokens < 1 || this.sayBudget.tokens < 1) {
       if (now - p.chatErrAt >= CHAT_ERR_EVERY_MS) {
         p.chatErrAt = now;
         p.session?.conn.send({ t: "err", msg: "Slow down" });
       }
       return;
     }
+    p.chatBucket.tokens--;
+    this.sayBudget.tokens--;
     this.addLine("say", p.name, p.color, text, p.id);
+  }
+
+  /** A join or leave line, unless the room's budget for them is spent (a churn of seats). */
+  private comingLine(kind: "join" | "leave", p: Player, now: number): void {
+    refill(this.comingsBudget, CHAT_COMINGS_BURST, CHAT_COMINGS_PER_SEC, now);
+    if (this.comingsBudget.tokens < 1) return;
+    this.comingsBudget.tokens--;
+    this.addLine(kind, p.name, p.color, kind === "join" ? "joined the room" : "left the room");
   }
 
   /** The room's chat history, oldest first. */
@@ -466,7 +486,7 @@ export class Room {
     }
 
     for (const p of [...this.players.values()]) {
-      if (!p.session && now - p.disconnectedAt > RECONNECT_GRACE_MS) this.remove(p);
+      if (!p.session && now - p.disconnectedAt > RECONNECT_GRACE_MS) this.remove(p, now);
     }
 
     if (tick % SNAPSHOT_EVERY === 0) this.sendSnapshots(tick, now);
@@ -702,7 +722,7 @@ export class Rooms {
         if (session.room && session.player) session.room.chat(session.player, msg.text, now);
         return;
       case "leave":
-        if (session.room && session.player) session.room.leave(session.player);
+        if (session.room && session.player) session.room.leave(session.player, now);
         session.conn.close();
         return;
     }

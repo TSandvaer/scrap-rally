@@ -28,6 +28,15 @@ export const CHAT_HISTORY = 300;
 export const CHAT_MAX = 200;
 export const CHAT_BURST = 5;
 export const CHAT_REFILL_MS = 1000;
+// Room-wide budgets, so a join / say / leave churn (a fresh player bucket every seat) cannot
+// flush a room's history: every say line also takes one of CHAT_ROOM_BURST, CHAT_ROOM_PER_SEC
+// back per second (over it: "Slow down"); join and leave lines take one of CHAT_COMINGS_BURST,
+// CHAT_COMINGS_PER_SEC back per second, and are not written when it is empty (the player
+// still joins or leaves).
+export const CHAT_ROOM_BURST = 15;
+export const CHAT_ROOM_PER_SEC = 3;
+export const CHAT_COMINGS_BURST = 12;
+export const CHAT_COMINGS_PER_SEC = 0.5;
 
 export type Phase = "lobby" | "countdown" | "racing" | "results";
 
