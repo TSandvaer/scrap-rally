@@ -224,7 +224,32 @@ Public deploy (Render free tier first, Dockerfile portable to Fly.io): see
 Jumps, road crossings, holes, recovery points and two new tracks: see [PLAN-M3.md](PLAN-M3.md)
 (approved 2026-11-16, Fable-reviewed).
 
+## Sound
+
+Plan: [PLAN-SOUND.md](PLAN-SOUND.md) (approved 2026-11-17, Fable-reviewed). Everything is made in code
+with Web Audio; no audio files. SND-1 (built 2026-11-17): music in the lobby (garage) and on the
+results screen, none in the countdown or the race, never on the menu.
+
+- `client/audio.ts`: `AudioEngine` creates/resumes the AudioContext on a gesture (pointerup / click /
+  keydown, re-armed while it is not running, e.g. iOS "interrupted"), suspends it while the tab is
+  hidden, and owns the chain music bus + sfx bus -> light compressor -> master (mute) plus a shared
+  noise buffer. `SoundControls`: the speaker button (top right) + popover with music / effects
+  sliders and mute, and M (KeyM, no repeat or modifiers, not in text fields). Settings in
+  localStorage `scrap-rally:sound` (defaults music 0.5, effects 0.8, unmuted). Controls blur after
+  use and the popover closes at the countdown, so they never hold the driving keys.
+- `client/music.ts`: "Rust Bucket Shuffle", an original 122 BPM song in E minor, 32 bars
+  (A Em-Em-C-D-Em-Em-Am-B hook, B C-D-Em-Em-C-D-B-B with arpeggio, A2, B2 with a fill), ~63 s loop;
+  square bass, pulse lead and arpeggio, noise drums with a sine kick and a scrap-metal clank.
+  `MusicPlayer` is polled every frame (client/main.ts soundFrame) with the room and phase.
+- `client/soundlogic.ts` (pure, tested in sim-test): settings parsing and clamping, the M key test,
+  the music state machine (start / fade out 0.8 s / stop / resume, fade in 1 s), and the lookahead
+  `StepClock` (25 ms timer, 100 ms ahead on the audio clock, never in the past, skips missed steps,
+  restarts from now after a hidden tab).
+- Debug sound board `?debug=1&sounds=1` (client/soundboard.ts, dynamic import): music play / stop /
+  follow game, volumes, an offline 4-bar level check (`window.scrapSound.check(bars, volume)`) and a
+  30 s WAV export. SND-2 adds the race effects to the sfx bus and its buttons to this board.
+
 ## Later (not in the prototype)
 
 Weapons (projectiles, mines) as entities, between-race shop with money, more tracks,
-touch / gamepad controls, sound and music, hosting, optional WebTransport transport.
+touch / gamepad controls, hosting, optional WebTransport transport.

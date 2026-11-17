@@ -5,10 +5,12 @@ import type { GameEvent, ResultRow } from "../shared/protocol";
 import { AMMO, AMMO_IDS, priceOf, UPGRADE_IDS, UPGRADES, type ItemId, type Wallet } from "../shared/shop";
 import { trackList, trackName } from "../shared/tracks";
 import { BotDriver } from "../scripts/bot-ai";
+import { AudioEngine, SoundControls } from "./audio";
 import { ChatPanel, fitViewport } from "./chat";
 import { Game, lostMessage, type TokenStore } from "./game";
 import { Keyboard } from "./input";
 import { JerkMeter } from "./jerk";
+import { MusicPlayer } from "./music";
 import { connectWs } from "./net";
 import { Renderer, type CarView, type DrawPose, type HudView, type WorldFx } from "./render";
 
@@ -19,6 +21,8 @@ const params = new URLSearchParams(location.search);
 const debug = params.get("debug") === "1";
 // Debug only: ?autopilot=1 drives the own car with the bot AI (weapons off), lane = ?lane=.
 const autopilot = debug && params.get("autopilot") === "1";
+// Debug only: ?sounds=1 opens the sound board (client/soundboard.ts, loaded only then).
+const soundBoard = debug && params.get("sounds") === "1";
 // Debug only: ?preview=1 draws a synthetic track with every feature and scripted cars
 // (client/preview.ts, loaded only then) instead of the game.
 const preview = debug && params.get("preview") === "1";
@@ -82,6 +86,21 @@ const chat = new ChatPanel({
   send: (text) => game.say(text),
   onFocus: () => keyboard.clear(), // a key held as the chat opens must not keep driving
 });
+// Sound: unlocked by the first gesture; music in the room's lobby and results (soundFrame).
+const audio = new AudioEngine();
+audio.attach();
+const music = new MusicPlayer(audio);
+const soundControls = new SoundControls(audio, {
+  root: $("sound"),
+  stage: $("stage"),
+  view: $<HTMLCanvasElement>("view"),
+  button: $<HTMLButtonElement>("sound-btn"),
+  pop: $("sound-pop"),
+  music: $<HTMLInputElement>("vol-music"),
+  effects: $<HTMLInputElement>("vol-effects"),
+  mute: $<HTMLButtonElement>("sound-mute"),
+});
+let soundPhase = "";
 // Rebuilt whenever the room's track changes (it caches the track's paths and decor).
 let renderer = new Renderer($<HTMLCanvasElement>("view"), game.track);
 let rendererTrack = game.track;
@@ -89,7 +108,7 @@ const jerk = new JerkMeter();
 let measuredPhase = "";
 const pilot = autopilot ? new BotDriver(game, Number(params.get("lane")) || 0) : null;
 if (pilot) pilot.weapons = false;
-if (debug) (window as unknown as { scrapDebug: unknown }).scrapDebug = { game, jerk };
+if (debug) (window as unknown as { scrapDebug: unknown }).scrapDebug = { game, jerk, audio, music };
 
 let connState: "connected" | "reconnecting" | "lost" = "connected";
 let restartNotice = false;
@@ -484,11 +503,24 @@ function frame(now: number): void {
   }
   if (acc >= STEP_MS) acc = 0;
   draw(acc / STEP_MS, elapsed);
+  soundFrame();
   if (game.you && game.phase === "lobby") {
     renderGarage();
     renderLobbyButtons();
   }
   requestAnimationFrame(frame);
+}
+
+/**
+ * Music follows the room's phase, polled every frame since snapshots change it without a
+ * room message: on in the lobby (garage) and results, off in the countdown and the race,
+ * never on the menu. The sound popover closes as the countdown starts, so a slider cannot
+ * keep the driving keys.
+ */
+function soundFrame(): void {
+  music.update(!!game.you, game.phase);
+  if (game.phase === "countdown" && soundPhase !== "countdown") soundControls.close();
+  soundPhase = game.phase;
 }
 
 /** A new room track gets a new Renderer; the camera tour restarts at its start line. */
@@ -584,6 +616,7 @@ function draw(alpha: number, elapsed: number): void {
   renderer.frame(cars, fx, hudView());
 }
 
+if (soundBoard) void import("./soundboard").then((m) => m.mountSoundBoard(audio, music));
 if (preview) {
   ui.menu.classList.add("hidden");
   void import("./preview").then((m) => m.runPreview($<HTMLCanvasElement>("view"), params));
