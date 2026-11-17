@@ -1645,8 +1645,8 @@ import { MINE_ARM_TICKS, RIVET_COOLDOWN } from "../shared/weapons";
 
 /**
  * A test track with a jump and a roll-off ramp on one straight (s = x there, heading +x):
- * ramp 1100..1200 into a gap 1200..1400, ramp 3000..3100 into a gap 3100..3300, a hole at
- * s = 5000 on the centerline; recovery points 0, 700, 2400 and 4500. scripts/bots.ts uses
+ * ramp 1100..1200 into a gap 1200..1400, ramp 2000..2100 into a gap 2100..2250, a hole at
+ * s = 5000 on the centerline; recovery points 0, 700, 1700 and 4500. scripts/bots.ts uses
  * the same layout.
  */
 const T1B_ID = "t1b-jumps";
@@ -1659,11 +1659,11 @@ const T1B_DEF: TrackDef = {
   features: [
     { k: "ramp", s: 1100, len: 100 },
     { k: "gap", s0: 1200, s1: 1400 },
-    { k: "ramp", s: 3000, len: 100 },
-    { k: "gap", s0: 3100, s1: 3300 },
+    { k: "ramp", s: 2000, len: 100 },
+    { k: "gap", s0: 2100, s1: 2250 },
     { k: "hole", s: 5000, lat: 0, r: 30 },
   ],
-  recovery: [0, 700, 2400, 4500],
+  recovery: [0, 700, 1700, 4500],
 };
 
 /**
@@ -2016,14 +2016,14 @@ function jumpsWired(): void {
         seen.obsFalling ||= obs.falling !== undefined;
         seen.obsGhost ||= !!obs.ghost && seen.obsFalling;
         // While falling or just recovered, the car is at the fall spot or the recovery point.
-        if ((script.stage === "fall" || script.stage === "done") && obs.x > 2450 && obs.x < 3050) slide++;
+        if ((script.stage === "fall" || script.stage === "done") && obs.x > 1750 && obs.x < 2050) slide++;
       }
     }
     const errs = J.game.recErrors;
     const max = errs.length ? Math.max(...errs) : NaN;
-    const rec = pointAt(t, 2400);
+    const rec = pointAt(t, 1700);
     check(
-      "no lag: the scripted jumper jumps, rolls off into the second gap and recovers at s = 2400",
+      "no lag: the scripted jumper jumps, rolls off into the second gap and recovers at s = 1700",
       script.done() && seen.serverAir && seen.serverFall && seen.serverGhost && Math.hypot(me.car!.x - rec.x, me.car!.y - rec.y) < 1,
       `stages ${[...stages].join(">")}, server car at x=${me.car!.x.toFixed(1)}`,
     );
