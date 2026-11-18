@@ -138,6 +138,8 @@ worker merges main into its branch (ctx_b38e18ff6cd2); then a quick merge check 
 SND-3 MERGED 2026-11-18: branch 75721e4 (main merged in; net diff = the reviewed 4 files, test-list-only resolution) -> main bdd0759
 (check clean, sim 427/427, bots 92/92, build ok); workers released, snd3 workspace removed; snd3-taste stays while the user's
 :3005 server runs from it. SND-5 early WAVs copied to tmp/snd5/ (Mirrorball Pit Stop, Neon Tailpipe, Gravel Surf, Grease Monkey Strut).
+SND-5 done: 0241e5c (Neon Tailpipe default + Mirrorball; Rust unchanged; sim 407/407 on its old base); conflicts with main ->
+worker merging main first, then review.
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
 SND-3 done: 47606ac (sim 394/394, bots 90/90); review APPROVE (ctx_1b41cd13cc04; notes: switch-on restores the volume
 remembered at the last switch-off; storage can't tell own from default -> SND-4); FROZEN COPY ~/orca/workspaces/scrap-rally/snd3-taste
