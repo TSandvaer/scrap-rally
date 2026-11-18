@@ -180,6 +180,12 @@ PLAN-GFX.md APPROVED 2026-11-18 (Fable draft + Fable advisor "sound with changes
 check, GFX-4 decals included). Tickets: GFX-0 123jpnbfb23, GFX-1 123jpnbfb24, GFX-2a 123jpnbfb26, GFX-2b 123jpnbfb28, GFX-3
 123jpnbfb29, GFX-4 123jpnbfb2c. Waves: GFX-0 (palette taste gate) -> GFX-1 + GFX-3 -> GFX-2a + GFX-2b -> GFX-4.
 GFX-0 in flight: ctx_27a7a271607b (Fable, run_fa7a81c5a7b8, ~/orca/workspaces/scrap-rally/gfx0, TSandvaer/gfx0, :3006).
+GFX-0 done 2026-11-18: 50bbe04 (check clean, sim 492/492, bots 95/95, build ok; report gfx0/tmp/gfx0/REPORT.md). User APPROVED the
+palette + mock direction (taste gate). Review APPROVE (Fable ctx_c6423d93d343, 7 non-blocking findings). User chose the
+STRICTER speed gate (median paired ratio this/base > 1.05 = OVER; fixed ref = GFX-0 merge, not moving main). Fix round 1
+(gate + findings 2-7, tmp/gfx0-fix1.md) sent to the author as ctx_39371bddc46c; reviewer kept for the re-check. Merge after.
+GFX-3 in flight (palette approved; based on TSandvaer/gfx0 @ 50bbe04): ctx_c7bda5e6427e (Fable, ~/orca/workspaces/scrap-rally/gfx3,
+TSandvaer/gfx3, :3007; style.css + index.html only).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
 SND-3 done: 47606ac (sim 394/394, bots 90/90); review APPROVE (ctx_1b41cd13cc04; notes: switch-on restores the volume
 remembered at the last switch-off; storage can't tell own from default -> SND-4); FROZEN COPY ~/orca/workspaces/scrap-rally/snd3-taste
@@ -234,6 +240,7 @@ Manual Deploy only on the user's go-ahead. The user's own dev server runs on :30
 
 | Ticket | Dispatch | Workspace | Branch | Port | Started |
 | --- | --- | --- | --- | --- | --- |
+| 123jpnbfb29 GFX-3 | ctx_c7bda5e6427e | ~/orca/workspaces/scrap-rally/gfx3 | TSandvaer/gfx3 | 3007 | 2026-11-18 |
 | 123jpnbfb23 GFX-0 | ctx_27a7a271607b | ~/orca/workspaces/scrap-rally/gfx0 | TSandvaer/gfx0 | 3006 | 2026-11-18 |
 
 ## Queued (milestone 3, PLAN-M3.md; start after solid collisions 123jpnbf6cy and easier-start 123jpnbf3xa merge)
