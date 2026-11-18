@@ -38,7 +38,7 @@ const CHROME_ARGS = "--mute-audio,--disable-background-timer-throttling,--disabl
 // this build / baseline. Metric A's median and p95 are OVER above GATE_RATIO, at one window
 // size (the canvas is 640x360 whatever the window; other sizes are information).
 const GATE_RATIO = 1.05;
-const GATE_RUNS = 5; // fewer runs: numbers only, no verdict
+const GATE_RUNS = 5; // any other number of runs: numbers only, no verdict (the noise limit is for five)
 const GATE_VIEWPORT = "1280x720";
 const CTOR_ALLOWANCE_MS = 50; // PLAN-GFX section 4: construction at or below baseline + 50 ms
 // Safeguard 1, a quiet machine. One benchmark at a time (the lock), and no verdict when the
@@ -68,7 +68,7 @@ const HELP = `npm run bench -- [target] [options]
                      ${BASELINE_NAME} is the fixed reference of the gate (the commit in
                      scripts/gfx-baseline.ref); any other ref is a look, not the gate.
   --vs <target>      a baseline given as a built directory or a URL
-  --runs <n>         runs per cell (default ${GATE_RUNS}; fewer gives numbers but no verdict)
+  --runs <n>         runs per cell (default ${GATE_RUNS}; any other number gives numbers, no verdict)
   --viewports <l>    default 1280x720,390x844@3 (metric A is judged at ${GATE_VIEWPORT} only)
   --metrics <l>      default A,G,B,C  (A = CPU raster, G = the same on a GPU canvas,
                      B = rAF-paced intervals, C = heap growth; see PLAN-GFX.md "Baseline")
@@ -757,7 +757,7 @@ async function main(): Promise<number> {
   // Set 1: the gate run.
   await measure(1, vps, cells);
   const compare = targets.length > 1;
-  const judge = compare && runs >= GATE_RUNS;
+  const judge = compare && runs === GATE_RUNS;
   let injected = "";
   if (scale && compare) {
     const [scene, track, stat, factor] = scale;
@@ -825,7 +825,7 @@ async function main(): Promise<number> {
       ? `Each value is the median of the runs; a ratio is the median of the per-run ratios this build / baseline (the two are loaded one right after the other in every run). OVER = a ratio above ${GATE_RATIO}, on metric A's median and p95 at ${GATE_VIEWPORT}. Other window sizes, p99, the frames over 4 ms, G and C are information.\n`
       : "Median of the runs, ± = their spread (max - min). No verdict: the gate needs a baseline (--vs-ref gfx-baseline).\n",
   );
-  if (compare && !judge) console.log(`Only ${runs} run(s): no verdict. The gate is defined on ${GATE_RUNS} runs.\n`);
+  if (compare && !judge) console.log(`${runs} run(s): no verdict. The gate is defined on ${GATE_RUNS} runs.\n`);
   console.log(tables);
   if (tables2) console.log(`\n**Set 2: the cells with a value OVER in set 1, measured again in new browser sessions**\n\n${tables2}`);
   if (verdict) console.log(`\n${gateSummary({ verdict, reference, gated1, gated2, noise1, noise2, confirmed, injected })}`);

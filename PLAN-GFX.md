@@ -294,12 +294,13 @@ The numbers every later ticket is measured against, the gate, and how to run bot
 (`?debug=1&bench=1`, its own chunk); runner: `scripts/bench.ts` (`npm run bench`). The tables were measured on the build of
 commit 9b29be5 (render.ts as on main at 3c6d247) on an Apple M5 Pro (18 cores), macOS 26.6.2, HeadlessChrome 152 driven by
 agent-browser 0.35.1, 5 us timer. The gate is the second one: the first (limit = baseline + 2 x spread) let a slowdown of
-0.25 ms per frame through in review, and the user replaced it on 2026-11-18 ("Stricter gate").
+0.25 ms per frame through in review, and the user replaced it on 2026-11-18 ("Stricter gate"). The same day it got two
+safeguards ("Add safeguards"), after two unchanged builds had failed it on a loaded machine.
 
 ### Running it
 
 ```
-npm run bench -- --vs-ref gfx-baseline     # the gate: this tree against the fixed reference; exit code 1 when OVER
+npm run bench -- --vs-ref gfx-baseline     # the gate: this tree against the fixed reference. Exit 0 PASS, 1 FAIL, 2 INVALID
 npm run bench                              # this tree alone: tables like the ones below, no verdict
 npm run bench -- --quick --only S4         # one run, metric A, 1280x720: a look, no verdict
 npm run bench -- --pixels --vs-ref main    # pixel diff of the 16 preview scenes against main
@@ -312,9 +313,12 @@ npm run bench -- --help
   target or with `--vs`; a URL has Chrome's 100 us timer.)
 - One cell (metric x scene x track) per page load, so no cell warms another's caches; five runs; in every run the two
   builds are loaded one right after the other, alternating which goes first.
-- The browser sessions are named `bench-<pid>-base` and `bench-<pid>-this`, so two runs at once never share a browser.
-  They still disturb each other's timing: do not benchmark while another benchmark or a test run is going on the
-  machine. Sessions, servers and temp builds are closed and removed on every way out: done, failed, Ctrl-C.
+- One benchmark on the machine at a time. The runner takes a lock before it builds (`scrap-rally-bench.lock` in the
+  temp directory, holding its pid), waits with a message while a live process holds it, and takes over the lock of a
+  process that is gone. The lock keeps benchmarks apart; it does not keep a test run, a build or another project's work
+  off the machine. That is what INVALID is for (The gate).
+- The browser sessions are named `bench-<pid>-base` and `bench-<pid>-this`. Sessions, servers, temp builds and the lock
+  are closed and removed on every way out: done, failed, Ctrl-C.
 - By hand: `?debug=1&bench=1[&metric=A|B|C][&scene=S3&track=crusher-run]` prints the table on screen and fills
   `window.scrapBench` (without scene and track every cell runs in the one page: a quick look only). `&hold=<frame>` draws
   one frame of a scene and stops.
@@ -341,10 +345,14 @@ including a 12-letter one, one with æøå and one in Cyrillic.
   CPU raster. Each cell also gets a checksum (FNV-1a of every 50th frame's pixels and the last): equal checksums mean the
   same picture.
 - **A's warm-up:** 300 unmeasured frames first, on a Renderer of their own. S1 to S3 warm up on their own frames: their
-  steady state is what they measure. S4 and S5 warm up on their first second only, looped. So the lap ahead, the
-  recovery point and the places the leaders are get drawn for the first time in the measured run, also by a renderer that
-  keeps baked ground between Renderers (advisor change 5) or bakes a destination ahead of a recovery or a leader change
-  (advisor change 4): the warm-up shows it neither.
+  steady state is what they measure. S4 and S5 warm up on their first second only, looped, which never shows the own car
+  falling or the leader changing. So the lap ahead and the places the leaders are get drawn for the first time in the
+  measured run, also by a renderer that keeps baked ground between Renderers (advisor change 5) or bakes a destination
+  ahead of a leader change (advisor change 4). The recovery point is first drawn in the measured run on Rust Bowl only,
+  where it lies 5200 units back. On Overpass Knot it is 340 units back, inside the view of the warm-up's own frames, and
+  on Crusher Run 595 back, at that view's edge (the reviewer's geometry check). There the measured run arrives at ground
+  it has seen, as a player would who has just driven past it. The comment at `warmIndex` in `client/bench.ts` claims the
+  recovery point for all three tracks; the file belongs to the fixed reference and is left as it is.
 - **G (informational):** the same on a canvas pinned to the GPU (`willReadFrequently: false`): JS, GPU raster and the
   read-back. Closer to what a player's browser does, but noisier; watch S4 and S5 here for the cost of uploading freshly
   baked tiles, which A cannot see.
@@ -357,23 +365,35 @@ including a 12-letter one, one with æøå and one in Cyrillic.
 
 ### The gate
 
-User decision 2026-11-18 ("Stricter gate"). It replaces section 4's "Metric A median at or below baseline" and "p95 at or
-below baseline x 1.05", and advisor change 9's "baseline + 2 x the measured spread".
+User decisions 2026-11-18 ("Stricter gate", then "Add safeguards"; the 1.05 stays). They replace section 4's "Metric A
+median at or below baseline" and "p95 at or below baseline x 1.05", and advisor change 9's "baseline + 2 x the measured
+spread".
 
 - **The rule.** Five runs. In every run the baseline and this build are loaded one right after the other for each cell,
   and the ratio this build / baseline is taken for that run. A value's ratio is the median of its five per-run ratios.
-  **A cell is OVER when the ratio of metric A's median, or of its p95, is above 1.05.**
+  **A value is OVER when the ratio of metric A's median, or of its p95, is above 1.05.**
+- **One window size.** Metric A is judged at 1280x720 only: the canvas is 640x360 whatever the window, and A does not
+  depend on it (finding 3). Other sizes are printed as information.
+- **Safeguard 1, a quiet machine.** The lock (Running it), and no verdict from a noisy set. The noise of a set is how far
+  apart a cell's five per-run ratios of the median lie (max - min), taken as the median over the set's metric A cells at
+  1280x720. Above 0.10 the runner prints INVALID and exits with 2: run the gate again when nothing else is running.
+- **Safeguard 2, confirm-on-OVER.** Set 1 is the gate run. If no metric A value is OVER in it, that part passes.
+  Otherwise the runner measures the cells that hold those values once more (set 2): five fresh alternating runs, in new
+  browser sessions (both are closed and opened again). The gate fails only on a value, the same statistic of the same
+  cell, that is above 1.05 in set 2 as well. A value that is OVER for the first time in set 2 does not count. There is
+  one set 2; the sets are never pooled and no third run decides. It all happens in the one invocation, and both sets'
+  ratios are printed.
 - **Information only:** metric A's p99 and its count of frames over 4 ms (in review the count printed OVER for a build
-  that differed by one 2x2 `fillRect`), and metrics G and C.
-- **Kept from section 4, checked by the runner:** metric B's frames over 20 ms at or below the baseline's (0 in headless
-  Chrome); Renderer construction at or below baseline + 50 ms.
+  that differed by one 2x2 `fillRect`), metric A at other window sizes, and metrics G and C.
+- **Kept from section 4, checked by the runner, once (in set 1):** metric B's frames over 20 ms at or below the
+  baseline's (0 in headless Chrome); Renderer construction at or below baseline + 50 ms.
 - **The fixed reference.** The baseline of the gate is not main, which moves with every merge, but one commit.
   `--vs-ref gfx-baseline` reads it from `scripts/gfx-baseline.ref`; the orchestrator writes the hash of the commit that
   merges GFX-0 into that file, once. Every ticket is measured against that same build, so a ticket's ratios hold
   everything merged since GFX-0. Slowdowns cannot add up from ticket to ticket: it is their sum that has to stay
   under 5%, not each step. A comparison with any other ref (`--vs-ref main`) is printed as "NOT the gate".
-- **The verdict** is the runner's "Gate: PASS" or "Gate: FAIL" block and its exit code (1 when anything is OVER). Under
-  five runs it gives none.
+- **The verdict** is the runner's "Gate: PASS", "Gate: FAIL" or "Gate: INVALID" block and its exit code (0, 1, 2).
+  Under five runs it gives none.
 - **`client/bench.ts` belongs to the reference:** the reference build runs its own copy of the page. A later ticket
   changes the scenes or the timing loop only when the Renderer's interface forces it, keeps the scripted frames the same,
   and says so in its report.
@@ -398,8 +418,8 @@ below baseline x 1.05", and advisor change 9's "baseline + 2 x the measured spre
    comes in spells of about a minute in which every cell runs 10 to 15% faster or slower. Hypothesis, not verified:
    other load on the machine's performance cores. That is why the gate compares the two builds load by load instead of
    against the numbers printed here.
-5. **What the gate lets through and what it stops** (metric A at 1280x720, five alternating runs; 15 cells, so 30 gated
-   ratios a run):
+5. **What the rule lets through and what it stops** (metric A at 1280x720, five alternating runs; 15 cells, so 30 gated
+   ratios a run; before the safeguards):
 
    | Compared | Gated ratios | OVER | Exit code |
    |---|---|---:|---:|
@@ -413,17 +433,50 @@ below baseline x 1.05", and advisor change 9's "baseline + 2 x the measured spre
    The first rule had called the reviewer's +0.25 ms cells ok (+15.3% and +13.5% on the medians). The one ratio the new
    rule did not flag in the +0.25 ms copy is S4 on Overpass Knot's p95, at 1.047; that cell was OVER through its
    median (1.121).
-6. **With nothing changed, a ratio can come within a hair of the line.** The three sets above without a slowdown are
-   64 ratios from 0.937 to 1.048, and the warm-up check under "The tables" adds 12 more, up to 1.050: no false OVER in
-   76 ratios, but no room either. Single runs' ratios went from 0.851 to 1.213. Another worker's browser sessions were
-   listed on the machine around both probes (right after the second one, a benchmark's pair of sessions). So: a cell
-   that lands just over 1.05 can be noise; run that cell again alone (`--only S4:rust-bowl`) before it is believed, and
-   do not benchmark beside other load.
-7. **A's checksum is a regression net.** All 15 cells gave one checksum over ten loads, the same again in the second
+6. **With nothing changed, a ratio can come within a hair of the line, and on a loaded machine across it.** The three
+   sets above without a slowdown are 64 ratios from 0.937 to 1.048, and the warm-up check under "The tables" adds 12
+   more, up to 1.050: no false OVER in 76 ratios, but no room either. Single runs' ratios went from 0.851 to 1.213. Then,
+   in the re-review, two unchanged builds failed beside another benchmark: metric A's p95 of S3 on Rust Bowl at 1.075
+   (1.109 at 390x844@3), and in a second run of that cell alone its median at 1.053, while the p95 came back at 1.015.
+   The noise of those two runs was 0.212 and 0.235; of the reviewer's quiet run and of the unchanged copy above, 0.045
+   and 0.044. From three quiet sessions (90 unchanged values, none above 1.05, two above 1.04) the reviewer estimates
+   that about 1.2% of unchanged values land above 1.05 on a quiet machine. Hence the two safeguards and the single
+   window size.
+7. **The safeguards at work** (2026-11-18, 20:58 to 22:13, against `gfx-baseline` = 7881af6, metric A at 1280x720). The
+   machine was not quiet for most of it: another project ran its tests on about 12 cores and a load test, beside
+   Spotlight and the virus scanner (process samples every 5 s).
+
+   | Run | Set 1 | Set 2 | Noise, set 1 / set 2 | Verdict, exit code |
+   |---|---|---|---|---|
+   | The unchanged tree, 15 cells and metric B's 3 | 30 ratios 0.964 to 1.038, 0 OVER; B and construction 0 OVER | none needed | 0.086 | PASS, 0 |
+   | A copy with 0.25 ms more per frame, S1 and S4 (6 cells) | 12 ratios 1.074 to 1.163, 12 OVER | 11 confirmed (1.085 to 1.158), 1 not (S4 Rust Bowl's p95: 1.094, then 1.046) | 0.063 / 0.062 | FAIL, 1 |
+   | Test injection: set 1's median of S1 Rust Bowl times 1.2, S1 (3 cells) | 6 ratios 0.996 to 1.176, 1 OVER | 1.026: not confirmed | 0.083 / 0.062 | PASS, 0 |
+
+   - **INVALID was the usual answer that evening: 24 of 27 gate runs**, each with exit code 2 and no verdict. The
+     slowdown copy needed five attempts: three were INVALID on set 1 (noise 0.136, 0.108, 0.104) and one on set 2
+     (0.116). The injection run was INVALID twice before its verdict (0.227, 0.164) and 18 times after it, in 18
+     attempts (set 1 at 0.116 to 0.200 in 15 of them).
+   - **The guard also refuses the obvious.** In the slowdown attempt that was INVALID on set 2, all 12 values were OVER
+     in set 1 (1.082 to 1.205) and again in set 2 (1.058 to 1.173). The rule gives no verdict there; the ratios are
+     printed.
+   - **Noise so far:** quiet 15-cell runs 0.044 and 0.045; that evening's sets under the limit 0.039 to 0.086; the sets
+     over it 0.104 to 0.235. The limit of 0.10 separates them, with little room on either side.
+   - **A small set is a shaky judge of noise.** A set's noise is the median over its cells, and a set 2 of one cell
+     rests on one number. Three of the injection attempts had a set 1 under the limit (0.039, 0.072, 0.086) and then a
+     one-cell set 2 over it (0.134, 0.185, 0.205). Even in the two quiet 15-cell runs 3 of the 30 cells lay above 0.10
+     on their own.
+   - **Three-cell runs fared worst:** the injection run (3 cells) got its verdict in 1 of 21 attempts, the 6-cell copy
+     in 1 of 5, the 15-cell run at once.
+   - The three verdicts in the table were measured before a last one-line change to the runner (a verdict only with
+     exactly five runs). The 18 attempts after it were all INVALID; three of them ran set 2 first.
+   - **The lock:** a second runner printed "another benchmark is running on this machine (pid ..., its directory):
+     waiting for it to finish" and started when the first was done; a lock left by a dead pid was taken over. A runner
+     from before the lock (an older checkout) neither takes nor respects it.
+8. **A's checksum is a regression net.** All 15 cells gave one checksum over ten loads, the same again in the second
    session, and the same again after the warm-up of S4 and S5 was changed. A refactor that must not change the picture
    has to reproduce it (the comparison prints it as "same picture"). G's checksum is not reliable: 1 of its 15 cells gave
    two values over ten loads.
-8. **Today's renderer allocates** about 9.1, 15.9 and 8.9 kB per frame in S3 (Rust Bowl, Crusher Run, Overpass Knot).
+9. **Today's renderer allocates** about 9.1, 15.9 and 8.9 kB per frame in S3 (Rust Bowl, Crusher Run, Overpass Knot).
 
 ### The tables
 
@@ -533,9 +586,10 @@ one on those two scenes (six cells, median and p95): the same checksums, ratios 
 
 ### Not measured here
 
-- The gate against the real fixed reference: `scripts/gfx-baseline.ref` is empty until GFX-0 is merged. The name was
-  tried with a local stand-in (this branch's own commit); the probes above used `--vs-ref HEAD`.
-- The gate at 390x844@3, and with metrics G, B and C in the same run: the probes ran metric A at 1280x720 only.
+- The whole default gate in one run (all four metrics, both window sizes): the runs in finding 7 measured metric A, and
+  once metric B, at 1280x720. It should take about half an hour (one build alone took 14.5 minutes), all of it quiet.
+- A value that is OVER in set 1 by noise on a real build (finding 7's third row forces one), and Ctrl-C from a terminal
+  (SIGTERM was tried).
 - Canvas memory (the 12 MB cap): by review of the pool sizes, there is no counter for it.
 - A real phone, and any browser but headless Chrome 152.
 - GFX-3's "metric B on S1 with the lobby panel open": run `npm run bench -- --metrics B --b-scene S1 --panel lobby --vs-ref gfx-baseline`.
