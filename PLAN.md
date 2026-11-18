@@ -169,7 +169,8 @@ shake (150 ms cooldown; replays never fire it). There is no server bump event.
   on `chatlog` and clears it on leave and in another room.
 - In-game menu and host room controls (see [PLAN-MENU.md](PLAN-MENU.md), MENU-1 built
   2026-11-18). Esc opens and closes the menu in a room in any phase (`client/menu.ts`; not on
-  the main menu; the chat input and the sound popover take their own Esc first). While it is
+  the main menu; the chat input and the sound popover take their own Esc first), and so does
+  the ☰ button under the speaker (every device, in a room; touch screens have no Esc). While it is
   open the frame loop drives with no controls: the race keeps running and the car coasts.
   Everyone: Resume, Sound, Controls, Copy invite link, Leave room. Host only (C->S, refused
   with an `err` from anyone else):
