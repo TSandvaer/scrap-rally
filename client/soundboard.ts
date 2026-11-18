@@ -1,12 +1,14 @@
 // Debug sound board (?debug=1&sounds=1), loaded on demand by main.ts: music play / stop /
-// follow-the-game, the volume settings, an offline render check and a 30 s WAV of the music,
-// for the taste gate. Nothing here runs, or is even downloaded, without the flag.
+// follow-the-game, a song picker with play and a 30 s WAV per song (SND-5), the volume
+// settings, an offline render check, for the taste gate. Nothing here runs, or is even
+// downloaded, without the flag.
 //
 // SND-2 adds a button per effect with board.addButton("Effects", "Rivet", () => ...).
-// Browser checks: window.scrapSound.check(bars, volume) renders offline and returns levels.
+// Browser checks: window.scrapSound.check(bars, volume, only, songId) renders offline and
+// returns levels; window.scrapSound.songs.levels(id, seconds) and .wavBase64(id, seconds).
 
 import { buildBuses, makeNoise, type AudioEngine } from "./audio";
-import { SONG, SongVoices, type MusicPlayer, type SongPart } from "./music";
+import { SONG, SONG_LIST, songById, SongVoices, type MusicPlayer, type Song, type SongPart } from "./music";
 
 export interface SoundBoard {
   addButton(group: string, label: string, play: () => void): HTMLButtonElement;
@@ -22,13 +24,14 @@ export interface RenderStats {
   voices: number;
 }
 
-/** The song from the top for `seconds`, rendered offline at `volume`, through the live chain or raw. */
+/** A song from the top for `seconds`, rendered offline at `volume`, through the live chain or raw. */
 async function renderMusic(
   seconds: number,
   volume: number,
   raw = false,
   only?: readonly SongPart[],
   sampleRate = 44100,
+  song: Song = SONG,
 ): Promise<{ buf: AudioBuffer; voices: number }> {
   const ctx = new OfflineAudioContext(2, Math.ceil(seconds * sampleRate), sampleRate);
   let out: AudioNode;
@@ -40,7 +43,7 @@ async function renderMusic(
   } else {
     out = buildBuses(ctx, { music: volume, effects: 0, muted: false }).music;
   }
-  const voices = new SongVoices(ctx, out, makeNoise(ctx));
+  const voices = new SongVoices(ctx, out, makeNoise(ctx), song);
   const lead = 0.05;
   for (let k = 0; lead + k * voices.stepSec < seconds; k++) voices.step(k, lead + k * voices.stepSec, only);
   return { buf: await ctx.startRendering(), voices: voices.voicesStarted };
@@ -64,10 +67,9 @@ function levels(buf: AudioBuffer): { peak: number; rms: number; clipped: number 
 
 const db = (x: number) => Math.round(20 * Math.log10(Math.max(x, 1e-9)) * 10) / 10;
 
-/** Levels of `bars` bars from the top (optionally some parts only) through the live output chain. */
-export async function checkMusic(bars = 4, volume = 1, only?: readonly SongPart[]): Promise<RenderStats> {
-  const seconds = (bars * SONG.stepsPerBar * 60) / SONG.bpm / 4 + 0.6;
-  const [post, pre] = await Promise.all([renderMusic(seconds, volume, false, only), renderMusic(seconds, volume, true, only)]);
+/** Levels of `seconds` of a song from the top (optionally some parts only) through the live output chain. */
+async function songStats(song: Song, seconds: number, volume = 1, only?: readonly SongPart[]): Promise<RenderStats> {
+  const [post, pre] = await Promise.all([renderMusic(seconds, volume, false, only, 44100, song), renderMusic(seconds, volume, true, only, 44100, song)]);
   const l = levels(post.buf);
   return {
     seconds: Math.round(seconds * 100) / 100,
@@ -79,6 +81,15 @@ export async function checkMusic(bars = 4, volume = 1, only?: readonly SongPart[
     voices: post.voices,
   };
 }
+
+/** Levels of `bars` bars from the top of a song (the default if no id). */
+export async function checkMusic(bars = 4, volume = 1, only?: readonly SongPart[], songId?: string): Promise<RenderStats> {
+  const song = songById(songId);
+  return songStats(song, (bars * song.stepsPerBar * 60) / song.bpm / 4 + 0.6, volume, only);
+}
+
+/** The WAV length the board renders per song. */
+export const SONG_WAV_S = 30;
 
 /** 16-bit PCM WAV. */
 export function wav(buf: AudioBuffer): Blob {
@@ -112,13 +123,15 @@ export function wav(buf: AudioBuffer): Blob {
 }
 
 const CSS = `
-.sboard{position:fixed;left:8px;top:8px;z-index:20;width:250px;max-height:calc(100vh - 16px);overflow:auto;
+.sboard{position:fixed;left:8px;top:8px;z-index:20;width:270px;max-height:calc(100vh - 16px);overflow:auto;
   padding:10px;background:rgba(18,14,11,.94);border:2px solid #4a3a2b;font:12px ui-monospace,Menlo,monospace;color:#efe6d2}
 .sboard h3{margin:0 0 6px;font-size:13px;color:#e8752d}
 .sboard h4{margin:10px 0 4px;font-size:11px;color:#a89981;text-transform:uppercase;letter-spacing:1px}
 .sboard .row{display:flex;flex-wrap:wrap;gap:4px}
 .sboard button,.sboard a{font:inherit;color:#efe6d2;background:#2a2119;border:1px solid #4a3a2b;padding:3px 7px;cursor:pointer;text-decoration:none}
 .sboard button.on{border-color:#e8752d;color:#e8752d}
+.sboard .song{display:flex;flex-wrap:wrap;gap:4px;margin:0 0 4px}
+.sboard .song .pick{flex:1;text-align:left}
 .sboard .vol{display:flex;align-items:center;gap:6px;margin:2px 0}
 .sboard .vol span{width:56px}
 .sboard input{flex:1}
@@ -150,8 +163,8 @@ export function mountSoundBoard(audio: AudioEngine, music: MusicPlayer): SoundBo
     }
     return g;
   };
-  const addButton = (name: string, label: string, play: () => void) => {
-    const b = el("button", label, group(name));
+  const button = (parent: HTMLElement, label: string, play: () => void) => {
+    const b = el("button", label, parent);
     b.type = "button";
     b.addEventListener("click", () => {
       play();
@@ -159,8 +172,9 @@ export function mountSoundBoard(audio: AudioEngine, music: MusicPlayer): SoundBo
     });
     return b;
   };
+  const addButton = (name: string, label: string, play: () => void) => button(group(name), label, play);
 
-  el("h3", `Sound board — ${SONG.title}`);
+  el("h3", "Sound board");
   const status = el("div");
   status.className = "st";
 
@@ -173,6 +187,44 @@ export function mountSoundBoard(audio: AudioEngine, music: MusicPlayer): SoundBo
     const b = addButton("Music", label, () => (music.forced = force));
     b.dataset.mode = String(force);
     return b;
+  });
+
+  // Songs: pick (the next start plays it; while playing a short crossfade), play, a 30 s WAV.
+  el("h4", "Songs");
+  const songList = el("div");
+  const download = (after: HTMLElement, id: string, text: string, file: string, buf: AudioBuffer) => {
+    let a = document.getElementById(id) as HTMLAnchorElement | null;
+    if (!a) {
+      a = document.createElement("a");
+      a.id = id;
+      after.after(a);
+    }
+    a.textContent = text;
+    a.download = file;
+    if (a.href) URL.revokeObjectURL(a.href);
+    a.href = URL.createObjectURL(wav(buf));
+  };
+  const pickButtons = SONG_LIST.map(({ id, title }) => {
+    const song = songById(id);
+    const row = el("div", "", songList);
+    row.className = "song";
+    const pick = button(row, `${title} · ${song.bpm}`, () => music.setSong(id));
+    pick.className = "pick";
+    pick.dataset.song = id;
+    pick.title = `${song.bars} bars, ${((song.steps.length * 15) / song.bpm).toFixed(0)} s loop`;
+    button(row, "▶", () => {
+      music.setSong(id);
+      music.forced = true;
+    }).setAttribute("aria-label", `Play ${title}`);
+    const w = button(row, "WAV", () => {
+      w.textContent = "…";
+      void renderMusic(SONG_WAV_S, 1, false, undefined, 44100, song).then(({ buf }) => {
+        download(row, `sboard-wav-${id}`, `⬇ ${title} (${SONG_WAV_S} s WAV)`, `scrap-rally-${id}.wav`, buf);
+        w.textContent = "WAV";
+      });
+    });
+    w.setAttribute("aria-label", `Make a ${SONG_WAV_S} s WAV of ${title}`);
+    return pick;
   });
 
   el("h4", "Volume");
@@ -200,15 +252,22 @@ export function mountSoundBoard(audio: AudioEngine, music: MusicPlayer): SoundBo
   out.className = "st";
   addButton("Check", "Render 4 bars", () => {
     out.textContent = "rendering…";
-    void checkMusic(4, 1).then((s) => (out.textContent = `vol 1: peak ${s.peak} (${s.peakDb} dB) rms ${s.rmsDb} dB\nclipped ${s.clipped}  pre-comp peak ${s.prePeak}`));
+    void checkMusic(4, 1, undefined, music.song.id).then(
+      (s) => (out.textContent = `${music.song.title}, vol 1: peak ${s.peak} (${s.peakDb} dB) rms ${s.rmsDb} dB\nclipped ${s.clipped}  pre-comp peak ${s.prePeak}`),
+    );
+  });
+  addButton("Check", `Levels, every song (${SONG_WAV_S} s)`, () => {
+    out.textContent = "rendering…";
+    void songLevels().then((rows) => (out.textContent = rows.map((r) => `${r.id.padEnd(14)} peak ${r.peakDb} rms ${r.rmsDb} pre ${r.prePeak} clip ${r.clipped}`).join("\n")));
   });
   const wavBtn = addButton("Check", "Make 30 s WAV", () => {
     wavBtn.textContent = "rendering…";
-    void renderMusic(30, 1).then(({ buf }) => {
+    const song = music.song;
+    void renderMusic(30, 1, false, undefined, 44100, song).then(({ buf }) => {
       const a = (document.getElementById("sboard-wav") as HTMLAnchorElement | null) ?? el("a", "", group("Check"));
       a.id = "sboard-wav";
-      a.textContent = "Download WAV (music at full volume)";
-      a.download = "scrap-rally-music.wav";
+      a.textContent = `Download WAV (${song.title} at full volume)`;
+      a.download = song === SONG ? "scrap-rally-music.wav" : `scrap-rally-${song.id}.wav`;
       if (a.href) URL.revokeObjectURL(a.href);
       a.href = URL.createObjectURL(wav(buf));
       wavBtn.textContent = "Make 30 s WAV";
@@ -222,24 +281,43 @@ export function mountSoundBoard(audio: AudioEngine, music: MusicPlayer): SoundBo
     if (document.activeElement !== vEffects) vEffects.value = String(Math.round(s.effects * 100));
     mute.textContent = s.muted ? "Unmute" : "Mute";
     for (const b of modeButtons) b.classList.toggle("on", b.dataset.mode === String(music.forced));
+    for (const b of pickButtons) {
+      const on = b.dataset.song === music.song.id;
+      b.classList.toggle("on", on);
+      b.setAttribute("aria-pressed", String(on));
+    }
   };
   audio.onChange(render);
   render();
   const tick = () => {
     const p = music.position();
-    const sec = [...SONG.sections].reverse().find((x) => p.bar >= x.bar)?.name ?? "";
+    const song = music.playingSong ?? music.song;
+    const sec = [...song.sections].reverse().find((x) => p.bar >= x.bar)?.name ?? "";
     status.textContent =
       `audio ${audio.ctx?.state ?? "locked (click anywhere)"}${document.hidden ? " hidden" : ""}\n` +
-      `music ${music.director.mode}${music.playing ? `  bar ${p.bar + 1}/${SONG.bars} ${sec}` : ""}\n` +
-      `${SONG.bpm} BPM  voices ${music.voicesStarted}`;
+      `music ${music.director.mode}${music.playing ? `  bar ${p.bar + 1}/${song.bars} ${sec}` : ""}\n` +
+      `${song.title}  ${song.bpm} BPM  voices ${music.voicesStarted}`;
     render();
     setTimeout(tick, 200);
   };
   tick();
 
   const board: SoundBoard = { addButton };
-  (window as unknown as { scrapSound: unknown }).scrapSound = { board, check: checkMusic };
+  const songs = { list: SONG_LIST, levels: songLevels, wavBase64: songWavBase64, select: (id: string) => music.setSong(id) };
+  (window as unknown as { scrapSound: unknown }).scrapSound = { board, check: checkMusic, songs };
   return board;
+}
+
+/** Every song's first `seconds` at music volume 1 through the live chain (the level balance against Rust Bucket). */
+async function songLevels(seconds = SONG_WAV_S): Promise<(RenderStats & { id: string })[]> {
+  const rows: (RenderStats & { id: string })[] = [];
+  for (const { id } of SONG_LIST) rows.push({ id, ...(await songStats(songById(id), seconds)) });
+  return rows;
+}
+
+/** A song's first `seconds` at music volume 1 through the live chain, as base64 WAV. */
+async function songWavBase64(id: string, seconds = SONG_WAV_S): Promise<string> {
+  return base64((await renderMusic(seconds, 1, false, undefined, 44100, songById(id))).buf);
 }
 
 // ---- race effects (SND-2) ---------------------------------------------------------------
