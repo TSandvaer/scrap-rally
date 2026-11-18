@@ -552,7 +552,8 @@ function hudView(): HudView | null {
     hud.banner = restartNotice ? "Server restarting — reconnecting…" : "Connection lost — reconnecting…";
   } else if (game.car && game.car.wreck > 0) hud.banner = `WRECKED — back on track in ${(game.car.wreck / 60).toFixed(1)}s`;
   else if (!mine && (game.phase === "countdown" || game.phase === "racing")) {
-    hud.banner = game.retired() ? "Retired — you're in the next one" : "Race in progress — you're in the next one";
+    // Retired: the garage panel says it (the strip would sit under the panel's bottom edge).
+    hud.banner = game.retired() ? "" : "Race in progress — you're in the next one";
   } else if (game.phase === "racing" && game.phaseEnds) {
     hud.banner = `Winner is in — race closes in ${Math.max(0, Math.ceil((game.phaseEnds - now) / 1000))}s`;
   }
