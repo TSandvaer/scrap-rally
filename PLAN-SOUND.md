@@ -120,3 +120,59 @@ Out of scope: chat sounds, voice lines, per-track music, music during races, aud
   user the same day.)
 - Crash: car-car contacts and own-car wall hits sound like bending metal, scaled by impact speed; wall impacts derived
   in step() (never in replays) from the velocity into the wall, with a threshold and a ~200 ms refractory.
+
+## SND-4 — host-set room sound defaults (2026-11-18; Fable review "sound with changes", folded in)
+
+User: "the host should be able to set music on/off + volume of music/effects that will be the base for the players sound until
+they make their own change". User choices (popup): per setting and remembered (a setting a player moved is theirs in every
+room; untouched settings follow the host); live follow when the host changes them; a "Use host's sound" reset button. The
+master Mute (M) stays personal.
+
+1. Room state: soundDefaults {musicOn, music 0..1, effects 0..1} on the Room, initial = built-in defaults (music 0.5 on,
+   effects 0.8), carried in the room message, kept on host handover, gone with the room. Host-only C->S {t:"soundDefaults",
+   musicOn?, music?, effects?} in any phase, following setLocked (server/room.ts:516-523): host check, err on a wrong type (no
+   silent clamp), volumes snapped to 0.05, no broadcast when unchanged, a per-room Bucket (~2 changes/s, like chat's,
+   room.ts:327). Built-in defaults + clampVolume move to a new shared/sound.ts (the server imports nothing from client/).
+2. One source of truth: engine.settings stays the EFFECTIVE values (its readers unchanged: audio.ts:43-47, 276-281;
+   menu.ts:315-317; soundboard.ts:220); the engine gains `own` (only keys the player moved) and `room` (or null outside a room),
+   combined by one pure effectiveSound(own, room) in soundlogic. Writes mark only the moved keys: toggleMute (audio.ts:122) and
+   the engine preset (soundboard.ts:523) never mark music/effects as own; the save writes only own keys + muted + engine.
+3. Migration: a legacy saved value counts as own only if it differs from the built-in default (today every save writes every
+   key, audio.ts:72-74, 114-116). An SND-3 entry with music 0 becomes own musicOn:false, volume from musicBack if > 0; then
+   musicBack is dropped. SND-3's on/off becomes a real musicOn flag; moving a Music slider above 0 while off also sets own
+   musicOn:true (keeps SND-3's rule).
+4. UI: the host's personal controls are the same as everyone's (a host with untouched settings hears the room defaults); a
+   "Room sound (for everyone)" block (music on/off, music volume, effects volume) sits in the Esc menu's Sound view for the host
+   only, rendered from the room message, client-throttled with a trailing send. Every player's own controls show the effective
+   values, mark settings that follow the host ("host's"), and show "Use host's sound" when they have own changes (resets
+   musicOn/music/effects, keeps muted and engine; hidden/relabelled outside a room). The Sound view updates in place on room
+   messages (menu.ts:148 skips rebuilding it today), incl. on handover while open; Esc-menu sliders blur on change
+   (menu.ts:299, 316) so live host changes show.
+5. Outside a room: soundFrame (main.ts:604) feeds `game.you ? game.soundDefaults : null` into the engine; game.leave()
+   (game.ts:352-356) resets it.
+Tests: the migration matrix (M-only entry, default-equal values, SND-3 off with musicBack); an own value equal to the host's
+stays pinned when the host changes; mute and engine preset do not mark music/effects as own; reset keeps muted and engine;
+partial patch, NaN and string values; host-only, rate limit, unchanged = no broadcast; handover with the Sound view open; a second
+room with different defaults; rejoin; rewrite (not delete) sim-test sound() (scripts/sim-test.ts:3084) and SND-3's musicSwitch.
+Bots: a default change reaches clients. Browser (muted): a guest follows untouched settings live, keeps own ones, reset works.
+Ticket: one medium ticket SND-4, after SND-3 and MENU-3 merge (MENU-3 also changes the room message, server/room.ts, client/menu.ts).
+
+## SND-5 — more songs, and the host picks the lobby song (2026-11-18)
+
+User: "generate some more retro game music, 2 or 3 more melodies the host can choose from. (1 should be in the 80 disco
+genre)". Popup: 3 new songs; styles synthwave chase, surf-rock chiptune, funky garage groove (all three picked) plus the
+required 80s disco -> FOUR new original songs (the orchestrator chose four because three styles were picked on top of disco;
+the user may trim). Host picks, everyone hears it (players can still turn music down/off).
+- SND-5 (content, now): client/music.ts gets a SONGS registry (id, title, bpm, structure, per-song instrument settings) with
+  "Rust Bucket Shuffle" (id rust-bucket, the default, unchanged) plus four new songs, each ~50-70 s per loop with an A/B
+  structure, composed in code as note tables, original (nothing transcribed from existing songs or games):
+  1. 80s disco: four-on-the-floor kick, offbeat open hats, octave-jumping bass, string-like stabs, ~118-124 BPM.
+  2. Synthwave chase: driving pulsing bass arpeggios, bright saw lead, gated snare, ~110-128 BPM.
+  3. Surf-rock chiptune: fast twangy lead (vibrato/slide), galloping beat, ~150-170 BPM.
+  4. Funky garage groove: slap-style chip bass, wah-ish lead stabs, swing, ~95-110 BPM.
+  MusicPlayer gains setSong(id) (takes effect at the next start; if playing, a short crossfade or restart from the top) and
+  exposes the song list; the sound board gets a song picker + per-song WAV render. Levels balanced against Rust Bucket.
+  client/main.ts is not touched (SND-4 wires the room choice).
+- SND-4 gains the host's song choice: room soundDefaults.song (a song id or "random"), host-only via the same command; the
+  host picks it with a "Music" dropdown next to the Track selector in the lobby (everyone sees the song name); "random" is
+  resolved by the server to a concrete song id each time the lobby opens, so everyone hears the same song.
