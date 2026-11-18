@@ -67,3 +67,4 @@
 - 2026-11-18 — MENU-3 taste verdict (user, frozen copy 8916137): "pause feature approved". Merge once the code review (ctx_97c8c95b896f) approves.
 - 2026-11-18 — SND-3 taste verdict (user, frozen copy 47606ac on :3005): "sound controls in host menu approved". Lobby Music on/off + volume approved; merge.
 - 2026-11-18 — SND-5 song verdict (user, after the previews): "I only like mirrorball and neon-tailpipe, delete the other 2". Keep Mirrorball Pit Stop (80s disco) and Neon Tailpipe (synthwave); Gravel Surf and Grease Monkey Strut removed. Songs: Rust Bucket (default), Mirrorball, Neon Tailpipe.
+- 2026-11-18 — Default song (user): "make neon tailpipe the default". Neon Tailpipe is the default lobby song (and the unknown-id fallback); Rust Bucket and Mirrorball selectable. SND-4's built-in room default song follows.

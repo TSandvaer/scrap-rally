@@ -176,3 +176,6 @@ the user may trim). Host picks, everyone hears it (players can still turn music 
 - SND-4 gains the host's song choice: room soundDefaults.song (a song id or "random"), host-only via the same command; the
   host picks it with a "Music" dropdown next to the Track selector in the lobby (everyone sees the song name); "random" is
   resolved by the server to a concrete song id each time the lobby opens, so everyone hears the same song.
+
+- 2026-11-18 user decisions on SND-5: keep only Mirrorball Pit Stop (80s disco) and Neon Tailpipe (synthwave); Gravel Surf and
+  Grease Monkey Strut dropped. Neon Tailpipe is the DEFAULT song (SND-4's built-in room default song = neon tailpipe).
