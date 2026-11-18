@@ -148,6 +148,8 @@ SND-4 123jpnbfa7e in flight: ctx_926803ba25ea (~/orca/workspaces/scrap-rally/snd
 (Esc menu + music controls + songs + SND-4).
 SND-4 done: dfb3dbd (merges cleanly; sim 479/479, bots 95/95, build ok); reviewer ctx_81157ecfcd96; FROZEN COPY
 ~/orca/workspaces/scrap-rally/snd4-taste (dfb3dbd) on :3009 (snd3-taste still serves the user's :3005).
+SND-4 review 1: REQUEST_CHANGES (host Room Music drag through 0 can turn the room's music off: throttled patch merge vs a lagging
+room message; + keyboard-focused popover/lobby sliders hide host changes; + sound board slider). Sent to the author; reviewer kept.
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
 SND-3 done: 47606ac (sim 394/394, bots 90/90); review APPROVE (ctx_1b41cd13cc04; notes: switch-on restores the volume
 remembered at the last switch-off; storage can't tell own from default -> SND-4); FROZEN COPY ~/orca/workspaces/scrap-rally/snd3-taste
