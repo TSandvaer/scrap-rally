@@ -7,7 +7,7 @@
 // only while `engine.running()` (nothing before the unlock, nothing while hidden).
 
 import { VIEW_W } from "./render";
-import { DEFAULT_SOUND, isMuteKey, parseSoundSettings, type SoundSettings } from "./soundlogic";
+import { clampVolume, DEFAULT_SOUND, isMuteKey, parseSoundSettings, type SoundSettings } from "./soundlogic";
 
 const STORE_KEY = "scrap-rally:sound";
 const GAIN_SMOOTH_S = 0.02; // volume and mute changes glide instead of clicking
@@ -61,17 +61,55 @@ export function makeNoise(ctx: BaseAudioContext, seconds = 1): AudioBuffer {
   return buf;
 }
 
-function loadSettings(): SoundSettings {
+// ---- the Music switch (SND-3) -----------------------------------------------------------
+
+/**
+ * Music on/off is the music volume: off is 0, so the popover's and the Esc menu's Music
+ * sliders show it too (0) and stay in step with no flag of their own. Switching off remembers
+ * the volume; switching on brings it back, or the default when nothing is remembered (the
+ * slider was dragged down to 0). Moving any Music slider above 0 turns the music on. The
+ * master mute (M) is separate: it silences everything and leaves the music volume alone.
+ */
+export function musicIsOn(s: Pick<SoundSettings, "music">): boolean {
+  return s.music > 0;
+}
+
+/** The Music switch pressed: the new music volume and the volume to remember for "on". */
+export function musicSwitched(music: number, remembered: number): { music: number; remembered: number } {
+  if (music > 0) return { music: 0, remembered: music };
+  return { music: remembered > 0 ? remembered : DEFAULT_SOUND.music, remembered };
+}
+
+/** The remembered "on" volume from the stored settings JSON (key musicBack); 0 = none. */
+export function parseMusicBack(raw: string | null): number {
   try {
-    return parseSoundSettings(localStorage.getItem(STORE_KEY));
+    const v: unknown = raw ? JSON.parse(raw) : null;
+    return clampVolume(v && typeof v === "object" ? (v as Record<string, unknown>).musicBack : 0, 0);
+  } catch {
+    return 0;
+  }
+}
+
+function loadStored(): string | null {
+  try {
+    return localStorage.getItem(STORE_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function loadSettings(raw: string | null): SoundSettings {
+  try {
+    return parseSoundSettings(raw);
   } catch {
     return { ...DEFAULT_SOUND };
   }
 }
 
-function saveSettings(s: SoundSettings): void {
+/** The settings and, beside them in the same entry, the Music switch's remembered volume. */
+function saveSettings(s: SoundSettings, musicBack: number): void {
   try {
-    localStorage.setItem(STORE_KEY, JSON.stringify(s));
+    localStorage.setItem(STORE_KEY, JSON.stringify({ ...s, musicBack }));
   } catch {
     /* private mode: the settings last until the reload */
   }
@@ -83,10 +121,17 @@ export class AudioEngine {
   ctx: AudioContext | null = null; // created on the first gesture
   buses: Buses | null = null;
   noise: AudioBuffer | null = null;
-  settings: SoundSettings = loadSettings();
+  settings: SoundSettings;
+  musicBack: number; // the volume the Music switch turns back on to (0: none, the default)
   private armed = false;
   private readonly listeners = new Set<() => void>();
   private readonly unlock = () => this.tryUnlock();
+
+  constructor() {
+    const raw = loadStored();
+    this.settings = loadSettings(raw);
+    this.musicBack = parseMusicBack(raw);
+  }
 
   /** Listen for a gesture that may start audio and for the tab being hidden. */
   attach(): void {
@@ -113,13 +158,20 @@ export class AudioEngine {
 
   set(patch: Partial<SoundSettings>): void {
     this.settings = parseSoundSettings(JSON.stringify({ ...this.settings, ...patch }));
-    saveSettings(this.settings);
+    saveSettings(this.settings, this.musicBack);
     if (this.buses && this.ctx) applyGains(this.buses, this.settings, this.ctx.currentTime);
     this.changed();
   }
 
   toggleMute(): void {
     this.set({ muted: !this.settings.muted });
+  }
+
+  /** Music on/off (musicSwitched): only the music; effects and the master mute stay as they are. */
+  toggleMusic(): void {
+    const next = musicSwitched(this.settings.music, this.musicBack);
+    this.musicBack = next.remembered;
+    this.set({ music: next.music });
   }
 
   /** Called on settings and context-state changes; returns the unsubscribe. */
@@ -188,6 +240,21 @@ export interface SoundControlEls {
   music: HTMLInputElement; // range 0..100
   effects: HTMLInputElement; // range 0..100
   mute: HTMLButtonElement;
+  lobby?: LobbyMusicEls | null; // the lobby panel's Music row; found by id when not given
+}
+
+/** The lobby panel's Music row (index.html), for every player: switch, volume, mute note. */
+export interface LobbyMusicEls {
+  toggle: HTMLButtonElement; // role="switch", aria-checked
+  music: HTMLInputElement; // range 0..100
+  muted: HTMLElement | null; // shown while everything is muted (M)
+}
+
+function lobbyMusicEls(): LobbyMusicEls | null {
+  const toggle = document.getElementById("lobby-music-on");
+  const music = document.getElementById("lobby-music-vol");
+  if (!(toggle instanceof HTMLButtonElement) || !(music instanceof HTMLInputElement)) return null;
+  return { toggle, music, muted: document.getElementById("lobby-music-muted") };
 }
 
 /**
@@ -195,14 +262,18 @@ export interface SoundControlEls {
  * M toggles mute anywhere but in a text field. Range inputs swallow the driving keys
  * (client/input.ts) and arrows move them, so every control gives its focus back after use,
  * and close() (at the countdown) drops it too. The slider captions are not <label>s: a click
- * on one would focus its slider with no pointerup or change to blur it.
+ * on one would focus its slider with no pointerup or change to blur it. The lobby panel's
+ * Music row (switch + volume) follows the same rules and shows the same settings.
  */
 export class SoundControls {
+  private readonly lobby: LobbyMusicEls | null;
+
   constructor(
     private readonly engine: AudioEngine,
     private readonly els: SoundControlEls,
   ) {
     const { root, button, pop, music, effects, mute } = els;
+    this.lobby = els.lobby === undefined ? lobbyMusicEls() : els.lobby;
     button.addEventListener("click", () => {
       this.setOpen(pop.classList.contains("hidden"));
       button.blur();
@@ -214,6 +285,14 @@ export class SoundControls {
     };
     slider(music, "music");
     slider(effects, "effects");
+    if (this.lobby) {
+      const { toggle, music: lobbyMusic } = this.lobby;
+      slider(lobbyMusic, "music");
+      toggle.addEventListener("click", () => {
+        engine.toggleMusic();
+        toggle.blur();
+      });
+    }
     mute.addEventListener("click", () => {
       engine.toggleMute();
       mute.blur();
@@ -263,6 +342,10 @@ export class SoundControls {
 
   close(): void {
     this.setOpen(false);
+    // The lobby panel hides at the countdown: its Music slider, if still focused (keyboard),
+    // would keep swallowing the driving keys.
+    const a = document.activeElement;
+    if (this.lobby && (a === this.lobby.toggle || a === this.lobby.music)) (a as HTMLElement).blur();
   }
 
   private setOpen(open: boolean): void {
@@ -281,6 +364,15 @@ export class SoundControls {
     if (document.activeElement !== effects) effects.value = String(Math.round(s.effects * 100));
     mute.textContent = s.muted ? "Unmute (M)" : "Mute (M)";
     mute.setAttribute("aria-pressed", String(s.muted));
+    if (this.lobby) {
+      const { toggle, music: lobbyMusic, muted } = this.lobby;
+      const on = musicIsOn(s);
+      if (document.activeElement !== lobbyMusic) lobbyMusic.value = String(Math.round(s.music * 100));
+      toggle.setAttribute("aria-checked", String(on));
+      toggle.textContent = on ? "On" : "Off";
+      toggle.title = on ? "Music off (effects stay on)" : "Music on";
+      muted?.classList.toggle("hidden", !s.muted);
+    }
   }
 }
 

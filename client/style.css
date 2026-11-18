@@ -521,6 +521,61 @@ h2 {
   transform: none;
 }
 
+/* Lobby Music row (client/audio.ts SoundControls): on/off switch + volume, like the track row. */
+.lobby-music {
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  min-height: 42px;
+}
+
+.lobby-music .label {
+  text-align: left;
+}
+
+.music-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 66px;
+  padding: 6px 10px;
+}
+
+/* The switch's lamp: lit like a shop pip while the music is on. */
+.music-switch::before {
+  content: "";
+  flex: none;
+  width: 10px;
+  height: 10px;
+  border: 2px solid var(--line);
+  background: #1c1612;
+}
+
+.music-switch[aria-checked="true"] {
+  color: var(--text);
+}
+
+.music-switch[aria-checked="true"]::before {
+  background: var(--rust);
+  border-color: #ffb27a;
+}
+
+.lobby-music input[type="range"] {
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: none;
+  accent-color: var(--rust);
+}
+
+@media (hover: none) and (pointer: coarse) {
+  .music-switch {
+    min-height: 44px;
+  }
+}
+
 /* ---- room chat (client/chat.ts) ---------------------------------------------------- */
 
 .chat {

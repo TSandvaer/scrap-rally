@@ -47,6 +47,23 @@
             <button id="start-anyway" class="btn hidden">Start anyway</button>
             <button id="ready" class="btn primary hidden">I'm ready</button>
             <p id="lobby-wait" class="muted">Waiting for the host to start…</p>
+            <!-- This browser's music (client/audio.ts SoundControls): the same setting as the
+                 speaker popover's and the Esc menu's Music slider; effects stay on. -->
+            <div class="lobby-music" role="group" aria-label="Music">
+              <span id="lobby-music-label" class="label">Music</span>
+              <button
+                id="lobby-music-on"
+                type="button"
+                class="btn small music-switch"
+                role="switch"
+                aria-checked="true"
+                aria-labelledby="lobby-music-label"
+              >
+                On
+              </button>
+              <input id="lobby-music-vol" type="range" min="0" max="100" step="5" aria-label="Music volume" />
+            </div>
+            <p id="lobby-music-muted" class="muted fine hidden">All sound is muted (M unmutes).</p>
             <button id="leave" class="btn link small">Leave room</button>
           </div>
           <div class="garage">
