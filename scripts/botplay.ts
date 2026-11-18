@@ -5,9 +5,11 @@
 //
 // Options: --calm (bots do not shoot or drop mines), --url ws://host:port/ws.
 // Bots race every race the host starts, spend their scrap in the garage between races,
-// report ready in the lobby once they have shopped, and leave on Ctrl+C.
+// report ready in the lobby once they have shopped, and leave on Ctrl+C. The host's Esc menu
+// works on them: a removed bot stops (the others play on), a stopped or restarted race is
+// logged, and a bot made the host hands it straight back (bots never start races).
 
-import { Game, type TokenStore } from "../client/game";
+import { Game, lostMessage, type TokenStore } from "../client/game";
 import { connectWs } from "../client/net";
 import { AMMO, priceOf, UPGRADE_IDS, type ItemId } from "../shared/shop";
 import { trackName } from "../shared/tracks";
@@ -73,21 +75,46 @@ for (let i = 0; i < count; i++) {
   const bot: Bot = { name, game, driver: new BotDriver(game, LANES[i]), shopped: false, readyDue: false };
   bot.driver.weapons = !flag("--calm");
   game.on.error = (msg) => console.log(`${name}: ${msg}`);
-  game.on.connection = (state) => {
-    if (state === "lost") {
-      console.log(`${name}: connection lost`);
-      process.exitCode = 1;
+  game.on.connection = (state, reason) => {
+    if (state !== "lost") return;
+    // Removed by the host, or a locked room: this bot is done, the others play on.
+    console.log(`${name}: ${reason === "kicked" || reason === "locked" ? lostMessage(reason, true) : "connection lost"}`);
+    if (reason !== "kicked" && reason !== "locked") process.exitCode = 1;
+    bots.splice(bots.indexOf(bot), 1);
+    game.leave();
+    if (!bots.length) {
+      console.log("no bots left");
+      process.exit();
     }
   };
   game.on.welcome = () => console.log(`${name} joined ${game.code}`);
   let trackId = "";
+  let phase = "";
+  let raceStart = 0;
+  let hostId = "";
   game.on.room = () => {
     bot.readyDue = true; // also after the host picks another track (that resets ready)
-    if (i === 0 && game.trackId !== trackId) console.log(`  track: ${trackName(game.trackId)}`);
+    const lead = bots[0] === bot; // log room-wide news once
+    if (lead && game.trackId !== trackId) console.log(`  track: ${trackName(game.trackId)}`);
+    const wasRace = phase === "countdown" || phase === "racing";
+    if (lead && wasRace && game.phase === "countdown" && game.raceStart !== raceStart) console.log("  race restarted by the host");
+    if (lead && wasRace && game.phase === "lobby") console.log("  race stopped by the host");
+    // Made the host: hand it back to who gave it (else the first driver who is not a bot).
+    if (game.isHost() && hostId && hostId !== game.you) {
+      const botIds = new Set(bots.map((b) => b.game.you));
+      const back = [game.player(hostId), ...game.players].find((p) => p && p.connected && !botIds.has(p.id));
+      if (back) {
+        console.log(`${name} was made the host: handing it back to ${back.name}`);
+        game.makeHost(back.id);
+      }
+    }
     trackId = game.trackId;
+    phase = game.phase;
+    raceStart = game.raceStart;
+    hostId = game.hostId;
   };
   game.on.event = (ev) => {
-    if (i !== 0) return; // log each event once
+    if (bots[0] !== bot) return; // log each event once
     const who = (id: string) => game.player(id)?.name ?? "?";
     if (ev.k === "finish") console.log(`  ${who(ev.id)} finished #${ev.place} in ${(ev.timeMs / 1000).toFixed(2)}s`);
     if (ev.k === "wreck") console.log(`  ${who(ev.by)} wrecked ${who(ev.id)}`);

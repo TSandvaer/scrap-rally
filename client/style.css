@@ -854,3 +854,182 @@ h2 {
   align-self: flex-start;
   padding: 6px 10px;
 }
+
+/* In-game menu (Esc in a room, client/menu.ts): a modal over the whole stage, above the chat,
+   the speaker button and the sound popover; the toast stays above it. */
+.gm-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  display: grid;
+  place-items: center;
+  padding: 12px;
+  background: rgba(8, 6, 4, 0.6);
+}
+
+.toast {
+  z-index: 11;
+}
+
+.panel.gm {
+  position: relative;
+  background: #16110d; /* opaque: the lobby panel behind must not show through */
+  width: min(380px, calc(100vw - 24px));
+  max-height: calc(var(--app-h, 100dvh) - 24px);
+  padding: 18px 18px 16px;
+  gap: 10px;
+}
+
+.gm-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.gm-sub {
+  font-size: 12px;
+  color: var(--muted-solid);
+  letter-spacing: 1px;
+  text-transform: uppercase;
+}
+
+.gm-note {
+  margin: 0;
+  padding: 6px 8px;
+  font-size: 12px;
+  color: var(--text);
+  background: #2b1a10;
+  border-left: 3px solid var(--rust);
+}
+
+.gm-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.gm-list,
+.gm-host,
+.gm-sound {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.gm-list .btn,
+.gm-host > .btn {
+  width: 100%;
+  text-align: left;
+}
+
+.gm-host {
+  padding-top: 10px;
+  border-top: 2px dashed var(--line);
+}
+
+.gm-host .label {
+  text-align: left;
+}
+
+.gm-host .fine,
+.gm-body > .fine {
+  text-align: left;
+  margin: -2px 0 0;
+}
+
+.gm-row {
+  display: flex;
+  gap: 8px;
+}
+
+.gm-row .btn {
+  flex: 1;
+  min-width: 0;
+}
+
+.btn.danger {
+  border-color: #b5482a;
+  color: #ffb39b;
+}
+
+.btn.danger:hover {
+  border-color: var(--err);
+}
+
+.gm-players li {
+  flex-wrap: wrap;
+  padding: 6px 8px;
+  font-size: 14px;
+  gap: 8px;
+}
+
+.gm-acts {
+  display: flex;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.gm-acts .btn {
+  padding: 4px 8px;
+  box-shadow: 2px 2px 0 rgba(0, 0, 0, 0.6);
+}
+
+.gm-acts .btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.gm-ask {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.4;
+}
+
+.gm-sound .vol {
+  display: grid;
+  grid-template-columns: 70px 1fr;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.gm-sound input[type="range"] {
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: none;
+  accent-color: var(--rust);
+}
+
+.gm-sound .btn {
+  align-self: flex-start;
+  padding: 6px 10px;
+}
+
+.gm-keys {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 8px 12px;
+  margin: 0;
+  font-size: 13px;
+}
+
+.gm-keys dt {
+  color: var(--muted-solid);
+}
+
+.gm-keys dd {
+  margin: 0;
+}
+
+.gm-body > .btn.link {
+  align-self: flex-start;
+}
+
+@media (hover: none) and (pointer: coarse) {
+  .gm .btn {
+    min-height: 44px;
+  }
+}

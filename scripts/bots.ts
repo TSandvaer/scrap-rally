@@ -17,7 +17,7 @@ import {
   type ServerMsg,
 } from "../shared/protocol";
 import { AMMO, PLACE_PAYOUT, statsFor, WRECK_BONUS } from "../shared/shop";
-import { pointAt, queryTrackNear, validateTrack, type Track, type TrackDef } from "../shared/track";
+import { gridSlot, pointAt, queryTrackNear, validateTrack, type Track, type TrackDef } from "../shared/track";
 import { DEFAULT_TRACK_ID, registerTestTrack, trackById, trackList } from "../shared/tracks";
 import { angleDiff, BASE_STATS, capsuleGap, clamp, speedOf, type CarState } from "../shared/physics";
 import { BTN_RIVET, validateRunUps, WEAPONS_ARM_MS } from "../shared/weapons";
@@ -381,6 +381,7 @@ async function run(ctx: Ctx, bots: Bot[]): Promise<void> {
   await runJumpFall(ctx, bots);
   await runOverpass(ctx, bots);
   await runChat(ctx, bots);
+  await runMenu(ctx, bots);
 }
 
 const lost = new Map<string, (ConnReason | undefined)[]>();
@@ -1217,5 +1218,96 @@ async function runChat(ctx: Ctx, bots: Bot[]): Promise<void> {
     );
   } finally {
     for (const b of [P, Q, R]) b.game.leave();
+  }
+}
+
+// ---- in-game menu: host room controls (MENU-1, PLAN-MENU.md) ---------------------------
+
+/**
+ * Host room controls over real sockets. A kicked bot is told "kicked" and stops: no reconnect
+ * attempts (an uncoded err plus the close would have resent its token 15 times), and typing the
+ * code again with its kept token meets the block. A restart mid-race sends every car back to
+ * the grid without a reconciliation jump for the lagged bot (the new raceStart drops the
+ * predicted car), and a stop takes everyone back to the lobby.
+ */
+async function runMenu(ctx: Ctx, bots: Bot[]): Promise<void> {
+  const S = new Bot("Sierra", ctx.url, -20);
+  const T = new Bot("Tango", ctx.url, 20, { lag: 80, jitter: 10 });
+  const U = new Bot("Uniform", ctx.url, 0);
+  bots.push(S, T, U);
+  for (const b of [S, T, U]) {
+    b.weapons = false;
+    watch(b);
+  }
+  try {
+    S.game.create(S.name);
+    await waitFor("S welcome", () => !!S.game.you, 3000);
+    const code = S.game.code;
+    T.game.join(code, T.name);
+    U.game.join(code, U.name);
+    await waitFor("T and U in S's room", () => S.game.players.length === 3 && !!T.game.you && !!U.game.you, 3000);
+
+    // Kick: the kicked bot stops for good.
+    const uId = U.game.you;
+    const uToken = U.tokens.get(code);
+    S.game.kick(uId);
+    await waitFor("U told", () => lost.get(U.name)!.length > 0, 3000);
+    await waitFor("S sees U removed", () => !S.game.player(uId) && S.game.chat.some((l) => l.kind === "removed" && l.name === U.name), 2000);
+    await sleep(2500); // well past the 1 s reconnect delay: a rejoin loop would show
+    const uLines = S.game.chat.filter((l) => l.name === U.name && (l.kind === "removed" || l.kind === "leave")).map((l) => l.kind);
+    check(
+      "menu over sockets: a kicked bot is told 'kicked' and stops (no reconnect attempts, token kept); one 'removed' line, no 'left'",
+      lost.get(U.name)!.join() === "kicked" &&
+        reconnecting.get(U.name)!.length === 0 &&
+        !U.game.connected &&
+        !!uToken && U.tokens.get(code) === uToken &&
+        uLines.join() === "removed" &&
+        S.game.players.length === 2 && T.game.players.length === 2,
+      `lost ${lost.get(U.name)!.join() || "-"}, reconnecting ${reconnecting.get(U.name)!.length}, lines ${uLines.join() || "-"}, players ${S.game.players.length}`,
+    );
+    U.game.leave();
+    U.game.join(code, U.name); // the kept token goes with it
+    await waitFor("U refused again", () => lost.get(U.name)!.length > 1, 3000);
+    await sleep(1500);
+    check(
+      "menu over sockets: the kicked bot typing the code again is refused ('kicked'), still no reconnect",
+      lost.get(U.name)!.join() === "kicked,kicked" && reconnecting.get(U.name)!.length === 0 && S.game.players.length === 2,
+      `lost ${lost.get(U.name)!.join()}`,
+    );
+
+    // Restart mid-race: back to the grid, no reconciliation jump for the lagged bot.
+    await readyUp("menu", S, [S, T]);
+    S.game.start();
+    await waitFor("menu: racing", () => S.game.phase === "racing" && !!S.game.car && !!T.game.car, 6000);
+    await sleep(3000);
+    const far = T.game.ownSnap()?.rd ?? 0;
+    const e0 = T.game.recErrors.length;
+    const start0 = S.game.raceStart;
+    S.game.restartRace();
+    await waitFor("restart: countdown", () => [S, T].every((b) => b.game.phase === "countdown" && b.game.raceStart !== start0), 3000);
+    const slots = [0, 1].map((i) => gridSlot(track, i));
+    const onGrid = (b: Bot) => !!b.game.car && slots.some((g) => Math.hypot(b.game.car!.x - g.x, b.game.car!.y - g.y) < 1);
+    await waitFor("restart: both on the grid", () => onGrid(S) && onGrid(T), 2000);
+    const gridOk = onGrid(S) && onGrid(T);
+    await waitFor("restart: racing again", () => [S, T].every((b) => b.game.phase === "racing"), 6000);
+    await sleep(3000);
+    const st = stats(T.game.recErrors.slice(e0));
+    check(
+      "menu over sockets: a restart mid-race puts both cars back on the grid; the lagged bot's reconciliation stays within the 50-unit bound (median < 0.5)",
+      far > 300 && gridOk && st.n > 100 && st.max <= 50 && st.median < 0.5 && S.errors.length + T.errors.length === 0,
+      `raced to rd ${far.toFixed(0)} first; after the restart n=${st.n} median ${st.median.toFixed(3)} max ${st.max.toFixed(2)}; errors ${[...S.errors, ...T.errors].join("; ") || "-"}`,
+    );
+
+    // Stop: everyone back in the lobby, no results.
+    S.game.stopRace();
+    await waitFor("stop: lobby", () => [S, T].every((b) => b.game.phase === "lobby"), 3000);
+    await sleep(300);
+    check(
+      "menu over sockets: Stop takes everyone back to the lobby with no results and no cars",
+      [S, T].every((b) => b.game.phase === "lobby" && b.results === null && !b.game.car) && S.errors.length + T.errors.length === 0,
+      [S, T].map((b) => `${b.name} ${b.game.phase}`).join(", "),
+    );
+  } finally {
+    for (const b of [S, T, U]) b.game.leave();
   }
 }

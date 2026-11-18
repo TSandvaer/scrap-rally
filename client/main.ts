@@ -10,6 +10,7 @@ import { ChatPanel, fitViewport } from "./chat";
 import { Game, lostMessage, NO_CONTROLS, type Controls, type TokenStore } from "./game";
 import { Keyboard } from "./input";
 import { JerkMeter } from "./jerk";
+import { GameMenu } from "./menu";
 import { MusicPlayer } from "./music";
 import { connectWs } from "./net";
 import { Renderer, type CarView, type DrawPose, type HudView, type WorldFx } from "./render";
@@ -177,7 +178,7 @@ ui.trackSelect.addEventListener("change", () => game.pickTrack(ui.trackSelect.va
 ui.start.addEventListener("click", () => game.start());
 ui.startAnyway.addEventListener("click", () => game.start(true));
 ui.ready.addEventListener("click", () => game.setReady(!game.me()?.ready));
-ui.copy.addEventListener("click", async () => {
+async function copyInvite(): Promise<void> {
   const link = `${location.origin}/?room=${game.code}`;
   try {
     await navigator.clipboard.writeText(link);
@@ -185,11 +186,58 @@ ui.copy.addEventListener("click", async () => {
   } catch {
     toast(link);
   }
-});
-ui.leave.addEventListener("click", () => {
+}
+function leaveRoom(): void {
   game.leave();
   setRoomInUrl("");
   updatePanels();
+}
+ui.copy.addEventListener("click", () => void copyInvite());
+ui.leave.addEventListener("click", leaveRoom);
+
+// ---- in-game menu (Esc) -----------------------------------------------------------
+
+const menu = new GameMenu({
+  root: $("game-menu"),
+  game,
+  audio,
+  onOpen: () => {
+    keyboard.clear(); // a key held as the menu opens must not keep driving afterwards
+    soundControls.close();
+  },
+  leave: leaveRoom,
+  copyInvite: () => void copyInvite(),
+});
+// The menu button (everyone, in a room): under the speaker, so SoundControls places both
+// clear of the minimap and the HUD. Touch screens have no Esc key.
+const menuBtn = $<HTMLButtonElement>("menu-btn");
+menuBtn.addEventListener("click", () => {
+  menuBtn.blur();
+  menu.open();
+});
+// Esc opens and closes the menu in a room, in any phase; on the main menu it does nothing.
+// The chat input and the sound popover take their own Esc first: the chat prevents its
+// default; the popover only closes itself, so whether it was open is noted on the way down
+// (capture phase). An open chat overlay whose input lost the focus is closed here instead.
+let escPopOpen = false;
+window.addEventListener(
+  "keydown",
+  (e) => {
+    if (e.key === "Escape") escPopOpen = !$("sound-pop").classList.contains("hidden");
+  },
+  true,
+);
+window.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape" || e.defaultPrevented || e.isComposing || e.repeat) return;
+  if (escPopOpen) {
+    soundControls.close();
+    return;
+  }
+  if (chat.open) {
+    chat.closeBox();
+    return;
+  }
+  if (game.you) menu.toggle();
 });
 
 // A reload of a room page rejoins the same seat (token kept per tab in sessionStorage).
@@ -221,7 +269,7 @@ game.on.connection = (state, reason) => {
     game.leave();
     setRoomInUrl("");
     // The room may still be there: keep its code for another try.
-    if ((reason === "unreachable" || reason === "busy") && code) ui.code.value = code;
+    if ((reason === "unreachable" || reason === "busy" || reason === "locked") && code) ui.code.value = code;
     ui.menuErr.textContent = lostMessage(reason, wasInRoom);
     updatePanels();
   }
@@ -255,7 +303,9 @@ function setRoomInUrl(code: string): void {
 // ---- panels -----------------------------------------------------------------------
 
 function updatePanels(): void {
+  menu.render(); // the open menu follows the room (closes once we are out of it)
   const inRoom = !!game.you;
+  show(menuBtn, inRoom);
   ui.menu.classList.toggle("hidden", inRoom);
   ui.lobby.classList.toggle("hidden", !inRoom || game.phase !== "lobby");
   ui.results.classList.toggle("hidden", !inRoom || game.phase !== "results" || !game.results);
@@ -503,7 +553,10 @@ function frame(now: number): void {
   acc += elapsed;
   let steps = 0;
   while (acc >= STEP_MS && steps < MAX_CATCH_UP) {
-    lastControls = pilot ? pilot.controls() : keyboard.read();
+    // Read every step (a mine tap is latched until read), but drive with nothing while the
+    // menu is open: the race keeps running and the car coasts.
+    const ctl = pilot ? pilot.controls() : keyboard.read();
+    lastControls = menu.isOpen ? NO_CONTROLS : ctl;
     game.step(lastControls, STEP_MS);
     acc -= STEP_MS;
     steps++;

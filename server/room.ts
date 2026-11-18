@@ -4,6 +4,7 @@
 import { randomBytes, randomInt } from "node:crypto";
 import { BASE_STATS, collideCars, NO_INPUT, type CarStats } from "../shared/physics";
 import {
+  BLOCKLIST_MAX,
   CHAT_BURST,
   CHAT_COMINGS_BURST,
   CHAT_COMINGS_PER_SEC,
@@ -129,6 +130,15 @@ export function cleanChat(raw: unknown): string {
 
 const PLACES = ["1st", "2nd", "3rd", "4th", "5th", "6th"]; // MAX_PLAYERS places
 
+/** Game lines about one player, and their text after the name. */
+type ComingKind = "join" | "leave" | "removed" | "host";
+const COMING_TEXT: Record<ComingKind, string> = {
+  join: "joined the room",
+  leave: "left the room",
+  removed: "was removed",
+  host: "is now the host",
+};
+
 export class Room {
   readonly players = new Map<string, Player>();
   private _trackId: string;
@@ -143,6 +153,13 @@ export class Room {
   private lastOrder: string[] = []; // last race's standings, for the reverse grid
   private lobbyAt = 0; // server time the lobby last opened (back from results)
   private lastJoinAt = 0; // server time the last new player joined (the creator included)
+  private startedAt = 0; // server time the current race's countdown began (start or restart)
+  /** The host's lock: no new players join; a seat rejoin with its token still does. */
+  locked = false;
+  // Rejoin tokens of the players the host removed, oldest first (BLOCKLIST_MAX); gone with the room.
+  private readonly blocked = new Set<string>();
+  // Each racer's ammo as the race began: a stopped or restarted race gives back what it used.
+  private readonly startAmmo = new Map<string, { rivets: number; mines: number }>();
   private readonly chatLog: ChatLine[] = []; // the last CHAT_HISTORY lines; gone with the room
   private chatSeq = 0;
   // Room-wide budgets (shared/protocol.ts CHAT_ROOM_*, CHAT_COMINGS_*); full at the start.
@@ -273,13 +290,14 @@ export class Room {
   }
 
   /**
-   * The player is gone for good: the Leave button, or the reconnect grace ran out. The only
-   * place a "leave" line is written (a reconnect or a takeover writes neither join nor leave).
+   * The player is gone for good: the Leave button, or the reconnect grace ran out, or the host
+   * removed them (kick: a "removed" line instead). The only place a "leave" line is written (a
+   * reconnect or a takeover writes neither join nor leave).
    */
-  private remove(p: Player, now: number): void {
+  private remove(p: Player, now: number, line: "leave" | "removed" = "leave"): void {
     this.players.delete(p.id);
     if (this.hostId === p.id) this.hostId = this.players.keys().next().value ?? "";
-    this.comingLine("leave", p, now);
+    this.comingLine(line, p, now);
     this.broadcastRoom();
   }
 
@@ -313,12 +331,15 @@ export class Room {
     this.addLine("say", p.name, p.color, text, p.id);
   }
 
-  /** A join or leave line, unless the room's budget for them is spent (a churn of seats). */
-  private comingLine(kind: "join" | "leave", p: Player, now: number): void {
+  /**
+   * A join, leave, removed or new-host line, unless the room's budget for them is spent (a churn
+   * of seats, or a host flipping the host or removing players in a loop).
+   */
+  private comingLine(kind: ComingKind, p: Player, now: number): void {
     refill(this.comingsBudget, CHAT_COMINGS_BURST, CHAT_COMINGS_PER_SEC, now);
     if (this.comingsBudget.tokens < 1) return;
     this.comingsBudget.tokens--;
-    this.addLine(kind, p.name, p.color, kind === "join" ? "joined the room" : "left the room");
+    this.addLine(kind, p.name, p.color, COMING_TEXT[kind]);
   }
 
   /** The room's chat history, oldest first. */
@@ -356,8 +377,19 @@ export class Room {
     const waiting = this.notReady().length;
     if (waiting > 0 && !force) return `Waiting for ${waiting} player${waiting === 1 ? "" : "s"} to get ready`;
     if (waiting > 0 && now < this.forceStartAt) return "Start anyway is not available yet";
+    this.beginRace(now);
+    return null;
+  }
+
+  /**
+   * A fresh countdown on the room's track: every connected player races (start() checked the
+   * ready flags; a restart does not). Offline players sit it out. Each racer's ammo is noted, so
+   * a stop or a restart can give back what the race used.
+   */
+  private beginRace(now: number): void {
     for (const q of this.players.values()) q.ready = false; // everyone readies again next time
     this.combat.reset();
+    this.startAmmo.clear();
     this.gridOrder().forEach((q, slot) => {
       const g = gridSlot(this.track, slot);
       q.car = { x: g.x, y: g.y, h: g.h, vx: 0, vy: 0, seg: g.seg, wreck: 0, air: 0, fall: 0 };
@@ -369,12 +401,125 @@ export class Room {
       q.cooldown = 0;
       q.stats = statsFor(q.wallet.levels);
       clampAmmo(q.wallet); // e.g. an old wallet over the mine cap: nobody races with more
+      this.startAmmo.set(q.id, { ...q.wallet.ammo });
       resetQueue(q);
     });
     this.finishers = 0;
+    this.startedAt = now;
     this.raceStart = now + COUNTDOWN_MS;
     this.setPhase("countdown", this.raceStart);
+  }
+
+  // ---- host room controls (the Esc menu, PLAN-MENU.md) ----------------------------------
+
+  /**
+   * Host only, countdown or race: abort it. Back to the lobby as if the race never ran: no
+   * results, no result line, no scrap, the ammo it used given back, the last finished race's
+   * grid order kept. "Start anyway" is available at once: the racers already had their lobby
+   * time (all ready, or the host forced the start after it); a player who joined during the
+   * aborted race still gets FORCE_START_MS to shop.
+   */
+  stopRace(p: Player, now: number): string | null {
+    if (p.id !== this.hostId) return "Only the host can stop the race";
+    if (this.phase !== "countdown" && this.phase !== "racing") return "No race to stop";
+    this.restoreAmmo();
+    const open = now - FORCE_START_MS;
+    if (this.lastJoinAt <= this.startedAt) this.lastJoinAt = Math.min(this.lastJoinAt, open);
+    this.toLobby(now, open);
     return null;
+  }
+
+  /**
+   * Host only, countdown or race: a fresh countdown on the same track. The race is cleared as
+   * on the way back to the lobby first (an offline player's car too: start only resets the
+   * connected ones), the ammo it used is given back, and then everyone connected races, ready
+   * or not (a player who joined during the race too).
+   */
+  restartRace(p: Player, now: number): string | null {
+    if (p.id !== this.hostId) return "Only the host can restart the race";
+    if (this.phase !== "countdown" && this.phase !== "racing") return "No race to restart";
+    this.restoreAmmo();
+    this.clearRace();
+    this.beginRace(now);
+    return null;
+  }
+
+  /**
+   * Host only, any phase: remove a player at once. Their socket is detached first (as leave()
+   * does: no chat or input from it afterwards), then told "kicked" and closed. Their rejoin token
+   * is blocked in this room (best effort: a join without a token is a new player, and a locked
+   * room refuses that too). One "removed" line, no "left the room".
+   */
+  kick(p: Player, id: unknown, now: number): string | null {
+    if (p.id !== this.hostId) return "Only the host can remove a player";
+    const q = typeof id === "string" ? this.players.get(id) : undefined;
+    if (!q) return "That player is not in the room";
+    if (q === p) return "You cannot remove yourself";
+    const s = q.session;
+    if (s) {
+      s.room = null;
+      s.player = null;
+    }
+    q.session = null;
+    this.blocked.delete(q.token); // re-added below as the newest
+    this.blocked.add(q.token);
+    for (const t of this.blocked) {
+      if (this.blocked.size <= BLOCKLIST_MAX) break;
+      this.blocked.delete(t);
+    }
+    this.remove(q, now, "removed");
+    s?.conn.send({ t: "err", code: "kicked", msg: "You were removed by the host" });
+    s?.conn.close();
+    return null;
+  }
+
+  /** A join with this token is refused: the host removed its player. */
+  isBlocked(token: unknown): boolean {
+    return typeof token === "string" && this.blocked.has(token);
+  }
+
+  /** How many removed players' tokens the room remembers (BLOCKLIST_MAX at most). */
+  get blockedCount(): number {
+    return this.blocked.size;
+  }
+
+  /**
+   * Host only, any phase: hand the host over to a connected player. Both lose any stale ready
+   * flag (a host never readies; the new host's old flag is not theirs to keep).
+   */
+  setHost(p: Player, id: unknown, now: number): string | null {
+    if (p.id !== this.hostId) return "Only the host can hand over the host";
+    const q = typeof id === "string" ? this.players.get(id) : undefined;
+    if (!q) return "That player is not in the room";
+    if (q === p) return "You are already the host";
+    if (!q.session) return `${q.name} is offline`;
+    q.ready = false;
+    p.ready = false;
+    this.hostId = q.id;
+    this.comingLine("host", q, now);
+    this.broadcastRoom();
+    return null;
+  }
+
+  /** Host only, any phase: lock (no new players) or unlock the room. */
+  setLocked(p: Player, locked: unknown): string | null {
+    if (p.id !== this.hostId) return "Only the host can lock the room";
+    if (typeof locked !== "boolean") return "Bad lock request";
+    if (locked === this.locked) return null;
+    this.locked = locked;
+    this.broadcastRoom();
+    return null;
+  }
+
+  /** Give each racer of the current race the ammo they started it with. */
+  private restoreAmmo(): void {
+    for (const [id, a] of this.startAmmo) {
+      const q = this.players.get(id);
+      if (!q) continue;
+      // In place: p.ammo is the wallet's own object.
+      q.wallet.ammo.rivets = a.rivets;
+      q.wallet.ammo.mines = a.mines;
+    }
   }
 
   /**
@@ -517,8 +662,16 @@ export class Room {
     }
   }
 
-  private toLobby(now: number): void {
-    this.lobbyAt = now;
+  /** lobbyAt: when the lobby counts as opened (FORCE_START_MS); a stop backdates it. */
+  private toLobby(now: number, lobbyAt = now): void {
+    this.lobbyAt = lobbyAt;
+    this.clearRace();
+    this.raceStart = 0;
+    this.setPhase("lobby", 0);
+  }
+
+  /** Every car, shot and mine gone, offline players' too. */
+  private clearRace(): void {
     for (const p of this.players.values()) {
       p.car = null;
       p.progress = null;
@@ -527,8 +680,7 @@ export class Room {
       resetQueue(p);
     }
     this.combat.reset();
-    this.raceStart = 0;
-    this.setPhase("lobby", 0);
+    this.startAmmo.clear();
   }
 
   private setPhase(phase: Phase, ends: number): void {
@@ -605,6 +757,7 @@ export class Room {
       raceStart: this.raceStart,
       forceStartAt: this.forceStartAt,
       trackId: this._trackId,
+      locked: this.locked,
       players: this.info(),
     });
   }
@@ -687,6 +840,9 @@ export class Rooms {
         if (!room) return err(`No room with code ${code || "(empty)"}`, "gone");
         const existing = room.playerByToken(msg.token);
         if (existing) return room.bind(existing, session);
+        // A removed player's token, then the lock: neither lets a new player in.
+        if (room.isBlocked(msg.token)) return err("You were removed from this room", "kicked");
+        if (room.locked) return err("This room is locked", "locked");
         const res = room.addPlayer(cleanName(msg.name), session, now);
         if (typeof res === "string") err(res, "full");
         return;
@@ -725,6 +881,27 @@ export class Rooms {
         if (session.room && session.player) session.room.leave(session.player, now);
         session.conn.close();
         return;
+      case "stop":
+      case "restart":
+      case "kick":
+      case "host":
+      case "lock": {
+        const room = session.room;
+        const player = session.player;
+        if (!room || !player) return;
+        const e =
+          msg.t === "stop"
+            ? room.stopRace(player, now)
+            : msg.t === "restart"
+              ? room.restartRace(player, now)
+              : msg.t === "kick"
+                ? room.kick(player, msg.id, now)
+                : msg.t === "host"
+                  ? room.setHost(player, msg.id, now)
+                  : room.setLocked(player, msg.locked);
+        if (e) err(e);
+        return;
+      }
     }
   }
 

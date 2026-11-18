@@ -37,6 +37,9 @@ export const CHAT_ROOM_BURST = 15;
 export const CHAT_ROOM_PER_SEC = 3;
 export const CHAT_COMINGS_BURST = 12;
 export const CHAT_COMINGS_PER_SEC = 0.5;
+// In-game menu (PLAN-MENU.md): the rejoin tokens of players the host removed are kept per
+// room, at most this many (the oldest is forgotten first); they die with the room.
+export const BLOCKLIST_MAX = 64;
 
 export type Phase = "lobby" | "countdown" | "racing" | "results";
 
@@ -62,17 +65,24 @@ export type ClientMsg =
   | { t: "ping"; c: number }
   | { t: "buy"; item: string }
   | { t: "chat"; text: string } // any phase, from a bound player; cleaned and rate-limited by the server
-  | { t: "leave" }; // leave the room for good: removed at once (no reconnect grace)
+  | { t: "leave" } // leave the room for good: removed at once (no reconnect grace)
+  // Host room controls (the Esc menu, PLAN-MENU.md). Host only; refused with an err otherwise.
+  | { t: "stop" } // countdown or race: abort it, back to the lobby (no results, no scrap, ammo given back)
+  | { t: "restart" } // countdown or race: a fresh countdown on the same track (ammo given back)
+  | { t: "kick"; id: string } // remove a player at once and block their seat token in this room
+  | { t: "host"; id: string } // hand the host over to a connected player
+  | { t: "lock"; locked: boolean }; // locked: no new players join (a seat rejoin with its token still does)
 
 /**
  * One line of room chat. say = a player's message (from = their id); join / leave = a player
- * came or went for good, result = a race's finish order (game lines: no `from`; `name` = the
- * player the line is about, "" for results). name and color are as of the moment the line was
+ * came or went for good, removed = the host removed them, host = they are the host now (handed
+ * over), result = a race's finish order (game lines: no `from`; `name` = the player the line is
+ * about, "" for results). name and color are as of the moment the line was
  * written (colours are reassigned once a player is removed). n counts up per room, from 1.
  */
 export interface ChatLine {
   n: number;
-  kind: "say" | "join" | "leave" | "result";
+  kind: "say" | "join" | "leave" | "removed" | "host" | "result";
   from?: string;
   name: string;
   color: string;
@@ -132,9 +142,10 @@ export interface ResultRow {
 /**
  * Error codes the client acts on: gone = no such room (e.g. the server restarted),
  * full = room full, taken = this seat was taken over by another connection,
- * restarting = the server is shutting down, busy = the server is full.
+ * restarting = the server is shutting down, busy = the server is full, kicked = the host removed
+ * this player (or a join with a removed player's token), locked = the room takes no new players.
  */
-export type ErrCode = "gone" | "full" | "taken" | "restarting" | "busy";
+export type ErrCode = "gone" | "full" | "taken" | "restarting" | "busy" | "kicked" | "locked";
 
 export type GameEvent =
   | { k: "lap"; id: string; lap: number }
@@ -151,6 +162,7 @@ export type ServerMsg =
       raceStart: number; // server time the current race starts/started, 0 = no race
       forceStartAt: number; // server time from which the host may start anyway, 0 outside the lobby
       trackId: string; // the room's track, an id in shared/tracks.ts
+      locked: boolean; // the host locked the room: no new players (rejoins with a token still work)
       players: PlayerInfo[];
     }
   | { t: "err"; msg: string; code?: ErrCode }
