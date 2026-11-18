@@ -214,6 +214,9 @@ Safeguards review APPROVE (findings: test hook <1, PASS without A, PLAN counts, 
 clean, sim 492/492, bots 95/95, build ok). User adopted the reviewer's MARGIN RULE (popup). Round sent to the GFX-0 author as
 ctx_db2f67477a12 (tmp/gfx0c-margin.md: margin rule, control cells, findings 1-4, optional stale-lock check). GFX-1 stays idle
 until that merges, then: merge main + final full gate.
+Margin rule done: 01a9a39 (replay 16/16 agrees with the reviewer's rules.py; control cells; findings fixed; --judge <file>;
+live default gate of main 2a964ca vs gfx-baseline: PASS exit 0, 2 noise OVERs not confirmed). Re-check sent as ctx_fbd30d7d19f8
+(no live benches; --judge only).
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
