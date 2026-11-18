@@ -5013,6 +5013,12 @@ function pauseResume(): void {
   const early = runPaused(sim);
   const at = sim.now; // the first tick that stepped again
   const d = at - pausedAt;
+  // Inputs went on arriving during the pause (fed every tick): the resume drops what is queued.
+  check(
+    "pause: at the resume every jitter buffer starts afresh (resetQueue: nothing queued from the pause, buffering, no mine counter, no input to repeat)",
+    [a, b].every((q) => q.queue.length === 0 && q.buffering && q.mineBase === null && q.lastInput.throttle === 0 && q.starved === 0),
+    [a, b].map((q) => `queue ${q.queue.length}, mineBase ${q.mineBase}, last throttle ${q.lastInput.throttle}`).join("; "),
+  );
   check(
     "pause: resume = a 3-2-1 (resumeAt = now + 3000) during which nothing moves; the room steps again at the first tick from resumeAt",
     e === null && resumeAt === call + PAUSE_RESUME_MS && roomMsg?.resumeAt === resumeAt && roomMsg.paused === true && !early && at >= resumeAt && at - resumeAt < TICK_MS + 1e-6 && roomDigest(sim.room) !== frozen,
