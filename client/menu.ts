@@ -6,9 +6,19 @@
 // NO_CONTROLS (client/main.ts), so the race keeps running and the own car coasts. The main
 // and confirm views follow the room: main.ts calls render() on every room message. Built with
 // textContent only.
+//
+// Sound view (SND-4): everyone's own Music and Effects sliders, Mute and "Use host's sound", with
+// "host's" marks on the settings that follow the room; for the host also the "Room sound (for
+// everyone)" block (music on/off, music and effects volume), sent throttled to the server. It
+// follows the settings and the room in place (a slider being dragged keeps its grip).
 
-import type { AudioEngine } from "./audio";
+import { resetLabel, roomTag, ROOM_TAG_TITLE, showTag, type AudioEngine } from "./audio";
 import type { Game } from "./game";
+import { musicHeard, musicIsOn, musicSlid, musicSwitched, PatchThrottle } from "./soundlogic";
+import type { RoomSound } from "../shared/sound";
+
+/** The host's Room sound sends: at most one per this many ms (the server takes 2 a second). */
+const ROOM_SOUND_GAP_MS = 500;
 
 type View = "main" | "sound" | "controls" | "confirm";
 
@@ -49,12 +59,20 @@ export class GameMenu {
   private readonly note: HTMLElement;
   private readonly body: HTMLElement;
   private built = ""; // the view the body was last built for
+  private builtHost = false; // the sound view was built for the host (Room sound block)
   private music: HTMLInputElement | null = null;
   private effects: HTMLInputElement | null = null;
   private muteBtn: HTMLButtonElement | null = null;
+  private musicTag: HTMLElement | null = null;
+  private effectsTag: HTMLElement | null = null;
+  private resetBtn: HTMLButtonElement | null = null;
+  private room: { toggle: HTMLButtonElement; music: HTMLInputElement; effects: HTMLInputElement } | null = null;
+  private roomMusicStart: number | undefined = undefined; // the room's volume as a Room Music slider drag began
+  private readonly roomSend: PatchThrottle<RoomSound>;
 
   constructor(private readonly deps: MenuDeps) {
     const root = deps.root;
+    this.roomSend = new PatchThrottle<RoomSound>((p) => deps.game.setSoundDefaults(p), ROOM_SOUND_GAP_MS, () => performance.now(), (fn, ms) => window.setTimeout(fn, ms));
     this.panel = el("section", "panel gm");
     this.panel.setAttribute("role", "dialog");
     this.panel.setAttribute("aria-modal", "true");
@@ -122,8 +140,9 @@ export class GameMenu {
   /**
    * Bring the open menu up to date with the room (every room message): the header, the race
    * note, and the main or confirm view (host items per phase, the players list). The sound and
-   * controls views do not depend on the room and are not rebuilt (a slider being dragged keeps
-   * its grip). The focused button keeps the focus across a rebuild.
+   * controls views are not rebuilt (a slider being dragged keeps its grip): the sound view
+   * follows the room in place, and is rebuilt only when the host changes (the Room sound block
+   * comes or goes). The focused control keeps the focus across a rebuild.
    */
   render(): void {
     const g = this.deps.game;
@@ -152,10 +171,15 @@ export class GameMenu {
           : "The race keeps running while this menu is open.";
     setText(this.note, noteText);
     this.note.classList.toggle("hidden", !noteText);
-    if (this.built === this.view && (this.view === "sound" || this.view === "controls")) return;
+    if (this.built === this.view && (this.view === "controls" || (this.view === "sound" && this.builtHost === g.isHost()))) {
+      this.renderSound();
+      return;
+    }
 
     const focused = document.activeElement instanceof HTMLElement && this.body.contains(document.activeElement) ? document.activeElement.dataset.key : undefined;
-    this.music = this.effects = this.muteBtn = null;
+    this.music = this.effects = this.muteBtn = this.resetBtn = this.musicTag = this.effectsTag = null;
+    this.room = null;
+    this.builtHost = g.isHost();
     if (this.view === "main") this.body.replaceChildren(...this.mainView());
     else if (this.view === "sound") this.body.replaceChildren(...this.soundView());
     else if (this.view === "controls") this.body.replaceChildren(...this.controlsView());
@@ -307,7 +331,9 @@ export class GameMenu {
 
   private soundView(): HTMLElement[] {
     const a = this.deps.audio;
-    const slider = (label: string, key: "music" | "effects"): [HTMLElement, HTMLInputElement] => {
+    const g = this.deps.game;
+    // A slider row: caption, range 0..100, and an optional mark (the "host's" tag).
+    const slider = (label: string, key: string, tag: boolean): [HTMLElement, HTMLInputElement, HTMLElement | null] => {
       const row = el("div", "vol");
       const id = `gm-vol-${key}`;
       const cap = el("span", "", label);
@@ -320,28 +346,80 @@ export class GameMenu {
       input.id = id;
       input.dataset.key = key;
       input.setAttribute("aria-labelledby", cap.id);
-      input.addEventListener("input", () => a.set({ [key]: Number(input.value) / 100 }));
+      // Blur on release, so the slider shows the room's live changes again (render skips a focused one).
+      input.addEventListener("change", () => input.blur());
       row.append(cap, input);
-      return [row, input];
+      let mark: HTMLElement | null = null;
+      if (tag) {
+        mark = el("span", "room-tag hidden");
+        mark.title = ROOM_TAG_TITLE;
+        row.append(mark);
+      }
+      return [row, input, mark];
     };
-    const [mRow, m] = slider("Music", "music");
-    const [eRow, e] = slider("Effects", "effects");
+    const [mRow, m, mTag] = slider("Music", "music", true);
+    const [eRow, e, eTag] = slider("Effects", "effects", true);
+    m.addEventListener("input", () => a.slideMusic(Number(m.value) / 100));
+    m.addEventListener("change", () => a.slideEnd());
+    e.addEventListener("input", () => a.set({ effects: Number(e.value) / 100 }));
     this.music = m;
     this.effects = e;
+    this.musicTag = mTag;
+    this.effectsTag = eTag;
     this.muteBtn = button("Mute (M)", "mute", () => a.toggleMute(), "small");
+    this.resetBtn = button("Use host's sound", "reset", () => a.useRoomSound(), "link small hidden");
     const box = el("div", "gm-sound");
-    box.append(mRow, eRow, this.muteBtn);
-    return [box, this.backButton()];
+    box.append(mRow, eRow, this.muteBtn, this.resetBtn);
+    const out: HTMLElement[] = [box];
+    if (g.isHost()) {
+      const rs = el("div", "gm-room-sound");
+      rs.setAttribute("role", "group");
+      rs.setAttribute("aria-labelledby", "gm-room-sound-label");
+      const head = el("div", "label", "Room sound (for everyone)");
+      head.id = "gm-room-sound-label";
+      const toggle = button("On", "room-music-on", () => this.roomSend.push(musicSwitched(g.soundDefaults)), "small music-switch");
+      toggle.setAttribute("role", "switch");
+      toggle.setAttribute("aria-label", "Room music");
+      const [rmRow, rm] = slider("Music", "room-music", false);
+      const [reRow, re] = slider("Effects", "room-effects", false);
+      rm.addEventListener("input", () => {
+        if (this.roomMusicStart === undefined) this.roomMusicStart = g.soundDefaults.music;
+        const r = musicSlid(Number(rm.value) / 100, g.soundDefaults, this.roomMusicStart);
+        this.roomSend.push(r.music === undefined ? { musicOn: r.musicOn } : { ...r, music: r.music });
+      });
+      rm.addEventListener("change", () => (this.roomMusicStart = undefined));
+      re.addEventListener("input", () => this.roomSend.push({ effects: Number(re.value) / 100 }));
+      this.room = { toggle, music: rm, effects: re };
+      rs.append(head, toggle, rmRow, reRow, el("p", "muted fine", "Every player hears these for the settings they have not changed themselves. Mute (M) stays each player's own."));
+      out.push(rs);
+    }
+    out.push(this.backButton());
+    return out;
   }
 
-  /** The sound view's controls follow the settings (also M pressed while it is open). */
+  /** The sound view follows the settings (M pressed while it is open too) and the room's sound defaults. */
   private renderSound(): void {
-    const s = this.deps.audio.settings;
-    if (this.music && document.activeElement !== this.music) this.music.value = String(Math.round(s.music * 100));
-    if (this.effects && document.activeElement !== this.effects) this.effects.value = String(Math.round(s.effects * 100));
+    const a = this.deps.audio;
+    const s = a.settings;
+    const active = document.activeElement;
+    if (this.music && active !== this.music) this.music.value = String(Math.round(musicHeard(s) * 100));
+    if (this.effects && active !== this.effects) this.effects.value = String(Math.round(s.effects * 100));
     if (this.muteBtn) {
       setText(this.muteBtn, s.muted ? "Unmute (M)" : "Mute (M)");
       this.muteBtn.setAttribute("aria-pressed", String(s.muted));
+    }
+    showTag(this.musicTag, roomTag(a, "music"));
+    showTag(this.effectsTag, roomTag(a, "effects"));
+    showTag(this.resetBtn, resetLabel(a));
+    const r = this.room;
+    if (r) {
+      const d = this.deps.game.soundDefaults;
+      const on = musicIsOn(d);
+      r.toggle.setAttribute("aria-checked", String(on));
+      setText(r.toggle, on ? "On" : "Off");
+      r.toggle.title = on ? "Music off for the room" : "Music on for the room";
+      if (active !== r.music) r.music.value = String(Math.round(musicHeard(d) * 100));
+      if (active !== r.effects) r.effects.value = String(Math.round(d.effects * 100));
     }
   }
 

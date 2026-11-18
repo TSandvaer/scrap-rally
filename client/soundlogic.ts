@@ -4,11 +4,17 @@
 
 // ---- settings -----------------------------------------------------------------------
 
+import { BUILTIN_SOUND, clampVolume, type RoomSound } from "../shared/sound";
+
+export { clampVolume };
+
+/** The effective sound settings (client/audio.ts AudioEngine.settings): what is heard. */
 export interface SoundSettings {
-  music: number; // music volume 0..1
+  musicOn: boolean; // the Music switch (SND-3; a real flag since SND-4)
+  music: number; // music volume 0..1 (heard only while musicOn)
   effects: number; // effects volume 0..1
-  muted: boolean;
-  engine: EnginePreset; // the own car's engine sound in races (client/sfx.ts presets)
+  muted: boolean; // the master mute (M): always the player's own
+  engine: EnginePreset; // the own car's engine sound in races (client/sfx.ts presets): the player's own
 }
 
 /**
@@ -18,28 +24,160 @@ export interface SoundSettings {
 export type EnginePreset = "four" | "v8" | "buggy";
 export const ENGINE_PRESETS: readonly EnginePreset[] = ["four", "v8", "buggy"];
 
-export const DEFAULT_SOUND: Readonly<SoundSettings> = { music: 0.5, effects: 0.8, muted: false, engine: "buggy" };
+/** The built-in settings (shared/sound.ts BUILTIN_SOUND for the room's keys): the game's outside a room. */
+export const DEFAULT_SOUND: Readonly<SoundSettings> = {
+  musicOn: BUILTIN_SOUND.musicOn,
+  music: BUILTIN_SOUND.music,
+  effects: BUILTIN_SOUND.effects,
+  muted: false,
+  engine: "buggy",
+};
 
-/** A volume in 0..1; anything that is not a finite number falls back. */
-export function clampVolume(v: unknown, fallback: number): number {
-  return typeof v === "number" && Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : fallback;
+/**
+ * Room sound (SND-4). The host sets the room's musicOn, music and effects; a player hears them
+ * for every one of these keys they have not moved themselves, in any room (own: only the keys
+ * the player moved, remembered across rooms and reloads). Mute and the engine are always the
+ * player's own. Outside a room the built-in defaults stand in for the host's.
+ */
+export type RoomKey = "musicOn" | "music" | "effects";
+export const ROOM_KEYS: readonly RoomKey[] = ["musicOn", "music", "effects"];
+export type OwnSettings = Partial<Pick<SoundSettings, RoomKey>>;
+export type RoomBase = Pick<RoomSound, RoomKey>;
+
+/** Each room key: the player's own value if they moved it, else the host's (outside a room: the built-in default). */
+export function effectiveSound(own: OwnSettings, room: RoomBase | null): Pick<SoundSettings, RoomKey> {
+  const base = room ?? BUILTIN_SOUND;
+  return { musicOn: own.musicOn ?? base.musicOn, music: own.music ?? base.music, effects: own.effects ?? base.effects };
 }
 
-/** Settings from their stored JSON; missing, broken or out-of-range values get the defaults. */
-export function parseSoundSettings(raw: string | null): SoundSettings {
+/** The music volume heard: the volume while the music is on, else 0 (the Music sliders show this). */
+export function musicHeard(s: Pick<SoundSettings, "musicOn" | "music">): number {
+  return s.musicOn ? s.music : 0;
+}
+
+/** The Music switch reads On while music is heard. */
+export function musicIsOn(s: Pick<SoundSettings, "musicOn" | "music">): boolean {
+  return musicHeard(s) > 0;
+}
+
+/**
+ * The Music switch pressed: the keys it makes the player's own. Off: musicOn false (the volume
+ * stays as it is, for "on"). On: musicOn true, and the default volume if the volume is 0 (a
+ * host's or the sound board's 0), so "on" is always heard.
+ */
+export function musicSwitched(s: Pick<SoundSettings, "musicOn" | "music">): OwnSettings {
+  if (musicIsOn(s)) return { musicOn: false };
+  return s.music > 0 ? { musicOn: true } : { musicOn: true, music: DEFAULT_SOUND.music };
+}
+
+/**
+ * A Music slider moved to v (0..1; it shows musicHeard). Above 0: that volume, and the music on
+ * if it was off (SND-3's rule). 0: the music off, with the volume put back as it was when this
+ * slider gesture began (startMusic; undefined = it was not set: for the player, following the
+ * host again), so the switch brings back the volume from before the drag. music: undefined in
+ * the result means "not set".
+ */
+export function musicSlid(v: number, s: Pick<SoundSettings, "musicOn">, startMusic: number | undefined): { musicOn?: boolean; music: number | undefined } {
+  if (v > 0) return s.musicOn ? { music: v } : { musicOn: true, music: v };
+  return { musicOn: false, music: startMusic };
+}
+
+/** What a player keeps in localStorage (STORE_VERSION): only the moved room keys, the mute, the engine. */
+export interface StoredSound {
+  own: OwnSettings;
+  muted: boolean;
+  engine: EnginePreset;
+}
+
+export const STORE_VERSION = 2;
+const SAME = 1e-6;
+
+function ownFrom(o: Record<string, unknown>): OwnSettings {
+  const own: OwnSettings = {};
+  if (typeof o.musicOn === "boolean") own.musicOn = o.musicOn;
+  const m = clampVolume(o.music, NaN);
+  if (!Number.isNaN(m)) own.music = m;
+  const e = clampVolume(o.effects, NaN);
+  if (!Number.isNaN(e)) own.effects = e;
+  return own;
+}
+
+/**
+ * The stored entry. Version 2 ({v: 2, own, muted, engine}) is read as it is. An older entry
+ * saved every key (SND-1..3) whether moved or not: a value counts as the player's own only if
+ * it differs from the built-in default. SND-3's Music switch saved off as music 0 with the
+ * volume to come back to in musicBack: that is own musicOn false, with musicBack as the own
+ * volume (by the same rule); musicBack itself is dropped. Missing, broken or out-of-range
+ * values fall back to the defaults (not own).
+ */
+export function parseStoredSound(raw: string | null): StoredSound {
   let o: Record<string, unknown> = {};
   try {
     const v: unknown = raw ? JSON.parse(raw) : null;
-    if (v && typeof v === "object") o = v as Record<string, unknown>;
+    if (v && typeof v === "object" && !Array.isArray(v)) o = v as Record<string, unknown>;
   } catch {
     /* defaults */
   }
-  return {
-    music: clampVolume(o.music, DEFAULT_SOUND.music),
-    effects: clampVolume(o.effects, DEFAULT_SOUND.effects),
-    muted: typeof o.muted === "boolean" ? o.muted : DEFAULT_SOUND.muted,
-    engine: ENGINE_PRESETS.find((p) => p === o.engine) ?? DEFAULT_SOUND.engine,
-  };
+  const muted = typeof o.muted === "boolean" ? o.muted : DEFAULT_SOUND.muted;
+  const engine = ENGINE_PRESETS.find((p) => p === o.engine) ?? DEFAULT_SOUND.engine;
+  if (o.v === STORE_VERSION) {
+    const own = o.own && typeof o.own === "object" ? ownFrom(o.own as Record<string, unknown>) : {};
+    return { own, muted, engine };
+  }
+  const own: OwnSettings = {};
+  const differs = (v: number, d: number) => Math.abs(v - d) > SAME;
+  const music = clampVolume(o.music, NaN);
+  if (music === 0) {
+    own.musicOn = false;
+    const back = clampVolume(o.musicBack, 0);
+    if (back > 0 && differs(back, DEFAULT_SOUND.music)) own.music = back;
+  } else if (!Number.isNaN(music) && differs(music, DEFAULT_SOUND.music)) own.music = music;
+  const effects = clampVolume(o.effects, NaN);
+  if (!Number.isNaN(effects) && differs(effects, DEFAULT_SOUND.effects)) own.effects = effects;
+  return { own, muted, engine };
+}
+
+export function storedSoundJson(s: StoredSound): string {
+  const own: OwnSettings = {};
+  for (const k of ROOM_KEYS) if (s.own[k] !== undefined) (own as Record<string, unknown>)[k] = s.own[k];
+  return JSON.stringify({ v: STORE_VERSION, own, muted: s.muted, engine: s.engine });
+}
+
+/**
+ * The host's Room sound sliders send at most one change per gapMs (the server takes
+ * SOUND_PER_SEC): the first at once, the rest merged into one trailing send at the end of the
+ * gap, so the last value always goes out. `now` in ms; `later` schedules (setTimeout).
+ */
+export class PatchThrottle<T extends object> {
+  private pending: Partial<T> | null = null;
+  private last = -Infinity;
+  private timer: unknown = null;
+
+  constructor(
+    private readonly send: (patch: Partial<T>) => void,
+    readonly gapMs: number,
+    private readonly now: () => number,
+    private readonly later: (fn: () => void, ms: number) => unknown,
+  ) {}
+
+  push(patch: Partial<T>): void {
+    this.pending = { ...this.pending, ...patch };
+    if (this.timer !== null) return;
+    const wait = this.last + this.gapMs - this.now();
+    if (wait <= 0) this.flush();
+    else this.timer = this.later(() => {
+      this.timer = null;
+      this.flush();
+    }, wait);
+  }
+
+  private flush(): void {
+    const p = this.pending;
+    this.pending = null;
+    if (!p) return;
+    this.last = this.now();
+    this.send(p);
+  }
 }
 
 /** The M key toggles mute: e.code KeyM, no auto-repeat, no modifier (text fields are the caller's check). */

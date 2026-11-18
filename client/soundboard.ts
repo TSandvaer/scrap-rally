@@ -598,7 +598,7 @@ export function mountEffects(board: SoundBoard, audio: AudioEngine): void {
     });
   }
   const pick = ENGINE_PRESETS.map((p) => {
-    const b = board.addButton("Engine: use in game", ENGINES[p].label, () => audio.set({ engine: p }));
+    const b = board.addButton("Engine: use in game", ENGINES[p].label, () => audio.setEngine(p));
     b.dataset.engine = p;
     return b;
   });

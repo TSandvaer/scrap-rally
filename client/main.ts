@@ -3,6 +3,7 @@
 import { pointAt } from "../shared/track";
 import { PAUSE_MAX_MS, type GameEvent, type ResultRow } from "../shared/protocol";
 import { AMMO, AMMO_IDS, priceOf, UPGRADE_IDS, UPGRADES, type ItemId, type Wallet } from "../shared/shop";
+import { DEFAULT_SONG_ID, isSongChoice, RANDOM_SONG } from "../shared/sound";
 import { trackList, trackName } from "../shared/tracks";
 import { BotDriver } from "../scripts/bot-ai";
 import { AudioEngine, SoundControls } from "./audio";
@@ -11,7 +12,7 @@ import { Game, lostMessage, NO_CONTROLS, type Controls, type TokenStore } from "
 import { Keyboard } from "./input";
 import { JerkMeter } from "./jerk";
 import { GameMenu } from "./menu";
-import { MusicPlayer } from "./music";
+import { MusicPlayer, songById } from "./music";
 import { connectWs } from "./net";
 import { Renderer, type CarView, type DrawPose, type HudView, type WorldFx } from "./render";
 import { RaceSounds } from "./sfx";
@@ -63,6 +64,8 @@ const ui = {
   players: $("lobby-players"),
   trackSelect: $<HTMLSelectElement>("track-select"),
   trackName: $("track-name"),
+  songSelect: $<HTMLSelectElement>("song-select"),
+  songName: $("song-name"),
   start: $<HTMLButtonElement>("start"),
   startAnyway: $<HTMLButtonElement>("start-anyway"),
   ready: $<HTMLButtonElement>("ready"),
@@ -103,6 +106,7 @@ const soundControls = new SoundControls(audio, {
   mute: $<HTMLButtonElement>("sound-mute"),
 });
 let soundPhase = "";
+let soundSong = ""; // the song last handed to the MusicPlayer (soundFrame)
 let lastControls: Controls = NO_CONTROLS; // the engine's throttle: what the last step drove with
 // Rebuilt whenever the room's track changes (it caches the track's paths and decor).
 let renderer = new Renderer($<HTMLCanvasElement>("view"), game.track);
@@ -175,6 +179,20 @@ ui.trackSelect.replaceChildren(
   }),
 );
 ui.trackSelect.addEventListener("change", () => game.pickTrack(ui.trackSelect.value));
+// The room's song (SND-4): the host's pick, sent as a room sound default; everyone hears it.
+ui.songSelect.replaceChildren(
+  ...[...music.songs, { id: RANDOM_SONG, title: "Random" }].map((t) => {
+    const o = document.createElement("option");
+    o.value = t.id;
+    o.textContent = t.title;
+    return o;
+  }),
+);
+ui.songSelect.addEventListener("change", () => {
+  const id = ui.songSelect.value;
+  if (isSongChoice(id)) game.setSoundDefaults({ song: id });
+  ui.songSelect.blur();
+});
 ui.start.addEventListener("click", () => game.start());
 ui.startAnyway.addEventListener("click", () => game.start(true));
 ui.ready.addEventListener("click", () => game.setReady(!game.me()?.ready));
@@ -259,7 +277,10 @@ game.on.chatlog = () => chat.reset(game.chat);
 game.on.error = (msg) => {
   if (!game.you) ui.menuErr.textContent = msg;
   else toast(msg);
-  if (game.you) renderTrackPick(); // a refused pick shows the room's track again
+  if (game.you) {
+    renderTrackPick(); // a refused pick shows the room's track again
+    renderSongPick();
+  }
 };
 game.on.connection = (state, reason) => {
   connState = state;
@@ -340,6 +361,7 @@ function updatePanels(): void {
     }),
   );
   renderTrackPick();
+  renderSongPick();
   renderLobbyButtons();
   if (game.results) renderResults(game.results);
   if (garage) renderGarage(true);
@@ -357,6 +379,23 @@ function renderTrackPick(): void {
   show(ui.trackName, !host);
   if (ui.trackSelect.value !== game.trackId) ui.trackSelect.value = game.trackId;
   setText(ui.trackName, trackName(game.trackId));
+}
+
+/**
+ * The room's song, under the track: the host picks it (a song or Random) in the lobby, everyone
+ * else sees the name of the song playing; with Random the host sees it beside the pick. Room
+ * messages only, as the track pick.
+ */
+function renderSongPick(): void {
+  const host = game.isHost() && game.phase === "lobby";
+  const choice = game.soundDefaults.song;
+  const random = choice === RANDOM_SONG;
+  const title = songById(game.song).title;
+  show(ui.songSelect, host);
+  if (ui.songSelect.value !== choice) ui.songSelect.value = choice;
+  show(ui.songName, !host || random);
+  ui.songName.classList.toggle("song-now", host);
+  setText(ui.songName, host ? `now ${title}` : random ? `${title} (random)` : title);
 }
 
 /**
@@ -632,7 +671,20 @@ function frame(now: number): void {
  * snapshot, held server events, and the engine from the controls the steps used.
  */
 function soundFrame(): void {
+  // The room's sound defaults are the base of the player's own settings (none outside a room).
+  audio.setRoom(game.you ? game.soundDefaults : null, game.isHost());
+  // Everyone plays the room's song (outside a room the default). Picked before a start, so the
+  // first song heard is the room's; while the music plays only after update(): in the lobby a
+  // new pick crossfades, at the countdown (a "random" one picked then) it waits for the next start.
+  const song = game.you ? game.song : DEFAULT_SONG_ID;
+  const pickSong = () => {
+    if (song === soundSong) return;
+    soundSong = song;
+    music.setSong(song);
+  };
+  if (music.director.mode === "off") pickSong();
   music.update(!!game.you, game.phase);
+  pickSong();
   sounds.frame(lastControls, renderer.cam);
   if (game.phase === "countdown" && soundPhase !== "countdown") soundControls.close();
   soundPhase = game.phase;

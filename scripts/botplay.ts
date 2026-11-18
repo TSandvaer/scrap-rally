@@ -93,10 +93,16 @@ for (let i = 0; i < count; i++) {
   let raceStart = 0;
   let hostId = "";
   let paused = false;
+  let sound = "";
   game.on.room = () => {
     bot.readyDue = true; // also after the host picks another track (that resets ready)
     const lead = bots[0] === bot; // log room-wide news once
     if (lead && game.trackId !== trackId) console.log(`  track: ${trackName(game.trackId)}`);
+    // The host's room sound (SND-4): bots play no audio; it is only news.
+    const d = game.soundDefaults;
+    const snd = `music ${d.musicOn ? `on ${Math.round(d.music * 100)}%` : "off"}, effects ${Math.round(d.effects * 100)}%, song ${d.song === game.song ? game.song : `${d.song} (${game.song})`}`;
+    if (lead && snd !== sound) console.log(`  room sound: ${snd}`);
+    sound = snd;
     const wasRace = phase === "countdown" || phase === "racing";
     if (lead && wasRace && game.phase === "countdown" && game.raceStart !== raceStart) console.log("  race restarted by the host");
     if (lead && wasRace && game.phase === "lobby") console.log("  race stopped by the host");
