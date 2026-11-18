@@ -3829,7 +3829,530 @@ function audioUnlock(): void {
   }
 }
 
-for (const t of [rivets, gating, mines, wrecks, finishing, garage, armDelay, engine, readyCheck, collisions, trackFeatures, roomTrack, jumpsWired, shippedTracks, botDriver, botLaps, mineCap, chatRoom, chatClient, sound, raceSounds, surfaceSounds, audioUnlock]) {
+// ---- in-game menu: host room controls (MENU-1, PLAN-MENU.md, 2026-11-18) ----------------
+
+// This section's imports (hoisted like the ones at the top).
+import { BLOCKLIST_MAX, COUNTDOWN_MS } from "../shared/protocol";
+import { lostMessage } from "../client/game";
+
+type MenuSession = Session & { conn: ClosingConn };
+const menuSession = (): MenuSession => ({ conn: new ClosingConn(), room: null, player: null });
+
+/** A Rooms server with a host and players joined over onMessage (the socket path). */
+function menuRooms(names: string[]): { rooms: Rooms; room: Room; s: MenuSession[]; p: Player[]; clock: { now: number }; send(i: number, m: ClientMsg): void; join(name: string, token?: string): MenuSession; step(n: number): void } {
+  const rooms = new Rooms(1);
+  const clock = { now: 1000 };
+  const s = names.map(() => menuSession());
+  rooms.onMessage(s[0], { t: "create", name: names[0] }, clock.now);
+  const room = s[0].room!;
+  for (let i = 1; i < names.length; i++) rooms.onMessage(s[i], { t: "join", code: room.code, name: names[i] }, clock.now);
+  return {
+    rooms,
+    room,
+    s,
+    p: s.map((x) => x.player!),
+    clock,
+    send: (i, m) => rooms.onMessage(s[i], m, clock.now),
+    join: (name, token) => {
+      const x = menuSession();
+      rooms.onMessage(x, token ? { t: "join", code: room.code, name, token } : { t: "join", code: room.code, name }, clock.now);
+      return x;
+    },
+    step: (n) => {
+      for (let i = 0; i < n; i++) rooms.step((clock.now += 1000 / 60));
+    },
+  };
+}
+
+function errMsgs(c: FakeConn): Extract<ServerMsg, { t: "err" }>[] {
+  return c.msgs.filter((m): m is Extract<ServerMsg, { t: "err" }> => m.t === "err");
+}
+
+function lastRoomMsg(c: FakeConn): Extract<ServerMsg, { t: "room" }> | undefined {
+  return c.msgs.filter((m): m is Extract<ServerMsg, { t: "room" }> => m.t === "room").pop();
+}
+
+/** Lines written since index `from` of the room's log. */
+const linesSince = (room: Room, from: number) => room.chatLines.slice(from).map((l) => `${l.kind}:${l.name} ${l.text}`);
+
+function menuHostOnly(): void {
+  const R = menuRooms(["Ann", "Bo", "Cy"]);
+  const [, b, c] = R.p;
+  const cmds: ClientMsg[] = [{ t: "stop" }, { t: "restart" }, { t: "kick", id: c.id }, { t: "host", id: b.id }, { t: "lock", locked: true }];
+  const want = "Only the host can stop the race|Only the host can restart the race|Only the host can remove a player|Only the host can hand over the host|Only the host can lock the room";
+  const e0 = errsOf(R.s[1].conn).length;
+  for (const m of cmds) R.send(1, m);
+  const lobbyErrs = errsOf(R.s[1].conn).slice(e0).join("|");
+  const unchanged = () => R.room.players.size === 3 && R.room.hostId === R.p[0].id && !R.room.locked;
+  const lobbyOk = unchanged() && R.room.phase === "lobby";
+  R.send(1, { t: "ready", ready: true });
+  R.send(2, { t: "ready", ready: true });
+  R.send(0, { t: "start" });
+  while (R.room.phase !== "racing") R.step(1);
+  const raceStart = R.room.raceStart;
+  const e1 = errsOf(R.s[1].conn).length;
+  for (const m of cmds) R.send(1, m);
+  const raceErrs = errsOf(R.s[1].conn).slice(e1).join("|");
+  check(
+    "menu: every host command (stop, restart, kick, host, lock) is refused from a non-host with an err, in the lobby and in a race",
+    lobbyErrs === want && lobbyOk && raceErrs === want && unchanged() && R.room.phase === "racing" && R.room.raceStart === raceStart,
+    `lobby: ${lobbyErrs}; race: ${raceErrs}`,
+  );
+
+  // Phase rules: no stop or restart in the lobby or the results.
+  const sim = new Sim(1);
+  const a = sim.add("Ann");
+  const s = sim.add("Sol");
+  const lobby = [sim.room.stopRace(a, sim.now), sim.room.restartRace(a, sim.now)];
+  sim.startRace(a);
+  nearFinish(sim, a);
+  sim.run(15, (p) => (p === a ? { throttle: 1 } : {}));
+  nearFinish(sim, s);
+  sim.run(15, (p) => (p === s ? { throttle: 1 } : {}));
+  const phase: string = sim.room.phase;
+  const results = [sim.room.stopRace(a, sim.now), sim.room.restartRace(a, sim.now)];
+  check(
+    "menu: the host's stop and restart are refused in the lobby and in the results (countdown and race only)",
+    lobby.join("|") === "No race to stop|No race to restart" && phase === "results" && results.join("|") === lobby.join("|") && sim.room.phase === "results",
+    `lobby: ${lobby.join("|")}; ${phase}: ${results.join("|")}`,
+  );
+}
+
+function menuStop(): void {
+  // ---- in the race: lobby, no payouts, no result line, ammo back ----
+  const sim = new Sim(1);
+  const a = sim.add("Ann");
+  const b = sim.add("Bo");
+  a.ammo.rivets = 30;
+  a.ammo.mines = 2;
+  b.ammo.rivets = 12;
+  b.ammo.mines = 1;
+  sim.startRace(a);
+  const grid0 = sim.room.gridOrder().map((p) => p.name).join(",");
+  sim.now = sim.room.raceStart + WEAPONS_ARM_MS;
+  sim.run(1, () => ({ throttle: 1, mine: true }));
+  sim.run(90, () => ({ throttle: 1, fire: true }));
+  const spent = `${a.ammo.rivets}/${a.ammo.mines} ${b.ammo.rivets}/${b.ammo.mines}`;
+  const scrap = [a.wallet.scrap, b.wallet.scrap];
+  const lines0 = sim.room.chatLines.length;
+  const msgs0 = [...sim.conns.values()].map((c) => c.msgs.length);
+  const e = sim.room.stopRace(a, sim.now);
+  sim.run(2);
+  const after = [...sim.conns.values()].flatMap((c, i) => c.msgs.slice(msgs0[i]));
+  check(
+    "stop: a race goes back to the lobby at once: no cars, no results message, no result line, no scrap paid",
+    e === null &&
+      sim.room.phase === "lobby" &&
+      !a.car && !b.car && !a.inRace &&
+      after.every((m) => m.t !== "results") &&
+      sim.room.chatLines.length === lines0 &&
+      a.wallet.scrap === scrap[0] && b.wallet.scrap === scrap[1] &&
+      sim.room.combat.shotSnaps().length === 0 && sim.room.combat.mineSnaps().length === 0,
+    `phase ${sim.room.phase}, lines +${sim.room.chatLines.length - lines0}, scrap ${a.wallet.scrap}/${b.wallet.scrap}`,
+  );
+  check(
+    "stop: each racer gets back the ammo the aborted race used (snapshot from start)",
+    spent !== "30/2 12/1" && a.ammo.rivets === 30 && a.ammo.mines === 2 && b.ammo.rivets === 12 && b.ammo.mines === 1 && a.ammo === a.wallet.ammo,
+    `spent to ${spent}, after the stop ${a.ammo.rivets}/${a.ammo.mines} ${b.ammo.rivets}/${b.ammo.mines}`,
+  );
+  const lastSnapAmmo = (sim.conns.get(a.id)!.msgs.filter((m) => m.t === "snap").pop() as Extract<ServerMsg, { t: "snap" }>).ammo;
+  check("stop: the lobby's snapshots carry the restored ammo", lastSnapAmmo.join() === "30,2", lastSnapAmmo.join());
+  // "Start anyway" at once: Bo is not ready.
+  const force = sim.room.forceStartAt;
+  const plain = sim.room.start(a, sim.now);
+  const forced = sim.room.start(a, sim.now, true);
+  check(
+    "stop: Start anyway is available at once afterwards (forceStartAt <= now)",
+    force <= sim.now && plain === "Waiting for 1 player to get ready" && forced === null && sim.room.phase === "countdown",
+    `forceStartAt ${force - sim.now} ms from now; ${plain}; forced: ${forced}`,
+  );
+  check("stop: the aborted race does not change the grid order (the last finished race's)", sim.room.gridOrder().map((p) => p.name).join(",") === grid0, grid0);
+  // Stop in the countdown.
+  const ec = sim.room.stopRace(a, sim.now);
+  check("stop: in the countdown too", ec === null && sim.room.phase === "lobby" && !a.car && sim.room.raceStart === 0, `${ec}`);
+
+  // A player who joined during the aborted race still gets their shop time.
+  sim.readyAll(a);
+  sim.room.start(a, sim.now);
+  while (sim.room.phase !== "racing") sim.run(1);
+  sim.run(60);
+  const late = sim.add("Late");
+  const joinedAt = sim.now;
+  sim.run(60);
+  sim.room.stopRace(a, sim.now);
+  check(
+    "stop: a player who joined during the aborted race still gets FORCE_START_MS to shop",
+    sim.room.forceStartAt === joinedAt + FORCE_START_MS && !late.car,
+    `forceStartAt ${sim.room.forceStartAt - joinedAt} ms after the join`,
+  );
+}
+
+function menuRestart(): void {
+  const sim = new Sim(1);
+  const a = sim.add("Ann");
+  const b = sim.add("Bo");
+  const c = sim.add("Cy");
+  a.ammo.rivets = 20;
+  a.ammo.mines = 1;
+  c.ammo.rivets = 5;
+  sim.startRace(a);
+  const raceStart0 = sim.room.raceStart;
+  const track0 = sim.room.trackId;
+  sim.now = sim.room.raceStart + WEAPONS_ARM_MS;
+  sim.run(120, (p) => (p === a ? { throttle: 1, fire: true } : { throttle: 1 }));
+  // Ann finishes (the grace timer runs), Cy drops (offline: keeps a stale car), Dee joins late.
+  nearFinish(sim, a);
+  sim.run(15, (p) => (p === a ? { throttle: 1 } : {}));
+  const finishedBefore = a.finished && sim.room.phaseEnds > 0;
+  sim.room.unbind(c, sim.now);
+  const cStale = !!c.car;
+  const d = sim.add("Dee");
+  const spentA = `${a.ammo.rivets}/${a.ammo.mines}`;
+  const scrap = a.wallet.scrap + b.wallet.scrap + c.wallet.scrap;
+  sim.run(1, () => ({ throttle: 1, fire: true })); // a rivet in the air
+  const e = sim.room.restartRace(a, sim.now);
+  const order = sim.room.gridOrder();
+  const onGrid = order.every((p, i) => {
+    const g = gridSlot(sim.room.track, i);
+    return p.car && Math.hypot(p.car.x - g.x, p.car.y - g.y) < 0.01 && p.car.vx === 0 && p.progress!.lap === 0 && !p.progress!.fin;
+  });
+  check(
+    "restart: a fresh countdown on the same track (new raceStart, every connected player on the grid, ready not required, a late joiner too)",
+    e === null &&
+      sim.room.phase === "countdown" &&
+      sim.room.raceStart === sim.now + COUNTDOWN_MS &&
+      sim.room.raceStart > raceStart0 &&
+      sim.room.trackId === track0 &&
+      order.map((p) => p.name).sort().join() === "Ann,Bo,Dee" &&
+      onGrid &&
+      !b.ready && !d.ready && !!d.car,
+    `${e}; ${sim.room.phase}; grid ${order.map((p) => p.name).join(",")}`,
+  );
+  check(
+    "restart: the old race is cleared first (finish, the grace timer, shots, an offline racer's stale car), no scrap paid",
+    finishedBefore && !a.finished && cStale && !c.car && !c.inRace && sim.room.combat.shotSnaps().length === 0 && a.wallet.scrap + b.wallet.scrap + c.wallet.scrap === scrap,
+    `finished before ${finishedBefore}, offline car before ${cStale}`,
+  );
+  check(
+    "restart: ammo given back, the offline player's too",
+    spentA !== "20/1" && a.ammo.rivets === 20 && a.ammo.mines === 1 && c.ammo.rivets === 5,
+    `Ann spent to ${spentA}, back to ${a.ammo.rivets}/${a.ammo.mines}; Cy ${c.ammo.rivets}`,
+  );
+  sim.rebind(c); // back during the new countdown: sits it out
+  while (sim.room.phase !== "racing") sim.run(1);
+  const x0 = a.car!.x;
+  sim.run(60, () => ({ throttle: 1 }));
+  check(
+    "restart: the new race runs (no grace timer left, cars drive, the returning offline player sits it out)",
+    sim.room.phase === "racing" && sim.room.phaseEnds === 0 && a.car!.x !== x0 && !c.car,
+    `phaseEnds ${sim.room.phaseEnds}`,
+  );
+  // Restart in the countdown: the countdown starts over.
+  sim.room.restartRace(a, sim.now);
+  sim.run(30);
+  const t1 = sim.now;
+  const e2 = sim.room.restartRace(a, sim.now);
+  check("restart: in the countdown, the countdown starts over", e2 === null && (sim.room.phase as string) === "countdown" && sim.room.raceStart === t1 + COUNTDOWN_MS, `${e2}`);
+}
+
+function menuKick(): void {
+  const R = menuRooms(["Ann", "Bo", "Cy"]);
+  const [a, b, c] = R.p;
+  const sb = R.s[1];
+  const bToken = b.token;
+  const lines0 = R.room.chatLines.length;
+  R.send(0, { t: "kick", id: b.id });
+  const last = sb.conn.msgs[sb.conn.msgs.length - 1];
+  check(
+    "kick: removed at once; the socket is detached, then told kicked, then closed",
+    !R.room.players.has(b.id) &&
+      sb.room === null && sb.player === null &&
+      last?.t === "err" && last.code === "kicked" && last.msg === "You were removed by the host" &&
+      sb.conn.closed &&
+      lastRoomMsg(R.s[0].conn)!.players.map((p) => p.name).join() === "Ann,Cy",
+    `last message ${JSON.stringify(last)}, closed ${sb.conn.closed}`,
+  );
+  check(
+    "kick: one chat line 'Bo was removed', no 'left the room'",
+    linesSince(R.room, lines0).join("|") === "removed:Bo was removed",
+    linesSince(R.room, lines0).join("|"),
+  );
+  const lines1 = R.room.chatLines.length;
+  R.send(1, { t: "chat", text: "still here?" });
+  R.send(1, { t: "ready", ready: true });
+  check("kick: the kicked socket cannot chat afterwards", R.room.chatLines.length === lines1, linesSince(R.room, lines1).join("|"));
+  const again = R.join("Bo", bToken);
+  const againErr = errMsgs(again.conn).pop();
+  check(
+    "kick: a rejoin with the kicked token is refused (err code kicked), the player is not added",
+    againErr?.code === "kicked" && againErr.msg === "You were removed from this room" && !again.room && R.room.players.size === 2,
+    JSON.stringify(againErr),
+  );
+  const fresh = R.join("Bo");
+  check(
+    "kick: a join without a token is a new player (best effort, documented in PLAN-MENU.md; Lock keeps them out)",
+    !!fresh.player && fresh.player.id !== b.id && R.room.players.size === 3,
+    `${R.room.players.size} players`,
+  );
+  const e0 = errsOf(R.s[0].conn).length;
+  R.send(0, { t: "kick", id: a.id });
+  R.send(0, { t: "kick", id: "nobody" });
+  R.send(0, { t: "kick", id: 7 as unknown as string });
+  check(
+    "kick: the host cannot remove themself; an unknown or non-string id is refused",
+    errsOf(R.s[0].conn).slice(e0).join("|") === "You cannot remove yourself|That player is not in the room|That player is not in the room" && R.room.players.has(a.id) && R.room.hostId === a.id,
+    errsOf(R.s[0].conn).slice(e0).join("|"),
+  );
+  // An offline player (in the reconnect grace): removed at once, token blocked.
+  R.rooms.onClose(R.s[2], R.clock.now);
+  const cOffline = !c.session && R.room.players.has(c.id);
+  const lines2 = R.room.chatLines.length;
+  R.send(0, { t: "kick", id: c.id });
+  const cBack = R.join("Cy", c.token);
+  check(
+    "kick: an offline player is removed at once (no grace), their token blocked, one removed line",
+    cOffline && !R.room.players.has(c.id) && errMsgs(cBack.conn).pop()?.code === "kicked" && linesSince(R.room, lines2).join("|") === "removed:Cy was removed",
+    linesSince(R.room, lines2).join("|"),
+  );
+
+  // In a race: the car goes, the race goes on.
+  const sim = new Sim(1);
+  const x = sim.add("Ann");
+  const y = sim.add("Bo");
+  const z = sim.add("Cy");
+  sim.startRace(x);
+  sim.run(30, () => ({ throttle: 1 }));
+  const ek = sim.room.kick(x, y.id, sim.now);
+  sim.run(2, () => ({ throttle: 1 }));
+  const snap = sim.conns.get(x.id)!.msgs.filter((m) => m.t === "snap").pop() as Extract<ServerMsg, { t: "snap" }>;
+  check(
+    "kick: in a race the car leaves the field and the race goes on",
+    ek === null && sim.room.phase === "racing" && snap.ents.filter((e) => e.k === "car").length === 2 && !!z.car,
+    `${ek}; ${sim.room.phase}; cars ${snap.ents.filter((e) => e.k === "car").length}`,
+  );
+
+  // The blocklist is capped (oldest forgotten first); the lines go through the comings budget.
+  const C = menuRooms(["Host"]);
+  const tokens: string[] = [];
+  let removedAll = true;
+  const lines3 = C.room.chatLines.length;
+  for (let i = 0; i < BLOCKLIST_MAX + 6; i++) {
+    const s = C.join(`P${i}`);
+    const p = s.player!;
+    tokens.push(p.token);
+    C.send(0, { t: "kick", id: p.id });
+    removedAll &&= !C.room.players.has(p.id) && s.conn.closed;
+  }
+  const removedLines = C.room.chatLines.slice(lines3).filter((l) => l.kind === "removed").length;
+  const firstBack = C.join("P0", tokens[0]);
+  const lastBack = C.join("Pn", tokens[tokens.length - 1]);
+  check(
+    `kick: the blocklist keeps the newest ${BLOCKLIST_MAX} tokens; every kick removes, but lines stop when the comings budget is spent`,
+    removedAll && C.room.blockedCount === BLOCKLIST_MAX && !!firstBack.player && errMsgs(lastBack.conn).pop()?.code === "kicked" && removedLines < BLOCKLIST_MAX && removedLines > 0, // join lines share the budget
+    `blocked ${C.room.blockedCount}, removed lines ${removedLines} of ${tokens.length} kicks`,
+  );
+}
+
+function menuLock(): void {
+  const R = menuRooms(["Ann", "Bo"]);
+  const [, b] = R.p;
+  R.send(0, { t: "lock", locked: true });
+  const seen = lastRoomMsg(R.s[1].conn)?.locked;
+  const nope = R.join("Dee");
+  const nopeErr = errMsgs(nope.conn).pop();
+  check(
+    "lock: everyone's room message says locked; a new join is refused (err code locked) and not added",
+    R.room.locked && seen === true && nopeErr?.code === "locked" && nopeErr.msg === "This room is locked" && !nope.room && R.room.players.size === 2,
+    JSON.stringify(nopeErr),
+  );
+  R.rooms.onClose(R.s[1], R.clock.now);
+  const back = R.join("Bo", b.token);
+  check("lock: a seat rejoin with its token still works", back.player === b && !!b.session && R.room.players.size === 2, `${back.player?.name}`);
+  const e0 = errsOf(R.s[0].conn).length;
+  R.send(0, { t: "lock", locked: "yes" as unknown as boolean });
+  check("lock: a non-boolean is refused", errsOf(R.s[0].conn).slice(e0).join() === "Bad lock request" && R.room.locked, errsOf(R.s[0].conn).slice(e0).join());
+  // A blocked token in a locked room hears "kicked", not "locked".
+  R.send(0, { t: "kick", id: b.id });
+  const bAgain = R.join("Bo", b.token);
+  check("lock: a removed player's token gets kicked, not locked", errMsgs(bAgain.conn).pop()?.code === "kicked");
+  R.send(0, { t: "lock", locked: false });
+  const now = R.join("Dee");
+  check("lock: unlocked, new players join again", !R.room.locked && !!now.player && lastRoomMsg(R.s[0].conn)?.locked === false);
+}
+
+function menuHandover(): void {
+  const R = menuRooms(["Ann", "Bo", "Cy"]);
+  const [a, b, c] = R.p;
+  R.send(1, { t: "ready", ready: true });
+  const wasReady = b.ready;
+  const lines0 = R.room.chatLines.length;
+  R.send(0, { t: "host", id: b.id });
+  const rm = lastRoomMsg(R.s[2].conn)!;
+  check(
+    "host: handed over to a connected player: hostId for everyone, their stale ready cleared, one chat line",
+    wasReady && R.room.hostId === b.id && rm.hostId === b.id && !b.ready && !a.ready && linesSince(R.room, lines0).join("|") === "host:Bo is now the host",
+    linesSince(R.room, lines0).join("|"),
+  );
+  const e0 = errsOf(R.s[0].conn).length;
+  R.send(0, { t: "host", id: a.id });
+  R.send(0, { t: "stop" });
+  check(
+    "host: the old host is a player now (host commands refused)",
+    errsOf(R.s[0].conn).slice(e0).join("|") === "Only the host can hand over the host|Only the host can stop the race" && R.room.hostId === b.id,
+    errsOf(R.s[0].conn).slice(e0).join("|"),
+  );
+  R.rooms.onClose(R.s[2], R.clock.now);
+  const e1 = errsOf(R.s[1].conn).length;
+  R.send(1, { t: "host", id: c.id });
+  R.send(1, { t: "host", id: b.id });
+  R.send(1, { t: "host", id: "nobody" });
+  check(
+    "host: refused for an offline player, yourself and an unknown id",
+    errsOf(R.s[1].conn).slice(e1).join("|") === "Cy is offline|You are already the host|That player is not in the room" && R.room.hostId === b.id,
+    errsOf(R.s[1].conn).slice(e1).join("|"),
+  );
+  // The new host starts and controls the race; handing over mid-race works.
+  R.send(0, { t: "ready", ready: true });
+  R.send(1, { t: "start" });
+  while (R.room.phase !== "racing") R.step(1);
+  R.send(1, { t: "host", id: a.id });
+  R.send(0, { t: "stop" });
+  check("host: the new host starts; handed back mid-race, that host can stop it", R.room.hostId === a.id && (R.room.phase as string) === "lobby", `${R.room.phase}`);
+  // A host flipping it in a loop: the lines are budgeted, the handovers all happen.
+  const R2 = menuRooms(["Ann", "Bo"]);
+  const lines1 = R2.room.chatLines.length;
+  for (let i = 0; i < 30; i++) R2.send(i % 2, { t: "host", id: R2.p[(i + 1) % 2].id });
+  const hostLines = R2.room.chatLines.slice(lines1).filter((l) => l.kind === "host").length;
+  check("host: handover lines go through the comings budget", R2.room.hostId === R2.p[0].id && hostLines < 30 && hostLines > 0, `${hostLines} lines for 30 handovers`);
+}
+
+function menuClient(): void {
+  const rooms = new Rooms(1);
+  const clock = { now: 1000 };
+  const A = wiredGame(rooms, clock);
+  const B = wiredGame(rooms, clock);
+  const C = wiredGame(rooms, clock);
+  const states = new Map<Game, string[]>();
+  for (const W of [A, B, C]) {
+    const list: string[] = [];
+    states.set(W.game, list);
+    W.game.on.connection = (st, r) => list.push(r ? `${st}:${r}` : st);
+  }
+  const flushAll = () => {
+    for (const W of [A, B, C]) W.flush();
+  };
+  A.game.create("Ann");
+  A.open();
+  A.flush();
+  const code = A.game.code;
+  B.game.join(code, "Bo");
+  B.open();
+  flushAll();
+  const room = rooms.rooms.get(code)!;
+  const bToken = (B.game as unknown as { tokens: TokenStoreLike }).tokens.get(code);
+  A.game.kick(B.game.you);
+  flushAll();
+  const bState = states.get(B.game)!;
+  const intent = (B.game as unknown as { intent: unknown }).intent;
+  check(
+    "client: kicked -> connection lost 'kicked', no reconnect, the stored token kept",
+    bState.join() === "connected,lost:kicked" && !B.game.connected && intent === null && (B.game as unknown as { tokens: TokenStoreLike }).tokens.get(code) === bToken && !!bToken,
+    bState.join(),
+  );
+  check(
+    "client: the menu screen says why (kicked, locked)",
+    lostMessage("kicked", true) === "You were removed from the room by the host." && lostMessage("locked", false) === "That room is locked: the host is not letting new drivers in.",
+  );
+  // main.ts leaves on "lost"; typing the code again sends the kept token: refused again, no loop.
+  B.game.leave();
+  B.game.join(code, "Bo");
+  B.open();
+  flushAll();
+  check("client: retyping the code with the kept token meets the block (lost 'kicked' again)", bState.join() === "connected,lost:kicked,lost:kicked" && !B.game.you && room.players.size === 1, bState.join());
+  A.game.setLocked(true);
+  flushAll();
+  C.game.join(code, "Cy");
+  C.open();
+  flushAll();
+  const cState = states.get(C.game)!;
+  check("client: Game.locked follows the room; a join to a locked room -> lost 'locked', no reconnect", A.game.locked && cState.join() === "lost:locked" && !C.game.you, cState.join());
+}
+
+interface TokenStoreLike {
+  get(code: string): string | null;
+}
+
+/**
+ * A restart over the wired client: the room message with the new raceStart drops the
+ * predicted car, the next snapshot seeds it on the grid, and reconciliation stays small (a
+ * car predicted from its old pose would show the teleport as a 100s-of-units error).
+ */
+function menuRestartClient(): void {
+  const realNow = performance.now.bind(performance);
+  const clock = { now: realNow() };
+  performance.now = () => clock.now;
+  try {
+    const rooms = new Rooms(1);
+    const H = wiredGame(rooms, clock);
+    const G = wiredGame(rooms, clock);
+    H.game.create("Host");
+    H.open();
+    H.flush();
+    G.game.join(H.game.code, "Guest");
+    G.open();
+    G.flush();
+    H.flush();
+    G.game.setReady(true);
+    G.flush();
+    H.game.start();
+    H.flush();
+    G.flush();
+    const room = rooms.rooms.get(H.game.code)!;
+    const drive = (n: number) => {
+      for (let i = 0; i < n; i++) {
+        clock.now += 1000 / 60;
+        rooms.step(clock.now);
+        for (const W of [H, G]) {
+          W.flush();
+          const on = W.game.raceOn();
+          W.game.step(on ? { throttle: 1, steer: 0, fire: false, mine: false } : NO_CONTROLS, 1000 / 60);
+        }
+      }
+    };
+    while (room.phase !== "racing") drive(1);
+    drive(150);
+    const moved = H.game.car ? Math.hypot(H.game.car.x - gridSlot(room.track, 0).x, H.game.car.y - gridSlot(room.track, 0).y) : 0;
+    const e0 = [H, G].map((W) => W.game.recErrors.length);
+    const start0 = H.game.raceStart;
+    H.game.restartRace();
+    for (const W of [H, G]) W.flush();
+    const dropped = [H, G].every((W) => W.game.car === null && W.game.pending.length === 0 && W.game.raceStart !== start0);
+    drive(4);
+    const order = room.gridOrder();
+    const seeded = [H, G].every((W) => {
+      const slot = gridSlot(room.track, order.findIndex((p) => p.id === W.game.you));
+      return !!W.game.car && Math.hypot(W.game.car.x - slot.x, W.game.car.y - slot.y) < 1;
+    });
+    while (room.phase !== "racing") drive(1);
+    drive(150);
+    const errs = [H, G].flatMap((W, i) => W.game.recErrors.slice(e0[i]));
+    const max = Math.max(0, ...errs);
+    check(
+      "restart client: the new raceStart drops the predicted car, the next snapshot seeds it on the grid, reconciliation stays small (max <= 50)",
+      moved > 200 && dropped && seeded && errs.length > 200 && max <= 50 && room.phase === "racing",
+      `drove ${moved.toFixed(0)} before; ${errs.length} samples after, max ${max.toFixed(2)}`,
+    );
+    // Stop: the lobby for both, the cars gone.
+    H.game.stopRace();
+    for (const W of [H, G]) W.flush();
+    drive(4);
+    check("stop client: both back in the lobby, no own car", [H, G].every((W) => W.game.phase === "lobby" && !W.game.car && W.game.raceStart === 0));
+  } finally {
+    performance.now = realNow;
+  }
+}
+
+for (const t of [rivets, gating, mines, wrecks, finishing, garage, armDelay, engine, readyCheck, collisions, trackFeatures, roomTrack, jumpsWired, shippedTracks, botDriver, botLaps, mineCap, chatRoom, chatClient, sound, raceSounds, surfaceSounds, audioUnlock, menuHostOnly, menuStop, menuRestart, menuKick, menuLock, menuHandover, menuClient, menuRestartClient]) {
   console.log(`\n# ${t.name}`);
   try {
     t();
