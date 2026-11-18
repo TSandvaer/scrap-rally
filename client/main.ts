@@ -250,10 +250,8 @@ game.on.welcome = () => {
   setRoomInUrl(game.code);
   updatePanels();
 };
-game.on.room = () => {
-  noteRetirements();
-  updatePanels();
-};
+game.on.room = () => updatePanels();
+game.on.retired = (p) => toast(`${p.name} retired from the race`);
 game.on.results = () => updatePanels();
 game.on.garage = () => renderGarage();
 game.on.chat = (line) => chat.add(line);
@@ -307,16 +305,6 @@ function setRoomInUrl(code: string): void {
 }
 
 // ---- panels -----------------------------------------------------------------------
-
-// Players already seen retired in this race: another player retiring gets one toast.
-let retiredSeen = new Set<string>();
-function noteRetirements(): void {
-  const now = new Set(game.players.filter((p) => p.retired).map((p) => p.id));
-  for (const p of game.players) {
-    if (now.has(p.id) && !retiredSeen.has(p.id) && p.id !== game.you) toast(`${p.name} retired from the race`);
-  }
-  retiredSeen = now;
-}
 
 /**
  * The lobby panel (room, garage, docked chat): in the lobby, and for a player who retired from

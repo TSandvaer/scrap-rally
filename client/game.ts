@@ -168,6 +168,11 @@ export interface GameHandlers {
   /** tick: the server tick the event happened in (snapshots carry theirs: snapTick). */
   event(ev: GameEvent, tick: number): void;
   results(rows: ResultRow[]): void;
+  /**
+   * Another player retired from the race, seen live: not for players already retired in the
+   * first room message after a welcome (a join or a rejoin mid-race).
+   */
+  retired(p: PlayerInfo): void;
   /** A live chat line (already in game.chat). */
   chat(line: ChatLine): void;
   /** game.chat was replaced (the room's history after a welcome) or cleared. */
@@ -201,6 +206,8 @@ export class Game {
   /** Room chat, oldest first: replaced by every chatlog, cleared on leave and in a new room. */
   chat: ChatLine[] = [];
   private chatCode = ""; // the room `chat` belongs to
+  // Players seen retired in the last room message; null until the first one after a welcome.
+  private retiredSeen: Set<string> | null = null;
 
   // Garage (server-confirmed only: never updated optimistically)
   scrap = 0;
@@ -348,6 +355,7 @@ export class Game {
     this.forceStartAt = 0;
     this.locked = false;
     this.results = null;
+    this.retiredSeen = null;
     this.resetOwnCar();
     this.snaps = [];
     this.latest = null;
@@ -480,6 +488,7 @@ export class Game {
         this.seq = 0;
         this.lastAck = -1;
         this.resetOwnCar();
+        this.retiredSeen = null; // whoever is retired already is not news
         this.intent = this.joinMsg();
         this.on.connection?.("connected");
         this.on.welcome?.();
@@ -500,7 +509,11 @@ export class Game {
         this.useTrack(msg.trackId);
         this.players = msg.players;
         if (msg.phase !== "results") this.results = null;
+        const retired = new Set(msg.players.filter((p) => p.retired).map((p) => p.id));
+        const seen = this.retiredSeen;
+        this.retiredSeen = retired;
         this.on.room?.();
+        if (seen) for (const p of msg.players) if (retired.has(p.id) && !seen.has(p.id) && p.id !== this.you) this.on.retired?.(p);
         return;
       case "garage":
         this.scrap = msg.scrap;

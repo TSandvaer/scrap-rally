@@ -183,7 +183,7 @@ export class GameMenu {
       list.append(
         button("Retire to garage", "retire", () =>
           this.ask({
-            text: "Retire from this race? Your car leaves the track and you are out of this race (DNF; any wreck bonus is still paid). You go to the garage to shop and chat while the others finish, and you race again next time.",
+            text: "Retire from this race? Your car leaves the track and you are out of this race (DNF: no place money; a wreck bonus is paid if the race finishes). You go to the garage to shop and chat while the others finish, and you race again next time.",
             label: "Retire",
             run: () => g.retire(),
             applies: () => g.canRetire(),
