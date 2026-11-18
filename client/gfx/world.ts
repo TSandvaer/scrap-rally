@@ -32,6 +32,7 @@
 // - The pool is module-level and keyed by track: it survives a new Renderer, and two
 //   Renderers on one canvas share it.
 
+import { MAX_PLAYERS } from "../../shared/protocol";
 import { gapAt, gridSlot, holeAt, pointAt, queryTrack, type Track, type Vec } from "../../shared/track";
 import type { CarView } from "../render";
 import { BAYER4, LIT, P, PALETTE, palette32, SHADE, type PaletteName } from "./palette";
@@ -439,7 +440,7 @@ function buildArt(track: Track, key: number): Art {
   ]);
 
   // Grid slots: a worn bracket round each car's nose.
-  for (let slot = 0; slot < 6; slot++) {
+  for (let slot = 0; slot < MAX_PLAYERS; slot++) {
     const g = gridSlot(track, slot);
     const f: Frame = { x: g.x * ZOOM, y: g.y * ZOOM, cos: Math.cos(g.h), sin: Math.sin(g.h) };
     for (const [u0, u1, v0, v1] of [[20, 22.5, -14, 14], [8, 20, -14, -11.5], [8, 20, 11.5, 14]]) {
