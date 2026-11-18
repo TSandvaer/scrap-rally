@@ -105,7 +105,9 @@ snd2 workspace and the snd2-taste copy removed. SOUND COMPLETE LOCALLY (SND-1 + 
 live 19d759b: the sound is not pushed or deployed; ask the user.
 PUSHED 2026-11-18 (user): origin/main = a41b49b (sound). Waiting for the user's Manual Deploy; then a muted QA worker on the live site.
 DEPLOYED 2026-11-18 (user started the deploy; live bundle index-CjYhpY-u.js contains "Rust Bucket" + AudioContext). Muted QA
-worker ctx_7d867674fde1 (spec tmp/spec-qa-live-4.md) on SND-1 + SND-2. Still pending: remove m3-t4 workspace once the
+worker ctx_7d867674fde1 (spec tmp/spec-qa-live-4.md) on SND-1 + SND-2.
+ESC MENU (plan PLAN-MENU.md approved 2026-11-18): MENU-1 123jpnbf9pg in flight, ctx_2196bb24b636 (~/orca/workspaces/scrap-rally/menu1,
+TSandvaer/menu1, :3006; taste gate via a frozen copy). Queued: MENU-2 123jpnbf9ph (retire), then MENU-3 123jpnbf9pj (pause). Still pending: remove m3-t4 workspace once the
 user stops :3001 (PID 16470).
 
 **Resume (2026-11-16):** main 0dec6c9 (local, 15 ahead of origin) = ready check + engine
@@ -153,6 +155,7 @@ Manual Deploy only on the user's go-ahead. The user's own dev server runs on :30
 
 | Ticket | Dispatch | Workspace | Branch | Port | Started |
 | --- | --- | --- | --- | --- | --- |
+| 123jpnbf9pg MENU-1 | ctx_2196bb24b636 | ~/orca/workspaces/scrap-rally/menu1 | TSandvaer/menu1 | 3006 | 2026-11-18 |
 
 ## Queued (milestone 3, PLAN-M3.md; start after solid collisions 123jpnbf6cy and easier-start 123jpnbf3xa merge)
 
