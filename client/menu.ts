@@ -1,6 +1,6 @@
 // The in-game menu (PLAN-MENU.md, MENU-1): Esc opens and closes it in a room, in any phase.
 // Everyone: Resume, Sound, Controls, Copy invite link, Retire to garage (racing with a car on
-// the field, MENU-2), Leave room. The host also gets Stop and
+// the field, MENU-2), Leave room. The host also gets Pause / Resume race (MENU-3), Stop and
 // Restart race (countdown and race only), Lock / Unlock room, and the players list with Make
 // host and Remove. A modal over the whole stage; while it is open the frame loop drives with
 // NO_CONTROLS (client/main.ts), so the race keeps running and the own car coasts. The main
@@ -138,11 +138,18 @@ export class GameMenu {
     }
     setText(this.sub, `Room ${g.code}${g.locked ? " · locked" : ""}`);
     const racing = g.phase === "countdown" || g.phase === "racing";
+    const by = g.pausedBy || "the host";
     const noteText = !racing
       ? ""
-      : g.ownSnap()
-        ? "The race keeps running while this menu is open: your car coasts."
-        : "The race keeps running while this menu is open.";
+      : g.paused
+        ? g.resumeAt
+          ? "The race resumes after the 3-2-1."
+          : g.isHost()
+            ? `The race is paused for everyone (by ${by}). Resume race starts a 3-2-1 for everyone; it resumes by itself after 2 minutes.`
+            : `The race is paused by ${by}. The host resumes it (it resumes by itself after 2 minutes).`
+        : g.ownSnap()
+          ? "The race keeps running while this menu is open: your car coasts."
+          : "The race keeps running while this menu is open.";
     setText(this.note, noteText);
     this.note.classList.toggle("hidden", !noteText);
     if (this.built === this.view && (this.view === "sound" || this.view === "controls")) return;
@@ -215,6 +222,22 @@ export class GameMenu {
     const racing = () => g.isHost() && (g.phase === "countdown" || g.phase === "racing");
     if (racing()) {
       const row = el("div", "gm-row");
+      // Pause and Resume share the slot; both close the menu, so the banner and the 3-2-1 show.
+      if (g.paused) {
+        const resume = button(g.resumeAt ? "Resuming…" : "Resume race", "pause", () => {
+          g.resume();
+          this.close();
+        }, g.resumeAt ? "" : "primary");
+        resume.disabled = !g.canResume();
+        row.append(resume);
+      } else {
+        row.append(
+          button("Pause race", "pause", () => {
+            g.pause();
+            this.close();
+          }),
+        );
+      }
       row.append(
         button("Stop race", "stop", () =>
           this.ask({

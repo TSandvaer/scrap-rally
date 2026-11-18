@@ -1,7 +1,7 @@
 // Browser entry: menu / lobby / results panels, HUD text, camera and the fixed-step loop.
 
 import { pointAt } from "../shared/track";
-import type { GameEvent, ResultRow } from "../shared/protocol";
+import { PAUSE_MAX_MS, type GameEvent, type ResultRow } from "../shared/protocol";
 import { AMMO, AMMO_IDS, priceOf, UPGRADE_IDS, UPGRADES, type ItemId, type Wallet } from "../shared/shop";
 import { trackList, trackName } from "../shared/tracks";
 import { BotDriver } from "../scripts/bot-ai";
@@ -369,7 +369,8 @@ function renderLobbyButtons(): void {
     // Retired from the running race: the garage only, no start or ready until the next lobby.
     for (const b of [ui.start, ui.startAnyway, ui.ready]) show(b, false);
     show(ui.wait, true);
-    setText(ui.wait, "You retired — you're in the next race. Shop and chat while the others finish.");
+    const paused = game.paused ? ` The race is paused by ${game.pausedBy || "the host"}.` : "";
+    setText(ui.wait, `You retired — you're in the next race. Shop and chat while the others finish.${paused}`);
     return;
   }
   const host = game.isHost();
@@ -505,7 +506,8 @@ function median(xs: number[]): number {
 function hudView(): HudView | null {
   if (!game.you) return null;
   const hud: HudView = { topLeft: [], time: "", notice: "", center: "", centerSub: "", banner: "", corner: "", debug: [], hp: null };
-  const now = game.serverNow();
+  // Race time (clock, countdown, GO!, weapons armed, race closes): stands still while paused.
+  const now = game.raceNow();
   const standings = game.standings();
   const mine = game.latest?.cars.get(game.you);
   const racePhase = game.phase === "countdown" || game.phase === "racing" || game.phase === "results";
@@ -521,24 +523,30 @@ function hudView(): HudView | null {
     hud.time = formatTime(mine?.fin || Math.max(0, now - game.raceStart));
   }
   const armsIn = game.armsInMs();
-  if (mine && !mine.fin && game.raceOn() && armsIn > 0) {
+  if (mine && !mine.fin && game.raceOnAt(now) && armsIn > 0) {
     hud.notice = `WEAPONS ARMED IN ${Math.ceil(armsIn / 1000)}`;
   }
   if (game.phase === "countdown") {
     const left = game.phaseEnds - now;
     hud.center = left > 0 ? String(Math.ceil(left / 1000)) : "GO!";
     hud.centerSub = mine ? "" : "Spectating";
-  } else if (game.phase === "racing" && now - game.raceStart < 900 && mine) {
-    hud.center = "GO!";
+  } else if (game.phase === "racing" && mine && (now - game.raceStart < 900 || (game.resumeGo > 0 && now >= game.resumeGo && now - game.resumeGo < 900))) {
+    hud.center = "GO!"; // the start, and the end of a pause's 3-2-1
   }
   if (flash.text && performance.now() < flash.until) {
     hud.centerSub = flash.text;
     if (!hud.center) hud.center = " ";
   }
+  const pause = pauseView();
+  if (pause) {
+    hud.center = pause.center;
+    hud.centerSub = pause.sub;
+  }
 
   if (connState === "reconnecting") {
     hud.banner = restartNotice ? "Server restarting — reconnecting…" : "Connection lost — reconnecting…";
-  } else if (game.car && game.car.wreck > 0) hud.banner = `WRECKED — back on track in ${(game.car.wreck / 60).toFixed(1)}s`;
+  } else if (pause) hud.banner = pause.banner;
+  else if (game.car && game.car.wreck > 0) hud.banner = `WRECKED — back on track in ${(game.car.wreck / 60).toFixed(1)}s`;
   else if (!mine && (game.phase === "countdown" || game.phase === "racing")) {
     // Retired: the garage panel says it (the strip would sit under the panel's bottom edge).
     hud.banner = game.retired() ? "" : "Race in progress — you're in the next one";
@@ -561,6 +569,28 @@ function hudView(): HudView | null {
     ];
   }
   return hud;
+}
+
+/**
+ * The pause on the canvas (everyone: racers, spectators): "PAUSED" by whom, then the resume
+ * 3-2-1 (GO! once it is over and the room message ending the pause is on its way). The banner
+ * says how it goes on: the host resumes from the menu, else it resumes by itself.
+ */
+function pauseView(): { center: string; sub: string; banner: string } | null {
+  if (!game.paused) return null;
+  const now = game.serverNow();
+  if (game.resumeAt) {
+    const left = game.resumeAt - now;
+    return { center: left > 0 ? String(Math.ceil(left / 1000)) : "GO!", sub: "Get ready", banner: "Race resuming" };
+  }
+  const by = game.pausedBy || "the host";
+  const auto = Math.max(0, Math.ceil((game.pausedAt + PAUSE_MAX_MS - now) / 1000));
+  const autoText = `${Math.floor(auto / 60)}:${String(auto % 60).padStart(2, "0")}`;
+  return {
+    center: "PAUSED",
+    sub: `by ${by}`,
+    banner: game.isHost() ? `Race paused — Esc, then Resume race (resumes by itself in ${autoText})` : `Race paused by ${by} — resumes by itself in ${autoText}`,
+  };
 }
 
 // ---- loop -------------------------------------------------------------------------
