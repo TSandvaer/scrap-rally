@@ -43,12 +43,19 @@
               <select id="track-select" class="hidden" aria-label="Track"></select>
               <span id="track-name" class="track-name"></span>
             </div>
+            <!-- The room's song (SND-4, client/main.ts renderSongPick): the host picks it, everyone hears it. -->
+            <div class="track-pick song-pick">
+              <span class="label">Music</span>
+              <select id="song-select" class="hidden" aria-label="Song"></select>
+              <span id="song-name" class="track-name"></span>
+            </div>
             <button id="start" class="btn primary">Start race</button>
             <button id="start-anyway" class="btn hidden">Start anyway</button>
             <button id="ready" class="btn primary hidden">I'm ready</button>
             <p id="lobby-wait" class="muted">Waiting for the host to start…</p>
             <!-- This browser's music (client/audio.ts SoundControls): the same setting as the
-                 speaker popover's and the Esc menu's Music slider; effects stay on. -->
+                 speaker popover's and the Esc menu's Music slider; effects stay on. "host's":
+                 it follows the host's room sound until moved (SND-4). -->
             <div class="lobby-music" role="group" aria-label="Music">
               <span id="lobby-music-label" class="label">Music</span>
               <button
@@ -62,8 +69,10 @@
                 On
               </button>
               <input id="lobby-music-vol" type="range" min="0" max="100" step="5" aria-label="Music volume" />
+              <span id="lobby-music-tag" class="room-tag hidden"></span>
             </div>
             <p id="lobby-music-muted" class="muted fine hidden">All sound is muted (M unmutes).</p>
+            <button id="lobby-sound-reset" type="button" class="btn link small hidden"></button>
             <button id="leave" class="btn link small">Leave room</button>
           </div>
           <div class="garage">
@@ -137,12 +146,15 @@
           <div class="vol">
             <span id="vol-music-label">Music</span>
             <input id="vol-music" type="range" min="0" max="100" step="5" aria-labelledby="vol-music-label" />
+            <span id="vol-music-tag" class="room-tag hidden"></span>
           </div>
           <div class="vol">
             <span id="vol-effects-label">Effects</span>
             <input id="vol-effects" type="range" min="0" max="100" step="5" aria-labelledby="vol-effects-label" />
+            <span id="vol-effects-tag" class="room-tag hidden"></span>
           </div>
           <button id="sound-mute" type="button" class="btn small" aria-pressed="false">Mute (M)</button>
+          <button id="sound-reset" type="button" class="btn link small hidden"></button>
         </div>
       </div>
 

@@ -524,7 +524,7 @@ h2 {
 /* Lobby Music row (client/audio.ts SoundControls): on/off switch + volume, like the track row. */
 .lobby-music {
   display: grid;
-  grid-template-columns: auto auto minmax(0, 1fr);
+  grid-template-columns: auto auto minmax(0, 1fr) auto;
   align-items: center;
   gap: 10px;
   min-height: 42px;
@@ -574,6 +574,50 @@ h2 {
   .music-switch {
     min-height: 44px;
   }
+}
+
+/* With Random the host sees the song playing beside the pick. */
+.track-name.song-now {
+  flex: none;
+  max-width: 45%;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--muted-solid);
+}
+
+/* SND-4: a setting that follows the host's room sound until the player moves it. */
+.room-tag {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  white-space: nowrap;
+  color: var(--muted-solid);
+  border: 1px solid var(--line);
+  padding: 1px 5px;
+}
+
+.lobby-room > #lobby-sound-reset {
+  align-self: flex-start;
+  margin-top: -6px;
+}
+
+/* The host's "Room sound (for everyone)" block in the Esc menu's Sound view. */
+.gm-room-sound {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 10px;
+  border-top: 2px dashed var(--line);
+}
+
+.gm-room-sound .label {
+  text-align: left;
+}
+
+.gm-room-sound .music-switch {
+  min-width: 0;
+  padding: 3px 8px;
+  font-size: 11px;
 }
 
 /* ---- room chat (client/chat.ts) ---------------------------------------------------- */
@@ -894,7 +938,7 @@ h2 {
 
 .sound-pop .vol {
   display: grid;
-  grid-template-columns: 60px 1fr;
+  grid-template-columns: 52px 1fr auto;
   align-items: center;
   gap: 8px;
 }
@@ -1041,15 +1085,17 @@ h2 {
   line-height: 1.4;
 }
 
-.gm-sound .vol {
+.gm-sound .vol,
+.gm-room-sound .vol {
   display: grid;
-  grid-template-columns: 70px 1fr;
+  grid-template-columns: 70px 1fr auto;
   align-items: center;
   gap: 8px;
   font-size: 13px;
 }
 
-.gm-sound input[type="range"] {
+.gm-sound input[type="range"],
+.gm-room-sound input[type="range"] {
   width: 100%;
   margin: 0;
   padding: 0;

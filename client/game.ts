@@ -21,6 +21,7 @@ import {
   type ShotSnap,
 } from "../shared/protocol";
 import { statsFor, type Levels } from "../shared/shop";
+import { BUILTIN_SOUND, DEFAULT_SONG_ID, isSongChoice, type RoomSound } from "../shared/sound";
 import { queryTrackNear, type Track } from "../shared/track";
 import { DEFAULT_TRACK_ID, findTrack, trackById } from "../shared/tracks";
 import {
@@ -199,6 +200,13 @@ export class Game {
   forceStartAt = 0; // server time from which the host may "Start anyway", 0 outside the lobby
   trackId = DEFAULT_TRACK_ID; // the room's track (room message); the default outside a room
   locked = false; // the host locked the room (no new players)
+  /**
+   * The host's sound defaults (room message, SND-4): the base of this player's sound for the
+   * settings they have not moved (client/audio.ts). song: the id everyone plays (the host's
+   * choice, a "random" one already picked by the server). The built-in ones outside a room.
+   */
+  soundDefaults: RoomSound = { ...BUILTIN_SOUND };
+  song: string = DEFAULT_SONG_ID;
   // The host's pause (room message, MENU-3). While paused nothing is predicted or sent, and the
   // race-time view (raceNow) stands at pausedAt. resumeAt: the end of the resume 3-2-1, 0 = none.
   paused = false;
@@ -346,6 +354,11 @@ export class Game {
     this.send({ t: "lock", locked });
   }
 
+  /** Host only, any phase: change the room's sound defaults (only the keys given; song: an id or "random"). */
+  setSoundDefaults(patch: Partial<RoomSound>): void {
+    this.send({ t: "soundDefaults", ...patch });
+  }
+
   /** Say something in the room chat. The server cleans it; it comes back as a chat line. */
   say(text: string): void {
     const t = [...text.trim()].slice(0, CHAT_MAX).join("");
@@ -377,6 +390,8 @@ export class Game {
     this.raceStart = 0;
     this.forceStartAt = 0;
     this.locked = false;
+    this.soundDefaults = { ...BUILTIN_SOUND };
+    this.song = DEFAULT_SONG_ID;
     this.clearPause();
     this.resumeGo = 0;
     this.results = null;
@@ -386,6 +401,19 @@ export class Game {
     this.latest = null;
     this.useTrack(DEFAULT_TRACK_ID);
     this.setChat([], "");
+  }
+
+  /** The room message's sound; missing or broken parts (an older server) keep the built-in defaults. */
+  private useSound(d: RoomSound | undefined, song: string | undefined): void {
+    const b = BUILTIN_SOUND;
+    const vol = (v: unknown, f: number) => (typeof v === "number" && v >= 0 && v <= 1 ? v : f);
+    this.soundDefaults = {
+      musicOn: typeof d?.musicOn === "boolean" ? d.musicOn : b.musicOn,
+      music: vol(d?.music, b.music),
+      effects: vol(d?.effects, b.effects),
+      song: isSongChoice(d?.song) ? d.song : b.song,
+    };
+    this.song = typeof song === "string" && song ? song : DEFAULT_SONG_ID;
   }
 
   private clearPause(): void {
@@ -556,6 +584,7 @@ export class Game {
         this.raceStart = msg.raceStart;
         this.forceStartAt = msg.forceStartAt;
         this.locked = msg.locked === true;
+        this.useSound(msg.soundDefaults, msg.song);
         this.useTrack(msg.trackId);
         this.players = msg.players;
         if (msg.phase !== "results") this.results = null;

@@ -228,6 +228,7 @@ export function mountSoundBoard(audio: AudioEngine, music: MusicPlayer): SoundBo
   });
 
   el("h4", "Volume");
+  const grip = new SliderGrip<HTMLInputElement>();
   const slider = (label: string, key: "music" | "effects") => {
     // A div, not a <label>: a click on the text would focus the slider and hold the driving keys.
     const l = el("div");
@@ -239,9 +240,18 @@ export function mountSoundBoard(audio: AudioEngine, music: MusicPlayer): SoundBo
     r.max = "100";
     r.step = "5";
     r.setAttribute("aria-label", label);
-    r.addEventListener("input", () => audio.set({ [key]: Number(r.value) / 100 }));
-    r.addEventListener("change", () => r.blur());
-    r.addEventListener("pointerup", () => r.blur());
+    // As the game's sliders (client/audio.ts SoundControls): Music shows the heard volume, above
+    // 0 turns the music on, 0 is off (AudioEngine.slideMusic); a slider being dragged is left
+    // alone (SliderGrip: until change, blur or pointerup).
+    grip.watch(r, () => {
+      if (key === "music") audio.slideEnd();
+      r.blur();
+    });
+    r.addEventListener("input", () => {
+      const v = Number(r.value) / 100;
+      if (key === "music") audio.slideMusic(v);
+      else audio.set({ effects: v });
+    });
     return r;
   };
   const vMusic = slider("Music", "music");
@@ -277,8 +287,8 @@ export function mountSoundBoard(audio: AudioEngine, music: MusicPlayer): SoundBo
 
   const render = () => {
     const s = audio.settings;
-    if (document.activeElement !== vMusic) vMusic.value = String(Math.round(s.music * 100));
-    if (document.activeElement !== vEffects) vEffects.value = String(Math.round(s.effects * 100));
+    if (!grip.holds(vMusic)) vMusic.value = String(Math.round(musicHeard(s) * 100));
+    if (!grip.holds(vEffects)) vEffects.value = String(Math.round(s.effects * 100));
     mute.textContent = s.muted ? "Unmute" : "Mute";
     for (const b of modeButtons) b.classList.toggle("on", b.dataset.mode === String(music.forced));
     for (const b of pickButtons) {
@@ -336,7 +346,9 @@ import {
   engineTarget,
   gravelTarget,
   impactSound,
+  musicHeard,
   OTHER_GAIN,
+  SliderGrip,
   panFor,
   SFX_KINDS,
   WALL_CRASH_SPEED,
@@ -598,7 +610,7 @@ export function mountEffects(board: SoundBoard, audio: AudioEngine): void {
     });
   }
   const pick = ENGINE_PRESETS.map((p) => {
-    const b = board.addButton("Engine: use in game", ENGINES[p].label, () => audio.set({ engine: p }));
+    const b = board.addButton("Engine: use in game", ENGINES[p].label, () => audio.setEngine(p));
     b.dataset.engine = p;
     return b;
   });

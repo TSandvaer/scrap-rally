@@ -7,7 +7,25 @@
 // only while `engine.running()` (nothing before the unlock, nothing while hidden).
 
 import { VIEW_W } from "./render";
-import { clampVolume, DEFAULT_SOUND, isMuteKey, parseSoundSettings, type SoundSettings } from "./soundlogic";
+import {
+  clampVolume,
+  effectiveSound,
+  ENGINE_PRESETS,
+  isMuteKey,
+  musicHeard,
+  musicIsOn,
+  musicSlid,
+  musicSwitched,
+  parseStoredSound,
+  SliderGrip,
+  ROOM_KEYS,
+  storedSoundJson,
+  type EnginePreset,
+  type OwnSettings,
+  type RoomBase,
+  type RoomKey,
+  type SoundSettings,
+} from "./soundlogic";
 
 const STORE_KEY = "scrap-rally:sound";
 const GAIN_SMOOTH_S = 0.02; // volume and mute changes glide instead of clicking
@@ -38,11 +56,12 @@ export function buildBuses(ctx: BaseAudioContext, s: Volumes, dest: AudioNode = 
   return buses;
 }
 
-type Volumes = Pick<SoundSettings, "music" | "effects" | "muted">;
+/** musicOn absent = on (offline renders pass a plain volume). */
+type Volumes = Pick<SoundSettings, "music" | "effects" | "muted"> & { musicOn?: boolean };
 
 function applyGains(b: Buses, s: Volumes, now: number, instant = false): void {
   const set = (p: AudioParam, v: number) => (instant ? (p.value = v) : p.setTargetAtTime(v, now, GAIN_SMOOTH_S));
-  set(b.music.gain, s.music);
+  set(b.music.gain, musicHeard({ musicOn: s.musicOn !== false, music: s.music }));
   set(b.sfx.gain, s.effects);
   set(b.master.gain, s.muted ? 0 : 1);
 }
@@ -61,34 +80,7 @@ export function makeNoise(ctx: BaseAudioContext, seconds = 1): AudioBuffer {
   return buf;
 }
 
-// ---- the Music switch (SND-3) -----------------------------------------------------------
-
-/**
- * Music on/off is the music volume: off is 0, so the popover's and the Esc menu's Music
- * sliders show it too (0) and stay in step with no flag of their own. Switching off remembers
- * the volume; switching on brings it back, or the default when nothing is remembered (the
- * slider was dragged down to 0). Moving any Music slider above 0 turns the music on. The
- * master mute (M) is separate: it silences everything and leaves the music volume alone.
- */
-export function musicIsOn(s: Pick<SoundSettings, "music">): boolean {
-  return s.music > 0;
-}
-
-/** The Music switch pressed: the new music volume and the volume to remember for "on". */
-export function musicSwitched(music: number, remembered: number): { music: number; remembered: number } {
-  if (music > 0) return { music: 0, remembered: music };
-  return { music: remembered > 0 ? remembered : DEFAULT_SOUND.music, remembered };
-}
-
-/** The remembered "on" volume from the stored settings JSON (key musicBack); 0 = none. */
-export function parseMusicBack(raw: string | null): number {
-  try {
-    const v: unknown = raw ? JSON.parse(raw) : null;
-    return clampVolume(v && typeof v === "object" ? (v as Record<string, unknown>).musicBack : 0, 0);
-  } catch {
-    return 0;
-  }
-}
+// ---- settings: own and the room's (SND-4) ---------------------------------------------
 
 function loadStored(): string | null {
   try {
@@ -98,18 +90,9 @@ function loadStored(): string | null {
   }
 }
 
-function loadSettings(raw: string | null): SoundSettings {
+function saveStored(json: string): void {
   try {
-    return parseSoundSettings(raw);
-  } catch {
-    return { ...DEFAULT_SOUND };
-  }
-}
-
-/** The settings and, beside them in the same entry, the Music switch's remembered volume. */
-function saveSettings(s: SoundSettings, musicBack: number): void {
-  try {
-    localStorage.setItem(STORE_KEY, JSON.stringify({ ...s, musicBack }));
+    localStorage.setItem(STORE_KEY, json);
   } catch {
     /* private mode: the settings last until the reload */
   }
@@ -121,16 +104,31 @@ export class AudioEngine {
   ctx: AudioContext | null = null; // created on the first gesture
   buses: Buses | null = null;
   noise: AudioBuffer | null = null;
+  /**
+   * The effective settings, what is heard (client/soundlogic.ts effectiveSound): each room key
+   * the player's own if they moved it, else the room's (the host's), outside a room the
+   * built-in default; mute and the engine always the player's own. Read-only for callers.
+   */
   settings: SoundSettings;
-  musicBack: number; // the volume the Music switch turns back on to (0: none, the default)
+  /** The room keys this player moved (kept in every room and across reloads). */
+  own: OwnSettings;
+  /** The room's sound defaults (game.soundDefaults in a room), or null outside a room. */
+  room: RoomBase | null = null;
+  /** This player is the room's host (their controls say "room" where the others say "host's"). */
+  roomHost = false;
+  private muted: boolean;
+  private enginePreset: EnginePreset;
+  private slideStart: { music: number | undefined } | null = null; // a Music slider gesture under way
   private armed = false;
   private readonly listeners = new Set<() => void>();
   private readonly unlock = () => this.tryUnlock();
 
   constructor() {
-    const raw = loadStored();
-    this.settings = loadSettings(raw);
-    this.musicBack = parseMusicBack(raw);
+    const st = parseStoredSound(loadStored());
+    this.own = st.own;
+    this.muted = st.muted;
+    this.enginePreset = st.engine;
+    this.settings = this.effective();
   }
 
   /** Listen for a gesture that may start audio and for the tab being hidden. */
@@ -156,22 +154,96 @@ export class AudioEngine {
     return this.ctx?.state === "running" && !document.hidden;
   }
 
+  /**
+   * The player changed settings: each room key given (musicOn, music, effects) becomes their
+   * own; muted and engine are always theirs. Only the keys given are touched and saved.
+   */
   set(patch: Partial<SoundSettings>): void {
-    this.settings = parseSoundSettings(JSON.stringify({ ...this.settings, ...patch }));
-    saveSettings(this.settings, this.musicBack);
-    if (this.buses && this.ctx) applyGains(this.buses, this.settings, this.ctx.currentTime);
-    this.changed();
+    this.slideStart = null;
+    for (const k of ROOM_KEYS) {
+      const v = patch[k];
+      if (k === "musicOn" ? typeof v === "boolean" : typeof v === "number" && Number.isFinite(v)) {
+        (this.own as Record<RoomKey, unknown>)[k] = k === "musicOn" ? v : clampVolume(v, 0);
+      }
+    }
+    if (typeof patch.muted === "boolean") this.muted = patch.muted;
+    if (patch.engine && ENGINE_PRESETS.includes(patch.engine)) this.enginePreset = patch.engine;
+    this.update(true);
   }
 
+  /** The master mute (M): the player's own, never a room key. */
   toggleMute(): void {
-    this.set({ muted: !this.settings.muted });
+    this.set({ muted: !this.muted });
+  }
+
+  /** The race engine sound (the sound board): the player's own, never a room key. */
+  setEngine(p: EnginePreset): void {
+    this.set({ engine: p });
   }
 
   /** Music on/off (musicSwitched): only the music; effects and the master mute stay as they are. */
   toggleMusic(): void {
-    const next = musicSwitched(this.settings.music, this.musicBack);
-    this.musicBack = next.remembered;
-    this.set({ music: next.music });
+    this.set(musicSwitched(this.settings));
+  }
+
+  /**
+   * A Music slider moved (input events, v 0..1): above 0 the volume is the player's (and the
+   * music on); 0 is the switch's off, with the volume as it was before this drag. slideEnd()
+   * (the slider's change) ends the gesture.
+   */
+  slideMusic(v: number): void {
+    if (!Number.isFinite(v)) return;
+    const start = (this.slideStart ??= { music: this.own.music });
+    const r = musicSlid(clampVolume(v, 0), this.settings, start.music);
+    if (r.musicOn !== undefined) this.own.musicOn = r.musicOn;
+    if (r.music === undefined) delete this.own.music;
+    else this.own.music = r.music;
+    this.update(true);
+  }
+
+  slideEnd(): void {
+    this.slideStart = null;
+  }
+
+  /** "Use host's sound": the room keys follow the room again; mute and the engine stay. */
+  useRoomSound(): void {
+    this.slideStart = null;
+    this.own = {};
+    this.update(true);
+  }
+
+  /** The player moved any room key. */
+  hasOwn(): boolean {
+    return ROOM_KEYS.some((k) => this.own[k] !== undefined);
+  }
+
+  /** This room key follows the room (the player has not moved it). */
+  follows(k: RoomKey): boolean {
+    return this.own[k] === undefined;
+  }
+
+  /**
+   * The room's sound defaults (null outside a room) and whether this player is its host;
+   * polled every frame (soundFrame), so it only acts on a change.
+   */
+  setRoom(room: RoomBase | null, host = false): void {
+    const r = this.room;
+    const same = room === null ? r === null : r !== null && r.musicOn === room.musicOn && r.music === room.music && r.effects === room.effects;
+    if (same && host === this.roomHost) return;
+    this.room = room && { musicOn: room.musicOn, music: room.music, effects: room.effects };
+    this.roomHost = host;
+    this.update(false);
+  }
+
+  private effective(): SoundSettings {
+    return { ...effectiveSound(this.own, this.room), muted: this.muted, engine: this.enginePreset };
+  }
+
+  private update(save: boolean): void {
+    this.settings = this.effective();
+    if (save) saveStored(storedSoundJson({ own: this.own, muted: this.muted, engine: this.enginePreset }));
+    if (this.buses && this.ctx) applyGains(this.buses, this.settings, this.ctx.currentTime);
+    this.changed();
   }
 
   /** Called on settings and context-state changes; returns the unsubscribe. */
@@ -223,6 +295,28 @@ export class AudioEngine {
   }
 }
 
+// ---- the controls' room marks (SND-4) -----------------------------------------------------
+
+/**
+ * The mark on a setting the room decides for this player ("host's"; on the host's own
+ * controls "room"), or "" when they moved it or outside a room. Music: the heard music, so it
+ * is the room's while musicOn follows it and, with the music on, the volume does too.
+ */
+export function roomTag(e: AudioEngine, which: "music" | "effects"): string {
+  if (!e.room) return "";
+  const follows = which === "effects" ? e.follows("effects") : e.follows("musicOn") && (!e.settings.musicOn || e.follows("music"));
+  return follows ? (e.roomHost ? "room" : "host's") : "";
+}
+
+/** The reset button's text (AudioEngine.useRoomSound), or "" when there is nothing to reset. */
+export function resetLabel(e: AudioEngine): string {
+  if (!e.hasOwn()) return "";
+  return !e.room ? "Default sound" : e.roomHost ? "Use room sound" : "Use host's sound";
+}
+
+/** The title of a room mark (hover): what following means. */
+export const ROOM_TAG_TITLE = "Set by the host for the room until you change it";
+
 // ---- speaker button, popover, M key ---------------------------------------------------
 
 const BUTTON_PX = 34; // .sound-btn (client/style.css)
@@ -240,6 +334,10 @@ export interface SoundControlEls {
   music: HTMLInputElement; // range 0..100
   effects: HTMLInputElement; // range 0..100
   mute: HTMLButtonElement;
+  // SND-4, found by id when not given: the "host's" marks by the sliders and "Use host's sound".
+  musicTag?: HTMLElement | null;
+  effectsTag?: HTMLElement | null;
+  reset?: HTMLButtonElement | null;
   lobby?: LobbyMusicEls | null; // the lobby panel's Music row; found by id when not given
 }
 
@@ -248,13 +346,27 @@ export interface LobbyMusicEls {
   toggle: HTMLButtonElement; // role="switch", aria-checked
   music: HTMLInputElement; // range 0..100
   muted: HTMLElement | null; // shown while everything is muted (M)
+  tag: HTMLElement | null; // "host's" while the music follows the room
+  reset: HTMLButtonElement | null; // "Use host's sound"
 }
 
 function lobbyMusicEls(): LobbyMusicEls | null {
   const toggle = document.getElementById("lobby-music-on");
   const music = document.getElementById("lobby-music-vol");
   if (!(toggle instanceof HTMLButtonElement) || !(music instanceof HTMLInputElement)) return null;
-  return { toggle, music, muted: document.getElementById("lobby-music-muted") };
+  const reset = document.getElementById("lobby-sound-reset");
+  return {
+    toggle,
+    music,
+    muted: document.getElementById("lobby-music-muted"),
+    tag: document.getElementById("lobby-music-tag"),
+    reset: reset instanceof HTMLButtonElement ? reset : null,
+  };
+}
+
+function byId<T extends HTMLElement>(id: string, type: { new (): T }): T | null {
+  const e = document.getElementById(id);
+  return e instanceof type ? e : null;
 }
 
 /**
@@ -267,6 +379,10 @@ function lobbyMusicEls(): LobbyMusicEls | null {
  */
 export class SoundControls {
   private readonly lobby: LobbyMusicEls | null;
+  private readonly musicTag: HTMLElement | null;
+  private readonly effectsTag: HTMLElement | null;
+  private readonly reset: HTMLButtonElement | null;
+  private readonly grip = new SliderGrip<HTMLInputElement>(); // the slider being dragged
 
   constructor(
     private readonly engine: AudioEngine,
@@ -274,17 +390,35 @@ export class SoundControls {
   ) {
     const { root, button, pop, music, effects, mute } = els;
     this.lobby = els.lobby === undefined ? lobbyMusicEls() : els.lobby;
+    this.musicTag = els.musicTag === undefined ? document.getElementById("vol-music-tag") : els.musicTag;
+    this.effectsTag = els.effectsTag === undefined ? document.getElementById("vol-effects-tag") : els.effectsTag;
+    this.reset = els.reset === undefined ? byId("sound-reset", HTMLButtonElement) : els.reset;
     button.addEventListener("click", () => {
       this.setOpen(pop.classList.contains("hidden"));
       button.blur();
     });
+    // render() leaves only a slider being dragged alone (SliderGrip: input until change, blur or
+    // pointerup), so a slider that merely has the focus (keyboard) still shows the host's live
+    // changes. The drag's end also ends the Music gesture and gives the focus back.
     const slider = (el: HTMLInputElement, key: "music" | "effects") => {
-      el.addEventListener("input", () => engine.set({ [key]: Number(el.value) / 100 }));
-      el.addEventListener("change", () => el.blur());
-      el.addEventListener("pointerup", () => el.blur());
+      this.grip.watch(el, () => {
+        engine.slideEnd();
+        el.blur();
+      });
+      el.addEventListener("input", () => {
+        const v = Number(el.value) / 100;
+        if (key === "music") engine.slideMusic(v);
+        else engine.set({ effects: v });
+      });
     };
     slider(music, "music");
     slider(effects, "effects");
+    const resetButton = (b: HTMLButtonElement | null) =>
+      b?.addEventListener("click", () => {
+        engine.useRoomSound();
+        b.blur();
+      });
+    resetButton(this.reset);
     if (this.lobby) {
       const { toggle, music: lobbyMusic } = this.lobby;
       slider(lobbyMusic, "music");
@@ -292,6 +426,7 @@ export class SoundControls {
         engine.toggleMusic();
         toggle.blur();
       });
+      resetButton(this.lobby.reset);
     }
     mute.addEventListener("click", () => {
       engine.toggleMute();
@@ -356,24 +491,42 @@ export class SoundControls {
   }
 
   private render(): void {
-    const s = this.engine.settings;
+    const e = this.engine;
+    const s = e.settings;
     const { button, music, effects, mute } = this.els;
     button.classList.toggle("muted", s.muted);
     button.title = s.muted ? "Sound is muted (M)" : "Sound (M mutes)";
-    if (document.activeElement !== music) music.value = String(Math.round(s.music * 100));
-    if (document.activeElement !== effects) effects.value = String(Math.round(s.effects * 100));
+    const heard = String(Math.round(musicHeard(s) * 100));
+    const grip = this.grip;
+    if (!grip.holds(music)) music.value = heard;
+    if (!grip.holds(effects)) effects.value = String(Math.round(s.effects * 100));
     mute.textContent = s.muted ? "Unmute (M)" : "Mute (M)";
     mute.setAttribute("aria-pressed", String(s.muted));
+    const musicTag = roomTag(e, "music");
+    showTag(this.musicTag, musicTag);
+    showTag(this.effectsTag, roomTag(e, "effects"));
+    const reset = resetLabel(e);
+    showTag(this.reset, reset);
     if (this.lobby) {
-      const { toggle, music: lobbyMusic, muted } = this.lobby;
+      const { toggle, music: lobbyMusic, muted, tag, reset: lobbyReset } = this.lobby;
       const on = musicIsOn(s);
-      if (document.activeElement !== lobbyMusic) lobbyMusic.value = String(Math.round(s.music * 100));
+      if (!grip.holds(lobbyMusic)) lobbyMusic.value = heard;
       toggle.setAttribute("aria-checked", String(on));
       toggle.textContent = on ? "On" : "Off";
       toggle.title = on ? "Music off (effects stay on)" : "Music on";
       muted?.classList.toggle("hidden", !s.muted);
+      showTag(tag, musicTag);
+      showTag(lobbyReset, reset);
     }
   }
+}
+
+/** Text on an element, hidden when there is none (a room mark, the reset button). */
+export function showTag(el: HTMLElement | null, text: string): void {
+  if (!el) return;
+  if (text && el.textContent !== text) el.textContent = text;
+  if (el.title === "" && el.classList.contains("room-tag")) el.title = ROOM_TAG_TITLE;
+  el.classList.toggle("hidden", !text);
 }
 
 /** Fields that take typed text (where M is a letter); range sliders and buttons are not. */

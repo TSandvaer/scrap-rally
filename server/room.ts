@@ -25,6 +25,8 @@ import {
   RECONNECT_GRACE_MS,
   RESULTS_MS,
   SNAPSHOT_EVERY,
+  SOUND_BURST,
+  SOUND_PER_SEC,
   round,
   type ChatLine,
   type ClientMsg,
@@ -37,6 +39,7 @@ import {
   type ServerMsg,
 } from "../shared/protocol";
 import { AMMO, buy, clampAmmo, isItem, payouts, startingWallet, statsFor, type AmmoId, type Wallet } from "../shared/shop";
+import { BUILTIN_SOUND, DEFAULT_SONG_ID, isSongChoice, isSongId, RANDOM_SONG, snapVolume, SONG_IDS, type RoomSound, type SongId } from "../shared/sound";
 import { gridSlot, type Track } from "../shared/track";
 import { DEFAULT_TRACK_ID, isTrackId, trackById } from "../shared/tracks";
 import { BTN_RIVET, CAR_HP, GHOST_TICKS, mineCount, NO_COMMAND, stepRaceCar, WEAPONS_ARM_MS, type Command } from "../shared/weapons";
@@ -186,6 +189,11 @@ export class Room {
   resumeAt = 0; // server time the resume 3-2-1 ends (the room steps again), 0 = none under way
   private pausedById = ""; // their player id: their unbind or removal starts the resume
   private pauseOkAt = 0; // server time from which the next pause is accepted (cooldown)
+  // The host's sound defaults (SND-4): in the room message, kept on a handover, gone with the
+  // room. song = the id everyone plays: the choice, or for "random" the server's pick (pickSong).
+  private sound: RoomSound = { ...BUILTIN_SOUND };
+  private _song: SongId = DEFAULT_SONG_ID;
+  private readonly soundBudget: Bucket = { tokens: SOUND_BURST, at: -Infinity };
 
   constructor(
     readonly code: string,
@@ -196,6 +204,17 @@ export class Room {
     this._trackId = trackId;
     this._track = trackById(trackId);
     this._combat = this.newCombat();
+    this.resolveSong();
+  }
+
+  /** The host's sound defaults (a copy); changed only through setSound. */
+  get soundDefaults(): RoomSound {
+    return { ...this.sound };
+  }
+
+  /** The song everyone in the room plays (an id; "random" already picked). */
+  get song(): SongId {
+    return this._song;
   }
 
   /** The room's track id (shared/tracks.ts); changed only through setTrack. */
@@ -434,6 +453,9 @@ export class Room {
     this.finishers = 0;
     this.startedAt = now;
     this.raceStart = now + COUNTDOWN_MS;
+    // A "random" song: a new one per race, picked as the music fades out for the countdown, so
+    // the results and the lobby after the race both play it (no switch while the music plays).
+    if (this.sound.song === RANDOM_SONG) this.resolveSong();
     this.setPhase("countdown", this.raceStart);
   }
 
@@ -536,6 +558,47 @@ export class Room {
     this.locked = locked;
     this.broadcastRoom();
     return null;
+  }
+
+  /**
+   * Host only, any phase (SND-4): change the room's sound defaults. Only the keys given change;
+   * a wrong type, a volume outside 0..1 or an unknown song refuses the whole request. Volumes
+   * snap to 0.05. Nothing changed: no broadcast. A change takes one of the room's SOUND_BURST
+   * tokens (SOUND_PER_SEC back a second); none left: "Slow down", nothing changes. Picking
+   * "random" picks a song at once (and again at each race's countdown, beginRace).
+   */
+  setSound(p: Player, patch: Record<string, unknown>, now: number): string | null {
+    if (p.id !== this.hostId) return "Only the host can set the room sound";
+    const { musicOn, music, effects, song } = patch;
+    const vol = (v: unknown) => v === undefined || (typeof v === "number" && Number.isFinite(v) && v >= 0 && v <= 1);
+    if ((musicOn !== undefined && typeof musicOn !== "boolean") || !vol(music) || !vol(effects)) return "Bad sound settings";
+    if (song !== undefined && !isSongChoice(song)) return "Unknown song";
+    const next: RoomSound = {
+      musicOn: typeof musicOn === "boolean" ? musicOn : this.sound.musicOn,
+      music: typeof music === "number" ? snapVolume(music) : this.sound.music,
+      effects: typeof effects === "number" ? snapVolume(effects) : this.sound.effects,
+      song: isSongChoice(song) ? song : this.sound.song,
+    };
+    const cur = this.sound;
+    if (next.musicOn === cur.musicOn && next.music === cur.music && next.effects === cur.effects && next.song === cur.song) return null;
+    refill(this.soundBudget, SOUND_BURST, SOUND_PER_SEC, now);
+    if (this.soundBudget.tokens < 1) return "Slow down";
+    this.soundBudget.tokens--;
+    this.sound = next;
+    if (next.song !== cur.song) this.resolveSong();
+    this.broadcastRoom();
+    return null;
+  }
+
+  /** The song to play for the choice: the id itself, or for "random" another song than the last one. */
+  private resolveSong(): void {
+    const c = this.sound.song;
+    if (isSongId(c)) {
+      this._song = c;
+      return;
+    }
+    const others = SONG_IDS.filter((id) => id !== this._song);
+    if (others.length) this._song = others[randomInt(others.length)];
   }
 
   // ---- pause (MENU-3) -------------------------------------------------------------------
@@ -971,6 +1034,8 @@ export class Room {
       pausedBy: this.pausedBy,
       pausedAt: this.pausedAt,
       resumeAt: this.resumeAt,
+      soundDefaults: { ...this.sound },
+      song: this._song,
       players: this.info(),
     });
   }
@@ -1101,6 +1166,12 @@ export class Rooms {
         if (session.room && session.player) session.room.leave(session.player, now);
         session.conn.close();
         return;
+      case "soundDefaults": {
+        if (!session.room || !session.player) return;
+        const e = session.room.setSound(session.player, msg as unknown as Record<string, unknown>, now);
+        if (e) err(e);
+        return;
+      }
       case "pause":
       case "resume": {
         if (!session.room || !session.player) return;

@@ -7,6 +7,7 @@
 //  - events (`ev`, `room`, `welcome`, ...): things that must arrive exactly once.
 
 import type { Levels } from "./shop";
+import type { RoomSound } from "./sound";
 
 export const LAPS = 3;
 export const MAX_PLAYERS = 6;
@@ -46,6 +47,10 @@ export const BLOCKLIST_MAX = 64;
 export const PAUSE_RESUME_MS = 3000;
 export const PAUSE_MAX_MS = 120000;
 export const PAUSE_COOLDOWN_MS = 5000;
+// Room sound (PLAN-SOUND.md SND-4): the host may change the room's sound defaults
+// SOUND_BURST times at once, then SOUND_PER_SEC times a second (the menu throttles its sends).
+export const SOUND_BURST = 4;
+export const SOUND_PER_SEC = 2;
 
 export type Phase = "lobby" | "countdown" | "racing" | "results";
 
@@ -89,7 +94,11 @@ export type ClientMsg =
   | { t: "pause" }
   // While paused: a 3-2-1 (resumeAt), then the room steps again; in the countdown phase the
   // countdown starts over instead (a full 3-2-1-GO, no second 3-2-1 on top).
-  | { t: "resume" };
+  | { t: "resume" }
+  // Host only, any phase (SND-4): change the room's sound defaults; only the keys given change.
+  // A wrong type, a volume outside 0..1 or an unknown song id is refused with an err (nothing
+  // changes); volumes are snapped to 0.05. song: an id of shared/sound.ts SONG_IDS or "random".
+  | { t: "soundDefaults"; musicOn?: boolean; music?: number; effects?: number; song?: string };
 
 /**
  * One line of room chat. say = a player's message (from = their id); join / leave = a player
@@ -189,6 +198,11 @@ export type ServerMsg =
       pausedBy: string;
       pausedAt: number;
       resumeAt: number;
+      // The host's sound defaults (SND-4): the base of every player's sound for the settings they
+      // have not changed; soundDefaults.song is the host's choice ("random" or an id), song the
+      // id everyone plays (a "random" choice is picked by the server at each race's countdown).
+      soundDefaults: RoomSound;
+      song: string;
       players: PlayerInfo[];
     }
   | { t: "err"; msg: string; code?: ErrCode }
