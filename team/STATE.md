@@ -102,7 +102,8 @@ user: ~/orca/workspaces/scrap-rally/snd2-taste (detached at 895b985, npm ci done
 SND-2 re-review APPROVE (no findings). Merge waits ONLY for the user's race verdict (frozen copy on :3004).
 SND-2 MERGED 2026-11-18 (user: "its approved"): main 48aca02 (check clean, sim 319/319, bots 82/82, build ok); workers released,
 snd2 workspace and the snd2-taste copy removed. SOUND COMPLETE LOCALLY (SND-1 + SND-2). Nothing in flight. origin/main 19d759b,
-live 19d759b: the sound is not pushed or deployed; ask the user. Still pending: remove m3-t4 workspace once the
+live 19d759b: the sound is not pushed or deployed; ask the user.
+PUSHED 2026-11-18 (user): origin/main = a41b49b (sound). Waiting for the user's Manual Deploy; then a muted QA worker on the live site. Still pending: remove m3-t4 workspace once the
 user stops :3001 (PID 16470).
 
 **Resume (2026-11-16):** main 0dec6c9 (local, 15 ahead of origin) = ready check + engine

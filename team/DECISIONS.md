@@ -54,3 +54,4 @@
 - 2026-11-17 — SND-2 taste feedback (user): kerb rumble when touching the red/white kerb, gravel crunch off the asphalt, and a bending-metal crash when hitting another car or the wall. Folded into the SND-2 round (same binding trigger rules; own car only for surfaces and wall hits); not a separate plan review: it uses the plan's existing mechanisms (frame-loop voices, step()-only triggers with refractories). PLAN-SOUND.md addendum added.
 - 2026-11-17 — User: "forget the rumble on the red/white line": kerb rumble dropped; gravel crunch and metal crashes stay.
 - 2026-11-18 — SND-2 race verdict (user, frozen copy 895b985): "its approved". Race sounds approved (buggy engine default, machine-gun rivets, explosions, metal crashes, gravel); merge.
+- 2026-11-18 — Deploy the sound (user, popup): main pushed 19d759b..a41b49b; the user clicks Manual Deploy; then a QA worker checks music and race sounds live and closes SND-1/SND-2.
