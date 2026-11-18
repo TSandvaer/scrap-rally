@@ -369,7 +369,7 @@ below say what this machine did on one afternoon.
    take about a quarter to a half of A's time on this machine.
 2. **Metric B is blunt in headless Chrome.** Every run, every track, both sizes: 16.665 ms median, 16.670 ms p95, no
    frame over 20 ms, no spread. Headless frames come off a 60 Hz timer; B shows dropped frames and nothing finer, and
-   `frame()` itself takes 0.11 to 0.16 ms there. It guards against a stall; it cannot rank two smooth builds. The check
+   `frame()` itself takes 0.10 to 0.16 ms there. It guards against a stall; it cannot rank two smooth builds. The check
    on a real phone (User decisions) is what covers that.
 3. **Metric A does not depend on the window size.** The checksums at 390x844@3 equal those at 1280x720 in all 15 cells,
    and the baselines differ by -4.8% to +4.2% (medians), which is inside the spread. Both tables are given; gate on
