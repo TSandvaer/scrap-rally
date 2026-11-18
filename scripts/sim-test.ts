@@ -4352,7 +4352,368 @@ function menuRestartClient(): void {
   }
 }
 
-for (const t of [rivets, gating, mines, wrecks, finishing, garage, armDelay, engine, readyCheck, collisions, trackFeatures, roomTrack, jumpsWired, shippedTracks, botDriver, botLaps, mineCap, chatRoom, chatClient, sound, raceSounds, surfaceSounds, audioUnlock, menuHostOnly, menuStop, menuRestart, menuKick, menuLock, menuHandover, menuClient, menuRestartClient]) {
+// ---- in-game menu: retire to garage (MENU-2, PLAN-MENU.md, 2026-11-18) ------------------
+
+// This section's imports (hoisted like the ones at the top).
+import { RESULTS_MS } from "../shared/protocol";
+import { PLACE_PAYOUT, WRECK_BONUS } from "../shared/shop";
+import { raceDistance } from "../server/race";
+
+type SnapMsg = Extract<ServerMsg, { t: "snap" }>;
+type RoomMsg = Extract<ServerMsg, { t: "room" }>;
+const lastSnapOf = (c: FakeConn) => c.msgs.filter((m): m is SnapMsg => m.t === "snap").pop();
+const snapCars = (m: SnapMsg | undefined) => (m?.ents ?? []).filter((e): e is CarSnap => e.k === "car").map((e) => e.id);
+const infoOf = (m: RoomMsg | undefined, id: string) => m?.players.find((p) => p.id === id);
+const resultsOf = (c: FakeConn) => c.msgs.filter((m): m is Extract<ServerMsg, { t: "results" }> => m.t === "results");
+
+function retireRules(): void {
+  // Over onMessage (the socket path): racing only, a racer with a car, once.
+  const R = menuRooms(["Ann", "Bo", "Cy"]);
+  const [, b] = R.p;
+  const e0 = errsOf(R.s[1].conn).length;
+  R.send(1, { t: "retire" }); // lobby
+  R.send(1, { t: "ready", ready: true });
+  R.send(2, { t: "ready", ready: true });
+  R.send(0, { t: "start" });
+  R.send(1, { t: "retire" }); // countdown
+  const notRacing = errsOf(R.s[1].conn).slice(e0);
+  check(
+    "retire: refused in the lobby and in the countdown (racing only), nothing changes",
+    notRacing.join("|") === "You can only retire during a race|You can only retire during a race" && R.p.every((p) => !p.retired && !!p.car) && R.room.phase === "countdown",
+    notRacing.join("|"),
+  );
+  while (R.room.phase !== "racing") R.step(1);
+  const late = R.join("Dee"); // joined mid-race: no car in this race
+  R.rooms.onMessage(late, { t: "retire" }, R.clock.now);
+  check("retire: refused for a mid-race joiner (not in this race)", errsOf(late.conn).pop() === "You are not in this race" && !late.player!.retired, errsOf(late.conn).join("|"));
+  const e1 = errsOf(R.s[1].conn).length;
+  R.send(1, { t: "retire" });
+  const ok = errsOf(R.s[1].conn).length === e1;
+  R.send(1, { t: "retire" });
+  const seen = [0, 2].map((i) => infoOf(lastRoomMsg(R.s[i].conn), b.id));
+  check(
+    "retire: accepted over the socket in a race; everyone's room message shows retired (still inRace); a second retire is refused",
+    ok && b.retired && !b.car && !!b.progress && errsOf(R.s[1].conn).slice(e1).join("|") === "You already retired" &&
+      seen.every((x) => x?.retired === true && x.inRace === true) && infoOf(lastRoomMsg(R.s[0].conn), R.p[0].id)?.retired === false,
+    `errors ${errsOf(R.s[1].conn).slice(e1).join("|") || "-"}`,
+  );
+
+  // A finished car and the results phase: refused.
+  const sim = new Sim(1);
+  const a = sim.add("Ann");
+  const c = sim.add("Cy");
+  sim.startRace(a);
+  nearFinish(sim, a);
+  sim.run(15, (p) => (p === a ? { throttle: 1 } : {}));
+  const fin = sim.room.retire(a);
+  nearFinish(sim, c);
+  sim.run(15, (p) => (p === c ? { throttle: 1 } : {}));
+  const res = sim.room.retire(c);
+  check(
+    "retire: refused for a car that already finished, and in the results",
+    a.finished && fin === "You already finished" && !a.retired && sim.room.phase === "results" && res === "You can only retire during a race" && !c.retired,
+    `${fin}; ${sim.room.phase}: ${res}`,
+  );
+}
+
+function retireField(): void {
+  const sim = new Sim(1);
+  const a = sim.add("Ann");
+  const b = sim.add("Bo");
+  const c = sim.add("Cy");
+  sim.startRace(a);
+  sim.run(60, () => ({ throttle: 1 }));
+  const rd0 = raceDistance(track, b.progress!);
+  const e = sim.room.retire(b);
+  const q0 = b.queue.length;
+  sim.room.queueInputs(b, [[9999, 1, 0, 0]]);
+  sim.run(2, () => ({ throttle: 1 }));
+  const snap = lastSnapOf(sim.conns.get(a.id)!);
+  const own = lastSnapOf(sim.conns.get(b.id)!);
+  check(
+    "retire: the car leaves the field at once (not solid, not stepped, not in anyone's snapshot, inputs ignored); the progress stays",
+    e === null && b.retired && !b.car && !solid(b) && q0 === 0 && b.queue.length === 0 &&
+      snapCars(snap).sort().join() === [a.id, c.id].sort().join() && !snapCars(own).includes(b.id) &&
+      !!b.progress && raceDistance(track, b.progress) === rd0 && rd0 > 0,
+    `cars in A's snapshot ${snapCars(snap).length}, B's ${snapCars(own).length}; rd ${rd0.toFixed(0)}`,
+  );
+  const xa = a.car!.x;
+  sim.run(60, () => ({ throttle: 1 }));
+  check("retire: the race goes on for the others", sim.room.phase === "racing" && a.car!.x !== xa && !!c.car && !b.car, sim.room.phase);
+}
+
+function retireRaceEnd(): void {
+  // ---- the last racer still out there retires, someone has finished: results at once ----
+  const sim = new Sim(1);
+  const a = sim.add("Ann");
+  const b = sim.add("Bo");
+  sim.startRace(a);
+  sim.now = sim.room.raceStart + WEAPONS_ARM_MS;
+  sim.run(30, () => ({ throttle: 1 }));
+  sim.room.combat.damage(a, a.hp, b.id, "rivet"); // Bo wrecks Ann: a wreck bonus for Bo
+  const wrecked = (sim.room.combat.wrecksCaused.get(b.id) ?? 0) === 1;
+  nearFinish(sim, a);
+  sim.run(15, (p) => (p === a ? { throttle: 1 } : {}));
+  const graceOn = a.finished && sim.room.phaseEnds > sim.now && sim.room.phase === "racing";
+  const scrap = [a.wallet.scrap, b.wallet.scrap];
+  const lines0 = sim.room.chatLines.length;
+  sim.room.retire(b);
+  const retiredAt = sim.now;
+  sim.run(1);
+  const rows = resultsOf(sim.conns.get(b.id)!).pop()?.rows ?? [];
+  check(
+    "retire: the last racer still out there retires with a finisher in -> results on the next tick (no 30 s wait)",
+    wrecked && graceOn && sim.room.phase === "results" && sim.now - retiredAt < 50,
+    `grace was on ${graceOn}; ${sim.room.phase} ${(sim.now - retiredAt).toFixed(0)} ms after the retire`,
+  );
+  check(
+    "retire: the retired player keeps a DNF row and the wreck bonus (place money only for finishers)",
+    rows.map((r) => `${r.name}:${r.timeMs > 0 ? "T" : "DNF"}:${r.earned}`).join() === `Ann:T:${PLACE_PAYOUT[0]},Bo:DNF:${WRECK_BONUS}` &&
+      a.wallet.scrap === scrap[0] + PLACE_PAYOUT[0] && b.wallet.scrap === scrap[1] + WRECK_BONUS &&
+      sim.lastGarage(b)?.scrap === b.wallet.scrap,
+    rows.map((r) => `${r.name} ${r.timeMs} +${r.earned}`).join(", "),
+  );
+  check("retire: one result line, finishers only", linesSince(sim.room, lines0).join("|") === "result: Race won by Ann", linesSince(sim.room, lines0).join("|"));
+  // Results -> lobby: the flag is gone; the next race Bo races again.
+  sim.now += RESULTS_MS;
+  sim.run(1);
+  const lobbyInfo = infoOf(sim.lastRoom(a), b.id);
+  sim.startRace(a);
+  check(
+    "retire: the flag resets on the way to the lobby; the retired player races again next race",
+    lobbyInfo?.retired === false && !b.retired && !!b.car && b.inRace && snapCars(lastSnapOf(sim.conns.get(a.id)!)).includes(b.id),
+    `lobby info retired=${lobbyInfo?.retired}; car ${!!b.car}`,
+  );
+
+  // ---- everyone retires, nobody finished: back to the lobby, no results ----
+  const s2 = new Sim(1);
+  const x = s2.add("Ann");
+  const y = s2.add("Bo");
+  s2.startRace(x);
+  s2.run(30, () => ({ throttle: 1 }));
+  s2.room.combat.wrecksCaused.set(y.id, 1);
+  const scrap2 = [x.wallet.scrap, y.wallet.scrap];
+  const lines2 = s2.room.chatLines.length;
+  s2.room.retire(x);
+  s2.run(30, () => ({ throttle: 1 }));
+  const stillOn = s2.room.phase === "racing" && !!y.car;
+  s2.room.retire(y);
+  s2.run(1);
+  check(
+    "retire: one of two retires -> the race goes on; the last one retires with no finisher -> lobby, no results message, no result line, no scrap",
+    stillOn && s2.room.phase === "lobby" && resultsOf(s2.conns.get(x.id)!).length === 0 && s2.room.chatLines.length === lines2 &&
+      x.wallet.scrap === scrap2[0] && y.wallet.scrap === scrap2[1] && !x.retired && !y.retired && infoOf(s2.lastRoom(x), y.id)?.retired === false,
+    `${s2.room.phase}, results ${resultsOf(s2.conns.get(x.id)!).length}, lines +${s2.room.chatLines.length - lines2}`,
+  );
+
+  // ---- DNF order: retired players rank after everyone still racing ----
+  const s3 = new Sim(1);
+  const f = s3.add("Fin");
+  const r = s3.add("Ret");
+  const slow = s3.add("Slow");
+  s3.startRace(f);
+  s3.run(90, () => ({ throttle: 1 }));
+  s3.place(r, L * 0.6); // far ahead of Slow
+  r.progress!.cp = 2;
+  s3.run(2);
+  const ahead = raceDistance(track, r.progress!) > raceDistance(track, slow.progress!);
+  s3.room.retire(r);
+  nearFinish(s3, f);
+  s3.run(15, (p) => (p === f ? { throttle: 1 } : {}));
+  s3.now = s3.room.phaseEnds; // the finish grace runs out
+  s3.run(1);
+  const rows3 = resultsOf(s3.conns.get(f.id)!).pop()?.rows ?? [];
+  check(
+    "retire: in the results a retired player ranks after the racers who did not finish (even from further ahead)",
+    ahead && rows3.map((x3) => `${x3.name}:${x3.timeMs > 0 ? "T" : "DNF"}:${x3.earned}`).join() === `Fin:T:${PLACE_PAYOUT[0]},Slow:DNF:0,Ret:DNF:0`,
+    rows3.map((x3) => `${x3.name} ${x3.timeMs}`).join(", "),
+  );
+}
+
+function retireGarage(): void {
+  const sim = new Sim(1);
+  const a = sim.add("Ann");
+  const b = sim.add("Bo");
+  const c = sim.add("Cy");
+  b.wallet.scrap = 1000;
+  b.ammo.rivets = 10;
+  b.ammo.mines = 0;
+  c.wallet.scrap = 1000;
+  sim.startRace(a);
+  sim.now = sim.room.raceStart + WEAPONS_ARM_MS;
+  sim.run(60, (p) => (p === b ? { throttle: 1, fire: true } : { throttle: 1 }));
+  const used = b.ammo.rivets;
+  const racerBuy = sim.room.buy(c, "rivets");
+  const early = sim.room.buy(b, "rivets"); // not retired yet
+  sim.room.retire(b);
+  const g0 = sim.conns.get(b.id)!.msgs.filter((m) => m.t === "garage").length;
+  const r1 = sim.room.buy(b, "rivets");
+  const r2 = sim.room.buy(b, "mines");
+  const r3 = sim.room.buy(b, "nonsense");
+  const garages = sim.conns.get(b.id)!.msgs.filter((m) => m.t === "garage").length - g0;
+  sim.run(2);
+  const snapAmmo = lastSnapOf(sim.conns.get(b.id)!)?.ammo.join();
+  check(
+    "retire: buy is open for the retired, carless player during the race (refused for racers); garage message and snapshot ammo follow",
+    used < 10 && racerBuy === "The garage is closed during a race" && early === racerBuy && c.wallet.scrap === 1000 &&
+      r1 === null && r2 === null && r3 === "Unknown item" && garages === 2 &&
+      b.wallet.scrap === 1000 - 150 - 200 && b.ammo.rivets === used + 20 && b.ammo.mines === 3 && sim.lastGarage(b)?.scrap === 650 &&
+      snapAmmo === `${used + 20},3`,
+    `used to ${used}; ${racerBuy}; ${r1}/${r2}/${r3}; scrap ${b.wallet.scrap}, ammo ${b.ammo.rivets}/${b.ammo.mines}, snap ${snapAmmo}`,
+  );
+  // A stop gives back what the race used, and keeps what the retired player bought.
+  sim.room.stopRace(a, sim.now);
+  check(
+    "retire then stop: lobby, the flag reset; the retired player's ammo = start + bought (the purchase is not undone), the scrap stays spent",
+    sim.room.phase === "lobby" && !b.retired && infoOf(sim.lastRoom(a), b.id)?.retired === false &&
+      b.ammo.rivets === 10 + 20 && b.ammo.mines === 3 && b.wallet.scrap === 650,
+    `ammo ${b.ammo.rivets}/${b.ammo.mines}, scrap ${b.wallet.scrap}`,
+  );
+  const lobbyBuy = sim.room.buy(b, "rivets");
+  check("retire: the lobby garage works as before afterwards", lobbyBuy === null && b.ammo.rivets === 50, `${lobbyBuy}`);
+
+  // Restart: an upgrade bought while retired fits the restarted race; the player races again.
+  const s2 = new Sim(1);
+  const x = s2.add("Ann");
+  const y = s2.add("Bo");
+  y.wallet.scrap = 1000;
+  s2.startRace(x);
+  s2.run(30, () => ({ throttle: 1 }));
+  s2.room.retire(y);
+  const up = s2.room.buy(y, "engine");
+  const capped = s2.room.buy(y, "mines");
+  s2.room.restartRace(x, s2.now);
+  check(
+    "retire then restart: a fresh countdown with the retired player back on the grid (flag reset), upgrades bought while retired fitted, ammo bought kept",
+    up === null && capped === null && s2.room.phase === "countdown" && !y.retired && !!y.car && y.inRace &&
+      y.levels.engine === 1 && y.stats.accel > BASE_STATS.accel && y.ammo.mines === 3 && infoOf(s2.lastRoom(x), y.id)?.retired === false,
+    `${s2.room.phase}, car ${!!y.car}, engine ${y.levels.engine}, mines ${y.ammo.mines}`,
+  );
+  while (s2.room.phase !== "racing") s2.run(1);
+  s2.run(30, () => ({ throttle: 1 }));
+  check("retire then restart: buying is closed again for the racer", s2.room.buy(y, "rivets") === "The garage is closed during a race");
+}
+
+function retireOthers(): void {
+  // Kick: a retired player can be removed; the host may retire too and still run the room.
+  const sim = new Sim(1);
+  const a = sim.add("Ann");
+  const b = sim.add("Bo");
+  const c = sim.add("Cy");
+  sim.startRace(a);
+  sim.run(30, () => ({ throttle: 1 }));
+  sim.room.retire(b);
+  const kb = sim.room.kick(a, b.id, sim.now);
+  sim.run(2, () => ({ throttle: 1 }));
+  const afterKick = sim.room.phase === "racing" && !sim.room.players.has(b.id);
+  const ra = sim.room.retire(a); // the host retires
+  sim.run(2, () => ({ throttle: 1 }));
+  const hostOn = sim.room.phase === "racing" && a.retired && sim.room.hostId === a.id;
+  const kc = sim.room.kick(a, c.id, sim.now); // ... and removes the last racer
+  sim.run(1);
+  check(
+    "retire then kick: a retired player is removed as any other; a retired host still runs the room; kicking the last racer -> lobby, no results",
+    kb === null && afterKick && ra === null && hostOn && kc === null && sim.room.phase === "lobby" && resultsOf(sim.conns.get(a.id)!).length === 0 && !a.retired,
+    `${kb}/${ra}/${kc}; ${sim.room.phase}`,
+  );
+
+  // A retired player who drops and rejoins stays retired (no car), and can still shop.
+  const s2 = new Sim(1);
+  const x = s2.add("Ann");
+  const y = s2.add("Bo");
+  s2.startRace(x);
+  s2.run(30, () => ({ throttle: 1 }));
+  s2.room.retire(y);
+  s2.room.unbind(y, s2.now);
+  s2.run(30, () => ({ throttle: 1 }));
+  s2.rebind(y);
+  s2.run(2, () => ({ throttle: 1 }));
+  check(
+    "retire: a retired player who reconnects mid-race is still retired (no car, garage open)",
+    y.retired && !y.car && infoOf(s2.lastRoom(y), y.id)?.retired === true && !snapCars(lastSnapOf(s2.conns.get(y.id)!)).includes(y.id) && s2.room.buy(y, "rivets") === null && s2.room.phase === "racing",
+    `${s2.room.phase}`,
+  );
+}
+
+/**
+ * The wired client: Game.retire() -> the room message drops the predicted car at once and no
+ * snapshot brings it back (the engine and the gravel sounds key off it: hasCar false = silent),
+ * the garage works, the results show us as DNF, and the next lobby clears the flag.
+ */
+function retireClient(): void {
+  const realNow = performance.now.bind(performance);
+  const clock = { now: realNow() };
+  performance.now = () => clock.now;
+  try {
+    const rooms = new Rooms(1);
+    const H = wiredGame(rooms, clock);
+    const G = wiredGame(rooms, clock);
+    H.game.create("Host");
+    H.open();
+    H.flush();
+    G.game.join(H.game.code, "Guest");
+    G.open();
+    G.flush();
+    H.flush();
+    G.game.setReady(true);
+    G.flush();
+    H.game.start();
+    H.flush();
+    G.flush();
+    const room = rooms.rooms.get(H.game.code)!;
+    const drive = (n: number) => {
+      for (let i = 0; i < n; i++) {
+        clock.now += 1000 / 60;
+        rooms.step(clock.now);
+        for (const W of [H, G]) {
+          W.flush();
+          W.game.step(W.game.raceOn() ? { throttle: 1, steer: 0, fire: false, mine: false } : NO_CONTROLS, 1000 / 60);
+        }
+      }
+    };
+    while (room.phase !== "racing") drive(1);
+    drive(60);
+    const before = G.game.canRetire() && !!G.game.car && !G.game.retired();
+    G.game.retire();
+    G.flush();
+    const dropped = G.game.car === null && G.game.retired() && !G.game.canRetire();
+    let carBack = false;
+    for (let i = 0; i < 60; i++) {
+      drive(1);
+      carBack ||= G.game.car !== null || !!G.game.ownSnap();
+    }
+    const st: EngineState = { phase: G.game.phase, hasCar: !!G.game.car, connected: G.game.connected, wreck: 0, fall: 0, air: 0, finished: false, speed: 300, topSpeed: 430, throttle: 1 };
+    check(
+      "retire client: the room message drops our car at once and no later snapshot brings it back; engine and gravel targets are silent (no car)",
+      before && dropped && !carBack && G.game.phase === "racing" && !engineTarget(st).on && !gravelTarget(st, true).on && H.game.player(G.game.you)?.retired === true,
+      `before ${before}, dropped ${dropped}, car back ${carBack}`,
+    );
+    const scrap0 = G.game.scrap;
+    G.game.buy("rivets");
+    G.flush();
+    drive(3);
+    check("retire client: the garage buy goes through during the race", G.game.scrap === scrap0 - 150 && G.game.serverAmmo[0] === 20, `scrap ${scrap0} -> ${G.game.scrap}, ammo ${G.game.serverAmmo.join("/")}`);
+    // Host finishes (put just before the line on the server): results, Guest DNF.
+    const hp = room.players.get(H.game.you)!;
+    const pt = pointAt(room.track, room.track.length - 40);
+    hp.car = { x: pt.x, y: pt.y, h: pt.h, vx: Math.cos(pt.h) * 300, vy: Math.sin(pt.h) * 300, seg: pt.seg, wreck: 0, air: 0, fall: 0 };
+    hp.progress = { s: queryTrackNear(room.track, pt.x, pt.y, pt.seg).s, cp: 3, lap: 0, fin: 0 };
+    for (let i = 0; i < 30 && room.phase === "racing"; i++) drive(1);
+    const rows = G.game.results ?? [];
+    check(
+      "retire client: the host finishing ends the race at once; the results show the retired player as DNF",
+      (room.phase as string) === "results" && G.game.phase === "results" && rows.length === 2 && rows[0].id === H.game.you && rows[1].id === G.game.you && rows[1].timeMs === 0,
+      rows.map((r) => `${r.name} ${r.timeMs}`).join(", "),
+    );
+    clock.now += RESULTS_MS;
+    drive(2);
+    check("retire client: the next lobby clears the flag (Game.retired() false)", G.game.phase === "lobby" && !G.game.retired() && H.game.player(G.game.you)?.retired === false);
+  } finally {
+    performance.now = realNow;
+  }
+}
+
+for (const t of [rivets, gating, mines, wrecks, finishing, garage, armDelay, engine, readyCheck, collisions, trackFeatures, roomTrack, jumpsWired, shippedTracks, botDriver, botLaps, mineCap, chatRoom, chatClient, sound, raceSounds, surfaceSounds, audioUnlock, menuHostOnly, menuStop, menuRestart, menuKick, menuLock, menuHandover, menuClient, menuRestartClient, retireRules, retireField, retireRaceEnd, retireGarage, retireOthers, retireClient]) {
   console.log(`\n# ${t.name}`);
   try {
     t();
