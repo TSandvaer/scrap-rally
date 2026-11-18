@@ -59,3 +59,4 @@
 - 2026-11-18 — Menu button (user, popup on the MENU-1 worker's question): a small ☰ button next to the speaker button for EVERYONE (tooltip "Menu (Esc)"); Esc still works on desktop.
 - 2026-11-18 — MENU-1 taste verdict (user, frozen copy 78143f3): "just tested. all accepted". Esc menu + host controls approved; merge, then MENU-2 (retire).
 - 2026-11-18 — MENU-2 retired ranking (user, popup after the review flagged grid gaming): a retired player ranks among the non-finishers by distance driven at the moment of retiring (not automatically last), so retiring cannot buy the front of the reversed next grid. Review notes 1, 3, 4 (scrap loss at the cap on stop/restart after a retired purchase; stale "retired" toasts on join; confirm text) fixed in the same round.
+- 2026-11-18 — MENU-2 taste verdict (user, frozen copy 903f3b1): "good". Retire to garage approved; merge, then MENU-3 (pause).
