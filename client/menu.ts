@@ -14,7 +14,7 @@
 
 import { resetLabel, roomTag, ROOM_TAG_TITLE, showTag, type AudioEngine } from "./audio";
 import type { Game } from "./game";
-import { musicHeard, musicIsOn, musicSlid, musicSwitched, PatchThrottle } from "./soundlogic";
+import { musicHeard, musicIsOn, musicSwitched, PatchThrottle, roomMusicSlid } from "./soundlogic";
 import type { RoomSound } from "../shared/sound";
 
 /** The host's Room sound sends: at most one per this many ms (the server takes 2 a second). */
@@ -394,8 +394,7 @@ export class GameMenu {
       const [reRow, re] = slider("Effects", "room-effects", false);
       rm.addEventListener("input", () => {
         if (this.roomMusicStart === undefined) this.roomMusicStart = g.soundDefaults.music;
-        const r = musicSlid(Number(rm.value) / 100, g.soundDefaults, this.roomMusicStart);
-        this.roomSend.push(r.music === undefined ? { musicOn: r.musicOn } : { ...r, music: r.music });
+        this.roomSend.push(roomMusicSlid(Number(rm.value) / 100, this.roomMusicStart));
       });
       rm.addEventListener("change", () => (this.roomMusicStart = undefined));
       re.addEventListener("input", () => this.roomSend.push({ effects: Number(re.value) / 100 }));

@@ -4875,7 +4875,7 @@ function retireClient(): void {
 // ---- lobby Music switch (SND-3, client/audio.ts; a real musicOn flag since SND-4) ---------
 
 // This section's imports (hoisted like the ones at the top).
-import { effectiveSound, musicHeard, musicIsOn, musicSlid, musicSwitched, PatchThrottle, storedSoundJson } from "../client/soundlogic";
+import { effectiveSound, musicHeard, musicIsOn, musicSlid, musicSwitched, PatchThrottle, roomMusicSlid, storedSoundJson } from "../client/soundlogic";
 import { resetLabel, roomTag } from "../client/audio";
 
 /** A fake localStorage for the AudioEngine (no AudioContext: the buses come with the unlock). */
@@ -4970,7 +4970,7 @@ function musicSwitch(): void {
 // ---- host-set room sound defaults (SND-4, PLAN-SOUND.md, 2026-11-18) --------------------
 
 // This section's imports (hoisted like the ones at the top).
-import { BUILTIN_SOUND, DEFAULT_SONG_ID as SHARED_DEFAULT_SONG, RANDOM_SONG, snapVolume, SONG_IDS } from "../shared/sound";
+import { BUILTIN_SOUND, DEFAULT_SONG_ID as SHARED_DEFAULT_SONG, RANDOM_SONG, snapVolume, SONG_IDS, type RoomSound } from "../shared/sound";
 import { SOUND_BURST, SOUND_PER_SEC } from "../shared/protocol";
 
 /** Legacy entries (every key saved, SND-1..3) -> own only where the value differs from the built-in default. */
@@ -5297,6 +5297,76 @@ function soundRandom(): void {
   check(
     "room sound: snapVolume gives the slider's own values (k/20 equals 5k/100) and stays in 0..1",
     Array.from({ length: 21 }, (_, k) => snapVolume(k / 20 + 0.012) === (5 * k) / 100).every(Boolean) && snapVolume(1.2) === 1 && snapVolume(-0.3) === 0,
+  );
+}
+
+/**
+ * The host's Room Music slider (client/menu.ts: roomMusicSlid through the 500 ms PatchThrottle)
+ * against the server with a 60 ms round trip: the room's musicOn the host last heard lags the
+ * sends, so a drag through 0 and back up within one gap must still end with the music on.
+ */
+function soundRoomDrag(): void {
+  const drag = (steps: number[]) => {
+    const R = menuRooms(["Ann", "Bo"]);
+    const base = R.clock.now;
+    let now = 0; // the host client's clock, ms
+    const timers: { at: number; seq: number; fn: () => void }[] = [];
+    let seq = 0;
+    const later = (fn: () => void, ms: number) => timers.push({ at: now + ms, seq: seq++, fn });
+    const RTT = 60;
+    let heard: RoomSound = R.room.soundDefaults; // the host's game.soundDefaults (room messages, RTT / 2 after the server)
+    const sent: string[] = [];
+    const th = new PatchThrottle<RoomSound>(
+      (p) => {
+        sent.push(JSON.stringify(p));
+        later(() => {
+          R.clock.now = base + now;
+          R.send(0, { t: "soundDefaults", ...p });
+          const sd = R.room.soundDefaults;
+          later(() => (heard = sd), RTT / 2);
+        }, RTT / 2);
+      },
+      500,
+      () => now,
+      later,
+    );
+    const run = (until: number) => {
+      for (;;) {
+        timers.sort((x, y) => x.at - y.at || x.seq - y.seq);
+        const t = timers[0];
+        if (!t || t.at > until) break;
+        timers.shift();
+        now = t.at;
+        t.fn();
+      }
+      now = until;
+    };
+    let start: number | undefined; // set at the drag's first input, as the menu's roomMusicStart
+    steps.forEach((v, i) => {
+      run(i * 30); // an input every 30 ms
+      start ??= heard.music;
+      th.push(roomMusicSlid(v, start));
+    });
+    run(3000);
+    return { room: R.room.soundDefaults, bo: lastRoomMsg(R.s[1].conn)!.soundDefaults, heard, sent: sent.join(" ") };
+  };
+  // The reviewer's drag: 0.45 -> 0 -> 0.3 in ~0.4 s, released at 30.
+  const through = drag([0.45, 0.4, 0.3, 0.2, 0.1, 0.05, 0, 0.05, 0.1, 0.15, 0.2, 0.25, 0.3]);
+  check(
+    "room music slider: a drag 0.45 -> 0 -> 0.3 within one send gap (60 ms round trip) ends with the room's music on at 0.3 for every follower and the host",
+    through.room.musicOn && through.room.music === 0.3 && through.bo.musicOn && through.bo.music === 0.3 && through.heard.musicOn && through.heard.music === 0.3,
+    `sent ${through.sent}; room ${JSON.stringify(through.room)}`,
+  );
+  // Dragged down to 0 and released there: the room's music off, its volume as before the drag.
+  const down = drag([0.45, 0.3, 0.15, 0]);
+  check(
+    "room music slider: dragged to 0 and released: the room's music off with the volume from before the drag (0.5), for everyone",
+    !down.room.musicOn && down.room.music === 0.5 && !down.bo.musicOn && down.bo.music === 0.5,
+    `sent ${down.sent}; room ${JSON.stringify(down.room)}`,
+  );
+  check(
+    "room music slider: roomMusicSlid always gives musicOn (on at v above 0; 0 off with the start volume)",
+    JSON.stringify(roomMusicSlid(0.3, 0.5)) === '{"musicOn":true,"music":0.3}' && JSON.stringify(roomMusicSlid(0, 0.5)) === '{"musicOn":false,"music":0.5}',
   );
 }
 
@@ -6218,7 +6288,7 @@ function songPlayer(): void {
   }
 }
 
-for (const t of [rivets, gating, mines, wrecks, finishing, garage, armDelay, engine, readyCheck, collisions, trackFeatures, roomTrack, jumpsWired, shippedTracks, botDriver, botLaps, mineCap, chatRoom, chatClient, sound, raceSounds, surfaceSounds, audioUnlock, menuHostOnly, menuStop, menuRestart, menuKick, menuLock, menuHandover, menuClient, menuRestartClient, retireRules, retireField, retireRaceEnd, retireGarage, retireRefund, retireOthers, retireNotices, retireClient, pauseRefused, pauseFreeze, pauseResume, pauseHold, pauseAuto, pauseCooldown, pauseGrace, pauseCountdown, pauseControls, pauseClient, musicSwitch, soundMigration, soundLayers, soundServer, soundRandom, soundClient, songs, songPlayer]) {
+for (const t of [rivets, gating, mines, wrecks, finishing, garage, armDelay, engine, readyCheck, collisions, trackFeatures, roomTrack, jumpsWired, shippedTracks, botDriver, botLaps, mineCap, chatRoom, chatClient, sound, raceSounds, surfaceSounds, audioUnlock, menuHostOnly, menuStop, menuRestart, menuKick, menuLock, menuHandover, menuClient, menuRestartClient, retireRules, retireField, retireRaceEnd, retireGarage, retireRefund, retireOthers, retireNotices, retireClient, pauseRefused, pauseFreeze, pauseResume, pauseHold, pauseAuto, pauseCooldown, pauseGrace, pauseCountdown, pauseControls, pauseClient, musicSwitch, soundMigration, soundLayers, soundServer, soundRandom, soundRoomDrag, soundClient, songs, songPlayer]) {
   console.log(`\n# ${t.name}`);
   try {
     t();

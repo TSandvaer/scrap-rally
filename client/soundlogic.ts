@@ -82,6 +82,17 @@ export function musicSlid(v: number, s: Pick<SoundSettings, "musicOn">, startMus
   return { musicOn: false, music: startMusic };
 }
 
+/**
+ * The host's Room Music slider (client/menu.ts) moved to v: musicSlid's rule, but musicOn is
+ * always given. The room's musicOn as this client last heard it lags the throttled sends (a
+ * drag through 0 and back up within one send gap would otherwise keep musicOn false), and an
+ * unchanged musicOn is a no-op on the server. Above 0: on at v; 0: off with the room's volume
+ * from before the drag (startMusic).
+ */
+export function roomMusicSlid(v: number, startMusic: number): { musicOn: boolean; music: number } {
+  return v > 0 ? { musicOn: true, music: v } : { musicOn: false, music: startMusic };
+}
+
 /** What a player keeps in localStorage (STORE_VERSION): only the moved room keys, the mute, the engine. */
 export interface StoredSound {
   own: OwnSettings;
