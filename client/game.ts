@@ -303,6 +303,14 @@ export class Game {
     this.send({ t: "host", id });
   }
 
+  /**
+   * Any racer, racing only (the menu's "Retire to garage"): our car leaves the race (DNF) and
+   * the garage opens until it is over. The server refuses it otherwise with an err.
+   */
+  retire(): void {
+    this.send({ t: "retire" });
+  }
+
   /** Host only: lock the room (no new players; seat rejoins still work) or unlock it. */
   setLocked(locked: boolean): void {
     this.send({ t: "lock", locked });
@@ -481,6 +489,9 @@ export class Game {
         // predicted car; the next snapshot seeds it at the new pose. Else the replay of old
         // inputs from the grid would look like a teleport to reconciliation.
         if (msg.raceStart !== this.raceStart) this.resetOwnCar();
+        // Retired: the car is off the field at once (the engine and the gravel go silent), not
+        // only from the next snapshot, which no longer carries it.
+        if (msg.players.some((p) => p.id === this.you && p.retired)) this.resetOwnCar();
         this.hostId = msg.hostId;
         this.phase = msg.phase;
         this.raceStart = msg.raceStart;
@@ -909,6 +920,17 @@ export class Game {
 
   ownSnap(): CarSnap | undefined {
     return this.latest?.cars.get(this.you);
+  }
+
+  /** We retired from the current race (DNF, garage open until it is over). */
+  retired(): boolean {
+    return !!this.me()?.retired;
+  }
+
+  /** "Retire to garage" applies: racing, with our car on the field and not finished. */
+  canRetire(): boolean {
+    const s = this.ownSnap();
+    return this.phase === "racing" && !this.retired() && !!this.car && !!s && !s.fin;
   }
 
   isHost(): boolean {
