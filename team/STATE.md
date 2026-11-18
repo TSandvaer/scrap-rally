@@ -107,7 +107,10 @@ PUSHED 2026-11-18 (user): origin/main = a41b49b (sound). Waiting for the user's 
 DEPLOYED 2026-11-18 (user started the deploy; live bundle index-CjYhpY-u.js contains "Rust Bucket" + AudioContext). Muted QA
 worker ctx_7d867674fde1 (spec tmp/spec-qa-live-4.md) on SND-1 + SND-2.
 ESC MENU (plan PLAN-MENU.md approved 2026-11-18): MENU-1 123jpnbf9pg in flight, ctx_2196bb24b636 (~/orca/workspaces/scrap-rally/menu1,
-TSandvaer/menu1, :3006; taste gate via a frozen copy). Queued: MENU-2 123jpnbf9ph (retire), then MENU-3 123jpnbf9pj (pause). Still pending: remove m3-t4 workspace once the
+TSandvaer/menu1, :3006; taste gate via a frozen copy). Queued: MENU-2 123jpnbf9ph (retire), then MENU-3 123jpnbf9pj (pause).
+LIVE SOUND QA 2026-11-18 (ctx_7d867674fde1): SND-1 + SND-2 PASS -> both complete. One reproduced edge case predating SND-2
+(phantom own rivet after a predicted recovery, client/game.ts:631-635 armed() vs the lagging ghost) parked in
+~/.claude/parking/scrap-rally/adhoc-2026-11-18.md. MENU-1: ☰ button for everyone (user). Still pending: remove m3-t4 workspace once the
 user stops :3001 (PID 16470).
 
 **Resume (2026-11-16):** main 0dec6c9 (local, 15 ahead of origin) = ready check + engine
