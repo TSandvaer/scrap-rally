@@ -275,3 +275,15 @@ render output, so pixel-diff fixtures are the only regression net).
   GFX-3 (DOM skin; style.css, index.html; mirrors the approved palette) in parallel.
 - **Wave 3:** GFX-2a (cars + effects) and GFX-2b (font + HUD + minimap) in parallel.
 - **Later, optional:** GFX-4 decals (B9).
+
+## User decisions (2026-11-18, popups; plan approved)
+
+- **Approved** with the advisor changes above.
+- **Car headings: 128 steps** (not 64). Memory: 128 x 32x32 cells = 0.5 MB per sheet; 6 colour sheets (3 MB) + "battered"
+  as ONE shared overlay sheet drawn on top of the colour sprite (0.5 MB) + one shared burnt sheet (0.5 MB) + tile pool
+  (~6.3 MB) = ~10.3 MB, inside the 12 MB cap. If the shared overlay looks wrong at the taste gate, per-colour battered
+  sheets are allowed with the cap raised to 14 MB (reported, not silent).
+- **Real-phone check: yes.** The user opens the frozen copy on a phone (LAN URL, `?debug=1`) at the GFX-1 and GFX-2a/2b
+  taste gates.
+- **Track marks (B9): include** as GFX-4 in this round, after GFX-2a (it stamps into GFX-1's tiles and uses GFX-2a's blast
+  events). Mine scorch first; skid marks only if the bench passes with margin; both are cut if the budget fails.
