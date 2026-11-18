@@ -121,7 +121,8 @@ MENU-2 done: 82b8fe5 (verified clean; sim 381/381, bots 90/90, build ok; design 
 ctx_3f08f2bd7fdd; FROZEN TASTE COPY ~/orca/workspaces/scrap-rally/menu2-taste (detached at 82b8fe5, npm ci done) on :3005 (the user's
 menu1-taste server still runs on :3004).
 MENU-2 review APPROVE + 4 notes; user decided retired players rank by distance; fix round sent to the author (ctx_63357609b130,
-spec tmp/fix-menu2-review1.md). The menu2-taste copy (82b8fe5) predates these fixes. Still pending: remove m3-t4 workspace once the
+spec tmp/fix-menu2-review1.md). The menu2-taste copy (82b8fe5) predates these fixes.
+MENU-2 fix round: 903f3b1 (verified clean; sim 387/387, bots 90/90); re-review ctx_19012f3cf47a; menu2-taste moved to 903f3b1 (:3005). Still pending: remove m3-t4 workspace once the
 user stops :3001 (PID 16470).
 
 **Resume (2026-11-16):** main 0dec6c9 (local, 15 ahead of origin) = ready check + engine
