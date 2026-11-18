@@ -2,7 +2,7 @@
 // the other cars, shots and mines, and the server clock estimate. No DOM access, so the
 // headless bot test drives exactly this code.
 
-import { angleDiff, BASE_STATS, CAR_RADIUS, cloneCar, TICK_HZ, type CarState, type CarStats, type Input } from "../shared/physics";
+import { angleDiff, BASE_STATS, CAR_RADIUS, cloneCar, TICK_HZ, wallLimit, type CarState, type CarStats, type Input } from "../shared/physics";
 import {
   CHAT_HISTORY,
   CHAT_MAX,
@@ -21,7 +21,7 @@ import {
   type ShotSnap,
 } from "../shared/protocol";
 import { statsFor, type Levels } from "../shared/shop";
-import type { Track } from "../shared/track";
+import { queryTrackNear, type Track } from "../shared/track";
 import { DEFAULT_TRACK_ID, findTrack, trackById } from "../shared/tracks";
 import {
   airHeight,
@@ -64,6 +64,32 @@ export interface Controls extends Input {
 
 export const NO_CONTROLS: Controls = { throttle: 0, steer: 0, fire: false, mine: false };
 
+/**
+ * Own-car sound cues, queued by step() only (reconcile's replays never queue one) and
+ * drained by the frame loop (takeOwnSounds; client/sfx.ts). No landing event exists: a
+ * landing is the last air tick ending without a fall. A wall hit carries its speed into the
+ * wall (wallHitSpeed).
+ */
+export type OwnSound = "takeoff" | "land" | "fall" | "recover" | "shot" | "mine" | "wall";
+export interface OwnCue {
+  k: OwnSound;
+  speed: number; // wall: units/s into the wall; 0 otherwise
+}
+const MAX_OWN_SOUNDS = 32; // bots and scripts never drain the queue
+const NO_SOUNDS: readonly OwnCue[] = [];
+export const WALL_HIT_MIN = 50; // units/s into the wall for a wall-hit cue
+
+/**
+ * Speed into the wall a step ended against, from the velocity before the step (collideWalls
+ * removes that component, shared/physics.ts): 0 when the car is not at the wall afterwards
+ * or was not moving into it. Same normal as the physics (queryTrackNear with the seg hint).
+ */
+export function wallHitSpeed(before: { vx: number; vy: number }, after: CarState, track: Track): number {
+  const q = queryTrackNear(track, after.x, after.y, after.seg);
+  if (q.dist < wallLimit(track) - 0.01) return 0;
+  return Math.max(0, before.vx * q.nx + before.vy * q.ny);
+}
+
 export interface Pose {
   id: string;
   x: number;
@@ -97,7 +123,7 @@ function airFall(a: CarState, b: CarState, t: number): { height: number; falling
   return out;
 }
 
-interface Snapshot {
+export interface Snapshot {
   time: number;
   cars: Map<string, CarSnap>;
   shots: Map<number, ShotSnap>;
@@ -136,7 +162,8 @@ export interface GameHandlers {
   welcome(): void;
   room(): void;
   garage(): void;
-  event(ev: GameEvent): void;
+  /** tick: the server tick the event happened in (snapshots carry theirs: snapTick). */
+  event(ev: GameEvent, tick: number): void;
   results(rows: ResultRow[]): void;
   /** A live chat line (already in game.chat). */
   chat(line: ChatLine): void;
@@ -190,6 +217,7 @@ export class Game {
   recStateErrors = 0;
   localShots: Shot[] = []; // cosmetic: our own rivets, drawn before the server confirms
   readonly contact = new Contacts(); // own-car bump prediction, near cars' drawn pose
+  private ownSounds: OwnCue[] = [];
   private cooldown = 0;
   private mineCounter = 0;
   private localShotId = 1;
@@ -197,6 +225,7 @@ export class Game {
   // Everyone (server view)
   snaps: Snapshot[] = [];
   latest: Snapshot | null = null;
+  snapTick = 0; // server tick of the last snapshot received
 
   on: Partial<GameHandlers> = {};
 
@@ -312,6 +341,7 @@ export class Game {
     this.localShots = [];
     this.cooldown = 0;
     this.contact.reset();
+    this.ownSounds = [];
   }
 
   private joinMsg(): ClientMsg {
@@ -458,7 +488,7 @@ export class Game {
         this.on.error?.(msg.msg);
         return;
       case "ev":
-        this.on.event?.(msg.ev);
+        this.on.event?.(msg.ev, msg.tick);
         return;
       case "results":
         this.results = msg.rows;
@@ -495,6 +525,7 @@ export class Game {
     this.phase = msg.phase;
     this.phaseEnds = msg.phaseEnds;
     this.serverAmmo = msg.ammo;
+    this.snapTick = msg.tick;
     const snap: Snapshot = { time: msg.time, cars: new Map(), shots: new Map(), mines: [] };
     for (const e of msg.ents) {
       if (e.k === "car") snap.cars.set(e.id, e);
@@ -651,6 +682,12 @@ export class Game {
     if (this.cooldown > 0) this.cooldown--;
     const ev = stepRaceCar(this.car, cmd, this.stats, this.track);
     this.contact.step(this.car, this.pending.length + 1); // the server applies it then
+    if (ev) this.cue(ev);
+    else if (this.prevCar.air > 0 && this.car.air === 0 && this.car.fall === 0) this.cue("land");
+    else if (this.car.air === 0 && this.car.fall === 0 && this.car.wreck === 0) {
+      const into = wallHitSpeed(this.prevCar, this.car, this.track); // a driving step: collideWalls ran
+      if (into >= WALL_HIT_MIN) this.cue("wall", into);
+    }
     // A respawn, a take-off or a recovery: drawn from the new state, no slide into it.
     if ((this.prevCar.wreck > 0 && this.car.wreck === 0) || ev === "takeoff" || ev === "recover") {
       this.prevCar = cloneCar(this.car);
@@ -664,7 +701,9 @@ export class Game {
       this.localShots.push(spawnShot(this.car, this.localShotId++, this.you));
       this.cooldown = RIVET_COOLDOWN;
       fired = true;
+      this.cue("shot");
     }
+    if (minePress && armedNow) this.cue("mine");
     this.pending.push({ seq, cmd, fired, mine: minePress && armedNow });
     this.history.set(seq, cloneCar(this.car));
     if (this.pending.length > MAX_PENDING) {
@@ -675,6 +714,19 @@ export class Game {
       .slice(-INPUT_REDUNDANCY)
       .map((p) => [p.seq, p.cmd.throttle, p.cmd.steer, p.cmd.buttons]);
     this.send({ t: "in", i: tail });
+  }
+
+  /** The own car's sound cues queued since the last call (client/sfx.ts). */
+  takeOwnSounds(): readonly OwnCue[] {
+    if (!this.ownSounds.length) return NO_SOUNDS;
+    const out = this.ownSounds;
+    this.ownSounds = [];
+    return out;
+  }
+
+  private cue(k: OwnSound, speed = 0): void {
+    this.ownSounds.push({ k, speed });
+    if (this.ownSounds.length > MAX_OWN_SOUNDS) this.ownSounds.shift();
   }
 
   /**
@@ -795,6 +847,11 @@ export class Game {
       out.push({ x: s.x + (s.vx * dt) / 1000, y: s.y + (s.vy * dt) / 1000, vx: s.vx, vy: s.vy });
     }
     return out;
+  }
+
+  /** The snapshot other cars, shots and mines are drawn from: the older one at the interpolation time. */
+  interpSnapshot(): Snapshot | null {
+    return this.bracket()?.a ?? null;
   }
 
   /** Mines as of the interpolation time, so they vanish when the (past) car hits them. */

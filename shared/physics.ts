@@ -105,10 +105,15 @@ export function stepCar(c: CarState, input: Input, stats: CarStats, track: Track
   collideWalls(c, track);
 }
 
+/** How far from the centerline a car's centre may go: its side touches the wall there. */
+export function wallLimit(track: Track): number {
+  return track.wall - CAR_WIDTH / 2;
+}
+
 function collideWalls(c: CarState, track: Track): void {
   const q = queryTrackNear(track, c.x, c.y, c.seg);
   c.seg = q.seg;
-  const limit = track.wall - CAR_WIDTH / 2;
+  const limit = wallLimit(track);
   if (q.dist <= limit) return;
   c.x -= q.nx * (q.dist - limit);
   c.y -= q.ny * (q.dist - limit);
