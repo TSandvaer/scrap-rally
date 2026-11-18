@@ -156,6 +156,9 @@ SND-4 re-review: REQUEST_CHANGES #2 (grabbed sticks in WebKit) -> user: fix then
 SND-4: user approved the taste test; merge after the WebKit fix + re-check.
 SND-4 round 3: 770d402 (SliderGrip ends a drag on pointerup too; default music 0.4 with legacy-0.5 migration; sim 486/486, bots 95/95;
 merges cleanly); re-check ctx_3f1ecf523cbc. Merge on APPROVE.
+SND-4 MERGED 2026-11-18: re-check APPROVE; main ab39ede (check clean, sim 486/486, bots 95/95, build ok); workers released, snd4
+workspace and snd3-taste removed; snd4-taste stays while the user's :3009 server runs from it. NOTHING IN FLIGHT. Local main is ahead
+of origin/live a41b49b with: Esc menu (MENU-1..3), SND-3, SND-5, SND-4. Next: ask the user about push + deploy.
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
 SND-3 done: 47606ac (sim 394/394, bots 90/90); review APPROVE (ctx_1b41cd13cc04; notes: switch-on restores the volume
 remembered at the last switch-off; storage can't tell own from default -> SND-4); FROZEN COPY ~/orca/workspaces/scrap-rally/snd3-taste
@@ -210,7 +213,6 @@ Manual Deploy only on the user's go-ahead. The user's own dev server runs on :30
 
 | Ticket | Dispatch | Workspace | Branch | Port | Started |
 | --- | --- | --- | --- | --- | --- |
-| 123jpnbfa7e SND-4 | ctx_926803ba25ea | ~/orca/workspaces/scrap-rally/snd4 | TSandvaer/snd4 | 3006 | 2026-11-18 |
 
 ## Queued (milestone 3, PLAN-M3.md; start after solid collisions 123jpnbf6cy and easier-start 123jpnbf3xa merge)
 
