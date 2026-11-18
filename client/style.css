@@ -615,7 +615,9 @@ h2 {
 }
 
 .gm-room-sound .music-switch {
-  align-self: flex-start;
+  min-width: 0;
+  padding: 3px 8px;
+  font-size: 11px;
 }
 
 /* ---- room chat (client/chat.ts) ---------------------------------------------------- */
@@ -1083,7 +1085,8 @@ h2 {
   line-height: 1.4;
 }
 
-.gm-sound .vol {
+.gm-sound .vol,
+.gm-room-sound .vol {
   display: grid;
   grid-template-columns: 70px 1fr auto;
   align-items: center;
@@ -1091,7 +1094,8 @@ h2 {
   font-size: 13px;
 }
 
-.gm-sound input[type="range"] {
+.gm-sound input[type="range"],
+.gm-room-sound input[type="range"] {
   width: 100%;
   margin: 0;
   padding: 0;

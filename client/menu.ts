@@ -68,6 +68,7 @@ export class GameMenu {
   private resetBtn: HTMLButtonElement | null = null;
   private room: { toggle: HTMLButtonElement; music: HTMLInputElement; effects: HTMLInputElement } | null = null;
   private roomMusicStart: number | undefined = undefined; // the room's volume as a Room Music slider drag began
+  private grabbed: HTMLInputElement | null = null; // the Sound view slider being dragged
   private readonly roomSend: PatchThrottle<RoomSound>;
 
   constructor(private readonly deps: MenuDeps) {
@@ -179,6 +180,7 @@ export class GameMenu {
     const focused = document.activeElement instanceof HTMLElement && this.body.contains(document.activeElement) ? document.activeElement.dataset.key : undefined;
     this.music = this.effects = this.muteBtn = this.resetBtn = this.musicTag = this.effectsTag = null;
     this.room = null;
+    this.grabbed = null;
     this.builtHost = g.isHost();
     if (this.view === "main") this.body.replaceChildren(...this.mainView());
     else if (this.view === "sound") this.body.replaceChildren(...this.soundView());
@@ -346,8 +348,16 @@ export class GameMenu {
       input.id = id;
       input.dataset.key = key;
       input.setAttribute("aria-labelledby", cap.id);
-      // Blur on release, so the slider shows the room's live changes again (render skips a focused one).
-      input.addEventListener("change", () => input.blur());
+      // A slider being dragged is not moved by renderSound (between its input and its change);
+      // it blurs on release, so the driving keys are free again.
+      input.addEventListener("input", () => (this.grabbed = input));
+      input.addEventListener("change", () => {
+        if (this.grabbed === input) this.grabbed = null;
+        input.blur();
+      });
+      input.addEventListener("blur", () => {
+        if (this.grabbed === input) this.grabbed = null;
+      });
       row.append(cap, input);
       let mark: HTMLElement | null = null;
       if (tag) {
@@ -390,7 +400,8 @@ export class GameMenu {
       rm.addEventListener("change", () => (this.roomMusicStart = undefined));
       re.addEventListener("input", () => this.roomSend.push({ effects: Number(re.value) / 100 }));
       this.room = { toggle, music: rm, effects: re };
-      rs.append(head, toggle, rmRow, reRow, el("p", "muted fine", "Every player hears these for the settings they have not changed themselves. Mute (M) stays each player's own."));
+      rmRow.append(toggle); // the row's last column, where the own rows have their mark
+      rs.append(head, rmRow, reRow, el("p", "muted fine", "Every player hears these for the settings they have not changed themselves. Mute (M) stays each player's own."));
       out.push(rs);
     }
     out.push(this.backButton());
@@ -401,7 +412,7 @@ export class GameMenu {
   private renderSound(): void {
     const a = this.deps.audio;
     const s = a.settings;
-    const active = document.activeElement;
+    const active = this.grabbed;
     if (this.music && active !== this.music) this.music.value = String(Math.round(musicHeard(s) * 100));
     if (this.effects && active !== this.effects) this.effects.value = String(Math.round(s.effects * 100));
     if (this.muteBtn) {
