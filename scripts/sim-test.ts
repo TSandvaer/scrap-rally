@@ -6370,7 +6370,186 @@ function songPlayer(): void {
   }
 }
 
-for (const t of [rivets, gating, mines, wrecks, finishing, garage, armDelay, engine, readyCheck, collisions, trackFeatures, roomTrack, jumpsWired, shippedTracks, botDriver, botLaps, mineCap, chatRoom, chatClient, sound, raceSounds, surfaceSounds, audioUnlock, menuHostOnly, menuStop, menuRestart, menuKick, menuLock, menuHandover, menuClient, menuRestartClient, retireRules, retireField, retireRaceEnd, retireGarage, retireRefund, retireOthers, retireNotices, retireClient, pauseRefused, pauseFreeze, pauseResume, pauseHold, pauseAuto, pauseCooldown, pauseGrace, pauseCountdown, pauseControls, pauseClient, musicSwitch, soundMigration, soundLayers, soundServer, soundRandom, soundRoomDrag, soundSliderGrip, soundClient, songs, songPlayer]) {
+// ---- own rivets after a predicted recovery or respawn (ClickUp 123jpnbfayd, 2026-11-18) ----
+
+// This section's imports (hoisted like the ones at the top).
+import { findTrack } from "../shared/tracks";
+// The server ghosts a car from its recovery (and after a wreck respawn) and refuses its shots;
+// the client must predict that ghost itself, because the latest snapshot still shows the car
+// not ghosted for a round trip after the predicted recovery.
+
+/**
+ * A client Game on a Rooms server over an in-process link that delays every message by
+ * oneWayMs each way (0: inputs reach the server at once, as in wiredGame). up() hands the
+ * server the inputs due by now, down() hands the client the messages due by now.
+ */
+function laggedGame(rooms: Rooms, clock: { now: number }, oneWayMs: number): { game: Game; open(): void; up(): void; down(): void } {
+  const toClient: { at: number; m: ServerMsg }[] = [];
+  const toServer: { at: number; m: ClientMsg }[] = [];
+  const session: Session = { conn: { send: (m) => void toClient.push({ at: clock.now + oneWayMs, m: decode<ServerMsg>(encode(m))! }), close() {} }, room: null, player: null };
+  const deliver = (m: ClientMsg) => rooms.onMessage(session, decode<ClientMsg>(encode(m)), clock.now);
+  const tr: Transport = {
+    send: (m) => (oneWayMs === 0 ? deliver(m) : void toServer.push({ at: clock.now + oneWayMs, m })),
+    close() {},
+    onOpen() {},
+    onMessage() {},
+    onClose() {},
+  };
+  const game = new Game(() => tr, { get: () => null, set() {} });
+  return {
+    game,
+    open: () => tr.onOpen(),
+    up: () => {
+      while (toServer.length && toServer[0].at <= clock.now) deliver(toServer.shift()!.m);
+    },
+    down: () => {
+      while (toClient.length && toClient[0].at <= clock.now) tr.onMessage(toClient.shift()!.m);
+    },
+  };
+}
+
+interface GhostRivetRun {
+  cues: number; // own "shot" cues (step() only)
+  drawn: number; // local shots drawn
+  fired: number; // rivets the server fired (ammo delta)
+  /** Loop ticks of the predicted event (recover cue / respawn), the server's, and the shots. */
+  predictedAt: number;
+  serverAt: number;
+  cueTicks: number[];
+  serverTicks: number[];
+  recErrs: number;
+}
+
+/**
+ * One car alone on the T1b track, weapons armed, rivet gun held. "fall": it waits for the
+ * weapons, fires 30 ticks standing, then the jump-then-roll-off script drives it into the
+ * second gap and through the recovery, still firing, then 150 ticks more. "wreck": it fires
+ * standing and the server wrecks it (combat.damage), then 250 ticks more (respawn + ghost).
+ * Then the gun is released and every input in flight drains.
+ */
+function ghostRivetRun(kind: "fall" | "wreck", rttMs: number): GhostRivetRun {
+  const realNow = performance.now.bind(performance);
+  const clock = { now: realNow() };
+  performance.now = () => clock.now;
+  try {
+    const rooms = new Rooms(1);
+    const J = laggedGame(rooms, clock, rttMs / 2);
+    let i = 0;
+    const step = (ctl: Controls) => {
+      i++;
+      clock.now += 1000 / 60;
+      J.up();
+      rooms.step(clock.now);
+      J.down();
+      J.game.step(ctl, 1000 / 60);
+    };
+    const until = (done: () => boolean, max = 600) => {
+      for (let k = 0; k < max && !done(); k++) step(NO_CONTROLS);
+    };
+    J.game.create("Gunner");
+    J.open();
+    until(() => !!J.game.you);
+    J.game.pickTrack(T1B_ID);
+    until(() => J.game.trackId === T1B_ID);
+    J.game.start();
+    const room = [...rooms.rooms.values()][0];
+    until(() => room.phase === "racing" && !!J.game.car);
+    const me = room.players.get(J.game.you)!;
+    me.ammo.rivets = 200;
+    const ammo0 = me.ammo.rivets;
+    const script = new JumpFallScript(trackById(T1B_ID));
+    const out: GhostRivetRun = { cues: 0, drawn: 0, fired: 0, predictedAt: -1, serverAt: -1, cueTicks: [], serverTicks: [], recErrs: 0 };
+    const drawnIds = new Set<number>();
+    let stage: "wait" | "stand" | "drive" | "hold" | "drain" | "end" = "wait";
+    let n = 0;
+    let lastAmmo = me.ammo.rivets;
+    let serverFall = false;
+    let serverWreck = false;
+    let predWreck = false;
+    for (let k = 0; k < 60 * 60 && stage !== "end"; k++) {
+      const c = J.game.car;
+      const drive = stage === "drive" ? script.controls(c) : NO_CONTROLS;
+      const wasPredWreck = (c?.wreck ?? 0) > 0;
+      step({ ...drive, fire: stage !== "drain" }); // held from the start: the client sends it once armed
+      const nc = J.game.car;
+      for (const cue of J.game.takeOwnSounds()) {
+        if (cue.k === "shot") {
+          out.cues++;
+          out.cueTicks.push(i);
+        } else if (cue.k === "recover" && out.predictedAt < 0) out.predictedAt = i;
+      }
+      if (kind === "wreck" && wasPredWreck && nc && nc.wreck === 0 && out.predictedAt < 0) out.predictedAt = i;
+      predWreck ||= (nc?.wreck ?? 0) > 0;
+      for (const s of J.game.localShots) drawnIds.add(s.id);
+      if (me.ammo.rivets < lastAmmo) out.serverTicks.push(i);
+      lastAmmo = me.ammo.rivets;
+      const sc = me.car!;
+      if (serverFall && sc.fall === 0 && out.serverAt < 0 && kind === "fall") out.serverAt = i;
+      serverFall ||= sc.fall > 0;
+      if (serverWreck && sc.wreck === 0 && out.serverAt < 0 && kind === "wreck") out.serverAt = i;
+      serverWreck ||= sc.wreck > 0;
+      n++;
+      if (stage === "wait" && J.game.armed() && J.game.predictedAmmo()[0] > 0) [stage, n] = ["stand", 0];
+      else if (stage === "stand" && n >= 30) {
+        if (kind === "fall") [stage, n] = ["drive", 0];
+        else {
+          room.combat.damage(me, me.hp, "nobody", "rivet");
+          [stage, n] = ["hold", 0];
+        }
+      } else if (stage === "drive" && script.done()) [stage, n] = ["hold", 0];
+      else if (stage === "hold" && n >= (kind === "fall" ? 150 : 250)) [stage, n] = ["drain", 0];
+      else if (stage === "drain" && n >= 60 && J.game.pending.length === 0) stage = "end";
+      else if (stage === "drain" && n >= 600) stage = "end";
+    }
+    out.drawn = drawnIds.size;
+    out.fired = ammo0 - me.ammo.rivets;
+    out.recErrs = J.game.recStateErrors;
+    if (kind === "wreck" && !predWreck) out.predictedAt = -2; // the client never saw the wreck
+    return out;
+  } finally {
+    performance.now = realNow;
+  }
+}
+
+function ghostRivets(): void {
+  if (!findTrack(T1B_ID)) registerTestTrack(T1B_DEF); // jumpsWired registers it first
+  for (const rtt of [0, 70]) {
+    const r = ghostRivetRun("fall", rtt);
+    const inGhost = r.cueTicks.filter((t) => t >= r.predictedAt && t <= r.predictedAt + GHOST_TICKS).length;
+    const after = r.cueTicks.filter((t) => t > r.predictedAt + GHOST_TICKS);
+    const serverAfter = r.serverTicks.filter((t) => t > r.serverAt).length;
+    const detail = `cues ${r.cues}, drawn ${r.drawn}, server fired ${r.fired}; predicted recover @${r.predictedAt}, server @${r.serverAt}; cues in the ghost ${inGhost}, after ${after.length} (first @${after[0] ?? "-"}), server shots after its recover ${serverAfter}`;
+    check(
+      `ghost rivets ${rtt} ms: holding fire through a fall and recovery, own rivet cues == local shots drawn == rivets the server fired`,
+      r.predictedAt > 0 && r.serverAt > 0 && r.cues === r.drawn && r.drawn === r.fired && r.fired > 0,
+      detail,
+    );
+    check(
+      `ghost rivets ${rtt} ms: no own shot inside the predicted ghost; firing resumes after it (on both sides)`,
+      inGhost === 0 && after.length > 0 && serverAfter > 0 && after[0] - (r.predictedAt + GHOST_TICKS) <= RIVET_COOLDOWN + 2 + Math.ceil((rtt / 1000) * 60) + SNAPSHOT_EVERY,
+      detail,
+    );
+  }
+  // The wreck itself comes from the server unannounced (a hit can't be predicted), so shots
+  // predicted in the round trip before the client sees it are another gap: compare from the
+  // respawn on (the predicted one for the client, the server's for the server).
+  for (const rtt of [0, 70]) {
+    const r = ghostRivetRun("wreck", rtt);
+    const cues = r.cueTicks.filter((t) => t >= r.predictedAt).length;
+    const fired = r.serverTicks.filter((t) => t >= r.serverAt).length;
+    const inGhost = r.cueTicks.filter((t) => t >= r.predictedAt && t <= r.predictedAt + GHOST_TICKS).length;
+    const after = r.cueTicks.filter((t) => t > r.predictedAt + GHOST_TICKS);
+    const detail = `all: cues ${r.cues}, drawn ${r.drawn}, server fired ${r.fired}; from the respawn: cues ${cues}, server fired ${fired}; predicted respawn @${r.predictedAt}, server @${r.serverAt}; cues in the ghost ${inGhost}, after ${after.length} (first @${after[0] ?? "-"})`;
+    check(
+      `ghost rivets ${rtt} ms: holding fire through a wreck respawn, own rivet cues from the respawn == rivets the server fired from its respawn; none in the ghost, firing resumes`,
+      r.predictedAt > 0 && r.serverAt > 0 && r.cues === r.drawn && cues === fired && fired > 0 && inGhost === 0 &&
+        after[0] - (r.predictedAt + GHOST_TICKS) <= RIVET_COOLDOWN + 2 + Math.ceil((rtt / 1000) * 60) + SNAPSHOT_EVERY,
+      detail,
+    );
+  }
+}
+
+for (const t of [rivets, gating, mines, wrecks, finishing, garage, armDelay, engine, readyCheck, collisions, trackFeatures, roomTrack, jumpsWired, shippedTracks, botDriver, botLaps, mineCap, chatRoom, chatClient, sound, raceSounds, surfaceSounds, audioUnlock, menuHostOnly, menuStop, menuRestart, menuKick, menuLock, menuHandover, menuClient, menuRestartClient, retireRules, retireField, retireRaceEnd, retireGarage, retireRefund, retireOthers, retireNotices, retireClient, pauseRefused, pauseFreeze, pauseResume, pauseHold, pauseAuto, pauseCooldown, pauseGrace, pauseCountdown, pauseControls, pauseClient, musicSwitch, soundMigration, soundLayers, soundServer, soundRandom, soundRoomDrag, soundSliderGrip, soundClient, songs, songPlayer, ghostRivets]) {
   console.log(`\n# ${t.name}`);
   try {
     t();
