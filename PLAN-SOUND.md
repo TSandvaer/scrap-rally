@@ -128,8 +128,8 @@ they make their own change". User choices (popup): per setting and remembered (a
 room; untouched settings follow the host); live follow when the host changes them; a "Use host's sound" reset button. The
 master Mute (M) stays personal.
 
-1. Room state: soundDefaults {musicOn, music 0..1, effects 0..1} on the Room, initial = built-in defaults (music 0.5 on,
-   effects 0.8), carried in the room message, kept on host handover, gone with the room. Host-only C->S {t:"soundDefaults",
+1. Room state: soundDefaults {musicOn, music 0..1, effects 0..1} on the Room, initial = built-in defaults (music 0.4 on since
+   2026-11-18, was 0.5; effects 0.8), carried in the room message, kept on host handover, gone with the room. Host-only C->S {t:"soundDefaults",
    musicOn?, music?, effects?} in any phase, following setLocked (server/room.ts:516-523): host check, err on a wrong type (no
    silent clamp), volumes snapped to 0.05, no broadcast when unchanged, a per-room Bucket (~2 changes/s, like chat's,
    room.ts:327). Built-in defaults + clampVolume move to a new shared/sound.ts (the server imports nothing from client/).
