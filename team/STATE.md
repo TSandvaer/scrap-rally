@@ -130,6 +130,9 @@ MENU-3 123jpnbf9pj in flight: ctx_719f299ee99f (~/orca/workspaces/scrap-rally/me
 MENU-3 done: 8916137 (sim 420/420, bots 92/92; adds a server-side resume hold, not in the spec; design notes in
 tmp/menu3/MENU-3-report.md); reviewer ctx_97c8c95b896f; FROZEN COPY ~/orca/workspaces/scrap-rally/menu3-taste (8916137) on :3009.
 MENU-3: user approved the taste test; merge waits only for the review.
+MENU-3 MERGED 2026-11-18: review APPROVE (non-blocking: dead canPause(), a cosmetic local rivet for inputs discarded at the
+pause, hold length not pinned in a test); main dd5708b (check clean, sim 420/420, bots 92/92, build ok). ESC MENU COMPLETE LOCALLY
+(MENU-1..3). Workers released; menu3 workspace, menu3-taste and menu1-taste removed.
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
 SND-3 done: 47606ac (sim 394/394, bots 90/90); review APPROVE (ctx_1b41cd13cc04; notes: switch-on restores the volume
 remembered at the last switch-off; storage can't tell own from default -> SND-4); FROZEN COPY ~/orca/workspaces/scrap-rally/snd3-taste
@@ -186,7 +189,6 @@ Manual Deploy only on the user's go-ahead. The user's own dev server runs on :30
 | --- | --- | --- | --- | --- | --- |
 | 123jpnbfa7m SND-5 | ctx_e20700e1079f | ~/orca/workspaces/scrap-rally/snd5 | TSandvaer/snd5 | 3008 | 2026-11-18 |
 | 123jpnbfa3a SND-3 | ctx_f56ecded07e9 | ~/orca/workspaces/scrap-rally/snd3 | TSandvaer/snd3 | 3007 | 2026-11-18 |
-| 123jpnbf9pj MENU-3 | ctx_719f299ee99f | ~/orca/workspaces/scrap-rally/menu3 | TSandvaer/menu3 | 3006 | 2026-11-18 |
 
 ## Queued (milestone 3, PLAN-M3.md; start after solid collisions 123jpnbf6cy and easier-start 123jpnbf3xa merge)
 
