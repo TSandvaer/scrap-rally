@@ -31,7 +31,7 @@ import {
   MUSIC_FADE_OUT_S,
   MusicDirector,
   musicWanted,
-  parseSoundSettings,
+  parseStoredSound,
   SEQ_LOOKAHEAD_S,
   SEQ_START_DELAY_S,
   SEQ_TIMER_MS,
@@ -3073,17 +3073,20 @@ function chatClient(): void {
 // ---- sound (SND-1, PLAN-SOUND.md, 2026-11-17): settings, music state, sequencer timing ----
 
 function sound(): void {
-  // Settings: defaults, clamping, broken storage.
-  const d = parseSoundSettings(null);
-  const broken = parseSoundSettings("{not json");
-  const clamped = parseSoundSettings(JSON.stringify({ music: 2, effects: -1, muted: "yes" }));
-  const kept = parseSoundSettings(JSON.stringify({ music: 0.3, effects: 0.65, muted: true }));
-  const partial = parseSoundSettings(JSON.stringify({ effects: 0.2 }));
+  // Settings: defaults, clamping, broken storage (SND-4: only moved keys are the player's own).
+  const d = parseStoredSound(null);
+  const broken = parseStoredSound("{not json");
+  const clamped = parseStoredSound(JSON.stringify({ v: 2, own: { music: 2, effects: -1, musicOn: "yes" }, muted: "yes" }));
+  const kept = parseStoredSound(JSON.stringify({ v: 2, own: { music: 0.3, effects: 0.65 }, muted: true }));
+  const partial = parseStoredSound(JSON.stringify({ v: 2, own: { effects: 0.2 } }));
+  const eff = (st: ReturnType<typeof parseStoredSound>) => effectiveSound(st.own, null);
   check(
-    "sound settings: defaults music 0.5, effects 0.8, unmuted; broken or missing values fall back; out of range clamps",
-    d.music === 0.5 && d.effects === 0.8 && !d.muted && JSON.stringify(broken) === JSON.stringify(DEFAULT_SOUND) &&
-      clamped.music === 1 && clamped.effects === 0 && clamped.muted === false &&
-      kept.music === 0.3 && kept.effects === 0.65 && kept.muted && partial.music === 0.5 && partial.effects === 0.2,
+    "sound settings: defaults music on 0.5, effects 0.8, unmuted, nothing own; broken or missing values fall back; out of range clamps",
+    DEFAULT_SOUND.musicOn && DEFAULT_SOUND.music === 0.5 && DEFAULT_SOUND.effects === 0.8 && !DEFAULT_SOUND.muted &&
+      JSON.stringify(d) === JSON.stringify({ own: {}, muted: false, engine: DEFAULT_SOUND.engine }) && JSON.stringify(broken) === JSON.stringify(d) &&
+      eff(d).music === 0.5 && eff(d).effects === 0.8 && eff(d).musicOn &&
+      clamped.own.music === 1 && clamped.own.effects === 0 && clamped.own.musicOn === undefined && clamped.muted === false &&
+      eff(kept).music === 0.3 && eff(kept).effects === 0.65 && kept.muted && eff(partial).music === 0.5 && eff(partial).effects === 0.2 && partial.own.music === undefined,
     `${JSON.stringify(d)} ${JSON.stringify(clamped)} ${JSON.stringify(partial)}`,
   );
   const key = (code: string, mods: Partial<{ repeat: boolean; ctrlKey: boolean; metaKey: boolean; altKey: boolean; shiftKey: boolean }> = {}) =>
@@ -3458,12 +3461,12 @@ function raceSounds(): void {
   const ranges = ENGINE_PRESETS.map((p) => `${p} ${ENGINES[p].idleHz}-${ENGINES[p].topHz} Hz`);
   const rangesOk = ENGINE_PRESETS.every((p) => ENGINES[p].idleHz >= 25 && ENGINES[p].idleHz <= 40 && ENGINES[p].topHz >= 150 && ENGINES[p].topHz <= 220);
   const distinct = new Set(ENGINE_PRESETS.map((p) => JSON.stringify(ENGINES[p].pulses))).size === ENGINE_PRESETS.length;
-  const stored = parseSoundSettings(JSON.stringify({ engine: "v8" })).engine;
-  const unknown = parseSoundSettings(JSON.stringify({ engine: "electric" })).engine;
+  const stored = parseStoredSound(JSON.stringify({ engine: "v8" })).engine;
+  const unknown = parseStoredSound(JSON.stringify({ engine: "electric" })).engine;
   check(
     "sfx engine presets: 3 distinct petrol engines, idle firing 25-40 Hz up to 150-220 Hz at top speed; the choice is a stored sound setting (unknown -> the default)",
     ENGINE_PRESETS.length === 3 && rangesOk && distinct && stored === "v8" && unknown === DEFAULT_SOUND.engine && ENGINE_PRESETS.includes(DEFAULT_SOUND.engine) &&
-      parseSoundSettings(null).engine === DEFAULT_SOUND.engine,
+      parseStoredSound(null).engine === DEFAULT_SOUND.engine,
     `${ranges.join(", ")}; default ${DEFAULT_SOUND.engine}`,
   );
 
@@ -4869,62 +4872,479 @@ function retireClient(): void {
   }
 }
 
-// ---- lobby Music switch (SND-3, client/audio.ts) ------------------------------------------
+// ---- lobby Music switch (SND-3, client/audio.ts; a real musicOn flag since SND-4) ---------
 
 // This section's imports (hoisted like the ones at the top).
-import { musicIsOn, musicSwitched, parseMusicBack } from "../client/audio";
+import { effectiveSound, musicHeard, musicIsOn, musicSlid, musicSwitched, PatchThrottle, storedSoundJson } from "../client/soundlogic";
+import { resetLabel, roomTag } from "../client/audio";
 
-/**
- * Music off is a music volume of 0 (so every Music slider shows it); off remembers the volume,
- * on brings it back (or the default). The switch and its memory persist in the sound entry,
- * and leave the effects and the master mute alone.
- */
-function musicSwitch(): void {
-  const off = musicSwitched(0.7, 0);
-  const on = musicSwitched(off.music, off.remembered);
-  check("music switch: off sets the music volume to 0 and remembers 0.7; on brings 0.7 back", off.music === 0 && off.remembered === 0.7 && on.music === 0.7 && on.remembered === 0.7, JSON.stringify({ off, on }));
-  const fresh = musicSwitched(0, 0);
-  check("music switch: on with nothing remembered (slider dragged to 0) gives the default volume", fresh.music === DEFAULT_SOUND.music && fresh.music > 0, JSON.stringify(fresh));
-  check("music switch: on/off is read from the volume (0 = off)", !musicIsOn({ music: 0 }) && musicIsOn({ music: 0.05 }) && musicIsOn({ music: 1 }));
-  const parsed = [parseMusicBack(null), parseMusicBack("{"), parseMusicBack('{"musicBack":"x"}'), parseMusicBack('{"musicBack":7}'), parseMusicBack('{"musicBack":0.35}'), parseMusicBack("[1]")];
-  check("music switch: the remembered volume parses missing/broken values to 0 and clamps to 0..1", JSON.stringify(parsed) === JSON.stringify([0, 0, 0, 1, 0.35, 0]), JSON.stringify(parsed));
-
-  // AudioEngine round trip on a fake localStorage (no AudioContext: the buses come with the unlock).
+/** A fake localStorage for the AudioEngine (no AudioContext: the buses come with the unlock). */
+function withStore(run: (store: Map<string, string>) => void): void {
   const g = globalThis as unknown as Record<string, unknown>;
   const had = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
   const store = new Map<string, string>();
   const fake = { getItem: (k: string) => store.get(k) ?? null, setItem: (k: string, v: string) => void store.set(k, String(v)) };
   Object.defineProperty(globalThis, "localStorage", { value: fake, configurable: true, writable: true });
   try {
+    run(store);
+  } finally {
+    if (had) Object.defineProperty(globalThis, "localStorage", had);
+    else delete g.localStorage;
+  }
+}
+
+const SOUND_KEY = "scrap-rally:sound";
+
+/**
+ * The Music switch: off is musicOn false (the volume stays, so on brings it back), on is
+ * musicOn true (the default volume if the volume is 0). Every Music slider shows the heard
+ * volume (0 while off); moving one above 0 turns the music on, dragging it to 0 is the switch's
+ * off with the volume from before the drag. The master mute (M) is separate. Persisted as own
+ * keys (SND-4).
+ */
+function musicSwitch(): void {
+  const off = musicSwitched({ musicOn: true, music: 0.7 });
+  const on = musicSwitched({ musicOn: false, music: 0.7 });
+  check("music switch: off sets only musicOn false (the volume 0.7 stays); on sets musicOn true", JSON.stringify(off) === '{"musicOn":false}' && JSON.stringify(on) === '{"musicOn":true}', JSON.stringify({ off, on }));
+  const fresh = musicSwitched({ musicOn: true, music: 0 });
+  check("music switch: on with a volume of 0 (a host's or the sound board's 0) also gives the default volume", fresh.musicOn === true && fresh.music === DEFAULT_SOUND.music && DEFAULT_SOUND.music > 0, JSON.stringify(fresh));
+  check(
+    "music switch: on/off reads the heard music (musicOn and a volume above 0); the sliders show the heard volume",
+    !musicIsOn({ musicOn: false, music: 0.7 }) && !musicIsOn({ musicOn: true, music: 0 }) && musicIsOn({ musicOn: true, music: 0.05 }) &&
+      musicHeard({ musicOn: false, music: 0.7 }) === 0 && musicHeard({ musicOn: true, music: 0.4 }) === 0.4,
+  );
+  const up = musicSlid(0.3, { musicOn: false }, undefined);
+  const move = musicSlid(0.3, { musicOn: true }, undefined);
+  const down = musicSlid(0, { musicOn: true }, 0.6);
+  const downFollow = musicSlid(0, { musicOn: true }, undefined);
+  check(
+    "music switch: a slider moved above 0 while off turns the music on (SND-3's rule); while on it sets only the volume; dragged to 0 it is off with the volume from before the drag",
+    JSON.stringify(up) === '{"musicOn":true,"music":0.3}' && JSON.stringify(move) === '{"music":0.3}' && down.musicOn === false && down.music === 0.6 && downFollow.musicOn === false && downFollow.music === undefined,
+    JSON.stringify({ up, move, down, downFollow }),
+  );
+
+  withStore((store) => {
     const a = new AudioEngine();
     a.set({ music: 0.6, effects: 0.3 });
     a.toggleMute();
     let changes = 0;
     a.onChange(() => changes++);
     a.toggleMusic();
-    const afterOff = { ...a.settings, back: a.musicBack };
+    const afterOff = { ...a.settings, heard: musicHeard(a.settings) };
     const b = new AudioEngine(); // a reload
-    const reloaded = { ...b.settings, back: b.musicBack };
+    const reloaded = { ...b.settings };
     b.toggleMusic();
     check(
-      "music switch: off keeps effects 0.3 and the master mute; the switch notifies the controls; off and the remembered 0.6 survive a reload; on after the reload brings 0.6 back",
-      afterOff.music === 0 && afterOff.effects === 0.3 && afterOff.muted && afterOff.back === 0.6 && changes === 1 &&
-        reloaded.music === 0 && reloaded.back === 0.6 && reloaded.effects === 0.3 && reloaded.muted &&
-        b.settings.music === 0.6 && b.settings.effects === 0.3 && b.settings.muted,
-      `${JSON.stringify(afterOff)} -> reload ${JSON.stringify(reloaded)} -> on ${b.settings.music}; stored ${store.get("scrap-rally:sound")}`,
+      "music switch: off keeps effects 0.3, the volume 0.6 and the master mute; the switch notifies the controls; off survives a reload; on after the reload brings 0.6 back",
+      !afterOff.musicOn && afterOff.heard === 0 && afterOff.music === 0.6 && afterOff.effects === 0.3 && afterOff.muted && changes === 1 &&
+        !reloaded.musicOn && reloaded.music === 0.6 && reloaded.effects === 0.3 && reloaded.muted &&
+        b.settings.musicOn && musicHeard(b.settings) === 0.6 && b.settings.effects === 0.3 && b.settings.muted,
+      `${JSON.stringify(afterOff)} -> reload ${JSON.stringify(reloaded)} -> on ${JSON.stringify(b.settings)}; stored ${store.get(SOUND_KEY)}`,
     );
-    b.set({ music: 0 }); // a Music slider dragged to 0 is off too; the switch brings the remembered volume
-    const viaSlider = b.settings.music;
+    // A Music slider dragged down to 0 (one gesture) is off; the switch brings back the volume from before the drag.
+    for (const v of [0.45, 0.2, 0.05, 0]) b.slideMusic(v);
+    b.slideEnd();
+    const viaSlider = musicHeard(b.settings);
     const offViaSlider = !musicIsOn(b.settings);
     b.toggleMusic();
-    check("music switch: a slider dragged to 0 reads as off and the switch brings back the remembered volume", viaSlider === 0 && offViaSlider && b.settings.music === 0.6, `${viaSlider} -> ${b.settings.music}`);
-    store.set("scrap-rally:sound", '{"music":0.4,"effects":0.8,"muted":false,"engine":"v8"}'); // saved before SND-3
+    const back = musicHeard(b.settings);
+    // A slider moved above 0 while off turns the music on at that volume.
+    b.toggleMusic();
+    b.slideMusic(0.25);
+    b.slideEnd();
+    check(
+      "music switch: a slider dragged to 0 reads as off and the switch brings back the volume from before the drag (0.6); a slider moved above 0 while off turns it on at that volume",
+      viaSlider === 0 && offViaSlider && back === 0.6 && b.settings.musicOn && musicHeard(b.settings) === 0.25,
+      `${viaSlider} -> ${back}; then ${JSON.stringify(b.settings)}`,
+    );
+    store.set(SOUND_KEY, '{"music":0.4,"effects":0.8,"muted":false,"engine":"v8"}'); // saved before SND-3
     const old = new AudioEngine();
-    check("music switch: settings saved before the switch load unchanged (no remembered volume)", old.settings.music === 0.4 && old.settings.engine === "v8" && old.musicBack === 0, JSON.stringify({ ...old.settings, back: old.musicBack }));
-  } finally {
-    if (had) Object.defineProperty(globalThis, "localStorage", had);
-    else delete g.localStorage;
+    check(
+      "music switch: settings saved before the switch load unchanged (the moved music 0.4 own, the default effects not)",
+      old.settings.musicOn && old.settings.music === 0.4 && old.settings.engine === "v8" && JSON.stringify(old.own) === '{"music":0.4}',
+      JSON.stringify({ ...old.settings, own: old.own }),
+    );
+  });
+}
+
+// ---- host-set room sound defaults (SND-4, PLAN-SOUND.md, 2026-11-18) --------------------
+
+// This section's imports (hoisted like the ones at the top).
+import { BUILTIN_SOUND, DEFAULT_SONG_ID as SHARED_DEFAULT_SONG, RANDOM_SONG, snapVolume, SONG_IDS } from "../shared/sound";
+import { SOUND_BURST, SOUND_PER_SEC } from "../shared/protocol";
+
+/** Legacy entries (every key saved, SND-1..3) -> own only where the value differs from the built-in default. */
+function soundMigration(): void {
+  const m = (raw: unknown) => {
+    const st = parseStoredSound(JSON.stringify(raw));
+    return JSON.stringify({ own: st.own, muted: st.muted, engine: st.engine });
+  };
+  const rows: [string, unknown, string][] = [
+    ["an M-only entry (everything default, muted)", { music: 0.5, effects: 0.8, muted: true, engine: "buggy" }, '{"own":{},"muted":true,"engine":"buggy"}'],
+    ["default-equal values, another engine", { music: 0.5, effects: 0.8, muted: false, engine: "v8" }, '{"own":{},"muted":false,"engine":"v8"}'],
+    ["moved volumes", { music: 0.35, effects: 0.6, muted: false, engine: "buggy" }, '{"own":{"music":0.35,"effects":0.6},"muted":false,"engine":"buggy"}'],
+    ["SND-3 off with musicBack 0.7", { music: 0, musicBack: 0.7, effects: 0.8, muted: false, engine: "buggy" }, '{"own":{"musicOn":false,"music":0.7},"muted":false,"engine":"buggy"}'],
+    ["SND-3 off with the default musicBack", { music: 0, musicBack: 0.5, effects: 0.8, muted: false, engine: "buggy" }, '{"own":{"musicOn":false},"muted":false,"engine":"buggy"}'],
+    ["SND-3 off by the slider (no musicBack)", { music: 0, musicBack: 0, effects: 0.3, muted: true, engine: "four" }, '{"own":{"musicOn":false,"effects":0.3},"muted":true,"engine":"four"}'],
+    ["SND-3 on with a stale musicBack", { music: 0.5, musicBack: 0.9, effects: 0.8, muted: false, engine: "buggy" }, '{"own":{},"muted":false,"engine":"buggy"}'],
+    ["broken values", { music: "x", effects: null, muted: 1, engine: "jet" }, '{"own":{},"muted":false,"engine":"buggy"}'],
+  ];
+  const bad = rows.filter(([, raw, want]) => m(raw) !== want);
+  check(
+    "sound migration: a legacy value counts as own only if it differs from the built-in default; SND-3's music 0 is own musicOn false with musicBack as the volume (by the same rule); mute and engine kept",
+    bad.length === 0,
+    bad.map(([what, raw]) => `${what}: ${m(raw)}`).join("; ") || rows.map(([w]) => w).join(", "),
+  );
+  withStore((store) => {
+    store.set(SOUND_KEY, '{"music":0,"musicBack":0.7,"effects":0.8,"muted":false,"engine":"v8"}');
+    const a = new AudioEngine();
+    a.toggleMute(); // any save writes the new entry
+    const saved = JSON.parse(store.get(SOUND_KEY) ?? "{}") as Record<string, unknown>;
+    check(
+      "sound migration: the next save writes version 2 with only the own keys, the mute and the engine; musicBack is dropped",
+      saved.v === 2 && JSON.stringify(saved.own) === '{"musicOn":false,"music":0.7}' && saved.muted === true && saved.engine === "v8" && !("musicBack" in saved) && !("effects" in saved),
+      store.get(SOUND_KEY),
+    );
+    const again = new AudioEngine();
+    check("sound migration: the version-2 entry reads back the same", JSON.stringify(again.own) === '{"musicOn":false,"music":0.7}' && again.settings.muted && again.settings.engine === "v8", JSON.stringify(again.own));
+  });
+  check(
+    "sound migration: storedSoundJson writes only defined own keys",
+    storedSoundJson({ own: { music: 0.3, musicOn: undefined }, muted: false, engine: "buggy" }) === '{"v":2,"own":{"music":0.3},"muted":false,"engine":"buggy"}',
+  );
+}
+
+/** The engine's own + room layers (client/audio.ts AudioEngine, effectiveSound). */
+function soundLayers(): void {
+  check(
+    "sound layers: shared/sound.ts lists client/music.ts's songs (ids and order, the same default); the built-in room defaults are the client's",
+    SONG_IDS.join() === SONGS.map((x) => x.id).join() && SHARED_DEFAULT_SONG === DEFAULT_SONG_ID && BUILTIN_SOUND.song === DEFAULT_SONG_ID &&
+      BUILTIN_SOUND.musicOn === DEFAULT_SOUND.musicOn && BUILTIN_SOUND.music === DEFAULT_SOUND.music && BUILTIN_SOUND.effects === DEFAULT_SOUND.effects &&
+      BUILTIN_SOUND.musicOn && BUILTIN_SOUND.music === 0.5 && BUILTIN_SOUND.effects === 0.8 && BUILTIN_SOUND.song === "neon-tailpipe",
+    `${SONG_IDS.join()} vs ${SONGS.map((x) => x.id).join()}`,
+  );
+  const room = { musicOn: false, music: 0.3, effects: 0.6 };
+  check(
+    "sound layers: effectiveSound takes each own key, else the room's, else (outside a room) the built-in default",
+    JSON.stringify(effectiveSound({}, room)) === '{"musicOn":false,"music":0.3,"effects":0.6}' &&
+      JSON.stringify(effectiveSound({ effects: 0.1 }, room)) === '{"musicOn":false,"music":0.3,"effects":0.1}' &&
+      JSON.stringify(effectiveSound({ musicOn: true }, null)) === '{"musicOn":true,"music":0.5,"effects":0.8}' &&
+      JSON.stringify(effectiveSound({}, null)) === '{"musicOn":true,"music":0.5,"effects":0.8}',
+  );
+  withStore((store) => {
+    const a = new AudioEngine();
+    let changes = 0;
+    a.onChange(() => changes++);
+    a.setRoom({ musicOn: true, music: 0.3, effects: 0.6 });
+    a.setRoom({ musicOn: true, music: 0.3, effects: 0.6 }); // polled every frame: no change, no notice
+    const follow = { ...a.settings };
+    check(
+      "sound layers: untouched settings follow the room at once; the same room again changes nothing; no save for a room change",
+      follow.musicOn && follow.music === 0.3 && follow.effects === 0.6 && changes === 1 && !store.has(SOUND_KEY) && roomTag(a, "music") === "host's" && roomTag(a, "effects") === "host's" && resetLabel(a) === "",
+      `${JSON.stringify(follow)}, ${changes} notices, stored ${store.get(SOUND_KEY)}`,
+    );
+    // An own value equal to the host's stays pinned when the host changes it.
+    a.slideMusic(0.3);
+    a.slideEnd();
+    a.setRoom({ musicOn: true, music: 0.7, effects: 0.2 });
+    check(
+      "sound layers: an own value equal to the host's (music 0.3) stays when the host changes; the untouched effects follow (0.2); marks and the reset follow",
+      a.settings.music === 0.3 && a.settings.effects === 0.2 && !a.follows("music") && a.follows("effects") && roomTag(a, "music") === "" && roomTag(a, "effects") === "host's" && resetLabel(a) === "Use host's sound",
+      JSON.stringify({ ...a.settings, own: a.own }),
+    );
+    // The host turns the room's music off: a player who only moved the volume hears it off (and the mark says so).
+    a.setRoom({ musicOn: false, music: 0.7, effects: 0.2 });
+    check("sound layers: the host's music off silences a player who only moved the volume; the Music mark is the host's again", musicHeard(a.settings) === 0 && roomTag(a, "music") === "host's", JSON.stringify(a.settings));
+    // Mute and the engine are never room keys.
+    store.clear();
+    const b = new AudioEngine();
+    b.setRoom({ musicOn: true, music: 0.3, effects: 0.6 });
+    b.toggleMute();
+    b.setEngine("v8");
+    const saved = JSON.parse(store.get(SOUND_KEY) ?? "{}") as { own?: object };
+    check(
+      "sound layers: mute and the engine preset do not make music or effects own (nothing to reset; the save holds no room key)",
+      !b.hasOwn() && b.settings.muted && b.settings.engine === "v8" && b.settings.music === 0.3 && JSON.stringify(saved.own) === "{}" && resetLabel(b) === "",
+      store.get(SOUND_KEY),
+    );
+    // Reset: the room keys follow the room again; mute and engine stay.
+    b.set({ effects: 0.15 });
+    b.toggleMusic();
+    const before = { ...b.settings };
+    b.useRoomSound();
+    check(
+      "sound layers: \"Use host's sound\" resets musicOn, music and effects to the room's and keeps the mute and the engine",
+      !before.musicOn && before.effects === 0.15 && !b.hasOwn() && b.settings.musicOn && b.settings.music === 0.3 && b.settings.effects === 0.6 && b.settings.muted && b.settings.engine === "v8" && JSON.stringify((JSON.parse(store.get(SOUND_KEY)!) as { own: object }).own) === "{}",
+      `${JSON.stringify(before)} -> ${JSON.stringify(b.settings)}`,
+    );
+    // A second room with other defaults: the untouched keys follow it; own keys stay (per setting and remembered).
+    b.set({ effects: 0.4 });
+    b.setRoom({ musicOn: true, music: 0.9, effects: 1 });
+    const second = { ...b.settings };
+    b.setRoom(null);
+    const outside = { ...b.settings };
+    check(
+      "sound layers: in a second room with other defaults the untouched music follows it (0.9) and the own effects stay (0.4); outside a room the built-in defaults stand in (the mark and the reset are relabelled)",
+      second.music === 0.9 && second.effects === 0.4 && outside.music === 0.5 && outside.musicOn && outside.effects === 0.4 && roomTag(b, "music") === "" && resetLabel(b) === "Default sound",
+      `${JSON.stringify(second)} / ${JSON.stringify(outside)}`,
+    );
+    b.setRoom({ musicOn: true, music: 0.9, effects: 1 }, true);
+    check("sound layers: on the host's own controls the mark reads room and the reset Use room sound", roomTag(b, "music") === "room" && resetLabel(b) === "Use room sound");
+  });
+  // The host's Room sound throttle: the first send at once, the rest merged into one trailing send.
+  let now = 0;
+  const sent: string[] = [];
+  const timers: { at: number; fn: () => void }[] = [];
+  const th = new PatchThrottle<{ music: number; effects: number }>((p) => sent.push(JSON.stringify(p)), 500, () => now, (fn, ms) => timers.push({ at: now + ms, fn }));
+  th.push({ music: 0.1 });
+  now = 100;
+  th.push({ music: 0.2 });
+  now = 200;
+  th.push({ effects: 0.5 });
+  th.push({ music: 0.3 });
+  const early = sent.length;
+  now = 500;
+  for (const t of timers.splice(0)) if (t.at <= now) t.fn();
+  now = 2000;
+  th.push({ music: 0.4 });
+  check(
+    "room sound throttle: the first change goes at once; later ones within 500 ms go as one merged trailing send (the last value wins); after a quiet gap at once again",
+    early === 1 && sent.join("|") === '{"music":0.1}|{"music":0.3,"effects":0.5}|{"music":0.4}',
+    sent.join("|"),
+  );
+}
+
+/** Room messages a connection received. */
+function roomMsgs(c: FakeConn): Extract<ServerMsg, { t: "room" }>[] {
+  return c.msgs.filter((m): m is Extract<ServerMsg, { t: "room" }> => m.t === "room");
+}
+
+function soundServer(): void {
+  const R = menuRooms(["Ann", "Bo", "Cy"]);
+  const [, b] = R.p;
+  const first = lastRoomMsg(R.s[2].conn)!;
+  check(
+    "room sound: a new room starts with the built-in defaults (music on 0.5, effects 0.8, Neon Tailpipe) in everyone's room message",
+    JSON.stringify(first.soundDefaults) === '{"musicOn":true,"music":0.5,"effects":0.8,"song":"neon-tailpipe"}' && first.song === "neon-tailpipe" && JSON.stringify(R.room.soundDefaults) === JSON.stringify(BUILTIN_SOUND),
+    JSON.stringify(first.soundDefaults),
+  );
+  // Host only.
+  const e1 = errsOf(R.s[1].conn).length;
+  R.send(1, { t: "soundDefaults", music: 0.2 });
+  check("room sound: from anyone but the host it is refused with an err and nothing changes", errsOf(R.s[1].conn).slice(e1).join() === "Only the host can set the room sound" && R.room.soundDefaults.music === 0.5, errsOf(R.s[1].conn).slice(e1).join());
+  // A partial patch, snapped to 0.05.
+  const n0 = roomMsgs(R.s[1].conn).length;
+  R.send(0, { t: "soundDefaults", music: 0.33 });
+  const rm = lastRoomMsg(R.s[1].conn)!;
+  check(
+    "room sound: a partial patch changes only its key, snapped to 0.05 (0.33 -> 0.35), and reaches everyone in one room message",
+    rm.soundDefaults.music === 0.35 && rm.soundDefaults.effects === 0.8 && rm.soundDefaults.musicOn && rm.soundDefaults.song === "neon-tailpipe" && roomMsgs(R.s[1].conn).length === n0 + 1 && lastRoomMsg(R.s[2].conn)?.soundDefaults.music === 0.35,
+    JSON.stringify(rm.soundDefaults),
+  );
+  // Wrong types: refused whole, no clamp.
+  const e0 = errsOf(R.s[0].conn).length;
+  const bad: ClientMsg[] = [
+    { t: "soundDefaults", music: NaN },
+    { t: "soundDefaults", effects: "0.5" as unknown as number },
+    { t: "soundDefaults", musicOn: "yes" as unknown as boolean },
+    { t: "soundDefaults", music: 1.5 },
+    { t: "soundDefaults", effects: -0.1 },
+    { t: "soundDefaults", music: 0.9, effects: null as unknown as number },
+    { t: "soundDefaults", song: "gravel-surf" },
+    { t: "soundDefaults", effects: 0.1, song: 7 as unknown as string },
+  ];
+  const n1 = roomMsgs(R.s[1].conn).length;
+  for (const m of bad) R.send(0, m);
+  const errs = errsOf(R.s[0].conn).slice(e0);
+  check(
+    "room sound: NaN, a string, a non-boolean musicOn, out-of-range volumes and a bad key next to a good one are refused whole (Bad sound settings); an unknown song id is refused (Unknown song); nothing changes, nothing is sent",
+    errs.join("|") === "Bad sound settings|Bad sound settings|Bad sound settings|Bad sound settings|Bad sound settings|Bad sound settings|Unknown song|Unknown song" &&
+      JSON.stringify(R.room.soundDefaults) === '{"musicOn":true,"music":0.35,"effects":0.8,"song":"neon-tailpipe"}' && roomMsgs(R.s[1].conn).length === n1,
+    errs.join("|"),
+  );
+  // Unchanged: no broadcast (a snapped value equal to the current one too).
+  R.clock.now += 5000;
+  R.send(0, { t: "soundDefaults", music: 0.36, musicOn: true });
+  R.send(0, { t: "soundDefaults" });
+  check("room sound: a request that changes nothing (0.36 snaps to the current 0.35) sends no room message and no err", roomMsgs(R.s[1].conn).length === n1 && errsOf(R.s[0].conn).length === e0 + errs.length, `${roomMsgs(R.s[1].conn).length - n1} room messages`);
+  // The rate budget: SOUND_BURST at once, then SOUND_PER_SEC a second.
+  R.clock.now += 10000;
+  const e2 = errsOf(R.s[0].conn).length;
+  for (let i = 0; i < 8; i++) R.send(0, { t: "soundDefaults", effects: (i + 1) / 20 });
+  const burst = errsOf(R.s[0].conn).slice(e2);
+  const afterBurst = R.room.soundDefaults.effects;
+  R.clock.now += 1000;
+  for (let i = 0; i < 4; i++) R.send(0, { t: "soundDefaults", effects: (i + 11) / 20 });
+  const later = errsOf(R.s[0].conn).slice(e2 + burst.length);
+  check(
+    `room sound: ${SOUND_BURST} changes at once, then Slow down (nothing changes); a second later ${SOUND_PER_SEC} more`,
+    burst.length === 8 - SOUND_BURST && burst.every((e) => e === "Slow down") && afterBurst === SOUND_BURST / 20 && later.length === 4 - SOUND_PER_SEC && R.room.soundDefaults.effects === (10 + SOUND_PER_SEC) / 20,
+    `burst errs ${burst.length}, effects ${afterBurst}; later errs ${later.length}, effects ${R.room.soundDefaults.effects}`,
+  );
+  // A song: the host's pick, everyone plays it; music off; then a handover keeps it all.
+  R.clock.now += 10000;
+  R.send(0, { t: "soundDefaults", song: "mirrorball", musicOn: false });
+  const picked = [0, 1, 2].map((i) => lastRoomMsg(R.s[i].conn)!);
+  check(
+    "room sound: the host picks a song (and music off): every room message carries the choice and the song to play",
+    picked.every((m) => m.soundDefaults.song === "mirrorball" && m.song === "mirrorball" && !m.soundDefaults.musicOn),
+    JSON.stringify(picked.map((m) => [m.soundDefaults.song, m.song])),
+  );
+  const kept = JSON.stringify(R.room.soundDefaults);
+  R.send(0, { t: "host", id: b.id });
+  const after = lastRoomMsg(R.s[2].conn)!;
+  const e3 = errsOf(R.s[0].conn).length;
+  R.send(0, { t: "soundDefaults", music: 0.9 });
+  R.clock.now += 1000;
+  R.send(1, { t: "soundDefaults", music: 0.9 });
+  check(
+    "room sound: a host handover keeps the defaults and the song; the old host is refused, the new one may change them",
+    JSON.stringify(after.soundDefaults) === kept && after.song === "mirrorball" && errsOf(R.s[0].conn).slice(e3).join() === "Only the host can set the room sound" && R.room.soundDefaults.music === 0.9,
+    `${JSON.stringify(after.soundDefaults)}; ${errsOf(R.s[0].conn).slice(e3).join()}`,
+  );
+  // Rejoin: the defaults come with the room message after the welcome.
+  R.rooms.onClose(R.s[2], R.clock.now);
+  const back = R.join("Cy", R.p[2].token);
+  const rj = lastRoomMsg(back.conn)!;
+  check("room sound: a rejoin gets the room's defaults and song in its room message", rj.soundDefaults.music === 0.9 && !rj.soundDefaults.musicOn && rj.song === "mirrorball", JSON.stringify(rj.soundDefaults));
+  // Gone with the room: a new room starts from the built-in defaults.
+  for (const x of [R.s[0], R.s[1], back]) R.rooms.onMessage(x, { t: "leave" }, R.clock.now);
+  R.step(1);
+  const gone = !R.rooms.rooms.has(R.room.code);
+  const R2 = menuRooms(["Dee"]);
+  check("room sound: gone with the room; a new room has the built-in defaults", gone && JSON.stringify(R2.room.soundDefaults) === JSON.stringify(BUILTIN_SOUND) && R2.room.song === DEFAULT_SONG_ID, JSON.stringify(R2.room.soundDefaults));
+}
+
+/** "random": picked by the server at once and at each race's countdown, never the song just played. */
+function soundRandom(): void {
+  const R = menuRooms(["Ann", "Bo"]);
+  R.send(1, { t: "ready", ready: true });
+  R.send(0, { t: "soundDefaults", song: RANDOM_SONG });
+  const m0 = [0, 1].map((i) => lastRoomMsg(R.s[i].conn)!);
+  const firstPick = m0[0].song;
+  check(
+    "random song: picking Random picks a song at once (not the one playing), the same for every client; the choice stays random",
+    firstPick !== "neon-tailpipe" && (SONG_IDS as readonly string[]).includes(firstPick) && m0.every((m) => m.song === firstPick && m.soundDefaults.song === RANDOM_SONG),
+    JSON.stringify(m0.map((m) => [m.soundDefaults.song, m.song])),
+  );
+  // Race cycles: stop (straight back to the lobby) and a full race with results.
+  const seen: string[] = [firstPick];
+  const songsAt: string[] = [];
+  let repeats = 0;
+  let lobbySwitches = 0;
+  let differ = 0;
+  for (let cycle = 0; cycle < 24; cycle++) {
+    R.clock.now += 2000;
+    R.send(1, { t: "ready", ready: true });
+    R.send(0, { t: "start" });
+    const cd = [0, 1].map((i) => lastRoomMsg(R.s[i].conn)!);
+    if (cd[0].phase !== "countdown") break;
+    if (cd[0].song !== cd[1].song) differ++;
+    if (cd[0].song === seen[seen.length - 1]) repeats++;
+    seen.push(cd[0].song);
+    songsAt.push(`countdown:${cd[0].song}`);
+    R.send(0, { t: "stop" });
+    const lobby = lastRoomMsg(R.s[1].conn)!;
+    if (lobby.song !== cd[0].song) lobbySwitches++;
   }
+  // One race to its results and the lobby after: the song stays the countdown's.
+  R.clock.now += 2000;
+  R.send(1, { t: "ready", ready: true });
+  R.send(0, { t: "start" });
+  const raceSong = R.room.song;
+  if (raceSong === seen[seen.length - 1]) repeats++;
+  seen.push(raceSong);
+  const resultsSongs = new Set<string>();
+  for (let i = 0; i < 60 * 300 && (R.room.phase as string) !== "lobby"; i++) {
+    // Everyone over the line at once: the race ends (results), then the lobby opens.
+    if (R.room.phase === "racing") for (const p of R.room.players.values()) if (p.progress && !p.progress.fin) p.progress.fin = 1000;
+    R.step(1);
+    if (R.room.phase === "results" || R.room.phase === "lobby") resultsSongs.add(lastRoomMsg(R.s[1].conn)!.song);
+  }
+  const distinct = new Set(seen);
+  check(
+    "random song: a new song at each race's countdown, never the one just played, the same for every client; the lobby after a stop keeps it",
+    seen.length === 26 && repeats === 0 && differ === 0 && lobbySwitches === 0 && distinct.size === SONG_IDS.length,
+    `${seen.join(" ")}; repeats ${repeats}, client mismatches ${differ}, lobby switches ${lobbySwitches}`,
+  );
+  check(
+    "random song: after a race the results screen and the lobby play the countdown's song (no switch while the music plays)",
+    (R.room.phase as string) === "lobby" && resultsSongs.size === 1 && resultsSongs.has(raceSong),
+    `phase ${R.room.phase}; results/lobby songs ${[...resultsSongs].join()} vs ${raceSong}`,
+  );
+  // A fixed song: never re-picked at the countdown.
+  R.send(0, { t: "soundDefaults", song: "rust-bucket" });
+  R.clock.now += 2000;
+  R.send(1, { t: "ready", ready: true });
+  R.send(0, { t: "start" });
+  check("random song: a fixed song is played at every countdown as picked", R.room.song === "rust-bucket" && lastRoomMsg(R.s[1].conn)?.song === "rust-bucket");
+  R.send(0, { t: "restart" });
+  const fixedRestart = R.room.song;
+  R.send(0, { t: "stop" });
+  R.send(0, { t: "soundDefaults", song: RANDOM_SONG });
+  R.clock.now += 2000;
+  R.send(1, { t: "ready", ready: true });
+  R.send(0, { t: "start" });
+  const beforeRestart = R.room.song;
+  R.send(0, { t: "restart" });
+  check(
+    "random song: Random is picked again on a restart (a new countdown, another song), a fixed song is not",
+    fixedRestart === "rust-bucket" && R.room.phase === "countdown" && R.room.song !== beforeRestart && lastRoomMsg(R.s[1].conn)?.song === R.room.song,
+    `fixed ${fixedRestart}; random ${beforeRestart} -> ${R.room.song}`,
+  );
+  R.send(0, { t: "stop" });
+  // snapVolume: the slider's steps.
+  check(
+    "room sound: snapVolume gives the slider's own values (k/20 equals 5k/100) and stays in 0..1",
+    Array.from({ length: 21 }, (_, k) => snapVolume(k / 20 + 0.012) === (5 * k) / 100).every(Boolean) && snapVolume(1.2) === 1 && snapVolume(-0.3) === 0,
+  );
+}
+
+/** The client: Game follows the room's sound; leave() goes back to the built-in defaults. */
+function soundClient(): void {
+  const rooms = new Rooms(1);
+  const clock = { now: 1000 };
+  const A = wiredGame(rooms, clock);
+  const B = wiredGame(rooms, clock);
+  const flushAll = () => {
+    for (const W of [A, B]) W.flush();
+  };
+  A.game.create("Ann");
+  A.open();
+  A.flush();
+  B.game.join(A.game.code, "Bo");
+  B.open();
+  flushAll();
+  const fresh = JSON.stringify(B.game.soundDefaults) === JSON.stringify(BUILTIN_SOUND) && B.game.song === DEFAULT_SONG_ID;
+  A.game.setSoundDefaults({ musicOn: false, effects: 0.25, song: "rust-bucket" });
+  flushAll();
+  check(
+    "room sound client: the host's change over the wire reaches the guest's Game (soundDefaults and song)",
+    fresh && !B.game.soundDefaults.musicOn && B.game.soundDefaults.effects === 0.25 && B.game.song === "rust-bucket" && B.game.soundDefaults.song === "rust-bucket" && A.game.song === "rust-bucket",
+    JSON.stringify([B.game.soundDefaults, B.game.song]),
+  );
+  // The guest's AudioEngine as main.ts feeds it (soundFrame): untouched follows, own stays, reset.
+  withStore(() => {
+    const eng = new AudioEngine();
+    eng.set({ effects: 0.7 });
+    eng.setRoom(B.game.you ? B.game.soundDefaults : null, B.game.isHost());
+    const inRoom = { ...eng.settings };
+    A.game.setSoundDefaults({ musicOn: true, music: 0.4 });
+    clock.now += 1000;
+    flushAll();
+    eng.setRoom(B.game.you ? B.game.soundDefaults : null, B.game.isHost());
+    const live = { ...eng.settings };
+    eng.useRoomSound();
+    const reset = { ...eng.settings };
+    B.game.leave();
+    eng.setRoom(B.game.you ? B.game.soundDefaults : null, B.game.isHost());
+    check(
+      "room sound client: the guest follows the untouched music live (off, then on 0.4), keeps the own effects (0.7) until the reset (0.25); leave() goes back to the built-in defaults and the default song",
+      !inRoom.musicOn && inRoom.effects === 0.7 && live.musicOn && live.music === 0.4 && live.effects === 0.7 && reset.effects === 0.25 &&
+        JSON.stringify(B.game.soundDefaults) === JSON.stringify(BUILTIN_SOUND) && B.game.song === DEFAULT_SONG_ID && eng.room === null && eng.settings.music === 0.5,
+      `${JSON.stringify(inRoom)} -> ${JSON.stringify(live)} -> reset ${JSON.stringify(reset)}`,
+    );
+  });
 }
 
 // ---- in-game menu: pause for everyone (MENU-3, PLAN-MENU.md, 2026-11-18) -----------------
@@ -5798,7 +6218,7 @@ function songPlayer(): void {
   }
 }
 
-for (const t of [rivets, gating, mines, wrecks, finishing, garage, armDelay, engine, readyCheck, collisions, trackFeatures, roomTrack, jumpsWired, shippedTracks, botDriver, botLaps, mineCap, chatRoom, chatClient, sound, raceSounds, surfaceSounds, audioUnlock, menuHostOnly, menuStop, menuRestart, menuKick, menuLock, menuHandover, menuClient, menuRestartClient, retireRules, retireField, retireRaceEnd, retireGarage, retireRefund, retireOthers, retireNotices, retireClient, pauseRefused, pauseFreeze, pauseResume, pauseHold, pauseAuto, pauseCooldown, pauseGrace, pauseCountdown, pauseControls, pauseClient, musicSwitch, songs, songPlayer]) {
+for (const t of [rivets, gating, mines, wrecks, finishing, garage, armDelay, engine, readyCheck, collisions, trackFeatures, roomTrack, jumpsWired, shippedTracks, botDriver, botLaps, mineCap, chatRoom, chatClient, sound, raceSounds, surfaceSounds, audioUnlock, menuHostOnly, menuStop, menuRestart, menuKick, menuLock, menuHandover, menuClient, menuRestartClient, retireRules, retireField, retireRaceEnd, retireGarage, retireRefund, retireOthers, retireNotices, retireClient, pauseRefused, pauseFreeze, pauseResume, pauseHold, pauseAuto, pauseCooldown, pauseGrace, pauseCountdown, pauseControls, pauseClient, musicSwitch, soundMigration, soundLayers, soundServer, soundRandom, soundClient, songs, songPlayer]) {
   console.log(`\n# ${t.name}`);
   try {
     t();

@@ -17,6 +17,7 @@ import {
   type ServerMsg,
 } from "../shared/protocol";
 import { AMMO, PLACE_PAYOUT, statsFor, WRECK_BONUS } from "../shared/shop";
+import { BUILTIN_SOUND, DEFAULT_SONG_ID, RANDOM_SONG, SONG_IDS } from "../shared/sound";
 import { gridSlot, pointAt, queryTrackNear, validateTrack, type Track, type TrackDef } from "../shared/track";
 import { DEFAULT_TRACK_ID, registerTestTrack, trackById, trackList } from "../shared/tracks";
 import { angleDiff, BASE_STATS, capsuleGap, clamp, speedOf, type CarState } from "../shared/physics";
@@ -384,6 +385,7 @@ async function run(ctx: Ctx, bots: Bot[]): Promise<void> {
   await runMenu(ctx, bots);
   await runRetire(ctx, bots);
   await runPause(ctx, bots);
+  await runSound(ctx, bots);
 }
 
 const lost = new Map<string, (ConnReason | undefined)[]>();
@@ -1463,5 +1465,45 @@ async function runPause(ctx: Ctx, bots: Bot[]): Promise<void> {
     await waitFor("pause: stopped", () => [P, Q].every((b) => b.game.phase === "lobby"), 3000);
   } finally {
     for (const b of [P, Q]) b.game.leave();
+  }
+}
+
+/**
+ * Room sound over sockets (SND-4): the host's sound defaults and song reach the other clients
+ * (one lagged) in the room message; a "random" song is picked by the server and every client
+ * plays the same one; a guest's change is refused.
+ */
+async function runSound(ctx: Ctx, bots: Bot[]): Promise<void> {
+  const H = new Bot("Hotel", ctx.url, -20);
+  const G = new Bot("Golf", ctx.url, 20, { lag: 80, jitter: 10 });
+  bots.push(H, G);
+  for (const b of [H, G]) b.weapons = false;
+  try {
+    H.game.create(H.name);
+    await waitFor("H welcome", () => !!H.game.you, 3000);
+    G.game.join(H.game.code, G.name);
+    await waitFor("G in H's room", () => H.game.players.length === 2 && !!G.game.you, 3000);
+    const fresh = JSON.stringify(G.game.soundDefaults) === JSON.stringify(BUILTIN_SOUND) && G.game.song === DEFAULT_SONG_ID;
+    H.game.setSoundDefaults({ musicOn: false, music: 0.33, effects: 0.6, song: "mirrorball" });
+    const got = await waitFor("sound: G sees the host's defaults", () => G.game.soundDefaults.song === "mirrorball", 3000);
+    check(
+      "room sound over sockets: the host's defaults reach the lagged guest (music off, 0.33 snapped to 0.35, effects 0.6) with the song to play",
+      fresh && got && !G.game.soundDefaults.musicOn && G.game.soundDefaults.music === 0.35 && G.game.soundDefaults.effects === 0.6 && G.game.song === "mirrorball" && H.errors.length + G.errors.length === 0,
+      `${JSON.stringify(G.game.soundDefaults)} ${G.game.song}; errors ${[...H.errors, ...G.errors].join("; ") || "-"}`,
+    );
+    H.game.setSoundDefaults({ song: RANDOM_SONG });
+    const picked = await waitFor("sound: random picked", () => G.game.soundDefaults.song === RANDOM_SONG && H.game.soundDefaults.song === RANDOM_SONG, 3000);
+    check(
+      "room sound over sockets: Random is picked by the server (not the song before) and both clients play the same song",
+      picked && G.game.song === H.game.song && G.game.song !== "mirrorball" && (SONG_IDS as readonly string[]).includes(G.game.song),
+      `H ${H.game.song}, G ${G.game.song}`,
+    );
+    const e0 = G.errors.length;
+    G.game.setSoundDefaults({ music: 1 });
+    await waitFor("sound: guest refused", () => G.errors.length > e0, 3000);
+    check("room sound over sockets: a guest's change is refused with an err; the defaults stay", G.errors.slice(e0).join() === "Only the host can set the room sound" && H.game.soundDefaults.music === 0.35, G.errors.slice(e0).join());
+    G.errors.length = e0;
+  } finally {
+    for (const b of [H, G]) b.game.leave();
   }
 }
