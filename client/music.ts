@@ -3,13 +3,12 @@
 // sine kick) and played by a lookahead scheduler. The song data is built at load without any
 // browser API (sim-test imports it).
 //
-// SONGS (SND-5): the host picks one (SND-4 wires the room's choice); Rust Bucket Shuffle is
-// the default. All are original compositions, each an A/B loop of 16 steps (16th notes) a bar:
-//   rust-bucket    Rust Bucket Shuffle   122 BPM  E minor  32 bars ~63 s  garage rock-chiptune
+// SONGS (SND-5): the host picks one (SND-4 wires the room's choice); Neon Tailpipe is the
+// default (the user's pick, 2026-11-18). All are original compositions, each an A/B loop of
+// 16 steps (16th notes) a bar:
+//   neon-tailpipe  Neon Tailpipe         124 BPM  D minor  32 bars ~62 s  synthwave chase (default)
+//   rust-bucket    Rust Bucket Shuffle   122 BPM  E minor  32 bars ~63 s  garage rock-chiptune (SND-1)
 //   mirrorball     Mirrorball Pit Stop   120 BPM  A minor  32 bars  64 s  80s disco
-//   neon-tailpipe  Neon Tailpipe         124 BPM  D minor  32 bars ~62 s  synthwave chase
-//   gravel-surf    Gravel Surf           160 BPM  A minor  40 bars  60 s  surf-rock chiptune
-//   grease-monkey  Grease Monkey Strut   100 BPM  G minor  28 bars ~67 s  funky garage groove, swung
 //
 // Rust Bucket Shuffle:
 //   A  (bars 1-8)   Em Em C D | Em Em Am B   the hook on the lead
@@ -26,7 +25,7 @@ export type DrumKind = "kick" | "snare" | "hat" | "ohat" | "clank" | "crash" | "
 export type SongPart = "bass" | "lead" | "arp" | "chord" | DrumKind;
 
 export interface StepEvents {
-  bass?: { midi: number; len: number; vel?: number }; // len in steps; vel 1 when absent
+  bass?: { midi: number; len: number }; // len in steps
   lead?: { midi: number; len: number };
   arp?: { midi: number; vel: number };
   chord?: { midi: readonly number[]; len: number; vel: number; swell?: boolean }; // stabs and pads
@@ -35,16 +34,13 @@ export interface StepEvents {
 
 export type Wave = "square" | "sawtooth" | "triangle" | "pulse25" | "pulse12";
 
-/** A filter whose cutoff glides (exponentially) from `from` to `to` at each note's start; `back` glides it on again (a wah). */
+/** A filter whose cutoff glides (exponentially) from `from` to `to` at each note's start. */
 export interface Sweep {
   type: BiquadFilterType;
   q: number;
   from: number;
   to: number;
   time: number;
-  back?: number;
-  backTime?: number;
-  track?: number; // accented notes (vel > 1) open the filter further: from * vel ** track
 }
 
 /** A pitched voice: one oscillator (two with `unison`) -> optional filter -> envelope. */
@@ -59,7 +55,6 @@ export interface Tone {
   filter?: Sweep;
   unison?: number; // cents: a second oscillator this far sharp (a thicker saw or pulse)
   vibrato?: { rate: number; depth: number; minDur: number; rise: number }; // depth in cents, on notes longer than minDur s
-  slide?: { cents: number; time: number; minDur: number }; // scoop up into notes longer than minDur s
   echo?: boolean; // also into the song's echo
 }
 
@@ -87,7 +82,6 @@ export interface Song {
   id: string;
   title: string;
   bpm: number;
-  swing: number; // 0 = straight; else the share of a step every off 16th plays late
   stepsPerBar: number;
   bars: number;
   sections: { name: string; bar: number; bars: number }[];
@@ -104,17 +98,11 @@ export function midiOf(name: string): number {
   return 12 * (Number(m[3]) + 1) + NOTE_INDEX[m[1]] + (m[2] === "#" ? 1 : m[2] === "b" ? -1 : 0);
 }
 
-/** Seconds step `step` of the song plays after its place on the straight grid (the swing). */
-export function swingOffset(song: Song, step: number): number {
-  return song.swing && step % 2 === 1 ? song.swing * stepSeconds(song.bpm) : 0;
-}
-
 // The note-table format every song is written in:
 //   chords  bass root (low octave), the triad the arpeggio walks, the voicing of stabs and pads
-//   bass    one char per step: R root, O octave up, F fifth, b flat seventh, P popped octave
-//           (accented), x ghost root (short, quiet), . rest (lengthens the note before it)
-//   lead    "step:note:length" tokens (length in steps); "length*" repeats the note every step
-//           (tremolo picking)
+//   bass    one char per step: R root, O octave up, F fifth, . rest (lengthens the note before
+//           it, up to 2 steps)
+//   lead    "step:note:length" tokens (length in steps)
 //   stabs   one char per step: X / x chord stab (accented / normal), S swelling pad, - hold, . rest
 //   beats   one line per drum: x hit, - soft hit, . rest; a beat named fill* swells its snare
 interface ChordDef {
@@ -136,31 +124,22 @@ interface SongDef {
   id: string;
   title: string;
   bpm: number;
-  swing?: number;
   chords: Record<string, ChordDef>;
   bass: Record<string, string>;
   beats: Record<string, DrumBar>;
   stabs?: Record<string, string>;
   sections: { name: string; bars: BarPlan[] }[];
-  bassMax?: number; // longest bass note in steps (rests lengthen up to it); 2
   inst: Instruments;
 }
 
 const SPB = 16;
 const ARP_WALK = [0, 1, 2, 3, 2, 1]; // triad up and down; 3 = the root an octave up
-const BASS_NOTE: Record<string, { up: number; vel?: number; ghost?: boolean }> = {
-  R: { up: 0 },
-  O: { up: 12 },
-  F: { up: 7 },
-  b: { up: 10 },
-  P: { up: 12, vel: 1.25 },
-  x: { up: 0, vel: 0.45, ghost: true },
-};
+const BASS_UP: Record<string, number> = { R: 0, O: 12, F: 7 }; // semitones over the root
+const BASS_MAX = 2; // longest bass note in steps
 
 function buildSong(def: SongDef): Song {
   const bars = def.sections.flatMap((s) => s.bars);
   const steps: StepEvents[] = Array.from({ length: bars.length * SPB }, () => ({ drums: [] }));
-  const maxLen = def.bassMax ?? 2;
   const fail = (bar: number, what: string): never => {
     throw new Error(`${def.id} bar ${bar + 1}: bad ${what}`);
   };
@@ -173,21 +152,18 @@ function buildSong(def: SongDef): Song {
     for (let i = 0; i < SPB; i++) {
       const c = rhythm[i];
       if (c === ".") continue;
-      const n = BASS_NOTE[c] ?? fail(bar, `bass note ${c}`);
+      const up = BASS_UP[c] ?? fail(bar, `bass note ${c}`);
       let len = 1;
-      while (!n.ghost && i + len < SPB && rhythm[i + len] === "." && len < maxLen) len++;
-      steps[at + i].bass = n.vel === undefined ? { midi: root + n.up, len } : { midi: root + n.up, len, vel: n.vel };
+      while (i + len < SPB && rhythm[i + len] === "." && len < BASS_MAX) len++;
+      steps[at + i].bass = { midi: root + up, len };
     }
     let leadEnd = 0;
     for (const tok of (b.lead ?? "").split(" ").filter(Boolean)) {
       const [s, note, len] = tok.split(":");
       const start = Number(s);
-      const trem = len.endsWith("*");
-      const n = Number(trem ? len.slice(0, -1) : len);
+      const n = Number(len);
       if (!(start >= leadEnd && n > 0 && start + n <= SPB)) fail(bar, `lead ${tok}`);
-      const midi = midiOf(note);
-      if (trem) for (let k = 0; k < n; k++) steps[at + start + k].lead = { midi, len: 1 };
-      else steps[at + start].lead = { midi, len: n };
+      steps[at + start].lead = { midi: midiOf(note), len: n };
       leadEnd = start + n;
     }
     if (b.arp) {
@@ -230,7 +206,7 @@ function buildSong(def: SongDef): Song {
     bar += s.bars.length;
     return x;
   });
-  return { id: def.id, title: def.title, bpm: def.bpm, swing: def.swing ?? 0, stepsPerBar: SPB, bars: bars.length, sections, steps, inst: def.inst };
+  return { id: def.id, title: def.title, bpm: def.bpm, stepsPerBar: SPB, bars: bars.length, sections, steps, inst: def.inst };
 }
 
 /** Eight bars over `chords`, bar i from `bar(chord, i)`. */
@@ -250,7 +226,7 @@ const KIT: Kit = {
   tom: { level: 0.3, hi: 200, lo: 130 },
 };
 
-// ---- Rust Bucket Shuffle (SND-1; the default, unchanged) -------------------------------
+// ---- Rust Bucket Shuffle (SND-1, unchanged; the default until SND-5) --------------------
 
 const RUST_HOOK = [
   "0:B4:3 3:B4:1 4:D5:2 6:E5:4 10:D5:2 12:B4:2 14:A4:2",
@@ -503,214 +479,11 @@ const NEON_TAILPIPE: SongDef = {
   },
 };
 
-// ---- Gravel Surf: surf-rock chiptune ----------------------------------------------------
-// A fast twangy lead (a scoop into each note, vibrato, a springy echo, tremolo picking) over a
-// galloping beat and bass.
-//   A  (1-8)   Am Am C D | Am Am F E       the main riff
-//   B  (9-16)  F G Am Am | F G E E         long twangy notes over chunky chords
-//   C  (17-24) Dm Dm Am Am | Dm Dm E E     the bridge: tremolo picking over galloping toms
-//   A2 (25-32) the riff again with chords
-//   B2 (33-40) B, ending in a snare roll back to the top
-
-const SURF_RIFF = [
-  "0:A4:2 2:C5:1 3:E5:1 4:A5:4* 8:G5:2 10:E5:2 12:C5:2 14:E5:2",
-  "0:E5:3 3:D5:1 4:C5:2 6:A4:2 8:C5:2 10:D5:2 12:E5:4",
-  "0:G5:2 2:E5:1 3:G5:1 4:C6:4* 8:B5:2 10:G5:2 12:E5:4",
-  "0:A5:3 3:F#5:1 4:D5:2 6:F#5:2 8:A5:8*",
-  "0:A4:2 2:C5:1 3:E5:1 4:A5:4* 8:G5:2 10:E5:2 12:C5:2 14:E5:2",
-  "0:C6:2 2:B5:2 4:A5:2 6:G5:2 8:E5:4 12:G5:2 14:E5:2",
-  "0:F5:4* 4:A5:4* 8:C6:4* 12:A5:4*",
-  "0:G#5:6 6:E5:2 8:B4:2 10:D5:2 12:E5:4",
-];
-const SURF_LONG = [
-  "0:C5:2 2:F5:2 4:A5:8 12:G5:2 14:F5:2",
-  "0:D5:2 2:G5:2 4:B5:8 12:A5:2 14:G5:2",
-  "0:A5:12 12:G5:2 14:E5:2",
-  "0:A5:2 2:C6:2 4:A5:2 6:E5:2 8:A4:8",
-  "0:C5:2 2:F5:2 4:A5:8 12:G5:2 14:F5:2",
-  "0:D5:2 2:G5:2 4:B5:8 12:C6:2 14:B5:2",
-  "0:G#5:8 8:B5:8",
-  "0:B5:4* 4:G#5:4* 8:E5:4* 12:B4:2 14:D5:2",
-];
-const SURF_BRIDGE = [
-  "0:D5:8* 8:F5:8*",
-  "0:A5:8* 8:F5:4* 12:D5:4*",
-  "0:E5:8* 8:C5:8*",
-  "0:A5:4* 4:G5:4* 8:E5:8*",
-  "0:F5:8* 8:A5:8*",
-  "0:C6:8* 8:A5:8*",
-  "0:G#5:8* 8:B5:8*",
-  "0:E5:2 2:G#5:2 4:B5:2 6:G#5:2 8:E5:2 10:D5:2 12:B4:2 14:G#4:2",
-];
-const SURF_A = ["Am", "Am", "C", "D", "Am", "Am", "F", "E"];
-const SURF_B = ["F", "G", "Am", "Am", "F", "G", "E", "E"];
-const SURF_C = ["Dm", "Dm", "Am", "Am", "Dm", "Dm", "E", "E"];
-
-const GRAVEL_SURF: SongDef = {
-  id: "gravel-surf",
-  title: "Gravel Surf",
-  bpm: 160,
-  chords: {
-    Am: { root: "A1", triad: ["A3", "C4", "E4"], pad: ["A3", "C4", "E4"] },
-    C: { root: "C2", triad: ["C4", "E4", "G4"], pad: ["G3", "C4", "E4"] },
-    D: { root: "D2", triad: ["D4", "F#4", "A4"], pad: ["F#3", "A3", "D4"] },
-    F: { root: "F2", triad: ["F4", "A4", "C5"], pad: ["F3", "A3", "C4"] },
-    G: { root: "G2", triad: ["G4", "B4", "D5"], pad: ["G3", "B3", "D4"] },
-    E: { root: "E2", triad: ["E4", "G#4", "B4"], pad: ["G#3", "B3", "E4"] },
-    Dm: { root: "D2", triad: ["D4", "F4", "A4"], pad: ["F3", "A3", "D4"] },
-  },
-  bass: {
-    gallop: "R.RRR.RRR.RRF.FF",
-    walk: "R.R.F.F.O.O.F.F.",
-    climb: "R.RRF.FFO.OOF.FF",
-    fill: "R.RRR.RRO.O.O.O.",
-  },
-  stabs: {
-    chunk: "x-..x-..x-..x-..",
-    push: "x-......x-..x-..",
-  },
-  beats: {
-    s: { kick: "x.......x.......", snare: "....x.......x...", hat: "x.xxx.xxx.xxx.xx" },
-    sEnd: { kick: "x.......x.x.....", snare: "....x.......x.xx", hat: "x.xxx.xxx.xx...." },
-    sB: { kick: "x.....x.x.......", snare: "....x.......x...", hat: "x.xxx.xxx.xxx.xx" },
-    toms: { kick: "x.......x.......", tom: "x.xx....x.xx....", ltom: "....x.xx....x.xx" },
-    fill: { kick: "x.......x.......", snare: "....x...x.xxxxxx" },
-  },
-  sections: [
-    { name: "A", bars: eight(SURF_A, (_, i) => ({ bass: i % 4 === 3 ? "climb" : "gallop", lead: SURF_RIFF[i], beat: phraseEnd(i) ? "sEnd" : "s", crash: i === 0 })) },
-    { name: "B", bars: eight(SURF_B, (_, i) => ({ bass: "walk", lead: SURF_LONG[i], stab: i % 2 ? "push" : "chunk", beat: phraseEnd(i) ? "sEnd" : "sB", crash: i === 0 })) },
-    { name: "C", bars: eight(SURF_C, (_, i) => ({ bass: i === 7 ? "climb" : "gallop", lead: SURF_BRIDGE[i], beat: i === 7 ? "sEnd" : "toms", crash: i === 0 || i === 4 })) },
-    { name: "A2", bars: eight(SURF_A, (_, i) => ({ bass: i % 4 === 3 ? "climb" : "gallop", lead: SURF_RIFF[i], stab: "chunk", beat: phraseEnd(i) ? "sEnd" : "s", crash: i === 0 })) },
-    {
-      name: "B2",
-      bars: eight(SURF_B, (_, i) => ({
-        bass: i === 7 ? "fill" : "walk",
-        lead: SURF_LONG[i],
-        stab: i === 7 ? undefined : i % 2 ? "push" : "chunk",
-        beat: i === 7 ? "fill" : phraseEnd(i) ? "sEnd" : "sB",
-        crash: i === 0,
-      })),
-    },
-  ],
-  inst: {
-    bass: { wave: "square", level: 0.13, gate: 0.6, sustain: 0.5, decay: 0.08, release: 0.03, filter: { type: "lowpass", q: 4, from: 1400, to: 400, time: 0.08 } },
-    lead: {
-      wave: "sawtooth",
-      level: 0.15,
-      gate: 0.85,
-      sustain: 0.45,
-      decay: 0.2,
-      release: 0.08,
-      filter: { type: "lowpass", q: 5, from: 7000, to: 2000, time: 0.09 },
-      slide: { cents: 100, time: 0.05, minDur: 0.15 },
-      vibrato: { rate: 6.8, depth: 30, minDur: 0.25, rise: 0.12 },
-      echo: true,
-    },
-    arp: { wave: "pulse12", level: 0.06, gate: 0.6, sustain: 0.35, decay: 0.06, release: 0.03 }, // unused
-    chord: { wave: "pulse25", level: 0.08, gate: 0.5, sustain: 0.3, decay: 0.08, release: 0.04, filter: { type: "lowpass", q: 1, from: 2400, to: 1200, time: 0.08 } },
-    kit: {
-      ...KIT,
-      kick: { ...KIT.kick, level: 0.42 },
-      snare: { ...KIT.snare, decay: 0.05 },
-      hat: { level: 0.06, decay: 0.01 },
-      tom: { level: 0.24, hi: 220, lo: 140 },
-    },
-    echo: { steps: 1, feedback: 0.45, tone: 2200, wet: 0.28 },
-  },
-};
-
-// ---- Grease Monkey Strut: funky garage groove ------------------------------------------
-// Swung 16ths, a slap-style bass (thumbed roots, popped octaves, ghost notes), wah'd lead
-// stabs and chord stabs.
-//   A  (1-8)   Gm7 Gm7 C7 Gm7 | Gm7 Gm7 C7 D7          the riff in short wah stabs
-//   B  (9-16)  Ebmaj7 D7 Gm7 Gm7 | Ebmaj7 D7 Cm7 D7    longer answers over held stabs
-//   A2 (17-24) the riff again with claps
-//   B2 (25-28) Gm7 Gm7 C7 D7: a breakdown to bass and drums, a fill back to the top
-
-const FUNK_RIFF = [
-  "0:G4:1 3:Bb4:1 4:D5:2 8:F5:1 10:G5:1 11:F5:1 12:D5:2",
-  "2:Bb4:1 3:C5:1 4:D5:1 7:F5:2 10:D5:1 12:C5:1 14:Bb4:2",
-  "0:E5:1 3:G5:1 4:Bb5:2 8:A5:1 10:G5:1 12:E5:2 14:C5:2",
-  "0:D5:2 3:F5:1 4:G5:4 10:F5:1 11:D5:1 12:Bb4:2",
-  "0:G4:1 3:Bb4:1 4:D5:2 8:F5:1 10:G5:1 11:F5:1 12:D5:2",
-  "0:G5:2 3:F5:1 4:D5:2 7:F5:1 8:G5:2 11:Bb5:1 12:A5:2 14:G5:2",
-  "0:Bb5:2 3:G5:1 4:E5:2 7:G5:1 8:Bb5:1 10:C6:2 13:Bb5:1 14:G5:2",
-  "0:F#5:2 3:A5:1 4:C6:2 8:A5:1 10:F#5:1 12:D5:4",
-];
-const FUNK_ANSWER = [
-  "0:G5:3 4:Bb5:2 8:G5:2 10:F5:2 12:D5:4",
-  "0:F#5:3 4:A5:2 8:C6:2 10:A5:2 12:F#5:4",
-  "0:G5:2 2:F5:2 4:D5:2 6:F5:2 8:G5:8",
-  "4:Bb4:1 5:C5:1 6:D5:2 10:F5:1 11:G5:1 12:Bb5:4",
-  "0:Bb5:3 4:G5:2 8:Eb5:2 10:F5:2 12:G5:4",
-  "0:F#5:3 4:A5:2 8:C6:2 10:A5:2 12:F#5:4",
-  "0:Eb5:2 2:G5:2 4:Bb5:4 8:G5:2 10:Eb5:2 12:C5:4",
-  "0:D5:2 2:F#5:2 4:A5:2 6:C6:2 8:A5:2 10:F#5:2 12:D5:2 14:A4:2",
-];
-const FUNK_BREAK = ["", "12:D5:1 13:F5:1 14:G5:2", "0:Bb5:4 8:G5:2 10:E5:2", "0:A5:1 2:F#5:1 4:D5:1 6:C5:1 8:A4:2 12:D5:1 14:F#5:2"];
-const FUNK_A = ["Gm7", "Gm7", "C7", "Gm7", "Gm7", "Gm7", "C7", "D7"];
-const FUNK_B = ["Ebmaj7", "D7", "Gm7", "Gm7", "Ebmaj7", "D7", "Cm7", "D7"];
-
-const GREASE_MONKEY: SongDef = {
-  id: "grease-monkey",
-  title: "Grease Monkey Strut",
-  bpm: 100,
-  swing: 0.2,
-  chords: {
-    Gm7: { root: "G2", triad: ["G4", "Bb4", "D5"], pad: ["F4", "Bb4", "D5"] },
-    C7: { root: "C2", triad: ["C4", "E4", "G4"], pad: ["E4", "Bb4", "D5"] },
-    D7: { root: "D2", triad: ["D4", "F#4", "A4"], pad: ["F#4", "C5", "E5"] },
-    Ebmaj7: { root: "Eb2", triad: ["Eb4", "G4", "Bb4"], pad: ["D4", "G4", "Bb4"] },
-    Cm7: { root: "C2", triad: ["C4", "Eb4", "G4"], pad: ["Eb4", "G4", "Bb4"] },
-  },
-  bass: {
-    thumb: "R.xR..P.RxbR.P.F",
-    pop: "R..RO.P.R..Rb.F.",
-    walk: "R.xRP.xRR.xRP.bO",
-    fill: "R.xRP.RxP.RxP.OP",
-  },
-  stabs: {
-    scratch: ".x...x.....x.x..",
-    push: "...x-..x....x-..",
-    hold: "x-......x-...x..",
-  },
-  beats: {
-    f1: { kick: "x.....x...x..x..", snare: "....x..-.-..x..-", hat: "x-x-x-x-x-x-x-..", ohat: "..............x." },
-    f2: { kick: "x.x...x...x....x", snare: "....x..-.-..x.--", hat: "x-x-x-x-x-x-x-x-" },
-    fClap: { kick: "x.....x...x..x..", snare: "....x..-.-..x..-", clap: "....x.......x...", hat: "x-x-x-x-x-x-x-..", ohat: "..............x." },
-    fEnd: { kick: "x.....x...x.....", snare: "....x..-.-..x.xx", hat: "x-x-x-x-x-x-...." },
-    fill: { kick: "x.....x.........", snare: "....x..-x-x-xxxx", hat: "x-x-x-x-........" },
-  },
-  sections: [
-    { name: "A", bars: eight(FUNK_A, (_, i) => ({ bass: i % 2 ? "pop" : "thumb", lead: FUNK_RIFF[i], stab: i % 2 ? "push" : "scratch", beat: phraseEnd(i) ? "fEnd" : i % 2 ? "f2" : "f1", crash: i === 0 })) },
-    { name: "B", bars: eight(FUNK_B, (_, i) => ({ bass: i === 7 ? "fill" : "walk", lead: FUNK_ANSWER[i], stab: "hold", beat: phraseEnd(i) ? "fEnd" : "f2", crash: i === 0 })) },
-    { name: "A2", bars: eight(FUNK_A, (_, i) => ({ bass: i % 2 ? "pop" : "thumb", lead: FUNK_RIFF[i], stab: i % 2 ? "push" : "scratch", beat: phraseEnd(i) ? "fEnd" : "fClap", crash: i === 0 })) },
-    {
-      name: "B2",
-      bars: ["Gm7", "Gm7", "C7", "D7"].map((chord, i) => ({ chord, bass: i === 3 ? "fill" : i % 2 ? "pop" : "thumb", lead: FUNK_BREAK[i], beat: i === 3 ? "fill" : "f1", crash: i === 0 })),
-    },
-  ],
-  inst: {
-    bass: { wave: "square", level: 0.145, gate: 0.55, sustain: 0.4, decay: 0.12, release: 0.03, filter: { type: "lowpass", q: 9, from: 3200, to: 420, time: 0.07, track: 1.5 } },
-    lead: { wave: "sawtooth", level: 0.45, gate: 0.8, sustain: 0.5, decay: 0.15, release: 0.05, filter: { type: "bandpass", q: 4, from: 500, to: 2600, time: 0.05, back: 800, backTime: 0.18 } },
-    arp: { wave: "pulse12", level: 0.06, gate: 0.6, sustain: 0.35, decay: 0.06, release: 0.03 }, // unused
-    chord: { wave: "pulse25", level: 0.16, gate: 0.6, sustain: 0.4, decay: 0.08, release: 0.03, filter: { type: "bandpass", q: 3, from: 700, to: 2200, time: 0.04, back: 900, backTime: 0.12 } },
-    kit: {
-      ...KIT,
-      kick: { level: 0.45, from: 130, to: 45, drop: 0.09, hold: 0.02, decay: 0.08 },
-      snare: { ...KIT.snare, hp: 1500, decay: 0.05 },
-      hat: { level: 0.06, decay: 0.015 },
-      ohat: { level: 0.06, decay: 0.1 },
-      clap: 0.18,
-    },
-  },
-};
-
-/** Every song, the default (Rust Bucket Shuffle) first. */
-export const SONGS: readonly Song[] = [RUST_BUCKET, MIRRORBALL, NEON_TAILPIPE, GRAVEL_SURF, GREASE_MONKEY].map(buildSong);
-export const DEFAULT_SONG_ID = "rust-bucket";
-/** The default song (SND-1's single SONG, kept for its callers). */
-export const SONG: Song = SONGS[0];
+/** Every song, the default (Neon Tailpipe) first. */
+export const SONGS: readonly Song[] = [NEON_TAILPIPE, RUST_BUCKET, MIRRORBALL].map(buildSong);
+export const DEFAULT_SONG_ID = "neon-tailpipe";
+/** The default song (SND-1's single SONG export, kept for its callers). */
+export const SONG: Song = SONGS.find((s) => s.id === DEFAULT_SONG_ID)!;
 /** For a song picker: id + title, the default first. */
 export const SONG_LIST: readonly { id: string; title: string }[] = SONGS.map((s) => ({ id: s.id, title: s.title }));
 
@@ -777,16 +550,15 @@ export class SongVoices {
     for (const n of this.echo?.nodes ?? []) n.disconnect();
   }
 
-  /** Song step i (wrapped) at audio time t (its grid time: the swing is added here); `only` limits it to some parts (debug mixing). */
+  /** Song step i (wrapped) at audio time t; `only` limits it to some parts (debug mixing). */
   step(i: number, t: number, only?: readonly SongPart[]): void {
     const song = this.song;
     const at = ((i % song.steps.length) + song.steps.length) % song.steps.length;
     const ev = song.steps[at];
     const sec = this.stepSec;
-    if (song.swing) t += swingOffset(song, at);
     const inst = song.inst;
     const on = (p: SongPart) => !only || only.includes(p);
-    if (ev.bass && on("bass")) this.tone(inst.bass, ev.bass.midi, t, ev.bass.len * sec * inst.bass.gate, ev.bass.vel ?? 1);
+    if (ev.bass && on("bass")) this.tone(inst.bass, ev.bass.midi, t, ev.bass.len * sec * inst.bass.gate, 1);
     if (ev.lead && on("lead")) this.tone(inst.lead, ev.lead.midi, t, ev.lead.len * sec * inst.lead.gate, 1);
     if (ev.arp && on("arp")) this.tone(inst.arp, ev.arp.midi, t, sec * inst.arp.gate, ev.arp.vel);
     if (ev.chord && on("chord")) this.chord(ev.chord, t, ev.chord.len * sec * inst.chord.gate);
@@ -840,13 +612,12 @@ export class SongVoices {
     return o;
   }
 
-  private sweep(s: Sweep, t: number, vel: number): BiquadFilterNode {
+  private sweep(s: Sweep, t: number): BiquadFilterNode {
     const f = this.ctx.createBiquadFilter();
     f.type = s.type;
     f.Q.value = s.q;
-    f.frequency.setValueAtTime(s.track && vel !== 1 ? s.from * vel ** s.track : s.from, t);
+    f.frequency.setValueAtTime(s.from, t);
     f.frequency.exponentialRampToValueAtTime(s.to, t + s.time);
-    if (s.back) f.frequency.exponentialRampToValueAtTime(s.back, t + s.time + (s.backTime ?? 0.2));
     return f;
   }
 
@@ -854,7 +625,7 @@ export class SongVoices {
     const c = this.ctx;
     const o = this.osc(inst.wave, midi);
     const nodes: AudioNode[] = [o];
-    if (inst.filter) nodes.push(this.sweep(inst.filter, t, vel));
+    if (inst.filter) nodes.push(this.sweep(inst.filter, t));
     const g = this.gain();
     nodes.push(g);
     const stop = this.env(g, t, t + dur, inst.level * vel, inst.sustain, inst.decay, inst.release, inst.attack);
@@ -865,14 +636,6 @@ export class SongVoices {
       o2.detune.value = inst.unison;
       o2.connect(nodes[1]);
       sources.push(o2);
-    }
-    const slide = inst.slide;
-    if (slide && dur > slide.minDur) {
-      for (const x of o2 ? [o, o2] : [o]) {
-        const base = x.detune.value;
-        x.detune.setValueAtTime(base - slide.cents, t);
-        x.detune.linearRampToValueAtTime(base, t + slide.time);
-      }
     }
     const vib = inst.vibrato;
     if (vib && dur > vib.minDur) {
@@ -895,7 +658,7 @@ export class SongVoices {
   /** A stab or pad: every note of the voicing (doubled with `unison`) into one filter and envelope. */
   private chord(ch: NonNullable<StepEvents["chord"]>, t: number, dur: number): void {
     const inst = this.song.inst.chord;
-    const f = inst.filter ? this.sweep(inst.filter, t, 1) : null;
+    const f = inst.filter ? this.sweep(inst.filter, t) : null;
     const g = this.gain();
     const attack = ch.swell ? Math.min(0.45, dur * 0.4) : inst.attack;
     const stop = this.env(g, t, t + dur, inst.level * ch.vel, inst.sustain, inst.decay, inst.release, attack);

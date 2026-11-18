@@ -4872,30 +4872,30 @@ function retireClient(): void {
 // ---- more songs (SND-5, PLAN-SOUND.md, 2026-11-18): the registry, structure, setSong ------
 
 // This section's imports (hoisted like the ones at the top).
-import { DEFAULT_SONG_ID, MusicPlayer, SONG_LIST, SONG_XFADE_S, SONGS, songById, SongVoices, swingOffset, type Song } from "../client/music";
+import { DEFAULT_SONG_ID, MusicPlayer, SONG_LIST, SONG_XFADE_S, SONGS, songById, type Song } from "../client/music";
 
-/** The style each song was asked for (ticket SND-5): its BPM range. */
+/** The style each song was asked for (ticket SND-5): its BPM range. The user kept two of the four new songs. */
 const SONG_BPM: Record<string, [number, number]> = {
+  "neon-tailpipe": [110, 128], // synthwave chase, the default (user, 2026-11-18)
   "rust-bucket": [110, 128],
   mirrorball: [118, 124], // 80s disco
-  "neon-tailpipe": [110, 128], // synthwave chase
-  "gravel-surf": [150, 170], // surf-rock chiptune
-  "grease-monkey": [95, 110], // funky garage groove
 };
 
 function songs(): void {
-  // The registry: the default first, ids and titles unique, the SND-1 export kept.
+  // The registry: the default first, ids and titles unique, the SND-1 export kept (now the default).
   const ids = SONGS.map((s) => s.id);
   check(
-    "songs: a registry of five (Rust Bucket Shuffle the default, SONG still points at it), unique ids and titles, the picker list matches",
-    SONGS.length === 5 && ids[0] === "rust-bucket" && DEFAULT_SONG_ID === "rust-bucket" && SONG === SONGS[0] && SONG.title === "Rust Bucket Shuffle" &&
-      new Set(ids).size === 5 && new Set(SONGS.map((s) => s.title)).size === 5 && SONGS.every((s) => s.title.length > 0 && s.title.length <= 24) &&
+    "songs: a registry of three (Neon Tailpipe the default, SONG points at it; Rust Bucket Shuffle and Mirrorball Pit Stop selectable), unique ids and titles, the picker list matches",
+    SONGS.length === 3 && ids[0] === "neon-tailpipe" && DEFAULT_SONG_ID === "neon-tailpipe" && SONG === SONGS[0] && SONG.title === "Neon Tailpipe" &&
+      songById("rust-bucket").title === "Rust Bucket Shuffle" && songById("mirrorball").title === "Mirrorball Pit Stop" &&
+      new Set(ids).size === 3 && new Set(SONGS.map((s) => s.title)).size === 3 && SONGS.every((s) => s.title.length > 0 && s.title.length <= 24) &&
       SONG_LIST.map((x) => `${x.id}:${x.title}`).join() === SONGS.map((s) => `${s.id}:${s.title}`).join() && Object.keys(SONG_BPM).join() === ids.join(),
     SONGS.map((s) => `${s.id} "${s.title}"`).join(", "),
   );
   check(
-    "songs: an unknown, empty or missing id falls back to the default; a known id finds its song",
-    songById("nope") === SONG && songById("") === SONG && songById(undefined) === SONG && songById(null) === SONG && ids.every((id) => songById(id).id === id),
+    "songs: an unknown, empty or missing id (incl. the two songs the user dropped) falls back to the default, Neon Tailpipe; a known id finds its song",
+    [songById("nope"), songById(""), songById(undefined), songById(null), songById("gravel-surf"), songById("grease-monkey")].every((x) => x === SONG && x.id === "neon-tailpipe") &&
+      ids.every((id) => songById(id).id === id),
   );
 
   for (const s of SONGS) {
@@ -4916,15 +4916,15 @@ function songs(): void {
         leadOk &&= i >= leadEnd && Number.isInteger(e.lead.len) && e.lead.len > 0 && i + e.lead.len <= n && e.lead.midi >= midiOf("C4") && e.lead.midi <= midiOf("C6");
         leadEnd = i + e.lead.len;
       }
-      if (e.bass) bassOk &&= Number.isInteger(e.bass.len) && e.bass.len > 0 && i + e.bass.len <= n && e.bass.midi >= midiOf("A1") && e.bass.midi <= midiOf("C4") && (e.bass.vel ?? 1) > 0;
+      if (e.bass) bassOk &&= Number.isInteger(e.bass.len) && e.bass.len > 0 && i + e.bass.len <= n && e.bass.midi >= midiOf("A1") && e.bass.midi <= midiOf("C4");
       if (e.chord) chordOk &&= e.chord.len > 0 && i + e.chord.len <= n && e.chord.vel > 0 && e.chord.midi.length >= 3 && e.chord.midi.every((m) => m >= midiOf("C3") && m <= midiOf("C6"));
       drumOk &&= e.drums.every((d) => d.vel > 0 && d.vel <= 1);
       if (i % s.stepsPerBar === 0) downbeats &&= e.drums.some((d) => d.kind === "kick" || d.kind === "tom");
     });
     check(
-      `songs ${s.id}: BPM ${lo}-${hi}; bars x stepsPerBar = steps; A/B sections cover the loop in order; a ${n < 1 ? "" : "50-70"} s loop`,
+      `songs ${s.id}: BPM ${lo}-${hi}; bars x stepsPerBar = steps; A/B sections cover the loop in order; a 50-70 s loop`,
       s.bpm >= lo && s.bpm <= hi && s.stepsPerBar === 16 && n === s.bars * s.stepsPerBar && covered === s.bars && names.includes("A") && names.includes("B") &&
-        (s.id === "rust-bucket" || (loop >= 50 && loop <= 70)),
+        loop >= 50 && loop <= 70,
       `"${s.title}" ${s.bpm} BPM, ${s.bars} bars x ${s.stepsPerBar} = ${n} steps, sections ${s.sections.map((x) => `${x.name}@${x.bar + 1}`).join(" ")}, loop ${loop.toFixed(1)} s`,
     );
     check(
@@ -4933,8 +4933,7 @@ function songs(): void {
       `lead ${leadOk}, bass ${bassOk}, chords ${chordOk}, drums ${drumOk}, downbeats ${downbeats}`,
     );
 
-    // On the beat grid: the clock hands out every step on the straight 16th grid of the song's
-    // BPM; the swing (if any) delays only the off 16ths, by less than half a step.
+    // On the beat grid: the clock hands out every step on the 16th grid of the song's BPM.
     const clock = new StepClock(sec);
     clock.start(7.3);
     const t0 = clock.timeOf(0);
@@ -4946,15 +4945,7 @@ function songs(): void {
     }
     const beat = 60 / s.bpm;
     const grid = due.every((d) => Math.abs(d.time - (t0 + d.step * sec)) < 1e-9) && due.every((d) => d.step % 4 || Math.abs(d.time - (t0 + (d.step / 4) * beat)) < 1e-9);
-    const swungOk = due.every((d) => {
-      const off = swingOffset(s, d.step % n);
-      return d.step % 2 === 0 ? off === 0 : Math.abs(off - s.swing * sec) < 1e-12 && off < sec / 2;
-    });
-    check(
-      `songs ${s.id}: every step lands on the ${s.bpm} BPM grid (beats on the beat); swing ${s.swing} delays only the off 16ths, under half a step`,
-      grid && swungOk && s.swing >= 0 && s.swing < 0.5 && due.length >= n,
-      `${due.length} steps, grid ${grid}, swing ${swungOk}`,
-    );
+    check(`songs ${s.id}: every step lands on the ${s.bpm} BPM grid (beats on the beat)`, grid && due.length >= n, `${due.length} steps, grid ${grid}`);
   }
 
   // The styles asked for (PLAN-SOUND.md SND-5).
@@ -4979,23 +4970,6 @@ function songs(): void {
     pulsing > 0.9 && new Set(synth.steps.map((e, i) => e.bass && (e.bass.midi - synth.steps[i - (i % 16)].bass!.midi + 120) % 12)).size >= 3 &&
       synth.inst.lead.wave === "sawtooth" && (synth.inst.lead.unison ?? 0) > 0 && !!synth.inst.lead.echo && !!synth.inst.echo && (synth.inst.kit.snare.gate ?? 0) > 0.1,
     `bass on ${(pulsing * 100).toFixed(0)} % of steps`,
-  );
-  const surf = by("gravel-surf");
-  const gallops = surf.steps.filter((e, i) => i % 4 === 0 && [0, 2, 3].every((d) => surf.steps[i + d]?.drums.some((x) => x.kind === "hat" || x.kind === "tom")) && !surf.steps[i + 1]?.drums.some((x) => x.kind === "hat" || x.kind === "tom")).length;
-  const tremolo = surf.steps.filter((e, i) => e.lead && e.lead.len === 1 && surf.steps[i + 1]?.lead?.midi === e.lead.midi).length;
-  check(
-    "songs gravel-surf (surf-rock chiptune): 150-170 BPM, a galloping beat (x.xx), a twangy lead (a scoop into notes, vibrato, a springy echo) with tremolo picking",
-    gallops >= surf.bars && !!surf.inst.lead.slide && !!surf.inst.lead.vibrato && !!surf.inst.lead.echo && tremolo >= 32,
-    `gallops ${gallops}, tremolo repeats ${tremolo}`,
-  );
-  const funk = by("grease-monkey");
-  const ghosts = funk.steps.filter((e) => e.bass && (e.bass.vel ?? 1) < 1).length;
-  const pops = funk.steps.filter((e) => e.bass && (e.bass.vel ?? 1) > 1).length;
-  check(
-    "songs grease-monkey (funky garage groove): 95-110 BPM, swung 16ths, slap-style bass (ghost notes and popped octaves), wah lead stabs (a band-pass sweeping up and back)",
-    funk.swing > 0 && ghosts > 20 && pops > 20 && funk.inst.lead.filter?.type === "bandpass" && (funk.inst.lead.filter.to ?? 0) > funk.inst.lead.filter.from && !!funk.inst.lead.filter.back &&
-      funk.steps.filter((e) => e.lead && e.lead.len <= 2).length > funk.steps.filter((e) => e.lead).length / 2,
-    `ghosts ${ghosts}, pops ${pops}, swing ${funk.swing}`,
   );
 }
 
@@ -5079,7 +5053,8 @@ function songPlayer(): void {
     };
     const fades = () => ctx.nodes.filter((n) => n.kind === "gain" && n.outs.has(musicBus));
 
-    // Off: setSong only picks the song for the next start.
+    // Off: the default is picked; setSong only picks the song for the next start.
+    const firstPick = music.song === SONG;
     music.setSong("mirrorball");
     const offPick = music.song.id === "mirrorball" && !music.playing && ctx.nodes.length === 1 && timers.size === 0;
     music.forced = true;
@@ -5090,8 +5065,8 @@ function songPlayer(): void {
     const firstSteps = ctx.starts.filter((x) => x.kind === "osc").map((x) => x.t);
     const gridOk = firstSteps.every((t) => Math.abs(((t - firstSteps[0]) / stepSeconds(120)) - Math.round((t - firstSteps[0]) / stepSeconds(120))) < 1e-6);
     check(
-      "songs player: setSong while off only picks (no nodes, no timer); the next start plays that song from the top on its own BPM grid",
-      offPick && run1 === "mirrorball" && music.playing && starts0 > 10 && gridOk && fades().length === 1 && music.position().bar === 0,
+      "songs player: the default is picked at first; setSong while off only picks (no nodes, no timer); the next start plays that song from the top on its own BPM grid",
+      firstPick && offPick && run1 === "mirrorball" && music.playing && starts0 > 10 && gridOk && fades().length === 1 && music.position().bar === 0,
       `picked ${offPick}, playing ${run1}, ${starts0} voices in 1 s, bar ${music.position().bar + 1} step ${music.position().step}`,
     );
 
@@ -5099,7 +5074,7 @@ function songPlayer(): void {
     const oldFade = fades()[0];
     const switchAt = ctx.currentTime;
     const nodesAtSwitch = ctx.nodes.length;
-    music.setSong("gravel-surf");
+    music.setSong("neon-tailpipe");
     const newFade = fades().find((n) => n !== oldFade);
     const xOld = oldFade.gain.events.at(-1);
     const xNew = newFade?.gain.events.at(-1);
@@ -5111,12 +5086,12 @@ function songPlayer(): void {
     advance(0.4); // the 300 ms disconnect timer
     check(
       `songs player: setSong while playing crossfades over ${SONG_XFADE_S} s (old ramps to 0, new from 0 to 1, the new song from bar 1); after it only the new song is connected`,
-      music.playingSong?.id === "gravel-surf" && !!xOld?.startsWith("lin 0 ") && Math.abs(at(xOld) - (switchAt + SONG_XFADE_S)) < 1e-9 && !!xNew?.startsWith("lin 1 ") &&
+      music.playingSong?.id === "neon-tailpipe" && !!xOld?.startsWith("lin 0 ") && Math.abs(at(xOld) - (switchAt + SONG_XFADE_S)) < 1e-9 && !!xNew?.startsWith("lin 1 ") &&
         Math.abs(at(xNew) - (switchAt + SONG_XFADE_S)) < 1e-9 && oldStillScheduled && fades().length === 1 && fades()[0] === newFade && oldFade.outs.size === 0,
       `old ${xOld}, new ${xNew}, old-song notes during the fade ${oldNotesAfter}, connected fades ${fades().length}`,
     );
 
-    // The echo of the old song (mirrorball's) is disconnected with its run; the new song's (surf's) plays on.
+    // The echo of the old song (mirrorball's) is disconnected with its run; the new song's (neon's) plays on.
     const delays = ctx.nodes.filter((n) => n.kind === "delay");
     check(
       "songs player: a song's echo goes with its run (the old song's delay loop is disconnected on the switch, the new one's connected)",
@@ -5124,15 +5099,17 @@ function songPlayer(): void {
       `${delays.length} delay nodes, connected ${delays.map((d) => d.outs.size > 0).join("/")}`,
     );
 
-    // The same id again: nothing; an unknown id: the default (and a switch, as it differs).
+    // The same id again: nothing; another song: a switch; an unknown id: back to the default.
     const before = ctx.nodes.length;
-    music.setSong("gravel-surf");
+    music.setSong("neon-tailpipe");
     const same = ctx.nodes.length === before;
+    music.setSong("rust-bucket");
+    const rust = music.playingSong?.id;
     music.setSong("no-such-song");
     check(
-      "songs player: picking the playing song again does nothing; an unknown id picks (and switches to) the default",
-      same && music.song === SONG && music.playingSong === SONG,
-      `same ${same}, now ${music.playingSong?.id}`,
+      "songs player: picking the playing song again does nothing; an unknown id picks (and switches to) the default, Neon Tailpipe",
+      same && rust === "rust-bucket" && music.song === SONG && music.playingSong === SONG && SONG.id === "neon-tailpipe",
+      `same ${same}, then ${rust}, now ${music.playingSong?.id}`,
     );
 
     // Countdown: fading out; a song picked then plays when the lobby comes back (resume -> switch).
@@ -5141,12 +5118,12 @@ function songPlayer(): void {
     music.update(true, "lobby"); // following the game, in a room: still on
     music.update(true, "countdown");
     const fading = music.director.mode === "fading";
-    music.setSong("neon-tailpipe");
+    music.setSong("mirrorball");
     const stillOld = music.playingSong === SONG;
     music.update(true, "lobby");
     check(
       "songs player: a song picked during the fade-out does not cut in; it starts (crossfading) when the lobby comes back",
-      fading && stillOld && music.playingSong?.id === "neon-tailpipe" && music.director.mode === "on",
+      fading && stillOld && music.playingSong?.id === "mirrorball" && music.director.mode === "on",
       `fading ${fading}, kept ${stillOld}, then ${music.playingSong?.id}`,
     );
 
@@ -5170,26 +5147,12 @@ function songPlayer(): void {
     const hiddenNone = !music.playing;
     running = true;
     music.update(false, "lobby");
-    check("songs player: nothing starts while the tab is hidden; on return the picked song starts", hiddenNone && music.playingSong?.id === "neon-tailpipe", `then ${music.playingSong?.id}`);
+    check("songs player: nothing starts while the tab is hidden; on return the picked song starts", hiddenNone && music.playingSong?.id === "mirrorball", `then ${music.playingSong?.id}`);
     music.forced = false;
     music.update(false, "lobby");
   } finally {
     Object.assign(g, saved);
   }
-
-  // The swing lands in the voices: off 16ths start late by swing x step, the rest on the grid.
-  const funk = songById("grease-monkey");
-  const vctx = new RecContext();
-  const v = new SongVoices(vctx as unknown as BaseAudioContext, new RecNode("out", vctx) as unknown as AudioNode, {} as AudioBuffer, funk);
-  const sec = stepSeconds(funk.bpm);
-  let swingOk = true;
-  for (let k = 0; k < 64; k++) {
-    const from = vctx.starts.length;
-    v.step(k, 10 + k * sec);
-    const want = 10 + k * sec + (k % 2 ? funk.swing * sec : 0);
-    swingOk &&= vctx.starts.slice(from).every((x) => Math.abs(x.t - want) < 1e-9);
-  }
-  check("songs voices: Grease Monkey Strut's off 16ths start swing x step late, the on-beat ones on the grid", swingOk && vctx.starts.length > 100, `${vctx.starts.length} sources started`);
 }
 
 for (const t of [rivets, gating, mines, wrecks, finishing, garage, armDelay, engine, readyCheck, collisions, trackFeatures, roomTrack, jumpsWired, shippedTracks, botDriver, botLaps, mineCap, chatRoom, chatClient, sound, raceSounds, surfaceSounds, audioUnlock, menuHostOnly, menuStop, menuRestart, menuKick, menuLock, menuHandover, menuClient, menuRestartClient, retireRules, retireField, retireRaceEnd, retireGarage, retireRefund, retireOthers, retireNotices, retireClient, songs, songPlayer]) {
