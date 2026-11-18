@@ -93,6 +93,31 @@ export function roomMusicSlid(v: number, startMusic: number): { musicOn: boolean
   return v > 0 ? { musicOn: true, music: v } : { musicOn: false, music: startMusic };
 }
 
+/**
+ * Which volume slider is being dragged: the controls do not move that one to the settings (it
+ * would fight the pointer) and move every other one, focused or not, so the host's live changes
+ * show. A drag starts with an input event and ends with whichever comes first of change, blur
+ * and pointerup. pointerup is needed: in WebKit a mouse drag does not focus a range input, and a
+ * drag that ends on its start value fires no change. onEnd runs on each of the three (it must be
+ * idempotent): it ends the gesture (AudioEngine.slideEnd, the menu's Room Music start) and blurs.
+ */
+export class SliderGrip<T extends EventTarget = EventTarget> {
+  held: T | null = null;
+
+  watch(el: T, onEnd: () => void = () => {}): void {
+    el.addEventListener("input", () => (this.held = el));
+    const end = () => {
+      if (this.held === el) this.held = null;
+      onEnd();
+    };
+    for (const ev of ["change", "blur", "pointerup"]) el.addEventListener(ev, end);
+  }
+
+  holds(el: T): boolean {
+    return this.held === el;
+  }
+}
+
 /** What a player keeps in localStorage (STORE_VERSION): only the moved room keys, the mute, the engine. */
 export interface StoredSound {
   own: OwnSettings;

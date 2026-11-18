@@ -4875,7 +4875,7 @@ function retireClient(): void {
 // ---- lobby Music switch (SND-3, client/audio.ts; a real musicOn flag since SND-4) ---------
 
 // This section's imports (hoisted like the ones at the top).
-import { effectiveSound, musicHeard, musicIsOn, musicSlid, musicSwitched, PatchThrottle, roomMusicSlid, storedSoundJson } from "../client/soundlogic";
+import { effectiveSound, musicHeard, musicIsOn, musicSlid, musicSwitched, PatchThrottle, roomMusicSlid, SliderGrip, storedSoundJson } from "../client/soundlogic";
 import { resetLabel, roomTag } from "../client/audio";
 
 /** A fake localStorage for the AudioEngine (no AudioContext: the buses come with the unlock). */
@@ -5368,6 +5368,74 @@ function soundRoomDrag(): void {
     "room music slider: roomMusicSlid always gives musicOn (on at v above 0; 0 off with the start volume)",
     JSON.stringify(roomMusicSlid(0.3, 0.5)) === '{"musicOn":true,"music":0.3}' && JSON.stringify(roomMusicSlid(0, 0.5)) === '{"musicOn":false,"music":0.5}',
   );
+}
+
+/**
+ * SliderGrip (client/soundlogic.ts), behind every volume slider (speaker popover, lobby, Esc menu,
+ * sound board): the slider being dragged is left alone; the drag ends on change, blur or
+ * pointerup, whichever comes first. WebKit: a mouse drag does not focus a range input and one
+ * that ends on its start value fires no change, so pointerup must end it.
+ */
+function soundSliderGrip(): void {
+  const grip = new SliderGrip();
+  const a = new EventTarget();
+  const b = new EventTarget();
+  let endsA = 0;
+  grip.watch(a, () => endsA++);
+  grip.watch(b);
+  const fire = (el: EventTarget, ...types: string[]) => {
+    for (const t of types) el.dispatchEvent(new Event(t));
+  };
+  // WebKit: drag 50 -> 30 -> 50, released on the start value: input, input, pointerup; no change, no blur.
+  fire(a, "input", "input");
+  const heldInDrag = grip.holds(a);
+  fire(a, "pointerup");
+  check(
+    "slider grip: a WebKit drag that ends on its start value (input, input, pointerup; no change, no blur) is held during the drag and released (gesture ended once) at pointerup",
+    heldInDrag && !grip.holds(a) && grip.held === null && endsA === 1,
+    `held ${heldInDrag}, after ${grip.holds(a)}, ends ${endsA}`,
+  );
+  // Chromium: input..., pointerup, change, blur: released; ending again is harmless.
+  fire(a, "input", "input", "pointerup", "change", "blur");
+  const chrome = !grip.holds(a);
+  // Keyboard: each step is input then change.
+  fire(a, "input");
+  const keyHeld = grip.holds(a);
+  fire(a, "change");
+  // Another slider's events never release the one being dragged; a focus-only slider is not held.
+  fire(a, "input");
+  fire(b, "pointerup", "change", "blur");
+  const stillA = grip.holds(a);
+  fire(a, "blur");
+  check(
+    "slider grip: released by a Chromium drag's pointerup/change/blur and a keyboard step's change; another slider's events do not release it; focus alone holds nothing",
+    chrome && keyHeld && !grip.holds(a) && stillA && grip.held === null && !grip.holds(b),
+    `chrome ${chrome}, key ${keyHeld}, other ${stillA}, ends ${endsA}`,
+  );
+  // With an AudioEngine: the Music gesture ends at pointerup, so the next drag to 0 restores the
+  // volume from before that drag, not from the earlier one.
+  withStore(() => {
+    const eng = new AudioEngine();
+    eng.setRoom({ musicOn: true, music: 0.5, effects: 0.8 });
+    const g2 = new SliderGrip();
+    const el = new EventTarget();
+    g2.watch(el, () => eng.slideEnd());
+    el.addEventListener("input", (e) => eng.slideMusic((e as CustomEvent<number>).detail));
+    const slide = (v: number) => el.dispatchEvent(new CustomEvent("input", { detail: v }));
+    slide(0.4);
+    slide(0.5); // back on the start value: no change in WebKit
+    el.dispatchEvent(new Event("pointerup"));
+    slide(0.7);
+    el.dispatchEvent(new Event("pointerup"));
+    slide(0.3);
+    slide(0); // a drag down to 0: off, with the volume from before this drag (0.7)
+    el.dispatchEvent(new Event("pointerup"));
+    check(
+      "slider grip: with the engine, each WebKit drag ends at pointerup; a drag to 0 is off with the volume from before that drag (0.7)",
+      !eng.settings.musicOn && eng.settings.music === 0.7 && JSON.stringify(eng.own) === '{"music":0.7,"musicOn":false}',
+      JSON.stringify(eng.own),
+    );
+  });
 }
 
 /** The client: Game follows the room's sound; leave() goes back to the built-in defaults. */
@@ -6288,7 +6356,7 @@ function songPlayer(): void {
   }
 }
 
-for (const t of [rivets, gating, mines, wrecks, finishing, garage, armDelay, engine, readyCheck, collisions, trackFeatures, roomTrack, jumpsWired, shippedTracks, botDriver, botLaps, mineCap, chatRoom, chatClient, sound, raceSounds, surfaceSounds, audioUnlock, menuHostOnly, menuStop, menuRestart, menuKick, menuLock, menuHandover, menuClient, menuRestartClient, retireRules, retireField, retireRaceEnd, retireGarage, retireRefund, retireOthers, retireNotices, retireClient, pauseRefused, pauseFreeze, pauseResume, pauseHold, pauseAuto, pauseCooldown, pauseGrace, pauseCountdown, pauseControls, pauseClient, musicSwitch, soundMigration, soundLayers, soundServer, soundRandom, soundRoomDrag, soundClient, songs, songPlayer]) {
+for (const t of [rivets, gating, mines, wrecks, finishing, garage, armDelay, engine, readyCheck, collisions, trackFeatures, roomTrack, jumpsWired, shippedTracks, botDriver, botLaps, mineCap, chatRoom, chatClient, sound, raceSounds, surfaceSounds, audioUnlock, menuHostOnly, menuStop, menuRestart, menuKick, menuLock, menuHandover, menuClient, menuRestartClient, retireRules, retireField, retireRaceEnd, retireGarage, retireRefund, retireOthers, retireNotices, retireClient, pauseRefused, pauseFreeze, pauseResume, pauseHold, pauseAuto, pauseCooldown, pauseGrace, pauseCountdown, pauseControls, pauseClient, musicSwitch, soundMigration, soundLayers, soundServer, soundRandom, soundRoomDrag, soundSliderGrip, soundClient, songs, songPlayer]) {
   console.log(`\n# ${t.name}`);
   try {
     t();

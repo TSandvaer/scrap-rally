@@ -17,6 +17,7 @@ import {
   musicSlid,
   musicSwitched,
   parseStoredSound,
+  SliderGrip,
   ROOM_KEYS,
   storedSoundJson,
   type EnginePreset,
@@ -381,7 +382,7 @@ export class SoundControls {
   private readonly musicTag: HTMLElement | null;
   private readonly effectsTag: HTMLElement | null;
   private readonly reset: HTMLButtonElement | null;
-  private grabbed: HTMLInputElement | null = null; // the slider being dragged (input until change)
+  private readonly grip = new SliderGrip<HTMLInputElement>(); // the slider being dragged
 
   constructor(
     private readonly engine: AudioEngine,
@@ -396,24 +397,19 @@ export class SoundControls {
       this.setOpen(pop.classList.contains("hidden"));
       button.blur();
     });
-    // render() leaves only a slider being dragged alone (between its input and its change), so
-    // a slider that merely has the focus (keyboard) still shows the host's live changes.
+    // render() leaves only a slider being dragged alone (SliderGrip: input until change, blur or
+    // pointerup), so a slider that merely has the focus (keyboard) still shows the host's live
+    // changes. The drag's end also ends the Music gesture and gives the focus back.
     const slider = (el: HTMLInputElement, key: "music" | "effects") => {
+      this.grip.watch(el, () => {
+        engine.slideEnd();
+        el.blur();
+      });
       el.addEventListener("input", () => {
-        this.grabbed = el;
         const v = Number(el.value) / 100;
         if (key === "music") engine.slideMusic(v);
         else engine.set({ effects: v });
       });
-      el.addEventListener("change", () => {
-        if (this.grabbed === el) this.grabbed = null;
-        engine.slideEnd();
-        el.blur();
-      });
-      el.addEventListener("blur", () => {
-        if (this.grabbed === el) this.grabbed = null;
-      });
-      el.addEventListener("pointerup", () => el.blur());
     };
     slider(music, "music");
     slider(effects, "effects");
@@ -501,9 +497,9 @@ export class SoundControls {
     button.classList.toggle("muted", s.muted);
     button.title = s.muted ? "Sound is muted (M)" : "Sound (M mutes)";
     const heard = String(Math.round(musicHeard(s) * 100));
-    const grabbed = this.grabbed;
-    if (grabbed !== music) music.value = heard;
-    if (grabbed !== effects) effects.value = String(Math.round(s.effects * 100));
+    const grip = this.grip;
+    if (!grip.holds(music)) music.value = heard;
+    if (!grip.holds(effects)) effects.value = String(Math.round(s.effects * 100));
     mute.textContent = s.muted ? "Unmute (M)" : "Mute (M)";
     mute.setAttribute("aria-pressed", String(s.muted));
     const musicTag = roomTag(e, "music");
@@ -514,7 +510,7 @@ export class SoundControls {
     if (this.lobby) {
       const { toggle, music: lobbyMusic, muted, tag, reset: lobbyReset } = this.lobby;
       const on = musicIsOn(s);
-      if (grabbed !== lobbyMusic) lobbyMusic.value = heard;
+      if (!grip.holds(lobbyMusic)) lobbyMusic.value = heard;
       toggle.setAttribute("aria-checked", String(on));
       toggle.textContent = on ? "On" : "Off";
       toggle.title = on ? "Music off (effects stay on)" : "Music on";

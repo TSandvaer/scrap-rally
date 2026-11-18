@@ -14,7 +14,7 @@
 
 import { resetLabel, roomTag, ROOM_TAG_TITLE, showTag, type AudioEngine } from "./audio";
 import type { Game } from "./game";
-import { musicHeard, musicIsOn, musicSwitched, PatchThrottle, roomMusicSlid } from "./soundlogic";
+import { musicHeard, musicIsOn, musicSwitched, PatchThrottle, roomMusicSlid, SliderGrip } from "./soundlogic";
 import type { RoomSound } from "../shared/sound";
 
 /** The host's Room sound sends: at most one per this many ms (the server takes 2 a second). */
@@ -68,7 +68,7 @@ export class GameMenu {
   private resetBtn: HTMLButtonElement | null = null;
   private room: { toggle: HTMLButtonElement; music: HTMLInputElement; effects: HTMLInputElement } | null = null;
   private roomMusicStart: number | undefined = undefined; // the room's volume as a Room Music slider drag began
-  private grabbed: HTMLInputElement | null = null; // the Sound view slider being dragged
+  private grip = new SliderGrip<HTMLInputElement>(); // the Sound view slider being dragged
   private readonly roomSend: PatchThrottle<RoomSound>;
 
   constructor(private readonly deps: MenuDeps) {
@@ -180,7 +180,10 @@ export class GameMenu {
     const focused = document.activeElement instanceof HTMLElement && this.body.contains(document.activeElement) ? document.activeElement.dataset.key : undefined;
     this.music = this.effects = this.muteBtn = this.resetBtn = this.musicTag = this.effectsTag = null;
     this.room = null;
-    this.grabbed = null;
+    // A drag cut short by the rebuild (a handover) ends with it: its slider is gone.
+    if (this.grip.held) this.deps.audio.slideEnd();
+    this.grip = new SliderGrip<HTMLInputElement>();
+    this.roomMusicStart = undefined;
     this.builtHost = g.isHost();
     if (this.view === "main") this.body.replaceChildren(...this.mainView());
     else if (this.view === "sound") this.body.replaceChildren(...this.soundView());
@@ -335,7 +338,9 @@ export class GameMenu {
     const a = this.deps.audio;
     const g = this.deps.game;
     // A slider row: caption, range 0..100, and an optional mark (the "host's" tag).
-    const slider = (label: string, key: string, tag: boolean): [HTMLElement, HTMLInputElement, HTMLElement | null] => {
+    // onEnd: the drag ended (change, blur or pointerup, SliderGrip); then the slider blurs, so
+    // the driving keys are free again.
+    const slider = (label: string, key: string, tag: boolean, onEnd?: () => void): [HTMLElement, HTMLInputElement, HTMLElement | null] => {
       const row = el("div", "vol");
       const id = `gm-vol-${key}`;
       const cap = el("span", "", label);
@@ -348,15 +353,11 @@ export class GameMenu {
       input.id = id;
       input.dataset.key = key;
       input.setAttribute("aria-labelledby", cap.id);
-      // A slider being dragged is not moved by renderSound (between its input and its change);
-      // it blurs on release, so the driving keys are free again.
-      input.addEventListener("input", () => (this.grabbed = input));
-      input.addEventListener("change", () => {
-        if (this.grabbed === input) this.grabbed = null;
+      // A slider being dragged is not moved by renderSound (SliderGrip: from its input until
+      // change, blur or pointerup); every other one is, focused or not.
+      this.grip.watch(input, () => {
+        onEnd?.();
         input.blur();
-      });
-      input.addEventListener("blur", () => {
-        if (this.grabbed === input) this.grabbed = null;
       });
       row.append(cap, input);
       let mark: HTMLElement | null = null;
@@ -367,10 +368,9 @@ export class GameMenu {
       }
       return [row, input, mark];
     };
-    const [mRow, m, mTag] = slider("Music", "music", true);
+    const [mRow, m, mTag] = slider("Music", "music", true, () => a.slideEnd());
     const [eRow, e, eTag] = slider("Effects", "effects", true);
     m.addEventListener("input", () => a.slideMusic(Number(m.value) / 100));
-    m.addEventListener("change", () => a.slideEnd());
     e.addEventListener("input", () => a.set({ effects: Number(e.value) / 100 }));
     this.music = m;
     this.effects = e;
@@ -390,13 +390,12 @@ export class GameMenu {
       const toggle = button("On", "room-music-on", () => this.roomSend.push(musicSwitched(g.soundDefaults)), "small music-switch");
       toggle.setAttribute("role", "switch");
       toggle.setAttribute("aria-label", "Room music");
-      const [rmRow, rm] = slider("Music", "room-music", false);
+      const [rmRow, rm] = slider("Music", "room-music", false, () => (this.roomMusicStart = undefined));
       const [reRow, re] = slider("Effects", "room-effects", false);
       rm.addEventListener("input", () => {
         if (this.roomMusicStart === undefined) this.roomMusicStart = g.soundDefaults.music;
         this.roomSend.push(roomMusicSlid(Number(rm.value) / 100, this.roomMusicStart));
       });
-      rm.addEventListener("change", () => (this.roomMusicStart = undefined));
       re.addEventListener("input", () => this.roomSend.push({ effects: Number(re.value) / 100 }));
       this.room = { toggle, music: rm, effects: re };
       rmRow.append(toggle); // the row's last column, where the own rows have their mark
@@ -411,9 +410,9 @@ export class GameMenu {
   private renderSound(): void {
     const a = this.deps.audio;
     const s = a.settings;
-    const active = this.grabbed;
-    if (this.music && active !== this.music) this.music.value = String(Math.round(musicHeard(s) * 100));
-    if (this.effects && active !== this.effects) this.effects.value = String(Math.round(s.effects * 100));
+    const grip = this.grip;
+    if (this.music && !grip.holds(this.music)) this.music.value = String(Math.round(musicHeard(s) * 100));
+    if (this.effects && !grip.holds(this.effects)) this.effects.value = String(Math.round(s.effects * 100));
     if (this.muteBtn) {
       setText(this.muteBtn, s.muted ? "Unmute (M)" : "Mute (M)");
       this.muteBtn.setAttribute("aria-pressed", String(s.muted));
@@ -428,8 +427,8 @@ export class GameMenu {
       r.toggle.setAttribute("aria-checked", String(on));
       setText(r.toggle, on ? "On" : "Off");
       r.toggle.title = on ? "Music off for the room" : "Music on for the room";
-      if (active !== r.music) r.music.value = String(Math.round(musicHeard(d) * 100));
-      if (active !== r.effects) r.effects.value = String(Math.round(d.effects * 100));
+      if (!grip.holds(r.music)) r.music.value = String(Math.round(musicHeard(d) * 100));
+      if (!grip.holds(r.effects)) r.effects.value = String(Math.round(d.effects * 100));
     }
   }
 
