@@ -9,9 +9,12 @@
 //   npm run bench -- --pixels --vs-ref main  same pixels in the preview scenes?
 //   npm run bench -- http://localhost:3006 --vs http://localhost:3007   targets given by hand
 //
+//   npm run bench -- --judge tmp/bench/x.json  judge a raw results file again: nothing is measured
+//
 // Exit code: 0 the gate passes (or there was none to judge), 1 it fails (or the run itself
-// failed), 2 no verdict because the machine was not quiet (INVALID). Only one benchmark runs
-// on the machine at a time: a second one waits for the first one's lock. A built directory
+// failed), 2 no verdict (INVALID): the machine was too noisy to decide, or metric A was not
+// measured at the gate's window size. Only one benchmark runs on the machine at a time: a
+// second one waits for the first one's lock. A built directory
 // is served by this script on 127.0.0.1 with cross-origin isolation, which gives the page a
 // 5 us timer; a URL target has whatever its server allows (usually 100 us).
 
@@ -41,19 +44,27 @@ const GATE_RATIO = 1.05;
 const GATE_RUNS = 5; // any other number of runs: numbers only, no verdict (the noise limit is for five)
 const GATE_VIEWPORT = "1280x720";
 const CTOR_ALLOWANCE_MS = 50; // PLAN-GFX section 4: construction at or below baseline + 50 ms
-// Safeguard 1, a quiet machine. One benchmark at a time (the lock), and no verdict when the
-// set was noisy all the same: the noise is the median over the cells of how far apart a
-// cell's per-run ratios of the median lie (max - min). Quiet runs measured 0.044 to 0.045,
-// runs beside another benchmark 0.177 to 0.235.
+// Safeguard 1, a quiet machine. One benchmark at a time (the lock), and a set knows how noisy
+// it was: the noise is the median over its cells of how far apart a cell's per-run ratios of
+// the median lie (max - min). Quiet runs measured 0.044 to 0.045, runs beside other load 0.104
+// to 0.235. At or below NOISE_LIMIT a set is quiet and a value is ok up to GATE_RATIO, OVER
+// above it. A noisier set gives each value a margin, the larger of the set's noise and the
+// value's own spread (max - min of its per-run ratios): ok at or below GATE_RATIO - margin,
+// OVER above GATE_RATIO + margin, open in between. A verdict that the noise cannot change
+// stands; anything open ends in INVALID.
 const NOISE_LIMIT = 0.1;
 const LOCK_FILE = path.join(os.tmpdir(), "scrap-rally-bench.lock");
-// Safeguard 2, confirm-on-OVER: metric A values OVER in the gate run (set 1) are measured
-// once more (set 2: their cells only, fresh runs in new browser sessions). The gate fails only
-// on a value that is OVER in both. The sets are never pooled and there is no third.
+// Safeguard 2, confirm-on-OVER: the cells holding metric A values OVER in the gate run (set 1)
+// are measured once more (set 2: fresh runs in new browser sessions), with control cells so
+// that set 2's noise rests on at least SET2_CELLS cells. The controls are never judged.
+// FAIL: a value OVER in both sets. PASS: nothing open, and every value ok in set 1, or OVER
+// there and ok in set 2. Anything else: INVALID. The sets are never pooled; there is no third.
+const SET2_CELLS = 5;
 //
 // Test only: BENCH_TEST_SCALE_SET1="S1:rust-bowl:median:1.2" multiplies that value of this
-// build by the factor in set 1 (median or p95), to see the confirmation run without a slow
-// build. The output says so in capitals; a run with it is not a gate result.
+// build by the factor (1 or more) in set 1 (median or p95), to see the confirmation run
+// without a slow build: it can only add an OVER that the unscaled set 2 has to confirm. The
+// output says so in capitals; a run with it is not a gate result.
 const TEST_SCALE = process.env.BENCH_TEST_SCALE_SET1 ?? "";
 // The fixed reference every ticket is gated against: `--vs-ref gfx-baseline` reads the commit
 // from this file (one hash on a line; lines starting with # are comments).
@@ -80,6 +91,8 @@ const HELP = `npm run bench -- [target] [options]
                      with and without the caption) between the two builds, or between two
                      loads of one build; --scenes <l> picks them (default: all sixteen)
   --out <file>       raw results as JSON (default tmp/bench/<time>.json)
+  --judge <file>     judge such a raw results file again with this runner's rules and print
+                     it as a run would be: nothing is built, opened or measured
   --session <name>   agent-browser session prefix (default bench-<pid>). The sessions
                      <name>-base and <name>-this are closed on every way out.
 
@@ -87,15 +100,19 @@ One benchmark at a time: the runner takes a machine-wide lock (${path.basename(L
 directory) and waits, saying so, while another one holds it.
 
 With a baseline the runs alternate between the two builds and the gate is judged:
-- Metric A's median and p95, at ${GATE_VIEWPORT}: OVER when the median of the per-run ratios
-  this/baseline is above ${GATE_RATIO}. Other window sizes, p99, the frames over 4 ms, G and C are
-  information.
-- Confirmation: values that are OVER are measured once more (their cells only, ${GATE_RUNS} fresh runs
-  in new browser sessions). The gate fails only on a value that is OVER both times.
+- Metric A's median and p95, at ${GATE_VIEWPORT}, by the median of the per-run ratios
+  this/baseline: ok up to ${GATE_RATIO}, OVER above. Other window sizes, p99, the frames over
+  4 ms, G and C are information.
+- Noise: how far apart a cell's per-run ratios lie, in the middle cell. In a set above
+  ${NOISE_LIMIT} each value gets a margin (the larger of that noise and its own spread): ok at or
+  below ${GATE_RATIO} - margin, OVER above ${GATE_RATIO} + margin, open in between.
+- Confirmation: the cells holding OVER values are measured once more (${GATE_RUNS} fresh runs in new
+  browser sessions, with control cells for the noise figure, at least ${SET2_CELLS} cells in all).
+- FAIL: a value OVER both times. PASS: nothing open, every value ok, or OVER and then ok.
+  INVALID, no verdict: anything else, or metric A not measured at ${GATE_VIEWPORT}; run it again
+  when nothing else is running. A run cut down with --only or --metrics says "partial".
 - Metric B's frames over 20 ms and the Renderer's construction are checked against the
-  baseline too (once).
-- INVALID, no verdict: the machine was not quiet (a cell's per-run ratios lay more than
-  ${NOISE_LIMIT} apart in the middle cell). Run it again when nothing else is running.
+  baseline too (once; under noise an OVER there gives INVALID).
 Exit code 0 PASS, 1 FAIL (or the run failed), 2 INVALID.`;
 
 interface Viewport {
@@ -120,17 +137,23 @@ interface Sample {
   cell: Cell;
 }
 
+/** ok and OVER are decided; open means the set's noise leaves both possible. */
+type Cls = "ok" | "OVER" | "open";
+
 /** A value the gate judged. */
 interface Gated {
   what: string; // "A median S4 crusher-run at 1280x720"
   kind: "ratio" | "dropped" | "construction";
   key: string; // the same value in another set: viewport, scene, track and statistic
+  viewport: string;
   scene: string;
   track: string;
   ratio: number; // this / baseline (ratio); the plain values otherwise
   base: number;
   cand: number;
-  over: boolean;
+  spread: number; // max - min of the value's per-run ratios (ratio only)
+  margin: number; // 0 in a quiet set; else the larger of the set's noise and the spread
+  cls: Cls;
 }
 
 function arg(name: string): string | null {
@@ -188,9 +211,23 @@ function alive(pid: number): boolean {
 }
 
 /**
+ * Does that pid still run a benchmark? After a runner was killed its pid can come back as
+ * some other process: a live pid whose command is not this script holds no lock.
+ */
+async function runnerAlive(pid: number): Promise<boolean> {
+  if (!alive(pid)) return false;
+  try {
+    return /bench\.ts/.test((await run("ps", ["-o", "command=", "-p", String(pid)])).stdout);
+  } catch (e) {
+    // ps exits 1 for a pid that is gone meanwhile; any other trouble: leave a live process its lock.
+    return (e as { code?: number }).code !== 1;
+  }
+}
+
+/**
  * One benchmark on the machine at a time: two at once spoil each other's timing. The lock is
- * a file in the temp directory holding the pid. While a live process holds it we wait and
- * say so; the lock of a process that is gone is taken over.
+ * a file in the temp directory holding the pid. While a live runner holds it we wait and
+ * say so; the lock of a process that is gone (or is something else by now) is taken over.
  */
 async function acquireLock(): Promise<void> {
   let told = 0;
@@ -213,15 +250,15 @@ async function acquireLock(): Promise<void> {
         return 0;
       }
     })();
-    // Stale: its process is gone, or nothing readable was ever written into it.
-    if (holder ? !alive(holder.pid) : age > 10_000) {
+    // Stale: its runner is gone, or nothing readable was ever written into it.
+    if (holder ? !(await runnerAlive(holder.pid)) : age > 10_000) {
       // Moved aside in one step, so that of two waiters only one takes it; and looked at again
       // after the move, in case it was a fresh lock by then.
       const aside = `${LOCK_FILE}.${process.pid}.stale`;
       try {
         renameSync(LOCK_FILE, aside);
         const moved = lockHolder(aside);
-        if (moved && alive(moved.pid) && !existsSync(LOCK_FILE)) renameSync(aside, LOCK_FILE);
+        if (moved && (await runnerAlive(moved.pid)) && !existsSync(LOCK_FILE)) renameSync(aside, LOCK_FILE);
         else {
           rmSync(aside, { force: true });
           console.error(`took over the lock of a benchmark that is gone${holder ? ` (pid ${holder.pid})` : ""}`);
@@ -516,14 +553,25 @@ function tablesAlone(samples: Sample[], vps: Viewport[], metrics: string[]): str
   return out.join("\n\n");
 }
 
+/** ok, OVER or open for a ratio, by the noise of the set it was measured in (null: none measured, judged as quiet). */
+function classify(ratio: number, spread: number, noise: number | null): { cls: Cls; margin: number } {
+  const margin = noise !== null && noise > NOISE_LIMIT ? Math.max(noise, spread) : 0;
+  return { cls: ratio <= GATE_RATIO - margin ? "ok" : ratio > GATE_RATIO + margin ? "OVER" : "open", margin };
+}
+
 /**
  * This build against the baseline, for the samples of one set. Each value is the median of
- * the runs; a ratio is the median of the per-run ratios this / baseline. The values the gate
- * judges are collected in `gated` when `judge` is on, and `mark` says what to print after
- * each (ok, OVER, ...). Metric A is judged at GATE_VIEWPORT only.
+ * the runs; a ratio is the median of the per-run ratios this / baseline. With `judge` the
+ * values the gate judges are classified by the set's `noise`, collected in `gated`, and
+ * followed in the table by what `mark` says (ok, OVER, open ...). Metric A is judged at
+ * GATE_VIEWPORT only. `note` adds a word to a cell's row (set 2's controls).
  */
-function tablesVersus(samples: Sample[], vps: Viewport[], metrics: string[], judge: boolean, gated: Gated[], mark: (g: Gated) => string, withConstruction: boolean): string {
+function tablesVersus(
+  samples: Sample[], vps: Viewport[], metrics: string[], judge: boolean, noise: number | null, gated: Gated[],
+  mark: (g: Gated) => string, withConstruction: boolean, note: (scene: string, track: string) => string = () => "",
+): string {
   const out: string[] = [];
+  const noisy = noise !== null && noise > NOISE_LIMIT;
   const add = (g: Gated): string => {
     if (!judge) return "";
     gated.push(g);
@@ -541,10 +589,15 @@ function tablesVersus(samples: Sample[], vps: Viewport[], metrics: string[], jud
           /** base, this, ratio; `stat` names the value when it is one the gate judges. */
           const timed = <T extends Cell>(f: (x: T) => number, stat: string | null): string[] => {
             const p = of<T>(f);
-            const ratio = median(p.base.map((b, i) => p.cand[i] / b));
+            const perRun = p.base.map((b, i) => p.cand[i] / b);
+            const ratio = median(perRun);
             const shown = [ms(median(p.base)), ms(median(p.cand))];
             if (!stat) return [...shown, ratio.toFixed(3)];
-            const g: Gated = { what: `${metric} ${stat} ${scene} ${track} at ${vp.name}`, kind: "ratio", key: `${vp.name}|${scene}|${track}|${stat}`, scene, track, ratio, base: median(p.base), cand: median(p.cand), over: ratio > GATE_RATIO };
+            const spread = Math.max(...perRun) - Math.min(...perRun);
+            const g: Gated = {
+              what: `${metric} ${stat} ${scene} ${track} at ${vp.name}`, kind: "ratio", key: `${vp.name}|${scene}|${track}|${stat}`, viewport: vp.name, scene, track,
+              ratio, base: median(p.base), cand: median(p.cand), spread, ...classify(ratio, spread, noise),
+            };
             return [...shown, `${ratio.toFixed(3)}${add(g)}`];
           };
           const plain = <T extends Cell>(f: (x: T) => number, fmt: (x: number) => string): string[] => {
@@ -555,14 +608,17 @@ function tablesVersus(samples: Sample[], vps: Viewport[], metrics: string[], jud
             const sums = new Set(samples.filter((s) => s.viewport === vp.name && s.metric === metric && s.cell.scene === scene && s.cell.track === track).map((s) => (s.cell as CellA).checksum));
             const gate = metric === "A" && vp.name === GATE_VIEWPORT; // G, and A at any other window size, are read, not judged
             rows.push([
-              scene, track,
+              scene, `${track}${note(scene, track)}`,
               ...timed<CellA>((x) => x.p50, gate ? "median" : null), ...timed<CellA>((x) => x.p95, gate ? "p95" : null), ...timed<CellA>((x) => x.p99, null), ...plain<CellA>((x) => x.over, int),
               sums.size === 1 ? [...sums][0] : `**${sums.size} differ**`,
             ]);
           } else if (metric === "B") {
             // Dropped frames: at or below the baseline's (PLAN-GFX section 4). In headless Chrome that is 0.
+            // Under noise an OVER is not believed (open), and an ok only when this build dropped none.
             const d = of<CellB>((x) => x.over20);
-            const g: Gated = { what: `B frames over 20 ms ${scene} ${track} at ${vp.name}`, kind: "dropped", key: `${vp.name}|${scene}|${track}|over20`, scene, track, ratio: 0, base: median(d.base), cand: median(d.cand), over: median(d.cand) > median(d.base) };
+            const base = median(d.base), cand = median(d.cand);
+            const cls: Cls = cand > base ? (noisy ? "open" : "OVER") : noisy && cand > 0 ? "open" : "ok";
+            const g: Gated = { what: `B frames over 20 ms ${scene} ${track} at ${vp.name}`, kind: "dropped", key: `${vp.name}|${scene}|${track}|over20`, viewport: vp.name, scene, track, ratio: 0, base, cand, spread: 0, margin: 0, cls };
             rows.push([scene, track, ...plain<CellB>((x) => x.p50, ms), ...plain<CellB>((x) => x.p95, ms), int(g.base), `${int(g.cand)}${add(g)}`, ...plain<CellB>((x) => x.jsP50, ms)]);
           } else {
             rows.push([scene, track, ...plain<CellC>((x) => (x.allocBytes - x.probeBytes) / x.n, whole), ...plain<CellC>((x) => x.gcDrops, int)]);
@@ -575,17 +631,18 @@ function tablesVersus(samples: Sample[], vps: Viewport[], metrics: string[], jud
         B: ["Scene", "Track", ...pair("median"), ...pair("p95"), ...pair(">20 ms"), ...pair("frame() median")],
         C: ["Scene", "Track", ...pair("bytes/frame"), ...pair("GCs")],
       };
-      const note = metric === "A" && vp.name !== GATE_VIEWPORT ? `; information, the gate reads ${GATE_VIEWPORT}` : "";
-      out.push(`**${TITLES[metric]} at ${vp.name}${note}**\n\n${table(head[metric === "G" ? "A" : metric], rows)}`);
+      const info = metric === "A" && vp.name !== GATE_VIEWPORT ? `; information, the gate reads ${GATE_VIEWPORT}` : "";
+      out.push(`**${TITLES[metric]} at ${vp.name}${info}**\n\n${table(head[metric === "G" ? "A" : metric], rows)}`);
     }
     if (!withConstruction) continue;
-    // Construction and the first frame of a cold page, from the metric A cells.
+    // Construction and the first frame of a cold page, from the metric A cells. Under noise an OVER is not believed.
     const rows = TRACKS.flatMap((track) => {
       const of = (t: string) => samples.filter((s) => s.target === t && s.viewport === vp.name && s.metric === "A" && s.cell.track === track).map((s) => s.cell as CellA);
       const b = of("base"), c = of("this");
       if (!b.length || !c.length) return [];
       const ctor = { base: median(b.map((x) => x.ctorMs)), cand: median(c.map((x) => x.ctorMs)) };
-      const g: Gated = { what: `construction ${track} at ${vp.name}`, kind: "construction", key: `${vp.name}|${track}|ctor`, scene: "", track, ratio: 0, ...ctor, over: ctor.cand > ctor.base + CTOR_ALLOWANCE_MS };
+      const cls: Cls = ctor.cand > ctor.base + CTOR_ALLOWANCE_MS ? (noisy ? "open" : "OVER") : "ok";
+      const g: Gated = { what: `construction ${track} at ${vp.name}`, kind: "construction", key: `${vp.name}|${track}|ctor`, viewport: vp.name, scene: "", track, ratio: 0, ...ctor, spread: 0, margin: 0, cls };
       return [[track, String(b.length), ms(ctor.base), `${ms(ctor.cand)}${add(g)}`, ms(median(b.map((x) => x.firstMs))), ms(median(c.map((x) => x.firstMs)))]];
     });
     if (rows.length) out.push(`**Renderer construction and first frame on a cold page at ${vp.name} (ms, medians)**\n\n${table(["Track", "page loads each", "new Renderer() base", "this", "first frame base", "this"], rows)}`);
@@ -594,59 +651,193 @@ function tablesVersus(samples: Sample[], vps: Viewport[], metrics: string[], jud
 }
 
 type Verdict = "PASS" | "FAIL" | "INVALID";
+type Noise = { noise: number; cells: number } | null;
+
+interface Decision {
+  verdict: Verdict;
+  over1: Gated[]; // metric A values OVER in set 1
+  confirmed: Gated[]; // ... and OVER in set 2 too
+  failed: Gated[]; // what a FAIL rests on: the confirmed, and metric B or construction OVER in a quiet set 1
+  undecided: string[]; // what an INVALID rests on
+  undecidedInSet2: number; // how many of those are values open in set 2 (the last of the list)
+  partial: string; // "" when the whole gate was judged; else what was cut
+}
+
+/**
+ * The verdict. FAIL: a value OVER in set 1 and OVER in set 2 (or metric B or construction OVER
+ * in a quiet set 1). PASS: nothing open, and every metric A value ok in set 1, or OVER there
+ * and ok in set 2. INVALID: anything else, and any run that judged no metric A value.
+ */
+function decide(gated1: Gated[], gated2: Gated[] | null): Decision {
+  const a1 = gated1.filter((g) => g.kind === "ratio");
+  const once = gated1.filter((g) => g.kind !== "ratio"); // metric B and construction: judged in set 1 only
+  const over1 = a1.filter((g) => g.cls === "OVER");
+  const second = (g: Gated) => gated2?.find((x) => x.key === g.key) ?? null;
+  const confirmed = over1.filter((g) => second(g)?.cls === "OVER");
+  const failed = [...confirmed, ...once.filter((g) => g.cls === "OVER")];
+  const undecided: string[] = [];
+  if (!a1.length) undecided.push(`metric A was not judged: the gate reads it at ${GATE_VIEWPORT}, with a baseline`);
+  for (const g of a1) if (g.cls === "open") undecided.push(`${g.what}: ${g.ratio.toFixed(3)} is open in set 1 (margin ${g.margin.toFixed(3)})`);
+  for (const g of over1) if (!second(g)) undecided.push(`${g.what}: OVER in set 1 (${g.ratio.toFixed(3)}) and not measured in a set 2`);
+  for (const g of once) if (g.cls === "open") undecided.push(`${g.what}: ${ms(g.base)} -> ${ms(g.cand)} cannot be judged in a noisy set`);
+  const before = undecided.length;
+  for (const g of over1) {
+    const again = second(g);
+    if (again?.cls === "open") undecided.push(`${g.what}: OVER in set 1 (${g.ratio.toFixed(3)}), open in set 2 (${again.ratio.toFixed(3)}, margin ${again.margin.toFixed(3)})`);
+  }
+  // What the whole gate judges: every metric A cell's median and p95, and metric B's lap on the three tracks.
+  const cut: string[] = [];
+  const all = SCENES.length * TRACKS.length * 2;
+  if (a1.length < all) cut.push(`${a1.length} of the gate's ${all} metric A values`);
+  if (!TRACKS.every((track) => once.some((g) => g.kind === "dropped" && g.viewport === GATE_VIEWPORT && g.scene === "S4" && g.track === track))) cut.push("without metric B's lap on all three tracks");
+  const verdict: Verdict = !a1.length ? "INVALID" : failed.length ? "FAIL" : undecided.length ? "INVALID" : "PASS";
+  return { verdict, over1, confirmed, failed, undecided, undecidedInSet2: undecided.length - before, partial: cut.join(", ") };
+}
 
 /** What the gate found, in words. */
-function gateSummary(o: {
-  verdict: Verdict;
-  reference: string;
-  gated1: Gated[];
-  gated2: Gated[] | null; // null: there was no set 2
-  noise1: { noise: number; cells: number } | null;
-  noise2: { noise: number; cells: number } | null;
-  confirmed: Gated[];
-  injected: string;
-}): string {
+function gateSummary(o: { d: Decision; reference: string; gated1: Gated[]; gated2: Gated[] | null; noise1: Noise; noise2: Noise; controls: string[]; notes: string[] }): string {
+  const { d } = o;
   const ratios = o.gated1.filter((g) => g.kind === "ratio");
-  const over1 = ratios.filter((g) => g.over);
   const dropped = o.gated1.filter((g) => g.kind === "dropped");
   const built = o.gated1.filter((g) => g.kind === "construction");
-  const once = [...dropped, ...built].filter((g) => g.over);
-  const noisy = (n: { noise: number } | null) => n !== null && n.noise > NOISE_LIMIT;
+  const count = (gs: Gated[]) => (["ok", "OVER", "open"] as const).map((c) => `${gs.filter((g) => g.cls === c).length} ${c}`).join(", ");
+  const partial = d.partial ? ` (partial: ${d.partial}; not the whole gate)` : "";
   const title =
-    o.verdict === "INVALID"
-      ? "INVALID, no verdict: the machine was not quiet. Run it again when nothing else is running"
-      : o.verdict === "FAIL"
-        ? `FAIL, ${o.confirmed.length + once.length} value(s) OVER`
-        : "PASS";
-  const lines = [`**Gate: ${title}**`, ""];
-  if (o.injected) lines.push(`- TEST INJECTION, NOT A GATE RESULT: ${o.injected}`);
-  lines.push(`- ${o.reference}`);
+    d.verdict === "INVALID"
+      ? `INVALID, no verdict${ratios.length ? ": too noisy to decide. Run it again when nothing else is running" : `: metric A was not judged at ${GATE_VIEWPORT}`}${partial}`
+      : d.verdict === "FAIL"
+        ? `FAIL, ${d.failed.length} value(s) OVER${partial}`
+        : `PASS${partial}`;
+  const lines = [`**Gate: ${title}**`, "", ...o.notes.map((n) => `- ${n}`), `- ${o.reference}`];
   const noiseLine = (n: { noise: number; cells: number }, set: number) =>
-    `- Noise of set ${set}: ${n.noise.toFixed(3)}${noisy(n) ? " **TOO NOISY**" : ""} (how far apart a cell's ${GATE_RUNS} per-run ratios of the median lie, max - min; the median over ${n.cells} cell(s); above ${NOISE_LIMIT} there is no verdict).`;
-  if (o.noise1) lines.push(noiseLine(o.noise1, 1));
+    `Noise of set ${set}: ${n.noise.toFixed(3)} over ${n.cells} cell(s), ${
+      n.noise > NOISE_LIMIT
+        ? `**noisy** (above ${NOISE_LIMIT}): each value has a margin, the larger of this and its own spread; ok at or below ${GATE_RATIO} - margin, OVER above ${GATE_RATIO} + margin, open in between`
+        : `quiet (at or below ${NOISE_LIMIT}): ok up to ${GATE_RATIO}, OVER above`
+    }.`;
+  const shown = (g: Gated) => `${g.ratio.toFixed(3)} ${g.cls}${g.margin ? ` (margin ${g.margin.toFixed(3)})` : ""}`;
+  if (o.noise1) lines.push(`- ${noiseLine(o.noise1, 1)}`);
   if (ratios.length) {
     const rs = ratios.map((g) => g.ratio);
     const worst = ratios.reduce((a, b) => (b.ratio > a.ratio ? b : a));
-    lines.push(`- Metric A at ${GATE_VIEWPORT}, median and p95 (OVER above ${GATE_RATIO}), set 1: ${ratios.length} ratios from ${Math.min(...rs).toFixed(3)} to ${Math.max(...rs).toFixed(3)}, ${over1.length} OVER. Largest: ${worst.what}.`);
+    lines.push(`- Metric A at ${GATE_VIEWPORT}, median and p95, set 1: ${ratios.length} ratios from ${Math.min(...rs).toFixed(3)} to ${Math.max(...rs).toFixed(3)}: ${count(ratios)}. Largest: ${worst.what}.`);
   } else lines.push(`- Metric A: not judged (the gate reads it at ${GATE_VIEWPORT}, which this run did not measure).`);
   if (o.gated2) {
-    lines.push(`- Set 2, the confirmation: the ${new Set(over1.map((g) => `${g.scene} ${g.track}`)).size} cell(s) holding those values again, ${GATE_RUNS} fresh runs in new browser sessions. A value fails only when it is OVER in both sets; the sets are not pooled.`);
-    if (o.noise2) lines.push(noiseLine(o.noise2, 2).replace("- ", "  - "));
-    for (const g of over1) {
+    const cells = new Set(d.over1.map((g) => `${g.scene} ${g.track}`)).size;
+    lines.push(`- Set 2: the ${cells} cell(s) holding the OVER values${o.controls.length ? ` and ${o.controls.length} control cell(s) for the noise figure only (${o.controls.join(", ")})` : ""}, ${GATE_RUNS} fresh runs in new browser sessions. The sets are not pooled.`);
+    if (o.noise2) lines.push(`  - ${noiseLine(o.noise2, 2)}`);
+    for (const g of d.over1) {
       const again = o.gated2.find((x) => x.key === g.key);
-      lines.push(`  - ${g.what}: set 1 ${g.ratio.toFixed(3)}, set 2 ${again ? again.ratio.toFixed(3) : "not measured"}: ${again?.over ? "**CONFIRMED**" : "not confirmed"}`);
+      lines.push(`  - ${g.what}: set 1 ${shown(g)}, set 2 ${again ? shown(again) : "not measured"}: ${again?.cls === "OVER" ? "**CONFIRMED**" : again?.cls === "ok" ? "not confirmed" : "undecided"}`);
     }
-    for (const g of o.gated2.filter((x) => x.over && !over1.some((y) => y.key === x.key))) lines.push(`  - ${g.what}: set 2 ${g.ratio.toFixed(3)}, OVER for the first time in set 2: does not count`);
-  } else if (over1.length) {
-    for (const g of over1) lines.push(`  - OVER in set 1, not taken to a set 2: ${g.what}: ${g.ratio.toFixed(3)}`);
+    for (const g of o.gated2.filter((x) => x.cls === "OVER" && !d.over1.some((y) => y.key === x.key))) lines.push(`  - ${g.what}: set 2 ${shown(g)}, OVER for the first time in set 2: does not count`);
   }
-  if (dropped.length) lines.push(`- Metric B, frames over 20 ms (OVER above the baseline's): ${dropped.length} cells, ${dropped.filter((g) => g.over).length} OVER.`);
-  if (built.length) lines.push(`- Construction (OVER above baseline + ${CTOR_ALLOWANCE_MS} ms): ${built.length} checked, ${built.filter((g) => g.over).length} OVER.`);
-  for (const g of once) lines.push(`- OVER: ${g.what}: ${ms(g.base)} -> ${ms(g.cand)}`);
+  if (dropped.length) lines.push(`- Metric B, frames over 20 ms (OVER above the baseline's): ${dropped.length} cells: ${count(dropped)}.`);
+  if (built.length) lines.push(`- Construction (OVER above baseline + ${CTOR_ALLOWANCE_MS} ms): ${built.length} checked: ${count(built)}.`);
+  for (const g of d.failed.filter((x) => x.kind !== "ratio")) lines.push(`- OVER: ${g.what}: ${ms(g.base)} -> ${ms(g.cand)}`);
+  if (d.verdict === "INVALID" && d.undecided.length) {
+    // The values open in set 2 are in the set 2 lines above already.
+    const rest = d.undecided.slice(0, d.undecided.length - d.undecidedInSet2);
+    lines.push(`- Undecided, which is why there is no verdict: ${d.undecided.length} value(s)${d.undecidedInSet2 ? `, ${d.undecidedInSet2} of them open in set 2 (above)` : ""}${rest.length ? ":" : "."}`);
+    for (const u of rest.slice(0, 12)) lines.push(`  - ${u}`);
+    if (rest.length > 12) lines.push(`  - ... and ${rest.length - 12} more`);
+  }
   return lines.join("\n");
 }
 
+/** What a run (or a raw results file read back) is judged with. */
+interface Judging {
+  vps: Viewport[];
+  metrics: string[];
+  runs: number;
+  reference: string;
+  notes: string[]; // lines for the top of the gate block (test injection, replay)
+}
+
+/** Set 1's tables, noise and gated values. */
+function readSet1(samples: Sample[], j: Judging, compare: boolean, judge: boolean): { tables: string; gated1: Gated[]; noise1: Noise } {
+  const set1 = samples.filter((s) => s.set === 1);
+  const noise1 = judge ? noiseOf(set1) : null;
+  const gated1: Gated[] = [];
+  const mark = (g: Gated) => (g.cls === "ok" ? " ok" : g.cls === "OVER" ? " **OVER**" : " open");
+  const tables = compare ? tablesVersus(set1, j.vps, j.metrics, judge, noise1?.noise ?? null, gated1, mark, true) : tablesAlone(set1, j.vps, j.metrics);
+  return { tables, gated1, noise1 };
+}
+
+/** Set 2's tables, noise and gated values. Only the values that were OVER in set 1 are judged; the controls not at all. */
+function readSet2(samples: Sample[], j: Judging, over1: Gated[]): { tables: string; gated2: Gated[]; noise2: Noise; controls: string[] } {
+  const set2 = samples.filter((s) => s.set === 2);
+  const noise2 = noiseOf(set2);
+  const held = new Set(over1.map((g) => `${g.scene}|${g.track}`));
+  const controls = [...new Set(set2.filter((s) => s.metric === "A").map((s) => `${s.cell.scene}|${s.cell.track}`))].filter((c) => !held.has(c));
+  const all: Gated[] = [];
+  const mark = (g: Gated) =>
+    !held.has(`${g.scene}|${g.track}`) ? "" : over1.some((x) => x.key === g.key) ? (g.cls === "OVER" ? " **OVER again**" : ` ${g.cls}`) : g.cls === "OVER" ? " (first time: not counted)" : "";
+  const sizes = j.vps.filter((v) => v.name === GATE_VIEWPORT);
+  const tables = tablesVersus(set2, sizes, ["A"], true, noise2?.noise ?? null, all, mark, false, (scene, track) => (held.has(`${scene}|${track}`) ? "" : " (control)"));
+  return { tables, gated2: all.filter((g) => held.has(`${g.scene}|${g.track}`)), noise2, controls: controls.map((c) => c.replace("|", " ")) };
+}
+
 // ---- main -------------------------------------------------------------------------
+
+/** Print a judged run and return its exit code. */
+function report(o: {
+  samples: Sample[]; j: Judging; compare: boolean; judge: boolean; set1: ReturnType<typeof readSet1>; set2: ReturnType<typeof readSet2> | null;
+  head: string[]; outFile: string | null; meta: Record<string, unknown>;
+}): number {
+  const { j, set1, set2 } = o;
+  const d = o.judge ? decide(set1.gated1, set2?.gated2 ?? null) : null;
+  if (o.outFile) {
+    mkdirSync(path.dirname(o.outFile), { recursive: true });
+    const gate = d
+      ? {
+          verdict: d.verdict, partial: d.partial || null, ratio: GATE_RATIO, viewport: GATE_VIEWPORT, noiseLimit: NOISE_LIMIT, noise: [set1.noise1?.noise ?? null, set2?.noise2?.noise ?? null],
+          set1: set1.gated1, set2: set2?.gated2 ?? null, controls: set2?.controls ?? [], confirmed: d.confirmed.map((g) => g.key), undecided: d.undecided,
+        }
+      : null;
+    writeFileSync(o.outFile, JSON.stringify({ meta: { ...o.meta, gate }, samples: o.samples }, null, 1));
+  }
+  for (const line of o.head) console.log(line);
+  console.log(
+    o.compare
+      ? `Each value is the median of the runs; a ratio is the median of the per-run ratios this build / baseline (the two are loaded one right after the other in every run). Judged: metric A's median and p95 at ${GATE_VIEWPORT}, ok up to ${GATE_RATIO} and OVER above (with a margin in a noisy set). Other window sizes, p99, the frames over 4 ms, G and C are information.\n`
+      : "Median of the runs, ± = their spread (max - min). No verdict: the gate needs a baseline (--vs-ref gfx-baseline).\n",
+  );
+  if (o.compare && !o.judge) console.log(`${j.runs} run(s): no verdict. The gate is defined on ${GATE_RUNS} runs.\n`);
+  console.log(set1.tables);
+  if (set2) console.log(`\n**Set 2: the cells with a value OVER in set 1, and the controls, measured in new browser sessions**\n\n${set2.tables}`);
+  if (d) console.log(`\n${gateSummary({ d, reference: j.reference, gated1: set1.gated1, gated2: set2?.gated2 ?? null, noise1: set1.noise1, noise2: set2?.noise2 ?? null, controls: set2?.controls ?? [], notes: j.notes })}`);
+  if (o.outFile) console.log(`\nRaw results: ${o.outFile}`);
+  return d?.verdict === "FAIL" ? 1 : d?.verdict === "INVALID" ? 2 : 0;
+}
+
+function viewportOf(v: string): Viewport {
+  const m = /^(\d+)x(\d+)(?:@(\d+(?:\.\d+)?))?$/.exec(v.trim());
+  if (!m) fail(`bad viewport ${v}`);
+  return { name: v.trim(), w: Number(m[1]), h: Number(m[2]), scale: Number(m[3] ?? 1) };
+}
+
+/** Judge a raw results file again, by this runner's rules: nothing is measured. */
+function rejudge(file: string): number {
+  if (!existsSync(file)) fail(`no such file: ${file}`);
+  const raw = JSON.parse(readFileSync(file, "utf8")) as { meta?: Record<string, unknown>; samples: Sample[] };
+  const samples = raw.samples.map((s) => ({ ...s, set: s.set ?? 1 })); // files from before the sets: all set 1
+  const meta = raw.meta ?? {};
+  const compare = samples.some((s) => s.target === "this");
+  const runs = Number(meta.runs ?? Math.max(...samples.map((s) => s.run)));
+  const injection = (meta.testInjection ?? (meta.gate as { testInjection?: string } | null | undefined)?.testInjection ?? "") as string;
+  const j: Judging = {
+    vps: [...new Set(samples.map((s) => s.viewport))].map(viewportOf),
+    metrics: METRICS.filter((m) => samples.some((s) => s.metric === m)),
+    runs,
+    reference: `Reference, as recorded: ${meta.vs ?? "?"}${meta.vsSha ? ` (${String(meta.vsSha).slice(0, 12)})` : ""}${meta.fixedReference ? ", the fixed reference" : ""}.`,
+    notes: [`JUDGED AGAIN from ${file}: nothing was measured.${injection ? ` The file holds a test injection: ${injection}` : ""}`],
+  };
+  const judge = compare && runs === GATE_RUNS;
+  const set1 = readSet1(samples, j, compare, judge);
+  const set2 = judge && samples.some((s) => s.set === 2) ? readSet2(samples, j, set1.gated1.filter((g) => g.kind === "ratio" && g.cls === "OVER")) : null;
+  return report({ samples, j, compare, judge, set1, set2, head: [`Render benchmark, judged again: ${runs} run(s) per cell.`], outFile: null, meta });
+}
 
 /** The run; the exit code. */
 async function main(): Promise<number> {
@@ -654,15 +845,12 @@ async function main(): Promise<number> {
     console.log(HELP);
     return 0;
   }
+  if (arg("judge") !== null) return rejudge(path.resolve(arg("judge")!));
   // Everything that can be wrong with the command line is found before anything is opened.
   const quick = flag("quick");
   const runs = Number(arg("runs") ?? (quick ? 1 : GATE_RUNS));
   if (!Number.isInteger(runs) || runs < 1) fail(`bad --runs ${arg("runs")}`);
-  const vps: Viewport[] = (arg("viewports") ?? (quick ? "1280x720" : "1280x720,390x844@3")).split(",").map((v) => {
-    const m = /^(\d+)x(\d+)(?:@(\d+(?:\.\d+)?))?$/.exec(v.trim());
-    if (!m) fail(`bad viewport ${v}`);
-    return { name: v.trim(), w: Number(m[1]), h: Number(m[2]), scale: Number(m[3] ?? 1) };
-  });
+  const vps: Viewport[] = (arg("viewports") ?? (quick ? "1280x720" : "1280x720,390x844@3")).split(",").map(viewportOf);
   const metrics = (arg("metrics") ?? (quick ? "A" : "A,G,B,C")).toUpperCase().split(",");
   for (const m of metrics) if (!METRICS.includes(m)) fail(`unknown metric ${m}: use ${METRICS.join(", ")}`);
   const only = (arg("only") ?? "").split(",").filter(Boolean).map((o) => o.split(":"));
@@ -670,15 +858,16 @@ async function main(): Promise<number> {
   const bScene = (arg("b-scene") ?? "S4").toUpperCase();
   const panel = arg("panel") ?? "";
   const prefix = arg("session") ?? `bench-${process.pid}`;
-  const valued = new Set(["vs", "vs-ref", "runs", "viewports", "metrics", "only", "b-scene", "panel", "out", "session", "scenes"]);
+  const valued = new Set(["vs", "vs-ref", "runs", "viewports", "metrics", "only", "b-scene", "panel", "out", "session", "scenes", "judge"]);
   const positional = process.argv.slice(2).filter((a, i, all) => !a.startsWith("--") && !(i > 0 && valued.has(all[i - 1].slice(2))));
   const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
   const outFile = path.resolve(arg("out") ?? path.join(ROOT, "tmp", "bench", `${stamp}.json`));
   if (arg("vs") && arg("vs-ref")) fail("give --vs or --vs-ref, not both");
-  // The test injection: scene, track, statistic, factor.
+  // The test injection: scene, track, statistic, factor. The factor is 1 or more: it can add
+  // an OVER to set 1, which the unscaled set 2 then has to confirm; it can never hide one.
   const scale = TEST_SCALE ? TEST_SCALE.split(":") : null;
-  if (scale && !(scale.length === 4 && SCENES.includes(scale[0]) && TRACKS.includes(scale[1]) && ["median", "p95"].includes(scale[2]) && Number(scale[3]) > 0)) {
-    fail(`bad BENCH_TEST_SCALE_SET1 "${TEST_SCALE}": use <scene>:<track>:<median|p95>:<factor>, e.g. S1:rust-bowl:median:1.2`);
+  if (scale && !(scale.length === 4 && SCENES.includes(scale[0]) && TRACKS.includes(scale[1]) && ["median", "p95"].includes(scale[2]) && Number(scale[3]) >= 1)) {
+    fail(`bad BENCH_TEST_SCALE_SET1 "${TEST_SCALE}": use <scene>:<track>:<median|p95>:<factor of 1 or more>, e.g. S1:rust-bowl:median:1.2`);
   }
 
   // Every cell of a run, as [metric, page query, time to leave a paced run alone].
@@ -758,7 +947,7 @@ async function main(): Promise<number> {
   await measure(1, vps, cells);
   const compare = targets.length > 1;
   const judge = compare && runs === GATE_RUNS;
-  let injected = "";
+  const notes: string[] = [];
   if (scale && compare) {
     const [scene, track, stat, factor] = scale;
     for (const s of samples) {
@@ -767,70 +956,49 @@ async function main(): Promise<number> {
       if (stat === "median") cell.p50 *= Number(factor);
       else cell.p95 *= Number(factor);
     }
-    injected = `set 1's ${stat} of ${scene} ${track} (this build, at ${GATE_VIEWPORT}) was multiplied by ${factor} through BENCH_TEST_SCALE_SET1.`;
-    console.error(`TEST INJECTION: ${injected}`);
+    notes.push(`TEST INJECTION, NOT A GATE RESULT: set 1's ${stat} of ${scene} ${track} (this build, at ${GATE_VIEWPORT}) was multiplied by ${factor} through BENCH_TEST_SCALE_SET1.`);
+    console.error(notes[0]);
   }
-  const set1 = samples.filter((s) => s.set === 1);
-  const gated1: Gated[] = [];
-  const verdictMark = (g: Gated) => (g.over ? " **OVER**" : " ok");
-  const tables = compare ? tablesVersus(set1, vps, metrics, judge, gated1, verdictMark, true) : tablesAlone(set1, vps, metrics);
-  const noise1 = judge ? noiseOf(set1) : null;
-  const over1 = gated1.filter((g) => g.kind === "ratio" && g.over);
-  const tooNoisy = (n: { noise: number } | null) => n !== null && n.noise > NOISE_LIMIT;
+  // Against the fixed reference the ratios are a total: every ticket merged since GFX-0 is in them.
+  const fixed = baseSha !== null && baseSha === fixedSha;
+  const baseName = vsRef ? `${vsRef} (${baseSha!.slice(0, 12)})` : (arg("vs") ?? "");
+  const j: Judging = {
+    vps, metrics, runs, notes,
+    reference: fixed
+      ? `Reference: ${baseName}, the fixed reference. The ratios are the total since GFX-0, not this ticket's share, so slowdowns cannot add up from ticket to ticket.`
+      : `Reference: ${baseName}. NOT the gate: this is not the fixed reference, so it shows one step only. The gate is \`npm run bench -- --vs-ref ${BASELINE_NAME}\`.`,
+  };
+  const set1 = readSet1(samples, j, compare, judge);
 
-  // Set 2: the values that were OVER, once more. Not on a noisy set 1: that has no verdict anyway.
-  let gated2: Gated[] | null = null;
-  let tables2 = "";
-  let noise2: { noise: number; cells: number } | null = null;
-  if (judge && over1.length && !tooNoisy(noise1)) {
-    const again = cells.filter((c) => c.metric === "A" && over1.some((g) => g.scene === c.scene && g.track === c.track));
-    console.error(`${over1.length} value(s) OVER in set 1: measuring ${again.length} cell(s) again in new browser sessions (set 2) ...`);
+  // Set 2: the cells holding values that are OVER in set 1 (quiet or noisy), once more, in new
+  // browser sessions; and control cells, the first of the run's order not among those, so that
+  // set 2's noise rests on at least SET2_CELLS cells. The controls are never judged.
+  const over1 = set1.gated1.filter((g) => g.kind === "ratio" && g.cls === "OVER");
+  let set2: ReturnType<typeof readSet2> | null = null;
+  if (judge && over1.length) {
+    const jobsA = cells.filter((c) => c.metric === "A");
+    const again = jobsA.filter((c) => over1.some((g) => g.scene === c.scene && g.track === c.track));
+    const controls = jobsA.filter((c) => !again.includes(c)).slice(0, Math.max(0, SET2_CELLS - again.length));
+    console.error(`${over1.length} value(s) OVER in set 1: measuring ${again.length} cell(s) again, with ${controls.length} control cell(s), in new browser sessions (set 2) ...`);
     for (const t of targets) {
       await closeSession(t.session);
       await openSession(t.session);
     }
-    await measure(2, vps.filter((v) => v.name === GATE_VIEWPORT), again);
-    const set2 = samples.filter((s) => s.set === 2);
-    gated2 = [];
-    // In set 2 only the values that were OVER in set 1 are judged.
-    const mark2 = (g: Gated) => (over1.some((x) => x.key === g.key) ? (g.over ? " **OVER again**" : " ok") : g.over ? " (first time: not counted)" : "");
-    tables2 = tablesVersus(set2, vps.filter((v) => v.name === GATE_VIEWPORT), ["A"], true, gated2, mark2, false);
-    noise2 = noiseOf(set2);
+    // In the run's order, the controls among the others.
+    await measure(2, vps.filter((v) => v.name === GATE_VIEWPORT), jobsA.filter((c) => again.includes(c) || controls.includes(c)));
+    set2 = readSet2(samples, j, over1);
   }
-  const confirmed = gated2 ? over1.filter((g) => gated2!.some((x) => x.key === g.key && x.over)) : [];
-  const once = gated1.filter((g) => g.kind !== "ratio" && g.over); // metric B and construction: judged in set 1 as before
-  const verdict: Verdict | null = !judge ? null : tooNoisy(noise1) || tooNoisy(noise2) ? "INVALID" : confirmed.length || once.length ? "FAIL" : "PASS";
 
-  // Against the fixed reference the ratios are a total: every ticket merged since GFX-0 is in them.
-  const fixed = baseSha !== null && baseSha === fixedSha;
-  const baseName = vsRef ? `${vsRef} (${baseSha!.slice(0, 12)})` : (arg("vs") ?? "");
-  const reference = fixed
-    ? `Reference: ${baseName}, the fixed reference. The ratios are the total since GFX-0, not this ticket's share, so slowdowns cannot add up from ticket to ticket.`
-    : `Reference: ${baseName}. NOT the gate: this is not the fixed reference, so it shows one step only. The gate is \`npm run bench -- --vs-ref ${BASELINE_NAME}\`.`;
-
-  mkdirSync(path.dirname(outFile), { recursive: true });
   const meta = {
     date: new Date().toISOString(), cpu: os.cpus()[0]?.model ?? "", cores: os.cpus().length, os: `${os.type()} ${os.release()}`, node: process.version,
     runs, env: seen.env, targets: targets.map((t) => t.label), target: positional[0] ?? "working tree (built by the runner)", vs: vsRef ?? arg("vs"), vsSha: baseSha, fixedReference: fixed,
-    gate: verdict
-      ? { verdict, ratio: GATE_RATIO, viewport: GATE_VIEWPORT, noiseLimit: NOISE_LIMIT, noise: [noise1?.noise ?? null, noise2?.noise ?? null], set1: gated1, set2: gated2, confirmed: confirmed.map((g) => g.key), testInjection: injected || null }
-      : null,
+    testInjection: notes[0] ?? null,
   };
-  writeFileSync(outFile, JSON.stringify({ meta, samples }, null, 1));
-
-  console.log(`Render benchmark, ${meta.date.slice(0, 10)}: ${runs} run(s) per cell, ${meta.cpu}, ${seen.env?.ua.match(/(Headless)?Chrome\/[\d.]+/)?.[0] ?? "?"}, timer ${((seen.env?.timerMs ?? 0) * 1000).toFixed(0)} us.`);
-  console.log(`Measured: ${meta.target}${compare ? `, against ${baseName}` : ""}.`);
-  console.log(
-    compare
-      ? `Each value is the median of the runs; a ratio is the median of the per-run ratios this build / baseline (the two are loaded one right after the other in every run). OVER = a ratio above ${GATE_RATIO}, on metric A's median and p95 at ${GATE_VIEWPORT}. Other window sizes, p99, the frames over 4 ms, G and C are information.\n`
-      : "Median of the runs, ± = their spread (max - min). No verdict: the gate needs a baseline (--vs-ref gfx-baseline).\n",
-  );
-  if (compare && !judge) console.log(`${runs} run(s): no verdict. The gate is defined on ${GATE_RUNS} runs.\n`);
-  console.log(tables);
-  if (tables2) console.log(`\n**Set 2: the cells with a value OVER in set 1, measured again in new browser sessions**\n\n${tables2}`);
-  if (verdict) console.log(`\n${gateSummary({ verdict, reference, gated1, gated2, noise1, noise2, confirmed, injected })}`);
-  console.log(`\nRaw results: ${outFile}`);
-  return verdict === "FAIL" ? 1 : verdict === "INVALID" ? 2 : 0;
+  const head = [
+    `Render benchmark, ${meta.date.slice(0, 10)}: ${runs} run(s) per cell, ${meta.cpu}, ${seen.env?.ua.match(/(Headless)?Chrome\/[\d.]+/)?.[0] ?? "?"}, timer ${((seen.env?.timerMs ?? 0) * 1000).toFixed(0)} us.`,
+    `Measured: ${meta.target}${compare ? `, against ${baseName}` : ""}.`,
+  ];
+  return report({ samples, j, compare, judge, set1, set2, head, outFile, meta });
 }
 
 // Ctrl-C and kill run the same cleanup as every other way out.
