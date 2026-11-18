@@ -112,7 +112,8 @@ LIVE SOUND QA 2026-11-18 (ctx_7d867674fde1): SND-1 + SND-2 PASS -> both complete
 (phantom own rivet after a predicted recovery, client/game.ts:631-635 armed() vs the lagging ghost) parked in
 ~/.claude/parking/scrap-rally/adhoc-2026-11-18.md. MENU-1: ☰ button for everyone (user).
 MENU-1 done: 78143f3 (verified clean; sim 358/358, bots 86/86, build ok); reviewer ctx_f240bf70baf7; FROZEN TASTE COPY
-~/orca/workspaces/scrap-rally/menu1-taste (detached at 78143f3, npm ci done; remove with `git worktree remove` after the verdict). Still pending: remove m3-t4 workspace once the
+~/orca/workspaces/scrap-rally/menu1-taste (detached at 78143f3, npm ci done; remove with `git worktree remove` after the verdict).
+MENU-1 review APPROVE (no findings). Merge waits ONLY for the user's taste verdict (frozen copy on :3004). Still pending: remove m3-t4 workspace once the
 user stops :3001 (PID 16470).
 
 **Resume (2026-11-16):** main 0dec6c9 (local, 15 ahead of origin) = ready check + engine
