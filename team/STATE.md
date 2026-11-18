@@ -168,6 +168,8 @@ pause resume when the pauser leaves, pause during countdown, mine refunds, cappe
 Tickets 123jpnbf9pg/9ph/9pj/fa3a/fa7m/fa7e commented + complete; QA worker released. NOTHING IN FLIGHT.
 GHOST-RIVET 123jpnbfayd (user chose 2026-11-18; from the parked QA4 phantom-rivet note) in flight: ctx_9aae16a600e1
 (run_fa7a81c5a7b8, ~/orca/workspaces/scrap-rally/ghost-rivet, :3006). No taste gate: reviewer APPROVE then merge.
+ghost-rivet done 2026-11-18: a837616 (test a81cfbc red on main 6/6 per author; sim 492/492, bots 95/95; merges cleanly;
+report tmp/ghost-rivet-report.md); reviewer ctx_e8ebac87fc8e (spec tmp/review-ghost-rivet.md).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
 SND-3 done: 47606ac (sim 394/394, bots 90/90); review APPROVE (ctx_1b41cd13cc04; notes: switch-on restores the volume
 remembered at the last switch-off; storage can't tell own from default -> SND-4); FROZEN COPY ~/orca/workspaces/scrap-rally/snd3-taste
