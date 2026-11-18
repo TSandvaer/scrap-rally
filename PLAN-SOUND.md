@@ -156,3 +156,23 @@ partial patch, NaN and string values; host-only, rate limit, unchanged = no broa
 room with different defaults; rejoin; rewrite (not delete) sim-test sound() (scripts/sim-test.ts:3084) and SND-3's musicSwitch.
 Bots: a default change reaches clients. Browser (muted): a guest follows untouched settings live, keeps own ones, reset works.
 Ticket: one medium ticket SND-4, after SND-3 and MENU-3 merge (MENU-3 also changes the room message, server/room.ts, client/menu.ts).
+
+## SND-5 — more songs, and the host picks the lobby song (2026-11-18)
+
+User: "generate some more retro game music, 2 or 3 more melodies the host can choose from. (1 should be in the 80 disco
+genre)". Popup: 3 new songs; styles synthwave chase, surf-rock chiptune, funky garage groove (all three picked) plus the
+required 80s disco -> FOUR new original songs (the orchestrator chose four because three styles were picked on top of disco;
+the user may trim). Host picks, everyone hears it (players can still turn music down/off).
+- SND-5 (content, now): client/music.ts gets a SONGS registry (id, title, bpm, structure, per-song instrument settings) with
+  "Rust Bucket Shuffle" (id rust-bucket, the default, unchanged) plus four new songs, each ~50-70 s per loop with an A/B
+  structure, composed in code as note tables, original (nothing transcribed from existing songs or games):
+  1. 80s disco: four-on-the-floor kick, offbeat open hats, octave-jumping bass, string-like stabs, ~118-124 BPM.
+  2. Synthwave chase: driving pulsing bass arpeggios, bright saw lead, gated snare, ~110-128 BPM.
+  3. Surf-rock chiptune: fast twangy lead (vibrato/slide), galloping beat, ~150-170 BPM.
+  4. Funky garage groove: slap-style chip bass, wah-ish lead stabs, swing, ~95-110 BPM.
+  MusicPlayer gains setSong(id) (takes effect at the next start; if playing, a short crossfade or restart from the top) and
+  exposes the song list; the sound board gets a song picker + per-song WAV render. Levels balanced against Rust Bucket.
+  client/main.ts is not touched (SND-4 wires the room choice).
+- SND-4 gains the host's song choice: room soundDefaults.song (a song id or "random"), host-only via the same command; the
+  host picks it with a "Music" dropdown next to the Track selector in the lobby (everyone sees the song name); "random" is
+  resolved by the server to a concrete song id each time the lobby opens, so everyone hears the same song.
