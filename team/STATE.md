@@ -176,6 +176,10 @@ ahead of origin (3270cc8) with the fix; not pushed. NOTHING IN FLIGHT.
 NEXT (user 2026-11-18): "Polish the graphics, keeping it retro and without compromising performance" + "Use fable for
 graphics always" -> graphics plan drafted by a Fable agent, Fable advisor review, user approval; graphics workers --model
 claude-fable-5-2.
+PLAN-GFX.md APPROVED 2026-11-18 (Fable draft + Fable advisor "sound with changes", folded in; user: 128 headings, real-phone
+check, GFX-4 decals included). Tickets: GFX-0 123jpnbfb23, GFX-1 123jpnbfb24, GFX-2a 123jpnbfb26, GFX-2b 123jpnbfb28, GFX-3
+123jpnbfb29, GFX-4 123jpnbfb2c. Waves: GFX-0 (palette taste gate) -> GFX-1 + GFX-3 -> GFX-2a + GFX-2b -> GFX-4.
+GFX-0 in flight: ctx_27a7a271607b (Fable, run_fa7a81c5a7b8, ~/orca/workspaces/scrap-rally/gfx0, TSandvaer/gfx0, :3006).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
 SND-3 done: 47606ac (sim 394/394, bots 90/90); review APPROVE (ctx_1b41cd13cc04; notes: switch-on restores the volume
 remembered at the last switch-off; storage can't tell own from default -> SND-4); FROZEN COPY ~/orca/workspaces/scrap-rally/snd3-taste
@@ -230,6 +234,7 @@ Manual Deploy only on the user's go-ahead. The user's own dev server runs on :30
 
 | Ticket | Dispatch | Workspace | Branch | Port | Started |
 | --- | --- | --- | --- | --- | --- |
+| 123jpnbfb23 GFX-0 | ctx_27a7a271607b | ~/orca/workspaces/scrap-rally/gfx0 | TSandvaer/gfx0 | 3006 | 2026-11-18 |
 
 ## Queued (milestone 3, PLAN-M3.md; start after solid collisions 123jpnbf6cy and easier-start 123jpnbf3xa merge)
 
