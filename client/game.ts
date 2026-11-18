@@ -139,11 +139,12 @@ interface Pending {
 
 /**
  * Why a connection changed state. From the server: gone = the room no longer exists,
- * full = room full, taken = seat taken over, busy = the server is full. restarted = the
- * room is gone after the server announced a restart; restarting = that notice itself;
- * unreachable = no answer.
+ * full = room full, taken = seat taken over, busy = the server is full, kicked = the host
+ * removed us (or this tab's token was removed), locked = the room takes no new players.
+ * restarted = the room is gone after the server announced a restart; restarting = that notice
+ * itself; unreachable = no answer.
  */
-export type ConnReason = "gone" | "restarted" | "full" | "taken" | "busy" | "unreachable" | "restarting";
+export type ConnReason = "gone" | "restarted" | "full" | "taken" | "busy" | "kicked" | "locked" | "unreachable" | "restarting";
 
 const LOST_MESSAGES: Partial<Record<ConnReason, string>> = {
   restarted: "The room is gone — the server restarted. Create a new room to play on.",
@@ -151,6 +152,8 @@ const LOST_MESSAGES: Partial<Record<ConnReason, string>> = {
   full: "The room filled up while you were away.",
   taken: "This seat is now being played in another tab or window.",
   busy: "The server is full right now, try again later",
+  kicked: "You were removed from the room by the host.",
+  locked: "That room is locked: the host is not letting new drivers in.",
 };
 
 /** The menu text for connection("lost", reason). wasInRoom: the player had a seat. */
@@ -190,6 +193,7 @@ export class Game {
   raceStart = 0;
   forceStartAt = 0; // server time from which the host may "Start anyway", 0 outside the lobby
   trackId = DEFAULT_TRACK_ID; // the room's track (room message); the default outside a room
+  locked = false; // the host locked the room (no new players)
   track: Track = trackById(DEFAULT_TRACK_ID); // built from trackId: prediction, shots, bots, renderer
   results: ResultRow[] | null = null;
   connected = false;
@@ -277,6 +281,33 @@ export class Game {
     this.send({ t: "track", id });
   }
 
+  // Host room controls (the Esc menu). The server refuses them from anyone else with an err.
+
+  /** Host only, countdown or race: abort it, everyone back to the lobby (no results, no scrap). */
+  stopRace(): void {
+    this.send({ t: "stop" });
+  }
+
+  /** Host only, countdown or race: a fresh countdown on the same track. */
+  restartRace(): void {
+    this.send({ t: "restart" });
+  }
+
+  /** Host only: remove a player at once (their seat token is blocked in this room). */
+  kick(id: string): void {
+    this.send({ t: "kick", id });
+  }
+
+  /** Host only: hand the host over to a connected player. */
+  makeHost(id: string): void {
+    this.send({ t: "host", id });
+  }
+
+  /** Host only: lock the room (no new players; seat rejoins still work) or unlock it. */
+  setLocked(locked: boolean): void {
+    this.send({ t: "lock", locked });
+  }
+
   /** Say something in the room chat. The server cleans it; it comes back as a chat line. */
   say(text: string): void {
     const t = [...text.trim()].slice(0, CHAT_MAX).join("");
@@ -305,7 +336,9 @@ export class Game {
     this.players = [];
     this.hostId = "";
     this.phase = "lobby";
+    this.raceStart = 0;
     this.forceStartAt = 0;
+    this.locked = false;
     this.results = null;
     this.resetOwnCar();
     this.snaps = [];
@@ -444,10 +477,15 @@ export class Game {
         this.on.welcome?.();
         return;
       case "room":
+        // A new race (a restart above all: the cars go back to the grid mid-race) drops the
+        // predicted car; the next snapshot seeds it at the new pose. Else the replay of old
+        // inputs from the grid would look like a teleport to reconciliation.
+        if (msg.raceStart !== this.raceStart) this.resetOwnCar();
         this.hostId = msg.hostId;
         this.phase = msg.phase;
         this.raceStart = msg.raceStart;
         this.forceStartAt = msg.forceStartAt;
+        this.locked = msg.locked === true;
         this.useTrack(msg.trackId);
         this.players = msg.players;
         if (msg.phase !== "results") this.results = null;
@@ -460,9 +498,11 @@ export class Game {
         this.on.garage?.();
         return;
       case "err":
-        if (msg.code === "taken") {
-          // Another tab or window took this seat: do not take it back (no ping-pong).
-          this.stop("taken");
+        if (msg.code === "taken" || msg.code === "kicked" || msg.code === "locked") {
+          // Another tab or window took this seat: do not take it back (no ping-pong). Removed
+          // by the host, or a locked room: retrying would only be refused again. The stored
+          // token stays, so typing the code again still meets the block.
+          this.stop(msg.code);
           return;
         }
         if (msg.code === "restarting") {
