@@ -133,6 +133,8 @@ MENU-3: user approved the taste test; merge waits only for the review.
 MENU-3 MERGED 2026-11-18: review APPROVE (non-blocking: dead canPause(), a cosmetic local rivet for inputs discarded at the
 pause, hold length not pinned in a test); main dd5708b (check clean, sim 420/420, bots 92/92, build ok). ESC MENU COMPLETE LOCALLY
 (MENU-1..3). Workers released; menu3 workspace, menu3-taste and menu1-taste removed.
+SND-3: user approved ("sound controls ... approved"); merge into main conflicted in sim-test.ts (runner list) -> aborted; the SND-3
+worker merges main into its branch (ctx_b38e18ff6cd2); then a quick merge check and the merge.
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
 SND-3 done: 47606ac (sim 394/394, bots 90/90); review APPROVE (ctx_1b41cd13cc04; notes: switch-on restores the volume
 remembered at the last switch-off; storage can't tell own from default -> SND-4); FROZEN COPY ~/orca/workspaces/scrap-rally/snd3-taste
