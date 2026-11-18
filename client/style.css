@@ -1,14 +1,35 @@
 :root {
-  --bg: #120e0b;
-  --panel: rgba(22, 17, 13, 0.92);
-  --line: #4a3a2b;
-  --text: #efe6d2;
-  --muted-solid: #a89981;
-  --rust: #e8752d;
-  --rust-dark: #9c4419;
-  --steel: #7c858d;
-  --err: #ff8b6b;
+  /* "Scrapyard 32", the palette the canvas draws with: these nine mirror CSS_MIRROR in
+     client/gfx/palette.ts, value for value (the palette entry is in the comment). */
+  --bg: #120e0b; /* soot1 */
+  --panel: #1d1a17; /* soot2 */
+  --line: #4e3e2c; /* dirt1 */
+  --text: #efe6d2; /* bone2 */
+  --muted-solid: #a89981; /* bone0 */
+  --rust: #e8752d; /* rust3 */
+  --rust-dark: #9c4419; /* rust1 */
+  --steel: #7c858d; /* steel2 */
+  --err: #e8452d; /* red */
+  /* More entries of the same palette (palette.ts P), for the plates, wells and lamps. */
+  --soot0: #050403;
+  --soot3: #2a2119;
+  --dirt0: #3b2e23;
+  --steel0: #24282c;
+  --steel3: #b6bec3;
+  --rust0: #5c2616;
+  --haz1: #e0a526;
+  --haz2: #ffe9a8;
+  --blast: #ff9a33;
+  --green: #7bc95a;
   --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  /* The skin's parts. Everything is hard-edged: 1 px lines and hard-stop gradients.
+     --face: what text sits on, darker than the plate's metal, so no text loses contrast.
+     --cast: a hard cast shadow, the ground darkened as the canvas darkens it.
+     --rivet: a 4 px stud, lit from the top left like everything on the canvas. */
+  --face: var(--bg);
+  --cast: rgba(5, 4, 3, 0.55);
+  --rivet: conic-gradient(var(--steel) 0 25%, var(--steel0) 0 50%, var(--steel) 0 75%, var(--steel3) 0);
+  color-scheme: dark;
 }
 
 * {
@@ -47,15 +68,58 @@ body {
   display: block;
 }
 
+/* One focus ring for every control: hazard yellow, clear of the control's own edge. */
+:focus-visible {
+  outline: 2px solid var(--haz1);
+  outline-offset: 2px;
+}
+
+/* A panel is an opaque steel plate: a dark edge, an 8 px frame of plate metal (--panel) with a
+   stud in each corner and hazard paint along the top, and a darker face let into it for the
+   text. All of it is background layers that scroll with the content (a long panel on a phone);
+   no layer is wider than a hard stop. Nothing is drawn with an inset shadow here: next to
+   layers that scroll, one would make the panel repaint on every scroll frame. */
 .panel {
   position: absolute;
   width: min(360px, calc(100vw - 32px));
   max-height: calc(100% - 32px);
   overflow: auto;
   padding: 24px 24px 20px;
-  background: var(--panel);
-  border: 2px solid var(--line);
-  box-shadow: 6px 6px 0 rgba(0, 0, 0, 0.55);
+  background-color: var(--face);
+  background-image:
+    /* the plate's own edge, 1 px: lit above and left, shaded below and right */
+    linear-gradient(var(--dirt0), var(--dirt0)), linear-gradient(var(--dirt0), var(--dirt0)),
+    linear-gradient(var(--bg), var(--bg)), linear-gradient(var(--bg), var(--bg)),
+    /* the studs */
+    var(--rivet), var(--rivet), var(--rivet), var(--rivet),
+    /* hazard paint: three 2 px rows, each 2 px along from the one below */
+    repeating-linear-gradient(90deg, transparent 0 4px, var(--haz1) 4px 12px, transparent 12px 16px),
+    repeating-linear-gradient(90deg, transparent 0 2px, var(--haz1) 2px 10px, transparent 10px 16px),
+    repeating-linear-gradient(90deg, var(--haz1) 0 8px, transparent 8px 16px),
+    /* the face's sunk edge: dark above and left, lit below and right */
+    linear-gradient(var(--soot0), var(--soot0)), linear-gradient(var(--soot0), var(--soot0)),
+    linear-gradient(var(--dirt0), var(--dirt0)), linear-gradient(var(--dirt0), var(--dirt0)),
+    /* the frame */
+    linear-gradient(var(--panel), var(--panel)), linear-gradient(var(--panel), var(--panel)),
+    linear-gradient(var(--panel), var(--panel)), linear-gradient(var(--panel), var(--panel));
+  background-position:
+    0 0, 0 0, left bottom, right top,
+    2px 2px, right 2px top 2px, left 2px bottom 2px, right 2px bottom 2px,
+    8px 1px, 8px 3px, 8px 5px,
+    8px 8px, 8px 8px,
+    left 8px bottom 8px, right 8px top 8px,
+    0 0, left bottom, 0 0, right top;
+  background-size:
+    100% 1px, 1px 100%, 100% 1px, 1px 100%,
+    4px 4px, 4px 4px, 4px 4px, 4px 4px,
+    calc(100% - 16px) 2px, calc(100% - 16px) 2px, calc(100% - 16px) 2px,
+    calc(100% - 16px) 1px, 1px calc(100% - 16px),
+    calc(100% - 16px) 1px, 1px calc(100% - 16px),
+    100% 8px, 100% 8px, 8px 100%, 8px 100%;
+  background-repeat: no-repeat;
+  background-attachment: local;
+  border: 2px solid var(--soot0);
+  box-shadow: 6px 6px 0 var(--cast);
   display: flex;
   flex-direction: column;
   gap: 12px;
@@ -77,7 +141,7 @@ body {
 .logo span {
   display: block;
   color: var(--rust);
-  text-shadow: 3px 3px 0 #2b1a10;
+  text-shadow: 3px 3px 0 var(--rust0);
 }
 
 .tag {
@@ -100,15 +164,10 @@ input {
   font: inherit;
   font-size: 16px;
   color: var(--text);
-  background: #0b0907;
+  background: var(--soot0);
   border: 2px solid var(--line);
   padding: 9px 10px;
-  outline: none;
   min-width: 0;
-}
-
-input:focus-visible {
-  border-color: var(--rust);
 }
 
 #code {
@@ -123,35 +182,52 @@ input:focus-visible {
   font-size: 15px;
   font-weight: 700;
   color: var(--text);
-  background: #2a2119;
-  border: 2px solid var(--line);
+  /* A key cap: dark edge, lit above and left, shaded below and right, standing 3 px proud. */
+  background: var(--soot3);
+  border: 2px solid var(--soot0);
   padding: 10px 16px;
   cursor: pointer;
-  box-shadow: 3px 3px 0 rgba(0, 0, 0, 0.6);
+  box-shadow:
+    inset 1px 1px 0 var(--line),
+    inset -1px -1px 0 var(--bg),
+    3px 3px 0 var(--cast);
 }
 
 .btn:hover {
   border-color: var(--steel);
 }
 
+/* Pressed: the cap goes down 2 px and its light turns over. */
 .btn:active {
   transform: translate(2px, 2px);
-  box-shadow: 1px 1px 0 rgba(0, 0, 0, 0.6);
-}
-
-.btn:focus-visible {
-  outline: 2px solid var(--rust);
-  outline-offset: 2px;
+  background: var(--panel);
+  box-shadow:
+    inset 1px 1px 0 var(--soot0),
+    inset -1px -1px 0 var(--line),
+    1px 1px 0 var(--cast);
 }
 
 .btn.primary {
   background: var(--rust);
-  border-color: #ffb27a;
-  color: #1a0f08;
+  color: var(--soot0);
+  box-shadow:
+    inset 1px 1px 0 var(--haz2),
+    inset -1px -1px 0 var(--rust-dark),
+    inset -2px -2px 0 var(--rust-dark),
+    3px 3px 0 var(--cast);
 }
 
 .btn.primary:hover {
-  background: #f68a45;
+  background: var(--blast);
+}
+
+.btn.primary:active {
+  background: var(--rust);
+  box-shadow:
+    inset 1px 1px 0 var(--rust-dark),
+    inset 2px 2px 0 var(--rust-dark),
+    inset -1px -1px 0 var(--blast),
+    1px 1px 0 var(--cast);
 }
 
 .btn.link {
@@ -193,11 +269,25 @@ input:focus-visible {
   border-top: 2px dashed var(--line);
 }
 
+/* An error is a red lamp in the margin; the text stays bone (red text would read weaker
+   than today's). */
 .err {
+  position: relative;
   margin: 0;
   min-height: 1em;
-  color: var(--err);
+  color: var(--text);
   font-size: 13px;
+}
+
+.err:not(:empty)::before {
+  content: "";
+  position: absolute;
+  left: -12px;
+  top: 4px;
+  width: 6px;
+  height: 6px;
+  background: var(--err);
+  box-shadow: inset 1px 1px 0 var(--blast);
 }
 
 .keys {
@@ -215,7 +305,7 @@ kbd {
   text-align: center;
   border: 1px solid var(--line);
   border-bottom-width: 2px;
-  background: #0b0907;
+  background: var(--soot0);
   color: var(--text);
 }
 
@@ -233,7 +323,7 @@ kbd {
   letter-spacing: 10px;
   text-align: center;
   color: var(--rust);
-  text-shadow: 3px 3px 0 #2b1a10;
+  text-shadow: 3px 3px 0 var(--rust0);
   padding-left: 10px;
 }
 
@@ -246,20 +336,24 @@ kbd {
   gap: 6px;
 }
 
+/* Rows (drivers, results, garage items) share one look: a well sunk into the face, a 3 px tab
+   at its left end. The tab is rust on the own results row. */
 .players li {
   display: flex;
   align-items: center;
   gap: 10px;
   padding: 8px 10px;
-  background: #0b0907;
+  background: var(--soot0);
   border: 2px solid var(--line);
+  box-shadow: inset 3px 0 0 var(--dirt0);
   font-size: 15px;
 }
 
 .players .swatch {
   width: 14px;
   height: 14px;
-  border: 2px solid #000;
+  border: 2px solid var(--soot0);
+  box-shadow: 0 0 0 1px var(--line);
   flex: none;
 }
 
@@ -301,13 +395,14 @@ kbd {
 
 .results li.me {
   border-color: var(--rust-dark);
+  box-shadow: inset 3px 0 0 var(--rust);
 }
 
 h2 {
   margin: 0;
   font-size: 26px;
   color: var(--rust);
-  text-shadow: 3px 3px 0 #2b1a10;
+  text-shadow: 3px 3px 0 var(--rust0);
 }
 
 .muted {
@@ -323,10 +418,13 @@ h2 {
   left: 50%;
   transform: translateX(-50%);
   padding: 8px 14px;
-  background: var(--panel);
-  border: 2px solid var(--line);
+  background: var(--face);
+  border: 2px solid var(--soot0);
   font-size: 14px;
-  box-shadow: 4px 4px 0 rgba(0, 0, 0, 0.55);
+  box-shadow:
+    inset 0 0 0 2px var(--panel),
+    inset 3px 3px 0 var(--dirt0),
+    4px 4px 0 var(--cast);
   max-width: calc(100vw - 32px);
 }
 
@@ -392,8 +490,9 @@ h2 {
   align-items: center;
   gap: 2px 12px;
   padding: 8px 10px;
-  background: #0b0907;
+  background: var(--soot0);
   border: 2px solid var(--line);
+  box-shadow: inset 3px 0 0 var(--dirt0);
 }
 
 .shop .item {
@@ -430,16 +529,20 @@ h2 {
   gap: 3px;
 }
 
+/* Level pips are lamps (the music switch has the same one): dark when off, rust with a
+   bright rim and a glint when lit. */
 .pips i {
   width: 10px;
   height: 10px;
   border: 2px solid var(--line);
-  background: #1c1612;
+  background: var(--panel);
+  box-shadow: inset 1px 1px 0 var(--soot0);
 }
 
 .pips i.on {
   background: var(--rust);
-  border-color: #ffb27a;
+  border-color: var(--blast);
+  box-shadow: inset 1px 1px 0 var(--haz2);
 }
 
 .count {
@@ -461,9 +564,11 @@ h2 {
   text-align: right;
 }
 
+/* Ready: a green lamp bar. The text stays bone (green on black would read weaker than today). */
 .players .tag-pill.ready {
-  color: #8fe09a;
-  border-color: #3c7a46;
+  color: var(--text);
+  border-color: var(--green);
+  box-shadow: inset 3px 0 0 var(--green);
 }
 
 /* Lobby track: the host's selector next to Start, the track name for everyone else. */
@@ -486,9 +591,23 @@ h2 {
   font-size: 16px; /* 16px: no zoom on focus in mobile Safari */
   font-weight: 700;
   color: var(--text);
-  background: #0b0907;
+  /* A well like the inputs, with a key cap at its right end carrying our own arrow: three
+     2 px rows, 10, 6 and 2 px wide. The native arrow is off. */
+  -webkit-appearance: none;
+  appearance: none;
+  background-color: var(--soot0);
+  background-image:
+    linear-gradient(var(--text), var(--text)), linear-gradient(var(--text), var(--text)),
+    linear-gradient(var(--text), var(--text)),
+    linear-gradient(var(--line), var(--line)), linear-gradient(var(--soot3), var(--soot3));
+  background-position:
+    right 9px top calc(50% - 2px), right 11px top 50%, right 13px top calc(50% + 2px),
+    right 28px top, right top;
+  background-size: 10px 2px, 6px 2px, 2px 2px, 2px 100%, 28px 100%;
+  background-repeat: no-repeat;
   border: 2px solid var(--line);
-  padding: 8px 10px;
+  /* 9 px above and below, where the native control had 8 px and 1 px of its own: same box. */
+  padding: 9px 38px 9px 10px;
   cursor: pointer;
 }
 
@@ -496,9 +615,21 @@ h2 {
   border-color: var(--steel);
 }
 
-.track-pick select:focus-visible {
-  outline: none;
-  border-color: var(--rust);
+/* Narrower than 375 px the lobby is as wide as its selects at their smallest, so the select
+   must not be wider there than the native control was: the key cap is 20 px, not 28. */
+@media (max-width: 374px) {
+  .track-pick select {
+    background-position:
+      right 5px top calc(50% - 2px), right 7px top 50%, right 9px top calc(50% + 2px),
+      right 20px top, right top;
+    background-size: 10px 2px, 6px 2px, 2px 2px, 2px 100%, 20px 100%;
+    padding-right: 30px;
+  }
+}
+
+.track-pick select option {
+  color: var(--text);
+  background: var(--soot0);
 }
 
 .track-name {
@@ -514,7 +645,7 @@ h2 {
 .lobby-room .btn:disabled:hover,
 .lobby-room .btn:disabled:active {
   cursor: not-allowed;
-  background: #1c1612;
+  background: var(--bg);
   border-color: var(--line);
   color: var(--muted-solid);
   box-shadow: none;
@@ -549,7 +680,8 @@ h2 {
   width: 10px;
   height: 10px;
   border: 2px solid var(--line);
-  background: #1c1612;
+  background: var(--panel);
+  box-shadow: inset 1px 1px 0 var(--soot0);
 }
 
 .music-switch[aria-checked="true"] {
@@ -558,7 +690,8 @@ h2 {
 
 .music-switch[aria-checked="true"]::before {
   background: var(--rust);
-  border-color: #ffb27a;
+  border-color: var(--blast);
+  box-shadow: inset 1px 1px 0 var(--haz2);
 }
 
 .lobby-music input[type="range"] {
@@ -656,7 +789,7 @@ h2 {
   list-style: none;
   margin: 0;
   padding: 6px 8px;
-  background: #0b0907;
+  background: var(--soot0);
   border: 2px solid var(--line);
   overflow-y: auto;
   overscroll-behavior: contain;
@@ -704,12 +837,15 @@ h2 {
   font: inherit;
   font-size: 12px;
   font-weight: 700;
-  color: #1a0f08;
+  color: var(--soot0);
   background: var(--rust);
-  border: 2px solid #ffb27a;
+  border: 2px solid var(--soot0);
   padding: 3px 10px;
   cursor: pointer;
-  box-shadow: 2px 2px 0 rgba(0, 0, 0, 0.6);
+  box-shadow:
+    inset 1px 1px 0 var(--haz2),
+    inset -1px -1px 0 var(--rust-dark),
+    2px 2px 0 var(--cast);
   white-space: nowrap;
 }
 
@@ -758,7 +894,7 @@ h2 {
   min-width: 18px;
   padding: 0 4px;
   text-align: center;
-  color: #1a0f08;
+  color: var(--soot0);
   background: var(--rust);
 }
 
@@ -800,9 +936,12 @@ h2 {
 
 .chat.overlay .chat-box {
   padding: 8px;
-  background: var(--panel);
-  border: 2px solid var(--line);
-  box-shadow: 4px 4px 0 rgba(0, 0, 0, 0.55);
+  background: var(--face);
+  border: 2px solid var(--soot0);
+  box-shadow:
+    inset 0 0 0 2px var(--panel),
+    inset 3px 3px 0 var(--dirt0),
+    4px 4px 0 var(--cast);
 }
 
 .chat.overlay .chat-log {
@@ -821,7 +960,7 @@ h2 {
   max-width: 100%;
   padding: 2px 7px;
   background: rgba(18, 14, 11, 0.72);
-  text-shadow: 1px 1px 0 #000;
+  text-shadow: 1px 1px 0 var(--soot0);
 }
 
 .chat-feed .chat-line.fade {
@@ -910,11 +1049,6 @@ h2 {
   border-color: var(--steel);
 }
 
-.sound-btn:focus-visible {
-  outline: 2px solid var(--rust);
-  outline-offset: 2px;
-}
-
 .sound-btn.muted {
   color: var(--rust);
 }
@@ -927,9 +1061,12 @@ h2 {
 .sound-pop {
   width: 220px;
   padding: 12px;
-  background: var(--panel);
-  border: 2px solid var(--line);
-  box-shadow: 4px 4px 0 rgba(0, 0, 0, 0.55);
+  background: var(--face);
+  border: 2px solid var(--soot0);
+  box-shadow:
+    inset 0 0 0 2px var(--panel),
+    inset 3px 3px 0 var(--dirt0),
+    4px 4px 0 var(--cast);
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -963,7 +1100,7 @@ h2 {
   display: grid;
   place-items: center;
   padding: 12px;
-  background: rgba(8, 6, 4, 0.6);
+  background: rgba(5, 4, 3, 0.6);
 }
 
 .toast {
@@ -972,7 +1109,6 @@ h2 {
 
 .panel.gm {
   position: relative;
-  background: #16110d; /* opaque: the lobby panel behind must not show through */
   width: min(380px, calc(100vw - 24px));
   max-height: calc(var(--app-h, 100dvh) - 24px);
   padding: 18px 18px 16px;
@@ -998,8 +1134,8 @@ h2 {
   padding: 6px 8px;
   font-size: 12px;
   color: var(--text);
-  background: #2b1a10;
-  border-left: 3px solid var(--rust);
+  background: var(--soot0);
+  border-left: 3px solid var(--haz1);
 }
 
 .gm-body {
@@ -1047,13 +1183,14 @@ h2 {
   min-width: 0;
 }
 
+/* Danger: a red edge; the text stays bone. */
 .btn.danger {
-  border-color: #b5482a;
-  color: #ffb39b;
+  border-color: var(--err);
+  color: var(--text);
 }
 
 .btn.danger:hover {
-  border-color: var(--err);
+  border-color: var(--blast);
 }
 
 .gm-players li {
@@ -1071,7 +1208,10 @@ h2 {
 
 .gm-acts .btn {
   padding: 4px 8px;
-  box-shadow: 2px 2px 0 rgba(0, 0, 0, 0.6);
+  box-shadow:
+    inset 1px 1px 0 var(--line),
+    inset -1px -1px 0 var(--bg),
+    2px 2px 0 var(--cast);
 }
 
 .gm-acts .btn:disabled {
