@@ -127,11 +127,26 @@ MENU-2 re-review APPROVE (no findings). Merge waits ONLY for the user's taste ve
 MENU-2 MERGED 2026-11-18 (user: "good"): main 980fa7e (check clean, sim 387/387, bots 90/90, build ok); workers released,
 menu2 workspace + menu2-taste removed (menu1-taste stays: the user's :3004 server runs from it).
 MENU-3 123jpnbf9pj in flight: ctx_719f299ee99f (~/orca/workspaces/scrap-rally/menu3, TSandvaer/menu3, :3006).
+MENU-3 done: 8916137 (sim 420/420, bots 92/92; adds a server-side resume hold, not in the spec; design notes in
+tmp/menu3/MENU-3-report.md); reviewer ctx_97c8c95b896f; FROZEN COPY ~/orca/workspaces/scrap-rally/menu3-taste (8916137) on :3009.
+MENU-3: user approved the taste test; merge waits only for the review.
+MENU-3 MERGED 2026-11-18: review APPROVE (non-blocking: dead canPause(), a cosmetic local rivet for inputs discarded at the
+pause, hold length not pinned in a test); main dd5708b (check clean, sim 420/420, bots 92/92, build ok). ESC MENU COMPLETE LOCALLY
+(MENU-1..3). Workers released; menu3 workspace, menu3-taste and menu1-taste removed.
+SND-3: user approved ("sound controls ... approved"); merge into main conflicted in sim-test.ts (runner list) -> aborted; the SND-3
+worker merges main into its branch (ctx_b38e18ff6cd2); then a quick merge check and the merge.
+SND-3 MERGED 2026-11-18: branch 75721e4 (main merged in; net diff = the reviewed 4 files, test-list-only resolution) -> main bdd0759
+(check clean, sim 427/427, bots 92/92, build ok); workers released, snd3 workspace removed; snd3-taste stays while the user's
+:3005 server runs from it. SND-5 early WAVs copied to tmp/snd5/ (Mirrorball Pit Stop, Neon Tailpipe, Gravel Surf, Grease Monkey Strut).
+SND-5 done: 0241e5c (Neon Tailpipe default + Mirrorball; Rust unchanged; sim 407/407 on its old base); conflicts with main ->
+worker merging main first, then review.
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
 SND-3 done: 47606ac (sim 394/394, bots 90/90); review APPROVE (ctx_1b41cd13cc04; notes: switch-on restores the volume
 remembered at the last switch-off; storage can't tell own from default -> SND-4); FROZEN COPY ~/orca/workspaces/scrap-rally/snd3-taste
 (47606ac) on :3005. Merge waits for the user's taste verdict (and needs main merged in: possible 1-line sim-test runner conflict with MENU-3).
-SND-4 (host sound defaults) plan approved (PLAN-SOUND.md); ClickUp 123jpnbfa7e; dispatch after MENU-3 + SND-3 merge. Still pending: remove m3-t4 workspace once the
+SND-4 (host sound defaults) plan approved (PLAN-SOUND.md); ClickUp 123jpnbfa7e; dispatch after MENU-3 + SND-3 merge. SND-4 also gains the host's song choice (PLAN-SOUND.md SND-5 section).
+SND-5 123jpnbfa7m (four new songs) in flight: ctx_e20700e1079f (~/orca/workspaces/scrap-rally/snd5, TSandvaer/snd5, :3008; files music.ts,
+soundboard.ts, sim-test append). Early WAV preview requested. Still pending: remove m3-t4 workspace once the
 user stops :3001 (PID 16470).
 
 **Resume (2026-11-16):** main 0dec6c9 (local, 15 ahead of origin) = ready check + engine
@@ -179,8 +194,7 @@ Manual Deploy only on the user's go-ahead. The user's own dev server runs on :30
 
 | Ticket | Dispatch | Workspace | Branch | Port | Started |
 | --- | --- | --- | --- | --- | --- |
-| 123jpnbfa3a SND-3 | ctx_f56ecded07e9 | ~/orca/workspaces/scrap-rally/snd3 | TSandvaer/snd3 | 3007 | 2026-11-18 |
-| 123jpnbf9pj MENU-3 | ctx_719f299ee99f | ~/orca/workspaces/scrap-rally/menu3 | TSandvaer/menu3 | 3006 | 2026-11-18 |
+| 123jpnbfa7m SND-5 | ctx_e20700e1079f | ~/orca/workspaces/scrap-rally/snd5 | TSandvaer/snd5 | 3008 | 2026-11-18 |
 
 ## Queued (milestone 3, PLAN-M3.md; start after solid collisions 123jpnbf6cy and easier-start 123jpnbf3xa merge)
 

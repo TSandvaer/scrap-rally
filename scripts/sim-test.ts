@@ -4869,6 +4869,649 @@ function retireClient(): void {
   }
 }
 
+// ---- lobby Music switch (SND-3, client/audio.ts) ------------------------------------------
+
+// This section's imports (hoisted like the ones at the top).
+import { musicIsOn, musicSwitched, parseMusicBack } from "../client/audio";
+
+/**
+ * Music off is a music volume of 0 (so every Music slider shows it); off remembers the volume,
+ * on brings it back (or the default). The switch and its memory persist in the sound entry,
+ * and leave the effects and the master mute alone.
+ */
+function musicSwitch(): void {
+  const off = musicSwitched(0.7, 0);
+  const on = musicSwitched(off.music, off.remembered);
+  check("music switch: off sets the music volume to 0 and remembers 0.7; on brings 0.7 back", off.music === 0 && off.remembered === 0.7 && on.music === 0.7 && on.remembered === 0.7, JSON.stringify({ off, on }));
+  const fresh = musicSwitched(0, 0);
+  check("music switch: on with nothing remembered (slider dragged to 0) gives the default volume", fresh.music === DEFAULT_SOUND.music && fresh.music > 0, JSON.stringify(fresh));
+  check("music switch: on/off is read from the volume (0 = off)", !musicIsOn({ music: 0 }) && musicIsOn({ music: 0.05 }) && musicIsOn({ music: 1 }));
+  const parsed = [parseMusicBack(null), parseMusicBack("{"), parseMusicBack('{"musicBack":"x"}'), parseMusicBack('{"musicBack":7}'), parseMusicBack('{"musicBack":0.35}'), parseMusicBack("[1]")];
+  check("music switch: the remembered volume parses missing/broken values to 0 and clamps to 0..1", JSON.stringify(parsed) === JSON.stringify([0, 0, 0, 1, 0.35, 0]), JSON.stringify(parsed));
+
+  // AudioEngine round trip on a fake localStorage (no AudioContext: the buses come with the unlock).
+  const g = globalThis as unknown as Record<string, unknown>;
+  const had = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+  const store = new Map<string, string>();
+  const fake = { getItem: (k: string) => store.get(k) ?? null, setItem: (k: string, v: string) => void store.set(k, String(v)) };
+  Object.defineProperty(globalThis, "localStorage", { value: fake, configurable: true, writable: true });
+  try {
+    const a = new AudioEngine();
+    a.set({ music: 0.6, effects: 0.3 });
+    a.toggleMute();
+    let changes = 0;
+    a.onChange(() => changes++);
+    a.toggleMusic();
+    const afterOff = { ...a.settings, back: a.musicBack };
+    const b = new AudioEngine(); // a reload
+    const reloaded = { ...b.settings, back: b.musicBack };
+    b.toggleMusic();
+    check(
+      "music switch: off keeps effects 0.3 and the master mute; the switch notifies the controls; off and the remembered 0.6 survive a reload; on after the reload brings 0.6 back",
+      afterOff.music === 0 && afterOff.effects === 0.3 && afterOff.muted && afterOff.back === 0.6 && changes === 1 &&
+        reloaded.music === 0 && reloaded.back === 0.6 && reloaded.effects === 0.3 && reloaded.muted &&
+        b.settings.music === 0.6 && b.settings.effects === 0.3 && b.settings.muted,
+      `${JSON.stringify(afterOff)} -> reload ${JSON.stringify(reloaded)} -> on ${b.settings.music}; stored ${store.get("scrap-rally:sound")}`,
+    );
+    b.set({ music: 0 }); // a Music slider dragged to 0 is off too; the switch brings the remembered volume
+    const viaSlider = b.settings.music;
+    const offViaSlider = !musicIsOn(b.settings);
+    b.toggleMusic();
+    check("music switch: a slider dragged to 0 reads as off and the switch brings back the remembered volume", viaSlider === 0 && offViaSlider && b.settings.music === 0.6, `${viaSlider} -> ${b.settings.music}`);
+    store.set("scrap-rally:sound", '{"music":0.4,"effects":0.8,"muted":false,"engine":"v8"}'); // saved before SND-3
+    const old = new AudioEngine();
+    check("music switch: settings saved before the switch load unchanged (no remembered volume)", old.settings.music === 0.4 && old.settings.engine === "v8" && old.musicBack === 0, JSON.stringify({ ...old.settings, back: old.musicBack }));
+  } finally {
+    if (had) Object.defineProperty(globalThis, "localStorage", had);
+    else delete g.localStorage;
+  }
+}
+
+// ---- in-game menu: pause for everyone (MENU-3, PLAN-MENU.md, 2026-11-18) -----------------
+
+// This section's imports (hoisted like the ones at the top).
+import { PAUSE_COOLDOWN_MS, PAUSE_MAX_MS, PAUSE_RESUME_MS, round } from "../shared/protocol";
+import { MINE_LIFE_TICKS } from "../shared/weapons";
+
+const TICK_MS = 1000 / 60;
+
+/** Everything the simulation moves: cars, progress, timers, shots, mines, the race clock. */
+function roomDigest(room: Room): string {
+  const cars = [...room.players.values()].map((p) => ({ id: p.id, car: p.car, pr: p.progress, hp: p.hp, ghost: p.ghost, cd: p.cooldown, fin: p.finished, ammo: { ...p.wallet.ammo } }));
+  return JSON.stringify({ cars, shots: room.combat.shots, mines: room.combat.mines, phase: room.phase, ends: room.phaseEnds, start: room.raceStart });
+}
+
+/** A Sim race on one lap, everyone on the field; `ms` of flat-out driving after GO. */
+function pauseRace(names: string[], ms = 0): { sim: Sim; p: Player[] } {
+  const sim = new Sim(1);
+  const p = names.map((n) => sim.add(n));
+  sim.startRace(p[0]);
+  sim.run(Math.round(ms / TICK_MS), () => ({ throttle: 1 }));
+  return { sim, p };
+}
+
+/** Tick until the room steps again (the 3-2-1 is over); true if anything moved before that. */
+function runPaused(sim: Sim, cmd: (p: Player) => Ctl = () => ({ throttle: 1 })): boolean {
+  const d0 = roomDigest(sim.room);
+  let moved = false;
+  for (let i = 0; i < 60 * 200 && sim.room.paused; i++) {
+    sim.run(1, cmd);
+    if (sim.room.paused && roomDigest(sim.room) !== d0) moved = true;
+  }
+  return moved;
+}
+
+function pauseRefused(): void {
+  const R = menuRooms(["Ann", "Bo"]);
+  const e0 = errsOf(R.s[0].conn).length;
+  const e1 = errsOf(R.s[1].conn).length;
+  R.send(0, { t: "pause" });
+  R.send(0, { t: "resume" });
+  R.send(1, { t: "pause" });
+  R.send(1, { t: "resume" });
+  const lobby = [...errsOf(R.s[0].conn).slice(e0), ...errsOf(R.s[1].conn).slice(e1)].join("|");
+  R.send(1, { t: "ready", ready: true });
+  R.send(0, { t: "start" });
+  while (R.room.phase !== "racing") R.step(1);
+  const f1 = errsOf(R.s[1].conn).length;
+  R.send(1, { t: "pause" });
+  const guestRefused = errsOf(R.s[1].conn).slice(f1).join("|") === "Only the host can pause the race" && !R.room.paused;
+  R.send(0, { t: "pause" });
+  const m = lastRoomMsg(R.s[1].conn);
+  const f0 = errsOf(R.s[0].conn).length;
+  R.send(0, { t: "pause" });
+  R.send(1, { t: "resume" });
+  const twice = errsOf(R.s[0].conn).slice(f0).join("|");
+  const guestResume = errsOf(R.s[1].conn).slice(f1 + 1).join("|");
+  check(
+    "pause: refused from a non-host (pause and resume) and outside a race; the room message carries paused, pausedBy, pausedAt, resumeAt",
+    lobby === "No race to pause|The race is not paused|Only the host can pause the race|Only the host can resume the race" &&
+      guestRefused && twice === "The race is already paused" && guestResume === "Only the host can resume the race" &&
+      m?.paused === true && m.pausedBy === "Ann" && m.pausedAt === R.clock.now && m.resumeAt === 0 && R.room.paused,
+    `lobby: ${lobby}; twice: ${twice}; guest resume: ${guestResume}; room ${m?.paused}/${m?.pausedBy}/${m?.pausedAt}/${m?.resumeAt}`,
+  );
+  // The results phase: nothing to pause.
+  const { sim, p } = pauseRace(["Ann", "Bo"]);
+  nearFinish(sim, p[0]);
+  sim.run(15, (q) => (q === p[0] ? { throttle: 1 } : {}));
+  nearFinish(sim, p[1]);
+  sim.run(15, (q) => (q === p[1] ? { throttle: 1 } : {}));
+  check("pause: refused in the results", sim.room.phase === "results" && sim.room.pause(p[0], sim.now) === "No race to pause" && !sim.room.paused, sim.room.phase);
+}
+
+function pauseFreeze(): void {
+  const { sim, p } = pauseRace(["Ann", "Bo", "Cy", "Di"], 500);
+  const [a, b, c, d] = p;
+  sim.armWeapons();
+  sim.place(a, 600, -20, 300);
+  sim.place(b, 900, 0, 0);
+  sim.place(c, 1200, 0, 250);
+  sim.place(d, 1500, 20, 0);
+  sim.run(2, () => ({ throttle: 1 }));
+  // A rivet in flight and a mine on the track (a's), b wrecked, c in the air and ghosted, d falling.
+  sim.run(1, (q) => (q === a ? { throttle: 1, fire: true, mine: true } : { throttle: 1 }));
+  sim.run(3, () => ({ throttle: 1 }));
+  wreckCar(b.car!);
+  c.car!.air = 25;
+  c.ghost = 40;
+  d.car!.fall = 30;
+  sim.run(1, () => ({ throttle: 1 }));
+  const shots0 = sim.room.combat.shots.length;
+  const mine0 = sim.room.combat.mines[0];
+  const age0 = mine0?.age ?? -1;
+  const ack0 = a.ack;
+  const before = roomDigest(sim.room);
+  const conn = sim.conns.get(a.id)!;
+  const snaps0 = conn.msgs.filter((m) => m.t === "snap").length;
+  if (sim.room.pause(a, sim.now)) throw new Error("pause refused");
+  for (let i = 0; i < 300; i++) sim.run(1, (q) => ({ throttle: 1, steer: 0.5, fire: true, mine: i % 40 === 0 && q === a }));
+  const after = roomDigest(sim.room);
+  const snaps = conn.msgs.filter((m) => m.t === "snap").length - snaps0;
+  const last = lastSnapOf(conn);
+  const lastCar = last?.ents.find((e): e is CarSnap => e.k === "car" && e.id === a.id);
+  check(
+    "pause: 5 s paused with every driver on full throttle, the gun held and mines pressed: cars, progress, hp, ghost, wreck/air/fall ticks, the rivet in flight, mine age and ammo do not change",
+    before === after && shots0 === 1 && !!mine0 && b.car!.wreck === WRECK_TICKS - 1 && c.car!.air > 0 && c.ghost > 0 && d.car!.fall > 0 && sim.room.paused,
+    `shots ${shots0}, mine age ${age0}, wreck ${b.car!.wreck}, air ${c.car!.air}, ghost ${c.ghost}, fall ${d.car!.fall}`,
+  );
+  const fed = (sim as unknown as { seqs: Map<string, number> }).seqs.get(a.id)! - 1;
+  check(
+    "pause: inputs are still consumed and thrown away (ack moves on one per tick, one input behind the last as before), snapshots keep flowing with the frozen poses",
+    a.ack === ack0 + 300 && a.ack === fed - 1 && snaps >= 145 && !!lastCar && lastCar.x === round(a.car!.x, 2) && lastCar.y === round(a.car!.y, 2) && last?.phase === "racing",
+    `ack ${ack0} -> ${a.ack}, last fed ${fed}; ${snaps} snapshots while paused`,
+  );
+  // Resume: the mine presses and the held gun of the pause do nothing afterwards.
+  sim.room.resume(a, sim.now);
+  runPaused(sim, () => ({}));
+  const mines1 = sim.room.combat.mines.length;
+  const age1 = sim.room.combat.mines[0]?.age ?? -1;
+  const ammo1 = a.wallet.ammo.mines;
+  sim.run(60, () => ({}));
+  check(
+    "pause: after the resume no mine is dropped for the presses made while paused; mine life goes on from where it stood",
+    sim.room.combat.mines.length === mines1 && a.wallet.ammo.mines === ammo1 && age1 === age0 + 1 && sim.room.combat.mines[0]?.age === age1 + 60 && MINE_LIFE_TICKS > age1 + 60,
+    `mines ${mines1} -> ${sim.room.combat.mines.length}, age at the pause ${age0}, after the resume tick ${age1}, 60 ticks on ${sim.room.combat.mines[0]?.age}`,
+  );
+}
+
+function pauseResume(): void {
+  const { sim, p } = pauseRace(["Ann", "Bo"], 2000);
+  const [a, b] = p;
+  sim.grantAmmo();
+  const start0 = sim.room.raceStart;
+  sim.run(1, () => ({ throttle: 1 }));
+  const pausedAt = sim.now;
+  sim.room.pause(a, pausedAt);
+  sim.run(600, () => ({ throttle: 1 }));
+  const call = sim.now;
+  const e = sim.room.resume(a, call);
+  const resumeAt = sim.room.resumeAt;
+  const roomMsg = sim.lastRoom(b);
+  const frozen = roomDigest(sim.room);
+  const early = runPaused(sim);
+  const at = sim.now; // the first tick that stepped again
+  const d = at - pausedAt;
+  // Inputs went on arriving during the pause (fed every tick): the resume drops what is queued.
+  check(
+    "pause: at the resume every jitter buffer starts afresh (resetQueue: nothing queued from the pause, buffering, no mine counter, no input to repeat)",
+    [a, b].every((q) => q.queue.length === 0 && q.buffering && q.mineBase === null && q.lastInput.throttle === 0 && q.starved === 0),
+    [a, b].map((q) => `queue ${q.queue.length}, mineBase ${q.mineBase}, last throttle ${q.lastInput.throttle}`).join("; "),
+  );
+  check(
+    "pause: resume = a 3-2-1 (resumeAt = now + 3000) during which nothing moves; the room steps again at the first tick from resumeAt",
+    e === null && resumeAt === call + PAUSE_RESUME_MS && roomMsg?.resumeAt === resumeAt && roomMsg.paused === true && !early && at >= resumeAt && at - resumeAt < TICK_MS + 1e-6 && roomDigest(sim.room) !== frozen,
+    `resumeAt ${resumeAt - call} ms after the call; stepped ${(at - resumeAt).toFixed(2)} ms after it`,
+  );
+  check(
+    "pause: on the resume raceStart moves on by the time paused (race time reads on from where it stood); phaseEnds 0 (no winner yet) stays 0",
+    Math.abs(sim.room.raceStart - (start0 + d)) < 1e-6 && Math.abs(at - sim.room.raceStart - (pausedAt - start0)) < 1e-6 && sim.room.phaseEnds === 0 && sim.lastRoom(b)?.raceStart === sim.room.raceStart && sim.lastRoom(b)?.paused === false,
+    `shift ${d.toFixed(1)} ms, race time at the pause ${(pausedAt - start0).toFixed(1)}, after ${(at - sim.room.raceStart).toFixed(1)}`,
+  );
+  // The weapons-armed delay counts race time: no rivet before WEAPONS_ARM_MS of it.
+  let firstShot = -1;
+  for (let i = 0; i < 60 * 10 && firstShot < 0; i++) {
+    sim.run(1, () => ({ fire: true }));
+    if (sim.room.combat.shots.length) firstShot = sim.now - sim.room.raceStart;
+  }
+  check(
+    "pause: the weapons arm WEAPONS_ARM_MS of race time after GO, the pause not counted",
+    firstShot >= WEAPONS_ARM_MS && firstShot < WEAPONS_ARM_MS + 4 * TICK_MS && sim.now - start0 > WEAPONS_ARM_MS + PAUSE_RESUME_MS,
+    `first rivet at race time ${firstShot.toFixed(0)} ms (wall clock since GO ${(sim.now - start0).toFixed(0)})`,
+  );
+  nearFinish(sim, b);
+  let fin = 0;
+  for (let i = 0; i < 60 && !fin; i++) {
+    sim.run(1, (q) => (q === b ? { throttle: 1 } : {}));
+    fin = b.progress!.fin;
+  }
+  check("pause: the finish time excludes the pause", fin > 0 && Math.abs(fin - (sim.now - start0 - d)) <= 1, `fin ${fin} ms, wall clock since GO ${(sim.now - start0).toFixed(0)}, paused ${d.toFixed(0)}`);
+}
+
+/** Cars stay put until their driver's inputs are in after a resume (no coasting gap). */
+function pauseHold(): void {
+  const { sim, p } = pauseRace(["Ann", "Bo"], 1500);
+  const [a, b] = p;
+  sim.room.pause(a, sim.now);
+  sim.run(30, () => ({}));
+  sim.room.resume(a, sim.now);
+  while (sim.room.paused) sim.tick(); // no inputs during the pause, as a client sends none
+  const pos = () => [a, b].map((q) => `${q.car!.x},${q.car!.y}`).join("|");
+  const p0 = pos();
+  sim.tick(); // nothing queued yet: both wait
+  const held = pos() === p0;
+  // Bo's inputs come in; Ann (online) sends nothing: hers waits up to RESUME_HOLD (1 s), then coasts.
+  let bMoved = -1;
+  for (let i = 0; i < 5; i++) {
+    sim.feed(b, { throttle: 1 });
+    sim.tick();
+    if (bMoved < 0 && `${b.car!.x},${b.car!.y}` !== p0.split("|")[1]) bMoved = i;
+  }
+  const aStill = `${a.car!.x},${a.car!.y}` === p0.split("|")[0];
+  for (let i = 0; i < 60; i++) {
+    sim.feed(b, { throttle: 1 });
+    sim.tick();
+  }
+  const aCoasted = `${a.car!.x},${a.car!.y}` !== p0.split("|")[0];
+  check(
+    "pause: after the resume a driver's car waits for their first inputs (QUEUE_START), then drives; one whose inputs never come coasts after the hold (1 s)",
+    held && bMoved === 1 && aStill && aCoasted,
+    `held ${held}, Bo moved at input ${bMoved}, Ann still at 5 ticks ${aStill}, coasting after the hold ${aCoasted}`,
+  );
+}
+
+function pauseAuto(): void {
+  // 120 s with nobody resuming: the 3-2-1 starts by itself.
+  {
+    const { sim, p } = pauseRace(["Ann", "Bo"], 1000);
+    const pausedAt = sim.now;
+    sim.room.pause(p[0], pausedAt);
+    let startedAt = 0;
+    for (let i = 0; i < 60 * 130 && !startedAt; i++) {
+      sim.run(1);
+      if (sim.room.resumeAt) startedAt = sim.now;
+    }
+    const resumeAt = sim.room.resumeAt;
+    runPaused(sim);
+    check(
+      "pause: auto-resume: the 3-2-1 starts by itself PAUSE_MAX_MS (120 s) after the pause, then the race goes on",
+      startedAt - pausedAt >= PAUSE_MAX_MS && startedAt - pausedAt < PAUSE_MAX_MS + TICK_MS + 1e-6 && resumeAt === startedAt + PAUSE_RESUME_MS && !sim.room.paused && sim.room.phase === "racing",
+      `3-2-1 began ${((startedAt - pausedAt) / 1000).toFixed(3)} s after the pause`,
+    );
+  }
+  // The pausing host's socket drops: the 3-2-1 starts at once (they keep the host for the grace).
+  {
+    const { sim, p } = pauseRace(["Ann", "Bo"], 1000);
+    sim.room.pause(p[0], sim.now);
+    sim.run(30);
+    sim.room.unbind(p[0], sim.now);
+    const m = sim.lastRoom(p[1]);
+    check(
+      "pause: the pausing host going offline starts the 3-2-1 at once (one room message); they are still the host",
+      sim.room.resumeAt === sim.now + PAUSE_RESUME_MS && m?.resumeAt === sim.room.resumeAt && m.paused && sim.room.hostId === p[0].id,
+      `resumeAt ${sim.room.resumeAt - sim.now} ms ahead`,
+    );
+  }
+  // The pausing host leaves for good: the new host sees the 3-2-1 already running.
+  {
+    const { sim, p } = pauseRace(["Ann", "Bo"], 1000);
+    sim.room.pause(p[0], sim.now);
+    sim.room.leave(p[0], sim.now);
+    check("pause: the pausing host leaving starts the 3-2-1 at once", sim.room.resumeAt === sim.now + PAUSE_RESUME_MS && sim.room.hostId === p[1].id);
+  }
+  // Handed over while paused: the new host resumes, the old one no longer can; removing the
+  // player who paused (after a handover) starts the 3-2-1 like their leaving.
+  {
+    const { sim, p } = pauseRace(["Ann", "Bo", "Cy"], 1000);
+    const [a, b] = p;
+    sim.room.pause(a, sim.now);
+    sim.room.setHost(a, b.id, sim.now);
+    const old = sim.room.resume(a, sim.now);
+    const stillPaused = sim.room.paused && !sim.room.resumeAt;
+    const neu = sim.room.resume(b, sim.now);
+    const again = sim.room.resume(b, sim.now + 500);
+    check(
+      "pause: a new host can resume (the old one is refused); a second resume during the 3-2-1 changes nothing",
+      old === "Only the host can resume the race" && stillPaused && neu === null && again === null && sim.room.resumeAt === sim.now + PAUSE_RESUME_MS,
+      `old ${old}, new ${neu}`,
+    );
+  }
+  {
+    const { sim, p } = pauseRace(["Ann", "Bo", "Cy"], 1000);
+    const [a, b] = p;
+    sim.room.pause(a, sim.now);
+    sim.room.setHost(a, b.id, sim.now);
+    sim.run(30);
+    sim.room.kick(b, a.id, sim.now);
+    check("pause: removing the player who paused (after a handover) starts the 3-2-1", !sim.room.players.has(a.id) && sim.room.resumeAt === sim.now + PAUSE_RESUME_MS);
+  }
+}
+
+function pauseCooldown(): void {
+  const { sim, p } = pauseRace(["Ann", "Bo"], 1000);
+  const a = p[0];
+  sim.room.pause(a, sim.now);
+  sim.room.resume(a, sim.now);
+  sim.run(30);
+  const during = sim.room.pause(a, sim.now);
+  runPaused(sim);
+  const back = sim.now;
+  sim.run(1);
+  const soon = sim.room.pause(a, sim.now);
+  let okAt = 0;
+  for (let i = 0; i < 60 * 10 && !okAt; i++) {
+    sim.run(1);
+    if (sim.room.pause(a, sim.now) === null) okAt = sim.now;
+  }
+  check(
+    "pause: re-pause cooldown: refused during the 3-2-1 and for PAUSE_COOLDOWN_MS (5 s) after the room steps again, then accepted",
+    during === "The race is already paused" && soon === "You can pause again in 5s" && okAt - back >= PAUSE_COOLDOWN_MS && okAt - back < PAUSE_COOLDOWN_MS + TICK_MS + 1e-6 && sim.room.paused,
+    `during: ${during}; soon: ${soon}; accepted ${(okAt - back).toFixed(1)} ms after the resume`,
+  );
+}
+
+function pauseGrace(): void {
+  // During the finish grace: the 30 s stand still, then run on for what was left.
+  const { sim, p } = pauseRace(["Ann", "Bo"], 500);
+  const [a] = p;
+  nearFinish(sim, a);
+  for (let i = 0; i < 60 && !a.finished; i++) sim.run(1, (q) => (q === a ? { throttle: 1 } : {}));
+  const ends0 = sim.room.phaseEnds;
+  sim.run(60);
+  const pausedAt = sim.now;
+  sim.room.pause(a, pausedAt);
+  sim.run(Math.round((FINISH_GRACE_MS + 5000) / TICK_MS));
+  const still = sim.room.phase === "racing" && sim.room.phaseEnds === ends0;
+  sim.room.resume(a, sim.now);
+  runPaused(sim, () => ({}));
+  const at = sim.now;
+  const shifted = Math.abs(sim.room.phaseEnds - (ends0 + (at - pausedAt))) < 1e-6;
+  let endedAt = 0;
+  for (let i = 0; i < 60 * 40 && !endedAt; i++) {
+    sim.run(1);
+    if (sim.room.phase === "results") endedAt = sim.now;
+  }
+  const left = ends0 - pausedAt;
+  check(
+    "pause: during the finish grace the grace stands still (35 s paused, still racing); on the resume phaseEnds moves on and the race closes after what was left of it",
+    a.finished && ends0 > 0 && still && shifted && endedAt > 0 && Math.abs(endedAt - at - left) <= TICK_MS + 1e-6,
+    `grace left at the pause ${left.toFixed(0)} ms; closed ${(endedAt - at).toFixed(0)} ms after the resume`,
+  );
+
+  // Grace removal of an offline player keeps running while paused; disconnectedAt is not shifted.
+  {
+    const { sim, p } = pauseRace(["Ann", "Bo", "Cy"], 500);
+    const [a, , c] = p;
+    sim.room.pause(a, sim.now);
+    sim.run(30);
+    const off = sim.now;
+    sim.room.unbind(c, off);
+    let goneAt = 0;
+    for (let i = 0; i < 60 * 30 && !goneAt; i++) {
+      sim.run(1);
+      if (!sim.room.players.has(c.id)) goneAt = sim.now;
+    }
+    const lines = sim.room.chatLines.filter((l) => l.name === "Cy").map((l) => l.kind);
+    check(
+      "pause: an offline player's reconnect grace runs out while paused (removed RECONNECT_GRACE_MS after the drop, a 'leave' line); the race stays paused",
+      goneAt - off > RECONNECT_GRACE_MS && goneAt - off <= RECONNECT_GRACE_MS + TICK_MS + 1e-6 && c.disconnectedAt === off && sim.room.paused && !sim.room.resumeAt && lines.join() === "join,leave",
+      `removed ${(goneAt - off).toFixed(0)} ms after the drop; lines ${lines.join()}`,
+    );
+  }
+}
+
+function pauseCountdown(): void {
+  const sim = new Sim(1);
+  const a = sim.add("Ann");
+  const b = sim.add("Bo");
+  sim.readyAll(a);
+  sim.room.start(a, sim.now);
+  sim.run(90);
+  const start0 = sim.room.raceStart;
+  sim.room.pause(a, sim.now);
+  const grid = roomDigest(sim.room);
+  sim.run(600);
+  const frozen = sim.room.phase === "countdown" && roomDigest(sim.room) === grid && sim.room.raceStart === start0;
+  const call = sim.now;
+  const e = sim.room.resume(a, call);
+  const m = sim.lastRoom(b);
+  const restarted = !sim.room.paused && sim.room.resumeAt === 0 && sim.room.raceStart === call + COUNTDOWN_MS && sim.room.phaseEnds === sim.room.raceStart && m?.paused === false && m.raceStart === sim.room.raceStart;
+  let goAt = 0;
+  for (let i = 0; i < 60 * 10 && !goAt; i++) {
+    sim.run(1);
+    if (sim.room.phase === "racing") goAt = sim.now;
+  }
+  check(
+    "pause: in the countdown it stands still; the resume starts the countdown over at once (a full 3 s, no 3-2-1 stacked on what was left of it)",
+    e === null && frozen && restarted && goAt - call >= COUNTDOWN_MS && goAt - call < COUNTDOWN_MS + TICK_MS + 1e-6,
+    `1.5 s were left at the pause; GO ${(goAt - call).toFixed(0)} ms after the resume`,
+  );
+  // Auto-resume and the pauser going offline in the countdown: the countdown starts over too.
+  const sim2 = new Sim(1);
+  const c = sim2.add("Cy");
+  sim2.add("Di");
+  sim2.readyAll(c);
+  sim2.room.start(c, sim2.now);
+  sim2.run(30);
+  sim2.room.pause(c, sim2.now);
+  sim2.room.unbind(c, sim2.now);
+  check("pause: the pauser going offline in the countdown starts the countdown over", !sim2.room.paused && sim2.room.phase === "countdown" && sim2.room.raceStart === sim2.now + COUNTDOWN_MS);
+}
+
+function pauseControls(): void {
+  // Kick while paused: the race stays paused.
+  {
+    const { sim, p } = pauseRace(["Ann", "Bo", "Cy"], 1000);
+    const [a, b, c] = p;
+    sim.room.pause(a, sim.now);
+    const e = sim.room.kick(a, c.id, sim.now);
+    sim.run(30);
+    check("pause: a kick works while paused and does not unpause (the others stay frozen)", e === null && !sim.room.players.has(c.id) && sim.room.paused && !sim.room.resumeAt && !!b.car && sim.room.phase === "racing");
+  }
+  // Retire while paused: the same.
+  {
+    const { sim, p } = pauseRace(["Ann", "Bo", "Cy"], 1000);
+    const [a, b] = p;
+    sim.room.pause(a, sim.now);
+    const pose = JSON.stringify(a.car);
+    const e = sim.room.retire(b);
+    sim.run(30);
+    check("pause: a retire works while paused and does not unpause", e === null && b.retired && !b.car && sim.room.paused && !sim.room.resumeAt && JSON.stringify(a.car) === pose);
+  }
+  // Stop and restart while paused: they clear the pause.
+  {
+    const { sim, p } = pauseRace(["Ann", "Bo"], 1000);
+    sim.room.pause(p[0], sim.now);
+    const e = sim.room.stopRace(p[0], sim.now);
+    const m = sim.lastRoom(p[1]);
+    check("pause: Stop while paused -> the lobby, the pause cleared (room message paused false), no results", e === null && sim.room.phase === "lobby" && !sim.room.paused && m?.paused === false && m.pausedBy === "" && !sim.conns.get(p[1].id)!.msgs.some((x) => x.t === "results"));
+  }
+  {
+    const { sim, p } = pauseRace(["Ann", "Bo"], 1000);
+    sim.room.pause(p[0], sim.now);
+    sim.room.resume(p[0], sim.now);
+    const e = sim.room.restartRace(p[0], sim.now);
+    const m = sim.lastRoom(p[1]);
+    let goAt = 0;
+    for (let i = 0; i < 60 * 5 && !goAt; i++) {
+      sim.run(1);
+      if (sim.room.phase === "racing") goAt = sim.now;
+    }
+    check(
+      "pause: Restart while paused (even during the 3-2-1) -> a fresh countdown, the pause cleared",
+      e === null && m?.paused === false && m.resumeAt === 0 && m.phase === "countdown" && goAt > 0 && !sim.room.paused,
+      `racing ${goAt ? "after the countdown" : "never"}`,
+    );
+  }
+  // A kick or a retire that leaves nobody to wait for ends the race at once, the pause with it.
+  for (const how of ["kick", "retire"] as const) {
+    const { sim, p } = pauseRace(["Ann", "Bo"], 500);
+    const [a, b] = p;
+    nearFinish(sim, a);
+    for (let i = 0; i < 60 && !a.finished; i++) sim.run(1, (q) => (q === a ? { throttle: 1 } : {}));
+    sim.room.pause(a, sim.now);
+    sim.run(10);
+    const e = how === "kick" ? sim.room.kick(a, b.id, sim.now) : sim.room.retire(b);
+    sim.run(1);
+    const rows = sim.conns.get(a.id)!.msgs.filter((x): x is Extract<ServerMsg, { t: "results" }> => x.t === "results").pop()?.rows ?? [];
+    check(
+      `pause: a ${how} of the last driver still racing (the winner is in) ends the race on the next tick, the pause with it`,
+      a.finished && e === null && sim.room.phase === "results" && !sim.room.paused && sim.lastRoom(a)?.paused === false && rows.length === (how === "kick" ? 1 : 2),
+      `${sim.room.phase}, rows ${rows.length}`,
+    );
+  }
+  {
+    const { sim, p } = pauseRace(["Ann", "Bo"], 1000);
+    const [a, b] = p;
+    sim.room.pause(a, sim.now);
+    sim.room.retire(b);
+    sim.room.retire(a);
+    sim.run(1);
+    check("pause: everyone retiring while paused (no finisher) -> the lobby at once, no results, the pause cleared", sim.room.phase === "lobby" && !sim.room.paused && !sim.conns.get(a.id)!.msgs.some((x) => x.t === "results"));
+  }
+}
+
+/**
+ * Over the wired client (no lag): the pause stops prediction and sending, the race view stands
+ * still, engine and gravel go silent, and the countdown cues do not replay: the resume has its
+ * own 3-2-1 cues (once), a countdown-phase resume replays the full countdown's. After the
+ * resume the predicted car is kept (no reset) and reconciliation stays tiny.
+ */
+function pauseClient(): void {
+  const realNow = performance.now.bind(performance);
+  const clock = { now: realNow() };
+  performance.now = () => clock.now;
+  try {
+    const rooms = new Rooms(3);
+    const H = wiredGame(rooms, clock);
+    const G = wiredGame(rooms, clock);
+    H.game.create("Host");
+    H.open();
+    H.flush();
+    G.game.join(H.game.code, "Guest");
+    G.open();
+    G.flush();
+    H.flush();
+    G.game.setReady(true);
+    G.flush();
+    H.game.start();
+    H.flush();
+    G.flush();
+    const room = rooms.rooms.get(H.game.code)!;
+    const trig = new SoundTriggers(100);
+    const cues: string[] = [];
+    let carLost = false;
+    let watchCar = false;
+    const drive = (n: number) => {
+      for (let i = 0; i < n; i++) {
+        clock.now += TICK_MS;
+        rooms.step(clock.now);
+        for (const W of [H, G]) {
+          W.flush();
+          W.game.step(W.game.raceOn() ? { throttle: 1, steer: 0, fire: true, mine: false } : NO_CONTROLS, TICK_MS);
+        }
+        const g = G.game;
+        const v: SoundView = { ...soundView(g), paused: g.paused, resumeGo: g.resumeGo, raceKey: g.raceId };
+        for (const t of trig.frame(v, clock.now, true)) if (t.src === "countdown" || t.src === "resume") cues.push(`${t.src}:${t.kind}`);
+        if (watchCar && !g.car) carLost = true;
+      }
+    };
+    while (room.phase !== "racing") drive(1);
+    drive(120);
+    const startCues = cues.splice(0).join();
+    const gs = room.players.get(G.game.you)!;
+    const raceId0 = G.game.raceId;
+    H.game.pause();
+    drive(3); // the in-flight inputs are consumed and acked
+    const seq0 = gs.lastQueuedSeq;
+    const view0 = { clock: G.game.raceNow() - G.game.raceStart, arms: G.game.armsInMs(), car: JSON.stringify(G.game.car) };
+    drive(300);
+    const view1 = { clock: G.game.raceNow() - G.game.raceStart, arms: G.game.armsInMs(), car: JSON.stringify(G.game.car) };
+    check(
+      "pause client: both clients see the pause; nothing is predicted or sent (no new inputs reach the server, nothing pending); raceOn false; the race clock and the arm timer stand still; the car stays where the server froze it",
+      G.game.paused && H.game.paused && G.game.pausedBy === "Host" && gs.lastQueuedSeq === seq0 && G.game.pending.length === 0 && !G.game.raceOn() &&
+        view0.clock === view1.clock && view0.arms === view1.arms && view1.arms > 0 && view0.car === view1.car &&
+        Math.hypot(G.game.car!.x - gs.car!.x, G.game.car!.y - gs.car!.y) < 0.01,
+      `clock ${view0.clock.toFixed(0)} -> ${view1.clock.toFixed(0)}, arms ${view0.arms.toFixed(0)} -> ${view1.arms.toFixed(0)}, last seq ${seq0} -> ${gs.lastQueuedSeq}`,
+    );
+    const st: EngineState = { phase: G.game.phase, hasCar: !!G.game.car, connected: G.game.connected, wreck: 0, fall: 0, air: 0, finished: false, speed: 300, topSpeed: 430, throttle: 1 };
+    check(
+      "pause client: engine and gravel targets are silent while paused (the same state unpaused drives them)",
+      !engineTarget({ ...st, paused: G.game.paused }).on && !gravelTarget({ ...st, paused: G.game.paused }, true).on && engineTarget(st).on && gravelTarget(st, true).on,
+    );
+    const pausedCues = cues.splice(0).join();
+    H.game.resume();
+    watchCar = true;
+    let e0 = -1;
+    let clockBack = NaN;
+    for (let i = 0; i < 400 && (G.game.paused || e0 < 0); i++) {
+      drive(1);
+      if (!G.game.paused && e0 < 0) {
+        e0 = G.game.recErrors.length;
+        clockBack = G.game.raceNow() - G.game.raceStart;
+      }
+    }
+    const resumeCues = cues.splice(0).join();
+    const at = { x: G.game.car!.x, y: G.game.car!.y };
+    drive(330); // also past the 5 s re-pause cooldown, for the countdown pause below
+    watchCar = false;
+    const errs = G.game.recErrors.slice(e0);
+    const max = Math.max(0, ...errs);
+    check(
+      "pause client: the start countdown's cues are not replayed: none while paused, the resume's own 3-2-1 (three beeps and GO) once",
+      startCues === "countdown:beep,countdown:beep,countdown:beep,countdown:go" && pausedCues === "" && resumeCues === "resume:beep,resume:beep,resume:beep,resume:go" && cues.join() === "",
+      `start: ${startCues}; paused: ${pausedCues || "-"}; resume: ${resumeCues}; after: ${cues.join() || "-"}`,
+    );
+    check(
+      "pause client: on the resume the predicted car is kept (same race id), the race clock reads on from where it stood, the car drives again and reconciliation stays tiny (max < 1)",
+      !carLost && G.game.raceId === raceId0 && Math.abs(clockBack - view1.clock) < 2 * TICK_MS && Math.hypot(G.game.car!.x - at.x, G.game.car!.y - at.y) > 50 && errs.length > 150 && max < 1,
+      `clock ${view1.clock.toFixed(0)} -> ${clockBack.toFixed(0)}; ${errs.length} samples after, max ${max.toFixed(3)}`,
+    );
+    // The countdown phase: paused, then the countdown starts over with its own cues.
+    H.game.restartRace();
+    H.flush();
+    G.flush();
+    drive(60);
+    cues.splice(0);
+    H.game.pause();
+    const pausedCd = room.paused && (room.phase as string) === "countdown";
+    drive(240);
+    const cdPaused = cues.splice(0).join();
+    const ends = G.game.phaseEnds;
+    H.game.resume();
+    drive(1);
+    const restarted = G.game.phase === "countdown" && !G.game.paused && G.game.phaseEnds === G.game.raceStart && G.game.phaseEnds > ends;
+    while (room.phase !== "racing") drive(1);
+    drive(30);
+    check(
+      "pause client: paused in the countdown no cue plays; the resume starts the countdown over and its cues play once (no resume 3-2-1 on top)",
+      pausedCd && cdPaused === "" && restarted && cues.join() === "countdown:beep,countdown:beep,countdown:beep,countdown:go",
+      `paused: ${cdPaused || "-"}; after: ${cues.join()}`,
+    );
+  } finally {
+    performance.now = realNow;
+  }
+}
+
 // ---- more songs (SND-5, PLAN-SOUND.md, 2026-11-18): the registry, structure, setSong ------
 
 // This section's imports (hoisted like the ones at the top).
@@ -5155,7 +5798,7 @@ function songPlayer(): void {
   }
 }
 
-for (const t of [rivets, gating, mines, wrecks, finishing, garage, armDelay, engine, readyCheck, collisions, trackFeatures, roomTrack, jumpsWired, shippedTracks, botDriver, botLaps, mineCap, chatRoom, chatClient, sound, raceSounds, surfaceSounds, audioUnlock, menuHostOnly, menuStop, menuRestart, menuKick, menuLock, menuHandover, menuClient, menuRestartClient, retireRules, retireField, retireRaceEnd, retireGarage, retireRefund, retireOthers, retireNotices, retireClient, songs, songPlayer]) {
+for (const t of [rivets, gating, mines, wrecks, finishing, garage, armDelay, engine, readyCheck, collisions, trackFeatures, roomTrack, jumpsWired, shippedTracks, botDriver, botLaps, mineCap, chatRoom, chatClient, sound, raceSounds, surfaceSounds, audioUnlock, menuHostOnly, menuStop, menuRestart, menuKick, menuLock, menuHandover, menuClient, menuRestartClient, retireRules, retireField, retireRaceEnd, retireGarage, retireRefund, retireOthers, retireNotices, retireClient, pauseRefused, pauseFreeze, pauseResume, pauseHold, pauseAuto, pauseCooldown, pauseGrace, pauseCountdown, pauseControls, pauseClient, musicSwitch, songs, songPlayer]) {
   console.log(`\n# ${t.name}`);
   try {
     t();

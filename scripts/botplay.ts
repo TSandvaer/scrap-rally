@@ -92,6 +92,7 @@ for (let i = 0; i < count; i++) {
   let phase = "";
   let raceStart = 0;
   let hostId = "";
+  let paused = false;
   game.on.room = () => {
     bot.readyDue = true; // also after the host picks another track (that resets ready)
     const lead = bots[0] === bot; // log room-wide news once
@@ -99,6 +100,9 @@ for (let i = 0; i < count; i++) {
     const wasRace = phase === "countdown" || phase === "racing";
     if (lead && wasRace && game.phase === "countdown" && game.raceStart !== raceStart) console.log("  race restarted by the host");
     if (lead && wasRace && game.phase === "lobby") console.log("  race stopped by the host");
+    // A pause needs nothing from a bot: Game.step() predicts and sends nothing while it lasts.
+    if (lead && game.paused && !paused) console.log(`  race paused by ${game.pausedBy}`);
+    if (lead && paused && !game.paused && (game.phase === "countdown" || game.phase === "racing")) console.log("  race resumed");
     // Made the host: hand it back to who gave it (else the first driver who is not a bot).
     if (game.isHost() && hostId && hostId !== game.you) {
       const botIds = new Set(bots.map((b) => b.game.you));
@@ -106,12 +110,17 @@ for (let i = 0; i < count; i++) {
       if (back) {
         console.log(`${name} was made the host: handing it back to ${back.name}`);
         game.makeHost(back.id);
+      } else if (game.canResume()) {
+        // Nobody to hand it back to: a bot never keeps the race paused.
+        console.log(`${name} is the host of a paused race: resuming it`);
+        game.resume();
       }
     }
     trackId = game.trackId;
     phase = game.phase;
     raceStart = game.raceStart;
     hostId = game.hostId;
+    paused = game.paused;
   };
   game.on.event = (ev) => {
     if (bots[0] !== bot) return; // log each event once
