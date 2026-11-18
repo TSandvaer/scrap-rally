@@ -306,7 +306,7 @@ results screen, none in the countdown or the race, never on the menu.
   hidden, and owns the chain music bus + sfx bus -> light compressor -> master (mute) plus a shared
   noise buffer. `SoundControls`: the speaker button (top right) + popover with music / effects
   sliders and mute, and M (KeyM, no repeat or modifiers, not in text fields). Settings in
-  localStorage `scrap-rally:sound` (defaults music 0.5, effects 0.8, unmuted). Controls blur after
+  localStorage `scrap-rally:sound` (defaults music 0.5, effects 0.8, unmuted; music 0.4 since SND-4). Controls blur after
   use and the popover closes at the countdown, so they never hold the driving keys.
 - `client/music.ts`: "Rust Bucket Shuffle", an original 122 BPM song in E minor, 32 bars
   (A Em-Em-C-D-Em-Em-Am-B hook, B C-D-Em-Em-C-D-B-B with arpeggio, A2, B2 with a fill), ~63 s loop;
@@ -372,7 +372,8 @@ SND-2 (built 2026-11-17): race effects, all synthesized on the effects bus.
 SND-4 (built 2026-11-18): the host's room sound defaults and the room's song (PLAN-SOUND.md SND-4/5).
 
 - Server: `Room.soundDefaults` {musicOn, music, effects, song} starts at the built-in defaults
-  (`shared/sound.ts` `BUILTIN_SOUND`: on, 0.5, 0.8, neon-tailpipe), is in the room message with
+  (`shared/sound.ts` `BUILTIN_SOUND`: on, 0.4, 0.8, neon-tailpipe; music was 0.5 until the user's
+  2026-11-18 change), is in the room message with
   `song` (the id everyone plays), survives a handover and dies with the room. Host only
   `{t:"soundDefaults", ...partial}` in any phase: a wrong type, a volume outside 0..1 or an unknown
   song refuses the whole request; volumes snap to 0.05; nothing changed = no broadcast; a room budget
@@ -383,8 +384,9 @@ SND-4 (built 2026-11-18): the host's room sound defaults and the room's song (PL
   moved (kept in every room and across reloads), `room` the room's defaults (`soundFrame` feeds
   `game.you ? game.soundDefaults : null`; `game.leave()` resets them), combined by `effectiveSound`.
   Mute (M) and the engine preset are always the player's own. Saved entry v2 {own, muted, engine};
-  older entries are migrated (a value is own only if it differs from the default; SND-3's music 0 is
-  own musicOn false, musicBack the volume). The Music switch is a real musicOn flag; Music sliders
+  older entries are migrated (a value is own only if it differs from the default it was saved with,
+  `LEGACY_DEFAULTS` music 0.5 / effects 0.8, so an untouched legacy 0.5 follows the new 0.4; SND-3's
+  music 0 is own musicOn false, musicBack the volume). The Music switch is a real musicOn flag; Music sliders
   show the heard volume, above 0 turns the music on, 0 is off with the volume from before the drag.
 - UI: "host's" marks ("room" for the host) on the settings that follow the room and "Use host's
   sound" (resets musicOn / music / effects, keeps mute and engine; "Default sound" outside a room)

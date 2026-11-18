@@ -127,6 +127,13 @@ export interface StoredSound {
 
 export const STORE_VERSION = 2;
 const SAME = 1e-6;
+/**
+ * The defaults the entries before version 2 were saved with (SND-1..3 wrote every key, these
+ * filled in when untouched). The current music default is 0.4 (DEFAULT_SOUND), so a legacy
+ * entry is compared with these, never with today's: its music 0.5 is untouched and follows the
+ * new default (or the host).
+ */
+export const LEGACY_DEFAULTS: Readonly<{ music: number; effects: number }> = { music: 0.5, effects: 0.8 };
 
 function ownFrom(o: Record<string, unknown>): OwnSettings {
   const own: OwnSettings = {};
@@ -141,7 +148,7 @@ function ownFrom(o: Record<string, unknown>): OwnSettings {
 /**
  * The stored entry. Version 2 ({v: 2, own, muted, engine}) is read as it is. An older entry
  * saved every key (SND-1..3) whether moved or not: a value counts as the player's own only if
- * it differs from the built-in default. SND-3's Music switch saved off as music 0 with the
+ * it differs from the default it was saved with (LEGACY_DEFAULTS, not today's). SND-3's Music switch saved off as music 0 with the
  * volume to come back to in musicBack: that is own musicOn false, with musicBack as the own
  * volume (by the same rule); musicBack itself is dropped. Missing, broken or out-of-range
  * values fall back to the defaults (not own).
@@ -166,10 +173,10 @@ export function parseStoredSound(raw: string | null): StoredSound {
   if (music === 0) {
     own.musicOn = false;
     const back = clampVolume(o.musicBack, 0);
-    if (back > 0 && differs(back, DEFAULT_SOUND.music)) own.music = back;
-  } else if (!Number.isNaN(music) && differs(music, DEFAULT_SOUND.music)) own.music = music;
+    if (back > 0 && differs(back, LEGACY_DEFAULTS.music)) own.music = back;
+  } else if (!Number.isNaN(music) && differs(music, LEGACY_DEFAULTS.music)) own.music = music;
   const effects = clampVolume(o.effects, NaN);
-  if (!Number.isNaN(effects) && differs(effects, DEFAULT_SOUND.effects)) own.effects = effects;
+  if (!Number.isNaN(effects) && differs(effects, LEGACY_DEFAULTS.effects)) own.effects = effects;
   return { own, muted, engine };
 }
 

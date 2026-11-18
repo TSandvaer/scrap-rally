@@ -3081,12 +3081,12 @@ function sound(): void {
   const partial = parseStoredSound(JSON.stringify({ v: 2, own: { effects: 0.2 } }));
   const eff = (st: ReturnType<typeof parseStoredSound>) => effectiveSound(st.own, null);
   check(
-    "sound settings: defaults music on 0.5, effects 0.8, unmuted, nothing own; broken or missing values fall back; out of range clamps",
-    DEFAULT_SOUND.musicOn && DEFAULT_SOUND.music === 0.5 && DEFAULT_SOUND.effects === 0.8 && !DEFAULT_SOUND.muted &&
+    "sound settings: defaults music on 0.4 (the user, 2026-11-18), effects 0.8, unmuted, nothing own; broken or missing values fall back; out of range clamps",
+    DEFAULT_SOUND.musicOn && DEFAULT_SOUND.music === 0.4 && DEFAULT_SOUND.effects === 0.8 && !DEFAULT_SOUND.muted &&
       JSON.stringify(d) === JSON.stringify({ own: {}, muted: false, engine: DEFAULT_SOUND.engine }) && JSON.stringify(broken) === JSON.stringify(d) &&
-      eff(d).music === 0.5 && eff(d).effects === 0.8 && eff(d).musicOn &&
+      eff(d).music === 0.4 && eff(d).effects === 0.8 && eff(d).musicOn &&
       clamped.own.music === 1 && clamped.own.effects === 0 && clamped.own.musicOn === undefined && clamped.muted === false &&
-      eff(kept).music === 0.3 && eff(kept).effects === 0.65 && kept.muted && eff(partial).music === 0.5 && eff(partial).effects === 0.2 && partial.own.music === undefined,
+      eff(kept).music === 0.3 && eff(kept).effects === 0.65 && kept.muted && eff(partial).music === 0.4 && eff(partial).effects === 0.2 && partial.own.music === undefined,
     `${JSON.stringify(d)} ${JSON.stringify(clamped)} ${JSON.stringify(partial)}`,
   );
   const key = (code: string, mods: Partial<{ repeat: boolean; ctrlKey: boolean; metaKey: boolean; altKey: boolean; shiftKey: boolean }> = {}) =>
@@ -4875,7 +4875,7 @@ function retireClient(): void {
 // ---- lobby Music switch (SND-3, client/audio.ts; a real musicOn flag since SND-4) ---------
 
 // This section's imports (hoisted like the ones at the top).
-import { effectiveSound, musicHeard, musicIsOn, musicSlid, musicSwitched, PatchThrottle, roomMusicSlid, SliderGrip, storedSoundJson } from "../client/soundlogic";
+import { effectiveSound, LEGACY_DEFAULTS, musicHeard, musicIsOn, musicSlid, musicSwitched, PatchThrottle, roomMusicSlid, SliderGrip, storedSoundJson } from "../client/soundlogic";
 import { resetLabel, roomTag } from "../client/audio";
 
 /** A fake localStorage for the AudioEngine (no AudioContext: the buses come with the unlock). */
@@ -4987,6 +4987,7 @@ function soundMigration(): void {
     ["SND-3 off with the default musicBack", { music: 0, musicBack: 0.5, effects: 0.8, muted: false, engine: "buggy" }, '{"own":{"musicOn":false},"muted":false,"engine":"buggy"}'],
     ["SND-3 off by the slider (no musicBack)", { music: 0, musicBack: 0, effects: 0.3, muted: true, engine: "four" }, '{"own":{"musicOn":false,"effects":0.3},"muted":true,"engine":"four"}'],
     ["SND-3 on with a stale musicBack", { music: 0.5, musicBack: 0.9, effects: 0.8, muted: false, engine: "buggy" }, '{"own":{},"muted":false,"engine":"buggy"}'],
+    ["a legacy music 0.4 (moved: the old default was 0.5)", { music: 0.4, effects: 0.8, muted: false, engine: "buggy" }, '{"own":{"music":0.4},"muted":false,"engine":"buggy"}'],
     ["broken values", { music: "x", effects: null, muted: 1, engine: "jet" }, '{"own":{},"muted":false,"engine":"buggy"}'],
   ];
   const bad = rows.filter(([, raw, want]) => m(raw) !== want);
@@ -4995,6 +4996,19 @@ function soundMigration(): void {
     bad.length === 0,
     bad.map(([what, raw]) => `${what}: ${m(raw)}`).join("; ") || rows.map(([w]) => w).join(", "),
   );
+  // The default music went from 0.5 to 0.4 (the user, 2026-11-18): a legacy entry saved with the old
+  // default 0.5 filled in is untouched and now follows the new default 0.4 (or the host's).
+  withStore((store) => {
+    store.set(SOUND_KEY, '{"music":0.5,"effects":0.8,"muted":false,"engine":"buggy"}');
+    const legacy = new AudioEngine();
+    const outside = legacy.settings.music;
+    legacy.setRoom({ musicOn: true, music: 0.7, effects: 0.8 });
+    check(
+      "sound migration: a legacy entry with the old default music 0.5 is untouched: it follows the new default 0.4 outside a room and the host's 0.7 in one (compared with LEGACY_DEFAULTS, not today's)",
+      LEGACY_DEFAULTS.music === 0.5 && DEFAULT_SOUND.music === 0.4 && JSON.stringify(legacy.own) === "{}" && outside === 0.4 && legacy.settings.music === 0.7 && !legacy.hasOwn(),
+      `own ${JSON.stringify(legacy.own)}, outside ${outside}, in a room ${legacy.settings.music}`,
+    );
+  });
   withStore((store) => {
     store.set(SOUND_KEY, '{"music":0,"musicBack":0.7,"effects":0.8,"muted":false,"engine":"v8"}');
     const a = new AudioEngine();
@@ -5020,7 +5034,7 @@ function soundLayers(): void {
     "sound layers: shared/sound.ts lists client/music.ts's songs (ids and order, the same default); the built-in room defaults are the client's",
     SONG_IDS.join() === SONGS.map((x) => x.id).join() && SHARED_DEFAULT_SONG === DEFAULT_SONG_ID && BUILTIN_SOUND.song === DEFAULT_SONG_ID &&
       BUILTIN_SOUND.musicOn === DEFAULT_SOUND.musicOn && BUILTIN_SOUND.music === DEFAULT_SOUND.music && BUILTIN_SOUND.effects === DEFAULT_SOUND.effects &&
-      BUILTIN_SOUND.musicOn && BUILTIN_SOUND.music === 0.5 && BUILTIN_SOUND.effects === 0.8 && BUILTIN_SOUND.song === "neon-tailpipe",
+      BUILTIN_SOUND.musicOn && BUILTIN_SOUND.music === 0.4 && BUILTIN_SOUND.effects === 0.8 && BUILTIN_SOUND.song === "neon-tailpipe",
     `${SONG_IDS.join()} vs ${SONGS.map((x) => x.id).join()}`,
   );
   const room = { musicOn: false, music: 0.3, effects: 0.6 };
@@ -5028,8 +5042,8 @@ function soundLayers(): void {
     "sound layers: effectiveSound takes each own key, else the room's, else (outside a room) the built-in default",
     JSON.stringify(effectiveSound({}, room)) === '{"musicOn":false,"music":0.3,"effects":0.6}' &&
       JSON.stringify(effectiveSound({ effects: 0.1 }, room)) === '{"musicOn":false,"music":0.3,"effects":0.1}' &&
-      JSON.stringify(effectiveSound({ musicOn: true }, null)) === '{"musicOn":true,"music":0.5,"effects":0.8}' &&
-      JSON.stringify(effectiveSound({}, null)) === '{"musicOn":true,"music":0.5,"effects":0.8}',
+      JSON.stringify(effectiveSound({ musicOn: true }, null)) === '{"musicOn":true,"music":0.4,"effects":0.8}' &&
+      JSON.stringify(effectiveSound({}, null)) === '{"musicOn":true,"music":0.4,"effects":0.8}',
   );
   withStore((store) => {
     const a = new AudioEngine();
@@ -5085,7 +5099,7 @@ function soundLayers(): void {
     const outside = { ...b.settings };
     check(
       "sound layers: in a second room with other defaults the untouched music follows it (0.9) and the own effects stay (0.4); outside a room the built-in defaults stand in (the mark and the reset are relabelled)",
-      second.music === 0.9 && second.effects === 0.4 && outside.music === 0.5 && outside.musicOn && outside.effects === 0.4 && roomTag(b, "music") === "" && resetLabel(b) === "Default sound",
+      second.music === 0.9 && second.effects === 0.4 && outside.music === 0.4 && outside.musicOn && outside.effects === 0.4 && roomTag(b, "music") === "" && resetLabel(b) === "Default sound",
       `${JSON.stringify(second)} / ${JSON.stringify(outside)}`,
     );
     b.setRoom({ musicOn: true, music: 0.9, effects: 1 }, true);
@@ -5124,14 +5138,14 @@ function soundServer(): void {
   const [, b] = R.p;
   const first = lastRoomMsg(R.s[2].conn)!;
   check(
-    "room sound: a new room starts with the built-in defaults (music on 0.5, effects 0.8, Neon Tailpipe) in everyone's room message",
-    JSON.stringify(first.soundDefaults) === '{"musicOn":true,"music":0.5,"effects":0.8,"song":"neon-tailpipe"}' && first.song === "neon-tailpipe" && JSON.stringify(R.room.soundDefaults) === JSON.stringify(BUILTIN_SOUND),
+    "room sound: a new room starts with the built-in defaults (music on 0.4, effects 0.8, Neon Tailpipe) in everyone's room message",
+    JSON.stringify(first.soundDefaults) === '{"musicOn":true,"music":0.4,"effects":0.8,"song":"neon-tailpipe"}' && first.song === "neon-tailpipe" && JSON.stringify(R.room.soundDefaults) === JSON.stringify(BUILTIN_SOUND),
     JSON.stringify(first.soundDefaults),
   );
   // Host only.
   const e1 = errsOf(R.s[1].conn).length;
   R.send(1, { t: "soundDefaults", music: 0.2 });
-  check("room sound: from anyone but the host it is refused with an err and nothing changes", errsOf(R.s[1].conn).slice(e1).join() === "Only the host can set the room sound" && R.room.soundDefaults.music === 0.5, errsOf(R.s[1].conn).slice(e1).join());
+  check("room sound: from anyone but the host it is refused with an err and nothing changes", errsOf(R.s[1].conn).slice(e1).join() === "Only the host can set the room sound" && R.room.soundDefaults.music === BUILTIN_SOUND.music, errsOf(R.s[1].conn).slice(e1).join());
   // A partial patch, snapped to 0.05.
   const n0 = roomMsgs(R.s[1].conn).length;
   R.send(0, { t: "soundDefaults", music: 0.33 });
@@ -5360,8 +5374,8 @@ function soundRoomDrag(): void {
   // Dragged down to 0 and released there: the room's music off, its volume as before the drag.
   const down = drag([0.45, 0.3, 0.15, 0]);
   check(
-    "room music slider: dragged to 0 and released: the room's music off with the volume from before the drag (0.5), for everyone",
-    !down.room.musicOn && down.room.music === 0.5 && !down.bo.musicOn && down.bo.music === 0.5,
+    "room music slider: dragged to 0 and released: the room's music off with the volume from before the drag (the default 0.4), for everyone",
+    !down.room.musicOn && down.room.music === 0.4 && !down.bo.musicOn && down.bo.music === 0.4,
     `sent ${down.sent}; room ${JSON.stringify(down.room)}`,
   );
   check(
@@ -5479,7 +5493,7 @@ function soundClient(): void {
     check(
       "room sound client: the guest follows the untouched music live (off, then on 0.4), keeps the own effects (0.7) until the reset (0.25); leave() goes back to the built-in defaults and the default song",
       !inRoom.musicOn && inRoom.effects === 0.7 && live.musicOn && live.music === 0.4 && live.effects === 0.7 && reset.effects === 0.25 &&
-        JSON.stringify(B.game.soundDefaults) === JSON.stringify(BUILTIN_SOUND) && B.game.song === DEFAULT_SONG_ID && eng.room === null && eng.settings.music === 0.5,
+        JSON.stringify(B.game.soundDefaults) === JSON.stringify(BUILTIN_SOUND) && B.game.song === DEFAULT_SONG_ID && eng.room === null && eng.settings.music === BUILTIN_SOUND.music,
       `${JSON.stringify(inRoom)} -> ${JSON.stringify(live)} -> reset ${JSON.stringify(reset)}`,
     );
   });

@@ -23,8 +23,11 @@ export interface RoomSound {
   song: SongChoice;
 }
 
-/** The built-in defaults: every room starts with them, and the game uses them outside a room. */
-export const BUILTIN_SOUND: Readonly<RoomSound> = { musicOn: true, music: 0.5, effects: 0.8, song: DEFAULT_SONG_ID };
+/**
+ * The built-in defaults: every room starts with them, and the game uses them outside a room.
+ * Music 0.4 (the user, 2026-11-18; it was 0.5 before SND-4: client/soundlogic.ts LEGACY_DEFAULTS).
+ */
+export const BUILTIN_SOUND: Readonly<RoomSound> = { musicOn: true, music: 0.4, effects: 0.8, song: DEFAULT_SONG_ID };
 
 /** A volume in 0..1; anything that is not a finite number falls back. */
 export function clampVolume(v: unknown, fallback: number): number {
