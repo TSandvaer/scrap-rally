@@ -127,7 +127,11 @@ MENU-2 re-review APPROVE (no findings). Merge waits ONLY for the user's taste ve
 MENU-2 MERGED 2026-11-18 (user: "good"): main 980fa7e (check clean, sim 387/387, bots 90/90, build ok); workers released,
 menu2 workspace + menu2-taste removed (menu1-taste stays: the user's :3004 server runs from it).
 MENU-3 123jpnbf9pj in flight: ctx_719f299ee99f (~/orca/workspaces/scrap-rally/menu3, TSandvaer/menu3, :3006).
-SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only). Still pending: remove m3-t4 workspace once the
+SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
+SND-3 done: 47606ac (sim 394/394, bots 90/90); review APPROVE (ctx_1b41cd13cc04; notes: switch-on restores the volume
+remembered at the last switch-off; storage can't tell own from default -> SND-4); FROZEN COPY ~/orca/workspaces/scrap-rally/snd3-taste
+(47606ac) on :3005. Merge waits for the user's taste verdict (and needs main merged in: possible 1-line sim-test runner conflict with MENU-3).
+SND-4 (host sound defaults) plan approved (PLAN-SOUND.md); ticket after MENU-3 + SND-3 merge. Still pending: remove m3-t4 workspace once the
 user stops :3001 (PID 16470).
 
 **Resume (2026-11-16):** main 0dec6c9 (local, 15 ahead of origin) = ready check + engine
