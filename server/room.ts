@@ -33,7 +33,7 @@ import {
   type ResultRow,
   type ServerMsg,
 } from "../shared/protocol";
-import { AMMO, AMMO_IDS, buy, clampAmmo, isItem, payouts, startingWallet, statsFor, type Wallet } from "../shared/shop";
+import { AMMO, buy, clampAmmo, isItem, payouts, startingWallet, statsFor, type AmmoId, type Wallet } from "../shared/shop";
 import { gridSlot, type Track } from "../shared/track";
 import { DEFAULT_TRACK_ID, isTrackId, trackById } from "../shared/tracks";
 import { BTN_RIVET, CAR_HP, GHOST_TICKS, mineCount, NO_COMMAND, stepRaceCar, WEAPONS_ARM_MS, type Command } from "../shared/weapons";
@@ -163,6 +163,9 @@ export class Room {
   private readonly blocked = new Set<string>();
   // Each racer's ammo as the race began: a stopped or restarted race gives back what it used.
   private readonly startAmmo = new Map<string, { rivets: number; mines: number }>();
+  // Ammo packs bought by retired players during the current race, in order, with the scrap paid:
+  // a stop or a restart replays them on the start-of-race ammo (restoreAmmo).
+  private readonly retiredBuys = new Map<string, { item: AmmoId; paid: number }[]>();
   private readonly chatLog: ChatLine[] = []; // the last CHAT_HISTORY lines; gone with the room
   private chatSeq = 0;
   // Room-wide budgets (shared/protocol.ts CHAT_ROOM_*, CHAT_COMINGS_*); full at the start.
@@ -397,6 +400,7 @@ export class Room {
     }
     this.combat.reset();
     this.startAmmo.clear();
+    this.retiredBuys.clear();
     this.gridOrder().forEach((q, slot) => {
       const g = gridSlot(this.track, slot);
       q.car = { x: g.x, y: g.y, h: g.h, vx: 0, vy: 0, seg: g.seg, wreck: 0, air: 0, fall: 0 };
@@ -539,14 +543,29 @@ export class Room {
     return null;
   }
 
-  /** Give each racer of the current race the ammo they started it with. */
+  /**
+   * Give each racer of the current race the ammo they started it with. The ammo packs a retired
+   * player bought during it are then bought again on top, as if in the lobby: a pack that would
+   * have been "Already maxed out" there (the start ammo is at the cap) gets its scrap back, so
+   * a stop or a restart never costs scrap, never takes a purchase away and never adds ammo.
+   */
   private restoreAmmo(): void {
     for (const [id, a] of this.startAmmo) {
       const q = this.players.get(id);
       if (!q) continue;
       // In place: p.ammo is the wallet's own object.
-      q.wallet.ammo.rivets = a.rivets;
-      q.wallet.ammo.mines = a.mines;
+      const ammo = q.wallet.ammo;
+      ammo.rivets = a.rivets;
+      ammo.mines = a.mines;
+      let refund = 0;
+      for (const b of this.retiredBuys.get(id) ?? []) {
+        if (ammo[b.item] >= AMMO[b.item].cap) refund += b.paid;
+        else ammo[b.item] = Math.min(AMMO[b.item].cap, ammo[b.item] + AMMO[b.item].pack);
+      }
+      if (refund > 0) {
+        q.wallet.scrap += refund;
+        this.sendGarage(q);
+      }
     }
   }
 
@@ -575,18 +594,21 @@ export class Room {
   }
 
   /**
-   * Garage purchase: between races, and for a player who retired from the running race. Ammo a
-   * retired player buys is added to their start-of-race ammo too, so a stop or a restart (which
-   * gives that back) does not take the purchase away.
+   * Garage purchase: between races, and for a player who retired from the running race. An ammo
+   * pack a retired player buys is noted, so a stop or a restart (which gives back the ammo the
+   * race used) can replay it (restoreAmmo).
    */
   buy(p: Player, item: unknown): string | null {
     if (this.phase !== "lobby" && !(this.phase === "racing" && p.retired)) return "The garage is closed during a race";
     if (!isItem(item)) return "Unknown item";
-    const before = { ...p.wallet.ammo };
+    const scrap = p.wallet.scrap;
     const e = buy(p.wallet, item);
     if (e) return e;
-    const start = this.startAmmo.get(p.id);
-    if (start) for (const id of AMMO_IDS) start[id] = Math.min(AMMO[id].cap, start[id] + p.wallet.ammo[id] - before[id]);
+    if (this.phase === "racing" && (item === "rivets" || item === "mines") && this.startAmmo.has(p.id)) {
+      const list = this.retiredBuys.get(p.id) ?? [];
+      list.push({ item, paid: scrap - p.wallet.scrap });
+      this.retiredBuys.set(p.id, list);
+    }
     this.sendGarage(p);
     return null;
   }
@@ -676,14 +698,15 @@ export class Room {
   }
 
   private endRace(now: number): void {
-    // Keyed on progress, not car: a retired player (no car) keeps a DNF row and the wreck bonus.
+    // Keyed on progress, not car: a retired player (no car) keeps a DNF row and the wreck bonus,
+    // ranked among the non-finishers by the distance driven when they retired, like any other
+    // DNF (user decision 2026-11-18: retiring must not buy the front of the reversed grid).
     const rows: { id: string; fin: number; rd: number; p: Player }[] = [];
     for (const p of this.players.values()) {
       if (!p.progress) continue;
       rows.push({ id: p.id, fin: p.progress.fin, rd: raceDistance(this.track, p.progress), p });
     }
-    // Retired players rank after everyone who was still racing (all DNF: no place money).
-    rows.sort((a, b) => (a.p.retired !== b.p.retired ? (a.p.retired ? 1 : -1) : compareStanding(a, b)));
+    rows.sort(compareStanding);
     const earned = payouts(rows, this.combat.wrecksCaused);
     this.lastOrder = rows.map((r) => r.id);
     const results: ResultRow[] = rows.map(({ id, fin, p }) => {
@@ -722,6 +745,7 @@ export class Room {
     }
     this.combat.reset();
     this.startAmmo.clear();
+    this.retiredBuys.clear();
   }
 
   private setPhase(phase: Phase, ends: number): void {
