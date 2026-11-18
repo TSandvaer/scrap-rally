@@ -168,6 +168,11 @@ export interface GameHandlers {
   /** tick: the server tick the event happened in (snapshots carry theirs: snapTick). */
   event(ev: GameEvent, tick: number): void;
   results(rows: ResultRow[]): void;
+  /**
+   * Another player retired from the race, seen live: not for players already retired in the
+   * first room message after a welcome (a join or a rejoin mid-race).
+   */
+  retired(p: PlayerInfo): void;
   /** A live chat line (already in game.chat). */
   chat(line: ChatLine): void;
   /** game.chat was replaced (the room's history after a welcome) or cleared. */
@@ -201,6 +206,8 @@ export class Game {
   /** Room chat, oldest first: replaced by every chatlog, cleared on leave and in a new room. */
   chat: ChatLine[] = [];
   private chatCode = ""; // the room `chat` belongs to
+  // Players seen retired in the last room message; null until the first one after a welcome.
+  private retiredSeen: Set<string> | null = null;
 
   // Garage (server-confirmed only: never updated optimistically)
   scrap = 0;
@@ -303,6 +310,14 @@ export class Game {
     this.send({ t: "host", id });
   }
 
+  /**
+   * Any racer, racing only (the menu's "Retire to garage"): our car leaves the race (DNF) and
+   * the garage opens until it is over. The server refuses it otherwise with an err.
+   */
+  retire(): void {
+    this.send({ t: "retire" });
+  }
+
   /** Host only: lock the room (no new players; seat rejoins still work) or unlock it. */
   setLocked(locked: boolean): void {
     this.send({ t: "lock", locked });
@@ -340,6 +355,7 @@ export class Game {
     this.forceStartAt = 0;
     this.locked = false;
     this.results = null;
+    this.retiredSeen = null;
     this.resetOwnCar();
     this.snaps = [];
     this.latest = null;
@@ -472,6 +488,7 @@ export class Game {
         this.seq = 0;
         this.lastAck = -1;
         this.resetOwnCar();
+        this.retiredSeen = null; // whoever is retired already is not news
         this.intent = this.joinMsg();
         this.on.connection?.("connected");
         this.on.welcome?.();
@@ -481,6 +498,9 @@ export class Game {
         // predicted car; the next snapshot seeds it at the new pose. Else the replay of old
         // inputs from the grid would look like a teleport to reconciliation.
         if (msg.raceStart !== this.raceStart) this.resetOwnCar();
+        // Retired: the car is off the field at once (the engine and the gravel go silent), not
+        // only from the next snapshot, which no longer carries it.
+        if (msg.players.some((p) => p.id === this.you && p.retired)) this.resetOwnCar();
         this.hostId = msg.hostId;
         this.phase = msg.phase;
         this.raceStart = msg.raceStart;
@@ -489,7 +509,11 @@ export class Game {
         this.useTrack(msg.trackId);
         this.players = msg.players;
         if (msg.phase !== "results") this.results = null;
+        const retired = new Set(msg.players.filter((p) => p.retired).map((p) => p.id));
+        const seen = this.retiredSeen;
+        this.retiredSeen = retired;
         this.on.room?.();
+        if (seen) for (const p of msg.players) if (retired.has(p.id) && !seen.has(p.id) && p.id !== this.you) this.on.retired?.(p);
         return;
       case "garage":
         this.scrap = msg.scrap;
@@ -909,6 +933,17 @@ export class Game {
 
   ownSnap(): CarSnap | undefined {
     return this.latest?.cars.get(this.you);
+  }
+
+  /** We retired from the current race (DNF, garage open until it is over). */
+  retired(): boolean {
+    return !!this.me()?.retired;
+  }
+
+  /** "Retire to garage" applies: racing, with our car on the field and not finished. */
+  canRetire(): boolean {
+    const s = this.ownSnap();
+    return this.phase === "racing" && !this.retired() && !!this.car && !!s && !s.fin;
   }
 
   isHost(): boolean {

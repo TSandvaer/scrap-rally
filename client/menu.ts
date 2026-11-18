@@ -1,5 +1,6 @@
 // The in-game menu (PLAN-MENU.md, MENU-1): Esc opens and closes it in a room, in any phase.
-// Everyone: Resume, Sound, Controls, Copy invite link, Leave room. The host also gets Stop and
+// Everyone: Resume, Sound, Controls, Copy invite link, Retire to garage (racing with a car on
+// the field, MENU-2), Leave room. The host also gets Stop and
 // Restart race (countdown and race only), Lock / Unlock room, and the players list with Make
 // host and Remove. A modal over the whole stage; while it is open the frame loop drives with
 // NO_CONTROLS (client/main.ts), so the race keeps running and the own car coasts. The main
@@ -177,6 +178,21 @@ export class GameMenu {
       button("Sound", "sound", () => this.show("sound")),
       button("Controls", "controls", () => this.show("controls")),
       button("Copy invite link", "invite", () => this.deps.copyInvite()),
+    );
+    if (g.canRetire()) {
+      list.append(
+        button("Retire to garage", "retire", () =>
+          this.ask({
+            text: "Retire from this race? Your car leaves the track and you are out of this race (DNF: no place money; a wreck bonus is paid if the race finishes). You go to the garage to shop and chat while the others finish, and you race again next time.",
+            label: "Retire",
+            run: () => g.retire(),
+            applies: () => g.canRetire(),
+            closeAfter: true,
+          }),
+        ),
+      );
+    }
+    list.append(
       button("Leave room", "leave", () =>
         this.ask({
           text: "Leave the room for good? Your seat, scrap and upgrades in this room are gone.",
@@ -232,9 +248,12 @@ export class GameMenu {
       const sw = el("span", "swatch");
       sw.style.background = p.color;
       li.append(sw, el("span", "name", p.name));
-      if (p.id === g.you) li.append(el("span", "tag-pill host", "you · host"));
-      else {
+      if (p.id === g.you) {
+        li.append(el("span", "tag-pill host", "you · host"));
+        if (p.retired) li.append(el("span", "tag-pill", "retired"));
+      } else {
         if (!p.connected) li.append(el("span", "tag-pill", "offline"));
+        if (p.retired) li.append(el("span", "tag-pill", "retired"));
         const acts = el("span", "gm-acts");
         const make = button("Make host", `host:${p.id}`, () => g.makeHost(p.id), "small");
         make.disabled = !p.connected;

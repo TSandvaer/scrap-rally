@@ -251,6 +251,7 @@ game.on.welcome = () => {
   updatePanels();
 };
 game.on.room = () => updatePanels();
+game.on.retired = (p) => toast(`${p.name} retired from the race`);
 game.on.results = () => updatePanels();
 game.on.garage = () => renderGarage();
 game.on.chat = (line) => chat.add(line);
@@ -280,7 +281,10 @@ game.on.event = (ev: GameEvent, tick: number) => {
   const mine = ev.id === game.you;
   if (ev.k === "lap" && mine) flashText(`LAP ${ev.lap + 1}/${game.laps}`);
   if (ev.k === "finish") {
-    if (mine) flashText(`FINISHED ${ordinal(ev.place)}`, 3000);
+    if (mine) {
+      flashText(`FINISHED ${ordinal(ev.place)}`, 3000);
+      menu.render(); // a finished car cannot retire any more
+    }
     else toast(`${who} finished ${ordinal(ev.place)} — ${formatTime(ev.timeMs)}`);
   }
   if (ev.k === "hit") sparks.push({ id: ev.id, start: performance.now() + (mine ? 0 : INTERP_DELAY_MS) });
@@ -302,14 +306,23 @@ function setRoomInUrl(code: string): void {
 
 // ---- panels -----------------------------------------------------------------------
 
+/**
+ * The lobby panel (room, garage, docked chat): in the lobby, and for a player who retired from
+ * the running race (they shop and chat while the others finish; no start or ready).
+ */
+function garageOpen(): boolean {
+  return !!game.you && (game.phase === "lobby" || (game.phase === "racing" && game.retired()));
+}
+
 function updatePanels(): void {
   menu.render(); // the open menu follows the room (closes once we are out of it)
   const inRoom = !!game.you;
+  const garage = garageOpen();
   show(menuBtn, inRoom);
   ui.menu.classList.toggle("hidden", inRoom);
-  ui.lobby.classList.toggle("hidden", !inRoom || game.phase !== "lobby");
+  ui.lobby.classList.toggle("hidden", !garage);
   ui.results.classList.toggle("hidden", !inRoom || game.phase !== "results" || !game.results);
-  chat.setMode(!inRoom ? "off" : game.phase === "lobby" ? "docked" : "overlay", debug);
+  chat.setMode(!inRoom ? "off" : garage ? "docked" : "overlay", debug);
   if (!inRoom) return;
 
   ui.lobbyCode.textContent = game.code;
@@ -322,13 +335,14 @@ function updatePanels(): void {
       if (p.id === game.hostId) li.append(span("tag-pill host", "host"));
       if (!p.connected) li.append(span("tag-pill", "offline"));
       if (p.ready && p.id !== game.hostId) li.append(span("tag-pill ready", "ready"));
+      if (p.retired) li.append(span("tag-pill", "retired"));
       return li;
     }),
   );
   renderTrackPick();
   renderLobbyButtons();
   if (game.results) renderResults(game.results);
-  if (game.phase === "lobby") renderGarage(true);
+  if (garage) renderGarage(true);
 }
 
 /**
@@ -337,7 +351,8 @@ function updatePanels(): void {
  * confirmation arrives.
  */
 function renderTrackPick(): void {
-  const host = game.isHost();
+  const host = game.isHost() && game.phase === "lobby"; // a retired host's garage: no pick
+
   show(ui.trackSelect, host);
   show(ui.trackName, !host);
   if (ui.trackSelect.value !== game.trackId) ui.trackSelect.value = game.trackId;
@@ -350,6 +365,13 @@ function renderTrackPick(): void {
  * clock rather than on a room message; it only touches the DOM when something changed.
  */
 function renderLobbyButtons(): void {
+  if (game.phase !== "lobby") {
+    // Retired from the running race: the garage only, no start or ready until the next lobby.
+    for (const b of [ui.start, ui.startAnyway, ui.ready]) show(b, false);
+    show(ui.wait, true);
+    setText(ui.wait, "You retired — you're in the next race. Shop and chat while the others finish.");
+    return;
+  }
   const host = game.isHost();
   const waiting = game.waitingFor();
   const ready = !!game.me()?.ready;
@@ -518,7 +540,8 @@ function hudView(): HudView | null {
     hud.banner = restartNotice ? "Server restarting — reconnecting…" : "Connection lost — reconnecting…";
   } else if (game.car && game.car.wreck > 0) hud.banner = `WRECKED — back on track in ${(game.car.wreck / 60).toFixed(1)}s`;
   else if (!mine && (game.phase === "countdown" || game.phase === "racing")) {
-    hud.banner = "Race in progress — you're in the next one";
+    // Retired: the garage panel says it (the strip would sit under the panel's bottom edge).
+    hud.banner = game.retired() ? "" : "Race in progress — you're in the next one";
   } else if (game.phase === "racing" && game.phaseEnds) {
     hud.banner = `Winner is in — race closes in ${Math.max(0, Math.ceil((game.phaseEnds - now) / 1000))}s`;
   }
@@ -564,7 +587,7 @@ function frame(now: number): void {
   if (acc >= STEP_MS) acc = 0;
   draw(acc / STEP_MS, elapsed);
   soundFrame();
-  if (game.you && game.phase === "lobby") {
+  if (garageOpen()) {
     renderGarage();
     renderLobbyButtons();
   }
