@@ -225,6 +225,7 @@ interface Stat {
 }
 
 const SPREAD_FLOOR = 0.01;
+const RULE_RUNS = 5; // the budget rule is defined on five runs
 
 function stat(xs: number[], time: boolean): Stat {
   const base = median(xs);
@@ -244,7 +245,8 @@ function column(base: number[], cand: number[] | null, fmt: (x: number) => strin
   const b = stat(base, fmt === ms);
   if (!cand) return [fmt(b.base), fmt(b.spread), fmt(b.limit)];
   const c = median(cand);
-  return [fmt(b.base), fmt(b.limit), `${fmt(c)} ${c <= b.limit ? "ok" : "**OVER**"}`];
+  // Under five runs there is no measured spread to judge by: the number only.
+  return [fmt(b.base), fmt(b.limit), base.length < RULE_RUNS ? fmt(c) : `${fmt(c)} ${c <= b.limit ? "ok" : "**OVER**"}`];
 }
 
 function table(head: string[], rows: string[][]): string {
@@ -410,6 +412,7 @@ async function main(): Promise<void> {
       ? "Each value is the median of the runs. limit = baseline + 2 x spread (spread = max - min of the baseline's runs, for a time at least 1% of the baseline). OVER = this build is above the limit.\n"
       : "Baseline = median of the runs, ± = spread (max - min of the runs, for a time at least 1% of the baseline), limit = baseline + 2 x spread.\n",
   );
+  if (runs < RULE_RUNS) console.log(`Only ${runs} run(s): the spread is not measured, so the limits are not a budget and no verdict is given. Use the default ${RULE_RUNS} runs to judge a build.\n`);
   console.log(tablesFor(samples, "base", compare ? "this" : null, vps, metrics));
   console.log(`\nRaw results: ${outFile}`);
 }
