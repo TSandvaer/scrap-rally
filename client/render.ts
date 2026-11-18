@@ -80,6 +80,7 @@ export class Renderer {
 
   /** Ease the camera toward a target (world coords). snap = jump straight there. */
   follow(x: number, y: number, dtMs: number, snap = false): void {
+    this.world.aim(x, y, dtMs, snap);
     if (snap) {
       this.cam.x = x;
       this.cam.y = y;
@@ -109,11 +110,17 @@ export class Renderer {
     const actors = this.actors;
     const amp = this.shakeLeft(now) / ZOOM;
     const ph = (now - this.shakeStart) / 16;
-    const cx = Math.round((this.cam.x + Math.sin(ph * 1.7) * amp) * ZOOM) / ZOOM;
-    const cy = Math.round((this.cam.y + Math.cos(ph * 2.3) * amp) * ZOOM) / ZOOM;
-    ctx.setTransform(ZOOM, 0, 0, ZOOM, VIEW_W / 2 - cx * ZOOM, VIEW_H / 2 - cy * ZOOM);
+    // The camera, snapped to whole view pixels: the baked world is blitted 1:1.
+    const vx = Math.round((this.cam.x + Math.sin(ph * 1.7) * amp) * ZOOM);
+    const vy = Math.round((this.cam.y + Math.cos(ph * 2.3) * amp) * ZOOM);
+    const cx = vx / ZOOM, cy = vy / ZOOM;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    this.world.draw(vx - VIEW_W / 2, vy - VIEW_H / 2, cars);
 
-    this.world.draw(cx, cy);
+    ctx.setTransform(ZOOM, 0, 0, ZOOM, VIEW_W / 2 - cx * ZOOM, VIEW_H / 2 - cy * ZOOM);
+    // Mines and sparks set no line cap or join of their own: the ones the track's strokes used to leave.
+    ctx.lineJoin = "round";
+    ctx.lineCap = "butt";
 
     for (const m of fx.mines) actors.mine(m.x, m.y, m.armed);
     // Falling cars sink below the road (drawn first, no shadow); airborne cars fly above
