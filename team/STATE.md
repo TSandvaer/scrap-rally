@@ -116,7 +116,10 @@ MENU-1 done: 78143f3 (verified clean; sim 358/358, bots 86/86, build ok); review
 MENU-1 review APPROVE (no findings). Merge waits ONLY for the user's taste verdict (frozen copy on :3004).
 MENU-1 MERGED 2026-11-18 (user: "all accepted"): main 94fc2af (check clean, sim 358/358, bots 86/86, build ok); worker
 released, menu1 workspace removed; the menu1-taste copy stays while the user's :3004 server runs from it.
-MENU-2 123jpnbf9ph in flight: ctx_63357609b130 (~/orca/workspaces/scrap-rally/menu2, TSandvaer/menu2, :3006). Then MENU-3 (pause). Still pending: remove m3-t4 workspace once the
+MENU-2 123jpnbf9ph in flight: ctx_63357609b130 (~/orca/workspaces/scrap-rally/menu2, TSandvaer/menu2, :3006). Then MENU-3 (pause).
+MENU-2 done: 82b8fe5 (verified clean; sim 381/381, bots 90/90, build ok; design choices in tmp/menu2/menu2-report.md); reviewer
+ctx_3f08f2bd7fdd; FROZEN TASTE COPY ~/orca/workspaces/scrap-rally/menu2-taste (detached at 82b8fe5, npm ci done) on :3005 (the user's
+menu1-taste server still runs on :3004). Still pending: remove m3-t4 workspace once the
 user stops :3001 (PID 16470).
 
 **Resume (2026-11-16):** main 0dec6c9 (local, 15 ahead of origin) = ready check + engine
