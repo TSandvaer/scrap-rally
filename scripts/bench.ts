@@ -5,6 +5,7 @@
 //   npm run build && npm run bench                    this build alone (dist/)
 //   npm run build && npm run bench -- --vs-ref main   this build against main, runs alternating
 //   npm run bench -- http://localhost:3006 --vs http://localhost:3007
+//   npm run build && npm run bench -- --pixels --vs-ref main   same pixels in the preview scenes?
 //
 // A directory target is served by this script on 127.0.0.1 with cross-origin isolation, which
 // gives the page a 5 us timer; a URL target has whatever its server allows (usually 100 us).
@@ -37,6 +38,9 @@ const HELP = `npm run bench -- [target] [options]
   --b-scene <S#>     the scene metric B plays (default S4)
   --panel <id>       metric B with that DOM panel shown over the canvas (e.g. lobby)
   --quick            1 run, 1280x720, metric A only
+  --pixels           no timing: pixel-diff the preview scenes (?debug=1&preview=1&freeze=1,
+                     with and without the caption) between the two builds, or between two
+                     loads of one build; --scenes <l> picks them (default: all sixteen)
   --out <file>       raw results as JSON (default tmp/bench/<time>.json)
   --session <name>   agent-browser session prefix (default bench)`;
 
@@ -116,7 +120,7 @@ async function buildRef(ref: string): Promise<string> {
   await run("sh", ["-c", `git archive "$1" | tar -x -C "$2"`, "sh", ref, dir], { cwd: ROOT });
   symlinkSync(path.join(ROOT, "node_modules"), path.join(dir, "node_modules"));
   await run(path.join(ROOT, "node_modules", ".bin", "vite"), ["build"], { cwd: dir });
-  if (!existsSync(path.join(dir, "client", "bench.ts"))) fail(`${ref} has no client/bench.ts: it cannot be benchmarked`);
+  if (!flag("pixels") && !existsSync(path.join(dir, "client", "bench.ts"))) fail(`${ref} has no client/bench.ts: it cannot be benchmarked`);
   return dir;
 }
 
@@ -155,6 +159,50 @@ async function load(t: Target, query: Record<string, string>, settleMs: number):
   const out = JSON.parse(JSON.parse(await ab(t.session, ["eval", "JSON.stringify(window.scrapBench)"])) as string) as BenchOut;
   if (out.error) fail(`${t.label}: bench error: ${out.error}`);
   return out;
+}
+
+// ---- pixel diff of the preview scenes -----------------------------------------------
+
+const PREVIEW_SCENES = ["ramp", "gap", "crossing", "hole", "scrap", "jump", "fall", "ghost", "rust", "fx", "wreck", "damage", "mine", "spectator", "pause", "countdown"];
+// The game canvas as base64 RGBA (640x360).
+const GRAB = `(() => { const c = document.getElementById("view"); const d = c.getContext("2d").getImageData(0, 0, c.width, c.height).data; let s = ""; for (let i = 0; i < d.length; i += 32768) s += String.fromCharCode.apply(null, d.subarray(i, i + 32768)); return btoa(s); })()`;
+
+async function grab(t: Target, query: Record<string, string>): Promise<Buffer> {
+  await ab(t.session, ["open", `${t.url}/?${new URLSearchParams({ debug: "1", preview: "1", ...query })}`]);
+  await sleep(300); // a held scene is redrawn every frame: any frame after the first will do
+  return Buffer.from(JSON.parse(await ab(t.session, ["eval", "-b", Buffer.from(GRAB).toString("base64")])) as string, "base64");
+}
+
+function differing(a: Buffer, b: Buffer): number {
+  if (a.length !== b.length) return Math.max(a.length, b.length) / 4;
+  let n = 0;
+  for (let i = 0; i < a.length; i += 4) if (a[i] !== b[i] || a[i + 1] !== b[i + 1] || a[i + 2] !== b[i + 2] || a[i + 3] !== b[i + 3]) n++;
+  return n;
+}
+
+/** The preview scenes, held, in both builds (or twice in one): how many pixels differ. */
+async function pixelDiff(base: Target, cand: Target, scenes: string[]): Promise<string> {
+  for (const t of new Set([base, cand])) await ab(t.session, ["set", "viewport", "1280", "720", "1"]);
+  const rows: string[][] = [];
+  let total = 0;
+  for (const scene of scenes) {
+    const row = [scene];
+    for (const more of [{}, { hud: "0" }] as Record<string, string>[]) {
+      const q = { scene, freeze: "1", ...more };
+      const n = differing(await grab(base, q), await grab(cand, q));
+      total += n;
+      row.push(String(n));
+    }
+    rows.push(row);
+    console.error(`${scene.padEnd(10)} ${row.slice(1).join("  ")}`);
+  }
+  // The control: the method must see a change. The same scene 20 ms later, in one build.
+  const control = differing(await grab(cand, { scene: scenes[0], t: "1" }), await grab(cand, { scene: scenes[0], t: "1.02" }));
+  return [
+    `Pixel diff of the preview scenes (640x360 = 230400 pixels each), ${base === cand ? "two loads of one build" : "baseline against this build"}.\n`,
+    table(["Scene", "differing pixels, freeze=1", "freeze=1&hud=0"], rows),
+    `\nTotal differing pixels: ${total}. Control (scene ${scenes[0]} at t=1 against t=1.02, one build): ${control} pixels differ${control ? "" : " - THE CONTROL FAILED, the method sees nothing"}.`,
+  ].join("\n");
 }
 
 // ---- statistics -------------------------------------------------------------------
@@ -282,7 +330,7 @@ async function main(): Promise<void> {
   const bScene = (arg("b-scene") ?? "S4").toUpperCase();
   const panel = arg("panel") ?? "";
   const prefix = arg("session") ?? "bench";
-  const valued = new Set(["vs", "vs-ref", "runs", "viewports", "metrics", "only", "b-scene", "panel", "out", "session"]);
+  const valued = new Set(["vs", "vs-ref", "runs", "viewports", "metrics", "only", "b-scene", "panel", "out", "session", "scenes"]);
   const positional = process.argv.slice(2).filter((a, i, all) => !a.startsWith("--") && !(i > 0 && valued.has(all[i - 1].slice(2))));
   const spec = positional[0] ?? "dist";
   const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
@@ -297,6 +345,10 @@ async function main(): Promise<void> {
   try {
     if (vsSpec) targets.push(await target("base", vsSpec, prefix, cleanup));
     targets.push(await target(vsSpec ? "this" : "base", spec, prefix, cleanup));
+    if (flag("pixels")) {
+      console.log(await pixelDiff(targets[0], targets[targets.length - 1], arg("scenes")?.split(",") ?? PREVIEW_SCENES));
+      return;
+    }
 
     // Every cell of a run, as [metric, page query, time to leave a paced run alone].
     const cells: { metric: string; scene: string; track: string; query: Record<string, string>; settle: number }[] = [];

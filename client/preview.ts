@@ -3,13 +3,24 @@
 // the lower road, holes, a scrap-filled gap) and scripted car poses, for screenshots and the
 // taste gate. Nothing here runs, or is even downloaded, without the flag.
 //
-// Keys 1-9 / arrows pick a scene. URL: &scene=<name> to start on one, &freeze=1 to hold the
-// scene's key moment, &t=<seconds> to hold any moment, &hud=0 to hide the caption.
+// Keys 1-9 pick one of the nine feature scenes, the arrows step through those and the seven
+// fixture scenes after them (fx, wreck, damage, mine, spectator, pause, countdown: the states
+// no feature scene shows; no test reads the renderer's output, so these frames are the
+// regression net of the graphics work). URL: &scene=<name> to start on one, &freeze=1 to hold
+// the scene's key moment, &t=<seconds> to hold any moment, &hud=0 to hide the caption.
+// A held moment pins performance.now() too while it draws (smoke and the mine blink read it),
+// so the same URL gives the same pixels on every load.
+//
+// Two more pages for the graphics polish (PLAN-GFX.md), neither wired into the game:
+// &scene=palette  the "scrapyard 32" sheet (client/gfx/palette.ts), at 1280x720
+// &scene=mock     one piece of track baked with the palette (&mock=today: the same view as
+//                 the game draws it now)
 
-import { buildTrack, pointAt, queryTrackNear, type Track, type TrackDef } from "../shared/track";
+import { buildTrack, gridSlot, pointAt, queryTrack, queryTrackNear, type Track, type TrackDef } from "../shared/track";
 import { trackById } from "../shared/tracks";
 import { airTicksFor, FALL_TICKS, GHOST_TICKS } from "../shared/weapons";
-import { Renderer, type CarView, type HudView } from "./render";
+import { BAYER4, CAR_COLORS, CAR_NEUTRALS, carTones, CSS_MIRROR, LIT, P, PALETTE, RAMPS, rgbOf, SHADE, type PaletteName } from "./gfx/palette";
+import { Renderer, VIEW_H, VIEW_W, type CarView, type HudView, type WorldFx } from "./render";
 
 const COLORS = ["#e8552d", "#33a3e8", "#f2c230", "#5cc46b", "#c46ad6", "#e8e2d4"];
 const DT = 1 / 60;
@@ -58,7 +69,14 @@ interface Scene {
   cam: () => { x: number; y: number };
   cars: (t: number) => CarView[];
   key: number; // seconds: the moment &freeze=1 holds
+  fx?: (t: number) => WorldFx; // fixture scenes: shots, mines, sparks
+  hud?: (t: number) => Partial<HudView>; // fixture scenes: the game's own HUD (its banner replaces the caption)
 }
+
+/** The feature scenes come first; keys 1-9 and their captions count only these. */
+const CLASSIC = 9;
+const NO_HUD: HudView = { topLeft: [], time: "", notice: "", center: "", centerSub: "", banner: "", corner: "", debug: [], hp: null };
+const NO_FX: WorldFx = { shots: [], mines: [], sparks: [] };
 
 function car(track: Track, i: number, s: number, lat: number, more: Partial<CarView> = {}): CarView {
   const p = pointAt(track, s);
@@ -192,11 +210,120 @@ function scenes(): Scene[] {
       cars: () => [car(rust, 0, 40, -20), car(rust, 1, -60, 25), car(rust, 2, 200, 0, { ghost: true })],
       key: 0,
     },
+    ...fixtures(track, rust),
+  ];
+}
+
+/**
+ * The fixture scenes: effects, wrecks, damage, mines and the HUD states (spectator, pause,
+ * countdown), as the game hands them to the renderer.
+ */
+function fixtures(track: Track, rust: Track): Scene[] {
+  const at = (t: Track, s: number) => () => pointAt(t, s);
+  const spot = (t: Track, s: number, lat: number) => car(t, 0, s, lat);
+  const grid = (i: number, more: Partial<CarView> = {}): CarView => {
+    const g = gridSlot(rust, i);
+    return { id: `p${i}`, x: g.x, y: g.y, h: g.h, color: COLORS[i], name: `Car ${i + 1}`, me: i === 0, wreck: false, ghost: false, ...more };
+  };
+  const raceHud: Partial<HudView> = { topLeft: ["LAP 2/3", "POS 3/6", "RIV  42 MINE 2"], time: "1:23.4", corner: "23 ms", hp: 0.62 };
+  // Damage: the hp each car of the grid has (the own car first). The renderer draws no
+  // damage yet; each car carries its hp as an extra field for the ticket that will.
+  const HP = [0.39, 1, 0.8, 0.6, 0.2, 0.05];
+  const holeRun = driver(track, 3, 950, 800, 240, 2);
+  return [
+    {
+      name: "fx",
+      title: "Effects: 12 rivets in flight, 6 sparks from new to old",
+      rust: true,
+      cam: at(rust, 120),
+      cars: () => [car(rust, 0, 20, -22), car(rust, 1, -10, 24), car(rust, 2, 250, 0)],
+      fx: (t) => ({
+        // Two streams of six, one from each car; a row of sparks through their whole life.
+        shots: Array.from({ length: 12 }, (_, k) => {
+          const p = spot(rust, (k < 6 ? 50 : 25) + (k % 6) * 30 + ((t * 900) % 30), k < 6 ? -22 : 24);
+          return { x: p.x, y: p.y, vx: Math.cos(p.h) * 900, vy: Math.sin(p.h) * 900 };
+        }),
+        mines: [],
+        sparks: Array.from({ length: 6 }, (_, k) => {
+          const p = spot(rust, 120, -50 + k * 20);
+          return { x: p.x, y: p.y, age: (k / 6 + t / 0.26) % 1 };
+        }),
+      }),
+      key: 0,
+    },
+    {
+      name: "wreck",
+      title: "Wrecks: scorched and smoking, next to a healthy car",
+      rust: true,
+      cam: at(rust, 120),
+      cars: () => {
+        const turned = car(rust, 2, 185, -18, { wreck: true });
+        turned.h += 0.6;
+        return [car(rust, 0, 60, -26), car(rust, 1, 120, 22, { wreck: true }), turned, car(rust, 5, 95, 62, { wreck: true })];
+      },
+      key: 0.35,
+    },
+    {
+      name: "damage",
+      title: "Damage: hp 39% (own car), 100, 80, 60, 20, 5%",
+      rust: true,
+      cam: at(rust, -150),
+      cars: () => HP.map((hp, i) => ({ ...grid(i, { name: `${Math.round(hp * 100)}%` }), hp })),
+      hud: () => ({ ...raceHud, hp: HP[0] }),
+      key: 0,
+    },
+    {
+      name: "mine",
+      title: "Mines: 4 armed (blinking), 2 not yet armed",
+      cam: at(track, 1330),
+      cars: (t) => [holeRun(t)],
+      fx: () => ({
+        shots: [],
+        // On the road, beside the pits, one on the verge; [distance, lateral, armed].
+        mines: ([[1250, 10, true], [1300, -44, true], [1420, 38, true], [1380, -84, true], [1215, -20, false], [1465, -34, false]] as [number, number, boolean][]).map(
+          ([s, lat, armed]) => {
+            const p = spot(track, s, lat);
+            return { x: p.x, y: p.y, armed };
+          },
+        ),
+        sparks: [],
+      }),
+      key: 1.0, // 1000 ms: the armed lamps are in the bright half of their blink
+    },
+    {
+      name: "spectator",
+      title: "Spectating: the camera on the leader, no own car",
+      rust: true,
+      cam: at(rust, 3000),
+      cars: () => [car(rust, 1, 3000, -8), car(rust, 2, 2930, 30), car(rust, 3, 2860, -30), car(rust, 4, 3110, 12)],
+      hud: () => ({ time: "0:42.3", banner: "Race in progress — you're in the next one", corner: "23 ms" }),
+      key: 0,
+    },
+    {
+      name: "pause",
+      title: "Paused by another player",
+      rust: true,
+      cam: at(rust, 5200),
+      cars: () => [car(rust, 0, 5200, -14), car(rust, 1, 5270, 22), car(rust, 2, 5120, 6)],
+      hud: () => ({ ...raceHud, center: "PAUSED", centerSub: "by Car 2", banner: "Race paused by Car 2 — resumes by itself in 4:32" }),
+      key: 0,
+    },
+    {
+      name: "countdown",
+      title: "Countdown on the grid",
+      rust: true,
+      cam: () => gridSlot(rust, 0),
+      cars: () => HP.map((_, i) => grid(i)),
+      hud: (t) => ({ topLeft: ["LAP 1/3", "POS 1/6", "RIV  60 MINE 3"], hp: 1, center: ["3", "2", "1", "GO!"][Math.floor(t) % 4], corner: "23 ms" }),
+      key: 0,
+    },
   ];
 }
 
 /** Run the preview on the game canvas (the game itself is not started). */
 export function runPreview(canvas: HTMLCanvasElement, params: URLSearchParams): void {
+  if (params.get("scene") === "palette") return showPalette(canvas);
+  if (params.get("scene") === "mock") return showMock(canvas, params.get("mock") === "today");
   const list = scenes();
   const renderers = new Map<boolean, Renderer>();
   const rendererFor = (rust: boolean) => {
@@ -214,7 +341,7 @@ export function runPreview(canvas: HTMLCanvasElement, params: URLSearchParams): 
 
   window.addEventListener("keydown", (e) => {
     const n = Number(e.key);
-    if (n >= 1 && n <= list.length) index = n - 1;
+    if (n >= 1 && n <= CLASSIC) index = n - 1;
     else if (e.key === "ArrowRight") index = (index + 1) % list.length;
     else if (e.key === "ArrowLeft") index = (index - 1 + list.length) % list.length;
   });
@@ -227,21 +354,756 @@ export function runPreview(canvas: HTMLCanvasElement, params: URLSearchParams): 
     const r = rendererFor(!!scene.rust);
     const cam = scene.cam();
     r.follow(cam.x, cam.y, 16, true);
-    const view: HudView | null = hud
-      ? {
-          topLeft: [],
-          time: "",
-          notice: "",
-          center: "",
-          centerSub: "",
-          banner: `PREVIEW ${index + 1}/${list.length}  ${scene.title}  (keys 1-${list.length})`,
-          corner: "",
-          debug: [],
-          hp: null,
-        }
-      : null;
-    r.frame(scene.cars(t), { shots: [], mines: [], sparks: [] }, view, held ? t * 1000 : now);
+    const caption = !hud
+      ? ""
+      : index < CLASSIC
+        ? `PREVIEW ${index + 1}/${CLASSIC}  ${scene.title}  (keys 1-${CLASSIC})`
+        : `FIXTURE ${index - CLASSIC + 1}/${list.length - CLASSIC}  ${scene.title}  (arrows)`;
+    const view: HudView | null = scene.hud ? { ...NO_HUD, banner: caption, ...scene.hud(t) } : caption ? { ...NO_HUD, banner: caption } : null;
+    // The renderer reads the real clock for the smoke and the mine blink: pin it while held.
+    if (held) performance.now = () => t * 1000;
+    try {
+      r.frame(scene.cars(t), scene.fx ? scene.fx(t) : NO_FX, view, held ? t * 1000 : now);
+    } finally {
+      if (held) delete (performance as { now?: unknown }).now;
+    }
     requestAnimationFrame(frame);
   };
   requestAnimationFrame(frame);
+}
+
+// ---- pixel car (the palette sheet and the mock) -----------------------------------
+
+const CAR_W = 26, CAR_H = 19;
+
+/**
+ * A car facing right as hard pixels in its three tones and the shared neutrals: only to
+ * judge the tones in place. The real sprites (128 headings from a master) are GFX-2a's.
+ */
+function carPixels(color: string): (string | null)[][] {
+  const t = carTones(color), n = CAR_NEUTRALS;
+  const px: (string | null)[][] = Array.from({ length: CAR_H }, () => new Array<string | null>(CAR_W).fill(null));
+  const rect = (x: number, y: number, w: number, h: number, c: string) => {
+    for (let j = y; j < y + h; j++) for (let i = x; i < x + w; i++) px[j][i] = c;
+  };
+  rect(3, 0, 6, CAR_H, n.tyre); // the wheels show 2 px either side of the body
+  rect(17, 0, 6, CAR_H, n.tyre);
+  rect(0, 2, 26, 15, n.outline);
+  rect(1, 3, 24, 13, t.body);
+  rect(1, 3, 24, 1, t.lit); // the sunlit edge
+  rect(1, 13, 24, 3, t.shade); // the side away from the sun
+  rect(6, 5, 7, 9, t.shade); // roof
+  rect(6, 5, 7, 1, t.body);
+  rect(13, 5, 5, 9, n.glass); // windscreen
+  rect(13, 5, 2, 1, n.glint);
+  rect(18, 9, 6, 2, t.lit); // bonnet stripe
+  rect(23, 4, 2, 2, n.lamp);
+  rect(23, 13, 2, 2, n.lamp);
+  return px;
+}
+
+// ---- palette sheet ------------------------------------------------------------------
+
+/** Relative luminance 0..1 (to pick a readable label colour). */
+function luminance(hex: string): number {
+  const [r, g, b] = rgbOf(hex).map((v) => {
+    const c = v / 255;
+    return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+  });
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
+
+/** The palette sheet: a 1280x720 canvas of its own over the page, drawn 1:1. */
+function showPalette(view: HTMLCanvasElement): void {
+  const W = 1280, H = 720;
+  const sheet = document.createElement("canvas");
+  sheet.id = "palette-sheet";
+  sheet.width = W;
+  sheet.height = H;
+  sheet.style.cssText = `position:fixed;left:0;top:0;width:${W}px;height:${H}px;z-index:99;image-rendering:pixelated`;
+  view.style.visibility = "hidden";
+  document.body.append(sheet);
+  const g = sheet.getContext("2d")!;
+  g.imageSmoothingEnabled = false;
+  const mono = "ui-monospace, Menlo, Consolas, monospace";
+  const text = (str: string, x: number, y: number, color: string, size = 11, bold = false) => {
+    g.font = `${bold ? "bold " : ""}${size}px ${mono}`;
+    g.fillStyle = color;
+    g.fillText(str, x, y);
+  };
+  const ink = (hex: string) => (luminance(hex) > 0.2 ? P.soot1 : P.bone2);
+  g.fillStyle = P.soot1;
+  g.fillRect(0, 0, W, H);
+  g.textBaseline = "alphabetic";
+  text("SCRAPYARD 32", 24, 36, P.bone2, 24, true);
+  text("Scrap Rally palette: 32 colours in 9 ramps, dark to light. The sun is top-left.", 232, 26, P.bone0, 12);
+  text("Each swatch: its sunlit edge (top and left), the colour, the colour in a cast shadow (bottom).", 232, 42, P.bone0, 12);
+
+  // The ramps.
+  const sw = 116, sh = 54, x0 = 24, y0 = 62, rowH = 72;
+  Object.entries(RAMPS).forEach(([ramp, names], row) => {
+    const y = y0 + row * rowH;
+    text(ramp.toUpperCase(), x0, y + 22, P.bone2, 12, true);
+    text(`${names.length} steps`, x0, y + 38, P.bone0, 11);
+    names.forEach((name, i) => {
+      const x = x0 + 84 + i * (sw + 8);
+      const hex = P[name];
+      g.fillStyle = hex;
+      g.fillRect(x, y, sw, sh);
+      g.fillStyle = P[SHADE[name]];
+      g.fillRect(x, y + sh - 13, sw, 13);
+      g.fillStyle = P[LIT[name]];
+      g.fillRect(x, y, sw, 3);
+      g.fillRect(x, y, 3, sh - 13);
+      text(name, x + 10, y + 20, ink(hex), 12, true);
+      text(hex, x + 10, y + 35, ink(hex), 11);
+      if (name === "bone0") text(ramp === "gravel" ? "= bone0" : "shared", x + 62, y + 35, ink(hex), 10);
+    });
+  });
+
+  // The cars.
+  const x1 = 624;
+  text("CARS", x1, 78, P.bone2, 12, true);
+  text("three tones each: shade, body (= the server colour), lit", x1 + 44, 78, P.bone0, 11);
+  CAR_COLORS.forEach((color, i) => {
+    const y = 88 + i * 66;
+    const t = carTones(color);
+    ([["shade", t.shade], ["body", t.body], ["lit", t.lit]] as const).forEach(([label, hex], k) => {
+      const x = x1 + k * 92;
+      g.fillStyle = hex;
+      g.fillRect(x, y, 86, 60);
+      text(label, x + 8, y + 24, ink(hex), 11, true);
+      text(hex, x + 8, y + 40, ink(hex), 11);
+    });
+    // The car on tarmac and on dirt, 3x.
+    [P.tar1, P.dirt2].forEach((ground, k) => {
+      const bx = x1 + 286 + k * 108, scale = 3;
+      g.fillStyle = ground;
+      g.fillRect(bx, y, 100, 60);
+      // Its hard shadow first, in the ground's SHADE tone.
+      const px = carPixels(color);
+      g.fillStyle = P[SHADE[k ? "dirt2" : "tar1"]];
+      px.forEach((line, j) => line.forEach((c, m) => c && g.fillRect(bx + 9 + (m + 1) * scale, y - 1 + (j + 1) * scale, scale, scale)));
+      px.forEach((line, j) =>
+        line.forEach((c, m) => {
+          if (!c) return;
+          g.fillStyle = c;
+          g.fillRect(bx + 9 + m * scale, y - 1 + j * scale, scale, scale);
+        }),
+      );
+    });
+  });
+  const x2 = 1140;
+  text("CAR NEUTRALS", x2, 78, P.bone2, 12, true);
+  Object.entries(CAR_NEUTRALS).forEach(([label, hex], i) => {
+    const y = 88 + i * 34;
+    g.fillStyle = hex;
+    g.fillRect(x2, y, 30, 26);
+    g.strokeStyle = P.dirt1;
+    g.strokeRect(x2 + 0.5, y + 0.5, 29, 25);
+    text(label, x2 + 38, y + 12, P.bone2, 11, true);
+    text(PALETTE.find((e) => e.hex === hex)?.name ?? hex, x2 + 38, y + 24, P.bone0, 10);
+  });
+
+  // Dither: the only blend there is, and only in small areas (a pit, a ramp).
+  const yd = 506;
+  text("DITHER", x1, yd, P.bone2, 12, true);
+  text("depth without gradients: ordered 4x4 between two steps (3x here)", x1 + 58, yd, P.bone0, 11);
+  ([["soot0", "soot2"], ["soot1", "dirt0"], ["steel1", "steel3"], ["rust1", "rust3"]] as [PaletteName, PaletteName][]).forEach(([a, b], i) => {
+    const bx = x1 + (i % 2) * 320, by = yd + 10 + Math.floor(i / 2) * 36;
+    for (let yy = 0; yy < 6; yy++) {
+      for (let xx = 0; xx < 100; xx++) {
+        g.fillStyle = BAYER4[yy & 3][xx & 3] < (xx / 99) * 16 ? P[b] : P[a];
+        g.fillRect(bx + xx * 3, by + yy * 3, 3, 3);
+      }
+    }
+    text(`${a}  to  ${b}`, bx, by + 29, P.bone0, 10);
+  });
+
+  // The CSS mirror, checked against the page's own :root.
+  const yc = 606;
+  text("CSS :root MIRROR", x1, yc, P.bone2, 12, true);
+  text("the entry each style.css variable takes (GFX-3 applies it), and its value now", x1 + 130, yc, P.bone0, 11);
+  const css = getComputedStyle(document.documentElement);
+  Object.entries(CSS_MIRROR).forEach(([name, entry], i) => {
+    const bx = x1 + (i % 2) * 300, by = yc + 9 + Math.floor(i / 2) * 21;
+    const today = css.getPropertyValue(name).trim();
+    g.fillStyle = P[entry];
+    g.fillRect(bx, by, 20, 16);
+    g.strokeStyle = P.dirt1;
+    g.strokeRect(bx + 0.5, by + 0.5, 19, 15);
+    text(name, bx + 28, by + 12, P.bone2, 11, true);
+    text(`${entry} ${P[entry]}`, bx + 118, by + 12, P.bone0, 10);
+    text(today.toLowerCase() === P[entry] ? "= now" : `now ${today.replace(/\s+/g, "")}`, bx + 206, by + 12, today.toLowerCase() === P[entry] ? P.green : P.haz1, 10);
+  });
+  (window as unknown as { scrapPalette: unknown }).scrapPalette = { colours: PALETTE.length, distinct: new Set(PALETTE.map((e) => e.hex)).size };
+}
+
+// ---- baked mock scene ---------------------------------------------------------------
+//
+// One view of a made-up piece of track (a pit, a ramp, a chasm, the start of a bend), baked
+// the way PLAN-GFX.md wants the world baked, to judge the palette and the lighting before
+// GFX-1 builds the real thing:
+// - every layer is drawn alone on a scratch canvas, cut to a hard mask at alpha >= 128, and
+//   filled with palette indices; layers are stacked bottom to top. An edge pixel therefore
+//   has the colour of one of the two layers that meet there, never a blend or a snapped third;
+// - one sun, top-left: a 1 px LIT edge up-left, a 1 px SHADE edge down-right, hard cast
+//   shadows (the colour underneath, mapped through SHADE) 2-4 px down-right; no alpha;
+// - no gradients: ramp steps, and an ordered dither only inside the pit, the chasm walls
+//   and the ramp plate. Wear on the wide surfaces is speck density, not a dither pattern
+//   (which could moire at a phone's non-integer scale).
+
+const ZOOM = 0.8; // render.ts ZOOM
+const MOCK_CAM = { x: 1620, y: 452 };
+const MOCK_CARS: [number, number, number][] = [[0, 1462, 0], [1, 1880, 1]]; // colour, x, lane (0 = left of centre)
+
+function mockTrack(): Track {
+  return buildTrack({
+    id: "preview-mock",
+    name: "Bake Mock",
+    halfWidth: 64,
+    verge: 44,
+    control: [[400, 400], [900, 400], [1400, 400], [1900, 400], [2300, 600], [2400, 1000], [2300, 1400], [1900, 1600], [1400, 1600], [900, 1600], [400, 1600], [100, 1400], [0, 1000], [100, 600]],
+    features: [
+      { k: "hole", s: 990, lat: -26, r: 24 },
+      { k: "ramp", s: 1150, len: 60 },
+      { k: "gap", s0: 1210, s1: 1360 },
+    ],
+    recovery: [0, 700],
+  });
+}
+
+function mockCarPose(track: Track, x: number, lane: number): { x: number; y: number } {
+  const q = queryTrack(track, x, 400);
+  const p = pointAt(track, q.s);
+  const lat = lane ? 26 : -24;
+  return { x: p.x - Math.sin(p.h) * lat, y: p.y + Math.cos(p.h) * lat };
+}
+
+function hash(x: number, y: number, seed: number): number {
+  let h = Math.imul(x, 374761393) ^ Math.imul(y, 668265263) ^ Math.imul(seed, 1442695041);
+  h = Math.imul(h ^ (h >>> 13), 1274126177);
+  return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+}
+
+/** Smooth value noise 0..1 (the large patches of wear). */
+function vnoise(x: number, y: number, seed: number): number {
+  const xi = Math.floor(x), yi = Math.floor(y);
+  const fx = x - xi, fy = y - yi;
+  const sx = fx * fx * (3 - 2 * fx), sy = fy * fy * (3 - 2 * fy);
+  const a = hash(xi, yi, seed), b = hash(xi + 1, yi, seed), c = hash(xi, yi + 1, seed), d = hash(xi + 1, yi + 1, seed);
+  return a + (b - a) * sx + (c - a) * sy + (a - b - c + d) * sx * sy;
+}
+
+type Mask = Uint8Array;
+type Fill = PaletteName | ((x: number, y: number) => PaletteName);
+
+/** The view as palette indices, with the layer operations of the bake. */
+class Bake {
+  readonly w = VIEW_W;
+  readonly h = VIEW_H;
+  readonly idx = new Uint8Array(VIEW_W * VIEW_H);
+  readonly colors: string[] = PALETTE.map((e) => e.hex); // 0..31 the palette; car tones after
+  private readonly at = new Map<string, number>(PALETTE.map((e, i) => [e.name, i]));
+  private readonly shadeOf = PALETTE.map((e) => PALETTE.findIndex((o) => o.name === SHADE[e.name]));
+  private readonly scratch: CanvasRenderingContext2D;
+  private readonly ox: number;
+  private readonly oy: number;
+
+  constructor(cam: { x: number; y: number }) {
+    const c = document.createElement("canvas");
+    c.width = this.w;
+    c.height = this.h;
+    this.scratch = c.getContext("2d", { willReadFrequently: true })!;
+    // The renderer's camera: snapped to whole view pixels.
+    this.ox = this.w / 2 - Math.round(cam.x * ZOOM);
+    this.oy = this.h / 2 - Math.round(cam.y * ZOOM);
+  }
+
+  /** World to view pixels. */
+  px(x: number, y: number): [number, number] {
+    return [x * ZOOM + this.ox, y * ZOOM + this.oy];
+  }
+
+  /** The hard mask of what `draw` paints in world coordinates: alpha >= 128, no in-between. */
+  mask(draw: (g: CanvasRenderingContext2D) => void): Mask {
+    const g = this.scratch;
+    g.setTransform(1, 0, 0, 1, 0, 0);
+    g.clearRect(0, 0, this.w, this.h);
+    g.save();
+    g.setTransform(ZOOM, 0, 0, ZOOM, this.ox, this.oy);
+    g.fillStyle = g.strokeStyle = "#fff";
+    g.lineJoin = "round";
+    g.lineCap = "butt";
+    draw(g);
+    g.restore();
+    const a = g.getImageData(0, 0, this.w, this.h).data;
+    const m = new Uint8Array(this.w * this.h);
+    for (let i = 0; i < m.length; i++) m[i] = a[i * 4 + 3] >= 128 ? 1 : 0;
+    return m;
+  }
+
+  fill(m: Mask | null, fill: Fill): void {
+    const flat = typeof fill === "string" ? this.at.get(fill)! : -1;
+    for (let y = 0, i = 0; y < this.h; y++) {
+      for (let x = 0; x < this.w; x++, i++) {
+        if (m && !m[i]) continue;
+        this.idx[i] = flat >= 0 ? flat : this.at.get((fill as (x: number, y: number) => PaletteName)(x, y))!;
+      }
+    }
+  }
+
+  /** One pixel. */
+  put(i: number, color: PaletteName): void {
+    this.idx[i] = this.at.get(color)!;
+  }
+
+  /** A cast shadow: whatever lies under the mask, one SHADE step down. */
+  shade(m: Mask): void {
+    for (let i = 0; i < m.length; i++) if (m[i] && this.idx[i] < this.shadeOf.length) this.idx[i] = this.shadeOf[this.idx[i]];
+  }
+
+  /** The mask moved by (dx, dy) view pixels. */
+  shift(m: Mask, dx: number, dy: number): Mask {
+    const out = new Uint8Array(m.length);
+    for (let y = 0; y < this.h; y++) {
+      const sy = y - dy;
+      if (sy < 0 || sy >= this.h) continue;
+      for (let x = 0; x < this.w; x++) {
+        const sx = x - dx;
+        if (sx >= 0 && sx < this.w) out[y * this.w + x] = m[sy * this.w + sx];
+      }
+    }
+    return out;
+  }
+
+  /** a and not b. */
+  minus(a: Mask, b: Mask): Mask {
+    return a.map((v, i) => (v && !b[i] ? 1 : 0));
+  }
+
+  /** The 1 px edges of a shape: sunlit up-left, dark down-right. */
+  bevel(m: Mask, lit: PaletteName | null, dark: PaletteName | null): void {
+    const w = this.w, h = this.h;
+    const on = (x: number, y: number) => x >= 0 && y >= 0 && x < w && y < h && m[y * w + x] === 1;
+    const litI = lit ? this.at.get(lit)! : -1, darkI = dark ? this.at.get(dark)! : -1;
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        if (!m[y * w + x]) continue;
+        if (litI >= 0 && (!on(x - 1, y) || !on(x, y - 1))) this.idx[y * w + x] = litI;
+        else if (darkI >= 0 && (!on(x + 1, y) || !on(x, y + 1))) this.idx[y * w + x] = darkI;
+      }
+    }
+  }
+
+  /** A shape with the sun on it: its cast shadow, the colour, the two edges. */
+  solid(m: Mask, color: PaletteName, drop = 2): void {
+    if (drop) this.shade(this.minus(this.shift(m, drop, drop + 1), m));
+    this.fill(m, color);
+    this.bevel(m, LIT[color], SHADE[color]);
+  }
+
+  /** Hard pixels of any colour (a car), top-left at view pixel (x, y). */
+  stamp(px: (string | null)[][], x: number, y: number): void {
+    px.forEach((line, j) =>
+      line.forEach((c, i) => {
+        const u = x + i, v = y + j;
+        if (!c || u < 0 || v < 0 || u >= this.w || v >= this.h) return;
+        let k = this.colors.indexOf(c);
+        if (k < 0) k = this.colors.push(c) - 1;
+        this.idx[v * this.w + u] = k;
+      }),
+    );
+  }
+
+  /** The baked pixels. */
+  image(): ImageData {
+    const img = new ImageData(this.w, this.h);
+    const out = new Uint32Array(img.data.buffer);
+    const table = this.colors.map((hex) => {
+      const [r, g, b] = rgbOf(hex);
+      return (0xff000000 | (b << 16) | (g << 8) | r) >>> 0;
+    });
+    for (let i = 0; i < out.length; i++) out[i] = table[this.idx[i]];
+    return img;
+  }
+}
+
+/** The mock's world: the same camera and cars for the baked and the "today" view. */
+function showMock(canvas: HTMLCanvasElement, today: boolean): void {
+  const track = mockTrack();
+  canvas.width = VIEW_W;
+  canvas.height = VIEW_H;
+  document.getElementById("sound")?.classList.add("hidden"); // the game's sound button: not part of the picture
+  const cars = MOCK_CARS.map(([color, x, lane]) => ({ color: CAR_COLORS[color], ...mockCarPose(track, x, lane) }));
+  if (today) {
+    const r = new Renderer(canvas, track);
+    r.follow(MOCK_CAM.x, MOCK_CAM.y, 16, true);
+    const view = cars.map((c, i): CarView => ({ id: `m${i}`, x: c.x, y: c.y, h: 0, color: c.color, name: "", me: true, wreck: false, ghost: false }));
+    r.frame(view, NO_FX, null, 0);
+    return;
+  }
+  const b = bakeMock(track, cars);
+  const g = canvas.getContext("2d")!;
+  g.setTransform(1, 0, 0, 1, 0, 0);
+  g.putImageData(b.image(), 0, 0);
+  // Proof for the report: read the canvas back and count the pixels that are not one of the
+  // 32 (the two cars' own tones are counted apart).
+  const data = new Uint32Array(g.getImageData(0, 0, VIEW_W, VIEW_H).data.buffer);
+  const world = new Set(PALETTE.map((e) => rgbOf(e.hex)).map(([r, gg, bb]) => (0xff000000 | (bb << 16) | (gg << 8) | r) >>> 0));
+  const carTone = new Set(b.colors.slice(PALETTE.length).map((hex) => rgbOf(hex)).map(([r, gg, bb]) => (0xff000000 | (bb << 16) | (gg << 8) | r) >>> 0));
+  let offPalette = 0, carPixelCount = 0;
+  const used = new Set<number>();
+  for (const v of data) {
+    if (world.has(v)) used.add(v);
+    else if (carTone.has(v)) carPixelCount++;
+    else offPalette++;
+  }
+  (window as unknown as { scrapMock: unknown }).scrapMock = { pixels: data.length, offPalette, paletteColoursUsed: used.size, carPixels: carPixelCount };
+}
+
+function bakeMock(track: Track, cars: { color: string; x: number; y: number }[]): Bake {
+  const b = new Bake(MOCK_CAM);
+  const gap = track.gaps[0], ramp = track.ramps[0], hole = track.holes[0];
+  const L = track.length;
+  const wall = track.wall, hw = track.def.halfWidth;
+  const R = wall + 7; // outside of the barrier
+  const offset = (s: number, lat: number) => {
+    const p = pointAt(track, s);
+    return { x: p.x - Math.sin(p.h) * lat, y: p.y + Math.cos(p.h) * lat };
+  };
+  // The ground from the gap's end round to its start, as one open centreline (butt caps).
+  const line = new Path2D();
+  for (let s = gap.s1; s <= gap.s0 + L; s += 6) {
+    const p = pointAt(track, Math.min(s, gap.s0 + L));
+    if (s === gap.s1) line.moveTo(p.x, p.y);
+    else line.lineTo(p.x, p.y);
+  }
+  const end = pointAt(track, gap.s0);
+  line.lineTo(end.x, end.y);
+  const band = (s0: number, s1: number, a: number, c: number) => {
+    const path = new Path2D();
+    const ss: number[] = [];
+    for (let s = s0; s < s1; s += 6) ss.push(s);
+    ss.push(s1);
+    ss.forEach((s, i) => {
+      const q = offset(s, a);
+      if (i) path.lineTo(q.x, q.y);
+      else path.moveTo(q.x, q.y);
+    });
+    for (let i = ss.length - 1; i >= 0; i--) {
+      const q = offset(ss[i], c);
+      path.lineTo(q.x, q.y);
+    }
+    path.closePath();
+    return path;
+  };
+  const stroke = (half: number, dash: number[] = []) =>
+    b.mask((g) => {
+      g.lineWidth = half * 2;
+      g.setLineDash(dash);
+      g.stroke(line);
+    });
+  const area = (path: Path2D) => b.mask((g) => g.fill(path));
+  /** Diagonal stripes inside `clip`, in the frame at (x, y, h): the mask of every second one. */
+  const stripes = (clip: Path2D, at: { x: number; y: number; h: number }, reach: number, w: number) =>
+    b.mask((g) => {
+      g.clip(clip);
+      g.translate(at.x, at.y);
+      g.rotate(at.h);
+      for (let u = -reach * 3 - w; u < reach; u += w * 2) {
+        g.beginPath();
+        g.moveTo(u, -reach);
+        g.lineTo(u + w, -reach);
+        g.lineTo(u + w + reach * 2, reach);
+        g.lineTo(u + reach * 2, reach);
+        g.closePath();
+        g.fill();
+      }
+    });
+
+  // 1. Dirt: specks as today, their density drifting in large patches so no tile repeats.
+  b.fill(null, (x, y) => {
+    const patch = vnoise(x / 46, y / 46, 11);
+    const h = hash(x, y, 1);
+    if (hash(x >> 1, y >> 1, 5) < 0.006) return "gravel0"; // a pebble
+    if (h < 0.03 + 0.07 * patch) return "dirt3";
+    if (h > 0.97 - 0.09 * (1 - patch)) return "dirt1";
+    return "dirt2";
+  });
+
+  // 2. Junk in small heaps outside the walls: two tones, a lit edge, a hard shadow.
+  const rnd = mulberry(23);
+  const paints: PaletteName[] = ["rust1", "rust2", "rust0", "haz0", "steel1", "rust1", "steel2"];
+  const junk: { kind: string; x: number; y: number; r: number; a: number; c: PaletteName }[] = [];
+  for (let tries = 0; junk.length < 26 && tries < 400; tries++) {
+    const hx = MOCK_CAM.x + (rnd() - 0.5) * 860, hy = MOCK_CAM.y + (rnd() - 0.5) * 500;
+    if (queryTrack(track, hx, hy).dist < R + 40) continue;
+    if (junk.some((d) => Math.hypot(d.x - hx, d.y - hy) < 90)) continue; // heaps stand apart
+    for (let n = 2 + Math.floor(rnd() * 3), k = 0; k < n; k++) {
+      const x = hx + (rnd() - 0.5) * 52, y = hy + (rnd() - 0.5) * 40;
+      if (queryTrack(track, x, y).dist < R + 16) continue;
+      const pick = rnd();
+      const kind = pick < 0.36 ? "cube" : pick < 0.56 ? "drum" : pick < 0.74 ? "tyres" : pick < 0.84 ? "plate" : pick < 0.93 ? "pallet" : "engine";
+      junk.push({ kind, x, y, r: 9 + rnd() * 8, a: rnd() * Math.PI, c: paints[Math.floor(rnd() * paints.length)] });
+    }
+  }
+  junk.sort((p, q) => p.y - q.y);
+  for (const d of junk) {
+    const turned = (g: CanvasRenderingContext2D) => {
+      g.translate(d.x, d.y);
+      g.rotate(d.a);
+    };
+    const disc = (x: number, y: number, r: number) => b.mask((g) => g.fill(circlePath(x, y, r)));
+    if (d.kind === "cube" || d.kind === "pallet") {
+      // A crushed cube with two straps; a pallet is wood with three slats.
+      const pallet = d.kind === "pallet";
+      const w = pallet ? d.r * 1.6 : d.r * 2, h = pallet ? d.r * 1.6 : d.r * 1.4;
+      const c: PaletteName = pallet ? "gravel1" : d.c;
+      b.solid(b.mask((g) => { turned(g); g.fillRect(-w / 2, -h / 2, w, h); }), c, 3);
+      b.fill(b.mask((g) => {
+        turned(g);
+        for (const k of pallet ? [-0.3, 0, 0.3] : [-0.17, 0.2]) g.fillRect(-w / 2 + 1.5, k * h - 1.25, w - 3, 2.5);
+      }), SHADE[c]);
+    } else if (d.kind === "drum") {
+      // A drum on its end: the rim is the bevel, inside it a darker ring.
+      b.solid(disc(d.x, d.y, d.r * 0.66), d.c, 3);
+      b.fill(b.mask((g) => { g.lineWidth = 2; g.stroke(circlePath(d.x, d.y, d.r * 0.36)); }), SHADE[d.c]);
+    } else if (d.kind === "tyres") {
+      for (let i = 0; i < 3; i++) {
+        const x = d.x + Math.cos(d.a + i * 2.1) * d.r * 0.5, y = d.y + Math.sin(d.a + i * 2.1) * d.r * 0.5;
+        b.solid(disc(x, y, 7), "soot2", 3);
+        b.fill(disc(x, y, 3.4), "tar2");
+      }
+    } else if (d.kind === "plate") {
+      // A bent plate with its crease catching the sun.
+      const w = d.r * 1.3, h = d.r * 0.8;
+      b.solid(b.mask((g) => {
+        turned(g);
+        g.beginPath();
+        g.moveTo(-w, -h * 0.6);
+        g.lineTo(w * 0.8, -h);
+        g.lineTo(w, h * 0.5);
+        g.lineTo(-w * 0.7, h);
+        g.closePath();
+        g.fill();
+      }), d.c, 3);
+      b.fill(b.mask((g) => { turned(g); g.rotate(-0.08); g.fillRect(-w * 0.8, -h * 0.2, w * 1.6, 1.8); }), LIT[d.c]);
+    } else {
+      // An engine block: steel, a lighter head, three bores.
+      const w = d.r * 1.7, h = d.r * 1.1;
+      b.solid(b.mask((g) => { turned(g); g.fillRect(-w / 2, -h / 2, w, h); }), "steel1", 3);
+      b.fill(b.mask((g) => { turned(g); g.fillRect(-w / 2 + 1.5, -h / 2 + 1.5, w - 3, h * 0.36); }), "steel2");
+      b.fill(b.mask((g) => { turned(g); for (const k of [-0.3, 0, 0.3]) g.fill(circlePath(k * w, h * 0.18, 2.2)); }), "soot2");
+    }
+  }
+
+  // 3. Gravel thrown over the wall: a ragged fringe, thinning out, instead of a ruled edge.
+  const fringe = [b.minus(stroke(R + 5), stroke(R)), b.minus(stroke(R + 12), stroke(R + 5))];
+  fringe.forEach((m, k) => {
+    for (let y = 0, i = 0; y < b.h; y++) {
+      for (let x = 0; x < b.w; x++, i++) {
+        if (m[i] && hash(x, y, 31) < (k ? 0.14 : 0.42)) b.put(i, hash(x, y, 32) < 0.5 ? "gravel0" : "gravel1");
+      }
+    }
+  });
+
+  // 4. The chasm: dark, its earth walls in steps; the walls that face the sun one step lighter.
+  const voidPath = band(gap.s0, gap.s1, -R, R);
+  const voidMask = area(voidPath);
+  b.fill(voidMask, (x, y) => (hash(x, y, 4) < 0.07 ? "soot0" : hash(x, y, 6) < 0.04 ? "soot2" : "soot1"));
+  const wallBand = (width: number) => b.mask((g) => { g.clip(voidPath); g.lineWidth = width * 2; g.stroke(voidPath); });
+  const inVoid = (x: number, y: number) => x >= 0 && y >= 0 && x < b.w && y < b.h && voidMask[y * b.w + x] === 1;
+  // From the dark inward step out to the rim: each band is drawn over the one before it.
+  [30, 21, 13, 6].forEach((width, k) => {
+    const reach = Math.ceil(width * ZOOM);
+    b.fill(wallBand(width), (x, y) => {
+      // A wall on the sun's side of the hole faces away from the sun: a step darker.
+      const away = !inVoid(x - reach, y - reach);
+      if (k === 0) return BAYER4[y & 3][x & 3] < 8 ? "soot1" : away ? "soot0" : "soot2";
+      return (away ? (["soot1", "soot2", "soot3"] as const) : (["soot2", "soot3", "dirt0"] as const))[k - 1];
+    });
+  });
+
+  // 5-7. Verge, kerbs, tarmac: one stroke each, the road worn along the racing line.
+  b.fill(stroke(wall), (x, y) => {
+    const h = hash(x, y, 2);
+    return h < 0.075 ? "gravel2" : h > 0.935 ? "gravel0" : h > 0.925 ? "bone0" : "gravel1";
+  });
+  b.fill(stroke(hw + 5), "bone1");
+  b.fill(stroke(hw + 5, [22, 22]), "rust2");
+  const tarmac = stroke(hw);
+  const groove = b.mask((g) => {
+    // The racing line: where the cars run, more rubber and oil.
+    g.lineWidth = 34;
+    g.beginPath();
+    for (let s = gap.s1; s <= gap.s0 + L; s += 8) {
+      const q = offset(s, 16 * Math.sin(s / 260));
+      if (s === gap.s1) g.moveTo(q.x, q.y);
+      else g.lineTo(q.x, q.y);
+    }
+    g.stroke();
+  });
+  const patch = area(band(1040, 1110, 8, 52)); // a repair: a lighter mix, a dark joint round it
+  b.fill(tarmac, (x, y) => {
+    const i = y * b.w + x, h = hash(x, y, 3);
+    if (patch[i]) return h < 0.3 ? "tar2" : h > 0.97 ? "tar0" : "tar1";
+    const dark = groove[i] ? 0.3 : 0.05;
+    return h < dark ? "tar0" : h > (groove[i] ? 0.985 : 0.93) ? "tar2" : "tar1";
+  });
+  b.bevel(patch, null, "tar0");
+  b.fill(b.mask((g) => { g.lineWidth = 2.5; g.setLineDash([18, 26]); g.stroke(line); }), "tar3");
+  // Two oil stains near the pit.
+  for (const [s, lat, r] of [[905, 22, 15], [1085, -40, 11]]) {
+    const o = offset(s, lat), [ox, oy] = b.px(o.x, o.y);
+    b.fill(tarmac, (x, y) => {
+      const d = Math.hypot(x - ox, (y - oy) * 1.5) / (r * ZOOM * (0.55 + 0.6 * vnoise(x / 5, y / 5, 9)));
+      const now = PALETTE[b.idx[y * b.w + x]].name;
+      return d < 0.6 ? "tar0" : d < 1 && hash(x, y, 8) < 0.5 ? "tar0" : now;
+    });
+  }
+
+  // 8. The pit: a jagged rim, cracks, and the far wall in the sun; the dark dithers down.
+  {
+    const rr = mulberry(211);
+    const rim = new Path2D();
+    for (let k = 0; k < 15; k++) {
+      const a = (k / 15) * Math.PI * 2, r = hole.r * (1.1 + rr() * 0.16);
+      if (k) rim.lineTo(hole.x + Math.cos(a) * r, hole.y + Math.sin(a) * r);
+      else rim.moveTo(hole.x + Math.cos(a) * r, hole.y + Math.sin(a) * r);
+    }
+    rim.closePath();
+    b.fill(b.mask((g) => {
+      g.lineWidth = 2;
+      g.beginPath();
+      for (let k = 0; k < 4; k++) {
+        const a = rr() * Math.PI * 2;
+        let x = hole.x + Math.cos(a) * hole.r * 1.12, y = hole.y + Math.sin(a) * hole.r * 1.12;
+        g.moveTo(x, y);
+        for (let j = 0; j < 3; j++) {
+          const c = a + (rr() - 0.5) * 1.1, step = hole.r * (0.18 + rr() * 0.22);
+          x += Math.cos(c) * step;
+          y += Math.sin(c) * step;
+          g.lineTo(x, y);
+        }
+      }
+      g.stroke();
+    }), "soot2");
+    const rimMask = area(rim);
+    b.fill(rimMask, "soot3");
+    b.bevel(rimMask, "tar3", null); // the broken edge catches the light
+    const [hx, hy] = b.px(hole.x, hole.y), r = hole.r * ZOOM;
+    b.fill(area(circlePath(hole.x, hole.y, hole.r)), (x, y) => {
+      // The pit's floor sits up-left of its mouth: what shows down-right is the lit far wall.
+      const d = Math.hypot(x + 0.5 - (hx - r * 0.2), y + 0.5 - (hy - r * 0.25)) / r;
+      const t = BAYER4[y & 3][x & 3] / 16;
+      if (d > 1) return "dirt0";
+      if (d > 0.8) return (d - 0.8) / 0.2 > t ? "soot3" : "soot2";
+      if (d > 0.45) return (d - 0.45) / 0.35 > t ? "soot2" : "soot1";
+      return d / 0.45 > t ? "soot1" : "soot0";
+    });
+  }
+
+  // 9. The chasm's ends on the road: the drop, hazard stripes, the broken edge.
+  for (const [s, dir] of [[gap.s0, 1], [gap.s1, -1]]) {
+    const lo = (p: number, q: number) => Math.min(p, q), hi = (p: number, q: number) => Math.max(p, q);
+    b.shade(area(band(lo(s, s + dir * 10), hi(s, s + dir * 10), -wall, wall)));
+    const hz = band(lo(s, s - dir * 7), hi(s, s - dir * 7), -(hw + 5), hw + 5);
+    b.fill(area(hz), "haz1");
+    b.fill(stripes(hz, pointAt(track, s - dir * 3.5), hw + 14, 5), "soot2");
+    b.fill(area(band(lo(s, s - dir * 2), hi(s, s - dir * 2), -wall, wall)), "gravel2");
+  }
+
+  // 10. The ramp: a striped plate rising to the lip (dark at the foot, light at the top, by
+  // dither), three chevrons, the hazard lip, and its shadow on what lies beyond.
+  {
+    const W = wall - 1, top = ramp.s + ramp.len;
+    const plate = band(ramp.s, top, -W, W);
+    const mid = pointAt(track, ramp.s + ramp.len / 2);
+    b.shade(area(band(top, top + 9, -W + 4, W + 4)));
+    const plateMask = area(plate), striped = stripes(plate, mid, ramp.len / 2 + wall + 4, 6);
+    const [ax, ay] = b.px(pointAt(track, ramp.s).x, pointAt(track, ramp.s).y);
+    const [bx, by] = b.px(pointAt(track, top).x, pointAt(track, top).y);
+    const len2 = (bx - ax) ** 2 + (by - ay) ** 2;
+    b.fill(plateMask, (x, y) => {
+      const base: PaletteName = striped[y * b.w + x] ? "rust2" : "steel2";
+      const t = Math.max(0, Math.min(1, ((x - ax) * (bx - ax) + (y - ay) * (by - ay)) / len2));
+      const seam = (x + y) & 1;
+      if (t < 0.34) return t > 0.31 && seam ? base : SHADE[base];
+      if (t > 0.67) return t < 0.7 && seam ? base : LIT[base];
+      return base;
+    });
+    const chevrons = (width: number) =>
+      b.mask((g) => {
+        g.clip(plate);
+        g.translate(mid.x, mid.y);
+        g.rotate(mid.h);
+        g.lineJoin = "miter";
+        g.lineWidth = width;
+        const d = Math.min(9, ramp.len * 0.18);
+        for (const lat of [-W * 0.58, 0, W * 0.58]) {
+          g.beginPath();
+          g.moveTo(-d, lat - d * 1.3);
+          g.lineTo(d, lat);
+          g.lineTo(-d, lat + d * 1.3);
+          g.stroke();
+        }
+      });
+    b.fill(chevrons(6), "soot2");
+    b.fill(chevrons(3), "bone1");
+    b.fill(b.mask((g) => { g.lineWidth = 2; g.stroke(plate); }), "soot2");
+    b.fill(area(band(top - 3.5, top, -W, W)), "haz1");
+  }
+
+  // 11. The barrier last: its shadow on the ground both sides, the rail with a lit top
+  // edge, a post every 60 units.
+  const barrier = b.minus(stroke(R), stroke(wall));
+  b.shade(b.minus(b.shift(barrier, 3, 4), barrier));
+  b.fill(barrier, "steel0");
+  const rail = b.minus(stroke(wall + 4.6), stroke(wall + 1.8));
+  b.fill(rail, "steel2");
+  b.bevel(rail, "steel3", null);
+  for (let s = gap.s1 + 30; s < gap.s0 + L; s += 60) {
+    for (const side of [-1, 1]) {
+      const q = offset(s, side * (wall + 3.2));
+      const [qx, qy] = b.px(q.x, q.y);
+      const x = Math.round(qx) - 1, y = Math.round(qy) - 1;
+      if (x < 1 || y < 1 || x > b.w - 4 || y > b.h - 4) continue;
+      const post = new Uint8Array(b.w * b.h);
+      for (let j = 0; j < 3; j++) for (let i = 0; i < 3; i++) post[(y + j) * b.w + x + i] = 1;
+      b.shade(b.minus(b.shift(post, 2, 2), post));
+      b.fill(post, "steel1");
+      b.bevel(post, "steel3", "steel0");
+    }
+  }
+
+  // 12. Two cars, to judge the car tones on the baked road (hard silhouette shadows).
+  for (const c of cars) {
+    const [cx, cy] = b.px(c.x, c.y);
+    const x = Math.round(cx) - CAR_W / 2, y = Math.round(cy) - Math.floor(CAR_H / 2);
+    const px = carPixels(c.color);
+    const body = new Uint8Array(b.w * b.h);
+    px.forEach((row, j) => row.forEach((v, i) => {
+      if (v && y + j >= 0 && y + j < b.h && x + i >= 0 && x + i < b.w) body[(y + j) * b.w + x + i] = 1;
+    }));
+    b.shade(b.minus(b.shift(body, 2, 3), body));
+    b.stamp(px, x, y);
+  }
+  return b;
+}
+
+function circlePath(x: number, y: number, r: number): Path2D {
+  const p = new Path2D();
+  p.arc(x, y, r, 0, Math.PI * 2);
+  return p;
+}
+
+function mulberry(seed: number): () => number {
+  return () => {
+    seed |= 0;
+    seed = (seed + 0x6d2b79f5) | 0;
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
 }
