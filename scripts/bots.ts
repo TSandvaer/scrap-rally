@@ -382,6 +382,7 @@ async function run(ctx: Ctx, bots: Bot[]): Promise<void> {
   await runOverpass(ctx, bots);
   await runChat(ctx, bots);
   await runMenu(ctx, bots);
+  await runRetire(ctx, bots);
 }
 
 const lost = new Map<string, (ConnReason | undefined)[]>();
@@ -1309,5 +1310,91 @@ async function runMenu(ctx: Ctx, bots: Bot[]): Promise<void> {
     );
   } finally {
     for (const b of [S, T, U]) b.game.leave();
+  }
+}
+
+// ---- in-game menu: retire to garage (MENU-2, PLAN-MENU.md) -----------------------------
+
+/**
+ * Retire over real sockets: a bot retires mid-race. Its car leaves everyone's snapshots and
+ * never comes back to its own prediction, it buys in the garage during the race, the race ends
+ * as soon as the two bots still racing have finished (no 30 s grace waiting on it), the
+ * results show it as DNF, and it is on the grid again in the next race.
+ */
+async function runRetire(ctx: Ctx, bots: Bot[]): Promise<void> {
+  const W = new Bot("Whiskey", ctx.url, -20);
+  const X = new Bot("Xray", ctx.url, 20, { lag: 80, jitter: 10 });
+  const Y = new Bot("Yankee", ctx.url, 0);
+  bots.push(W, X, Y);
+  for (const b of [W, X, Y]) b.weapons = false;
+  try {
+    W.game.create(W.name);
+    await waitFor("W welcome", () => !!W.game.you, 3000);
+    const code = W.game.code;
+    X.game.join(code, X.name);
+    Y.game.join(code, Y.name);
+    await waitFor("X and Y in W's room", () => W.game.players.length === 3 && !!X.game.you && !!Y.game.you, 3000);
+    await readyUp("retire", W, [W, X, Y]);
+    W.game.start();
+    await waitFor("retire: racing", () => [W, X, Y].every((b) => b.game.phase === "racing" && !!b.game.car), 6000);
+    await sleep(2500);
+    const yId = Y.game.you;
+    const rd = Y.game.ownSnap()?.rd ?? 0;
+    // From the room message that says we retired: no predicted car, and no own car in any
+    // snapshot newer than that message (the one already in hand may still show it).
+    let carBack = false;
+    let snapBack = false;
+    let retiredTick = -1;
+    Y.afterStep = () => {
+      if (retiredTick < 0 && Y.game.retired()) retiredTick = Y.game.snapTick;
+      if (retiredTick < 0) return;
+      if (Y.game.car) carBack = true;
+      if (Y.game.snapTick > retiredTick && Y.game.ownSnap()) snapBack = true;
+    };
+    Y.game.retire();
+    await waitFor("retire: everyone sees Y retired", () => [W, X, Y].every((b) => b.game.player(yId)?.retired === true), 3000);
+    await sleep(600);
+    const gone = [W, X].every((b) => !b.game.latest?.cars.has(yId));
+    check(
+      "retire over sockets: the bot's car leaves every snapshot at once and never returns to its own prediction; the others race on",
+      rd > 100 && retiredTick >= 0 && Y.game.snapTick > retiredTick && !carBack && !snapBack && !Y.game.car && gone &&
+        W.game.phase === "racing" && !!W.game.car && !!X.game.car && Y.errors.length === 0,
+      `rd ${rd.toFixed(0)} at the retire; predicted car back ${carBack}, own car in a later snapshot ${snapBack}; errors ${Y.errors.join("; ") || "-"}`,
+    );
+    const scrap0 = Y.game.scrap;
+    Y.game.buy("rivets");
+    await waitFor("retire: garage", () => Y.game.scrap === scrap0 - AMMO.rivets.price, 3000);
+    await sleep(200);
+    check(
+      "retire over sockets: the retired bot buys in the garage during the race",
+      Y.game.scrap === scrap0 - AMMO.rivets.price && Y.game.serverAmmo[0] === AMMO.rivets.pack && Y.game.phase === "racing" && Y.errors.length === 0,
+      `scrap ${scrap0} -> ${Y.game.scrap}, rivets ${Y.game.serverAmmo[0]}, errors ${Y.errors.join("; ") || "-"}`,
+    );
+    const finished = () => [W, X].every((b) => W.game.latest?.cars.get(b.game.you)?.fin);
+    await waitFor("retire: W and X finish", finished, 150_000);
+    const finishedAt = performance.now();
+    await waitFor("retire: results", () => W.results !== null && Y.results !== null, 5000);
+    const after = performance.now() - finishedAt;
+    const rows = Y.results ?? [];
+    check(
+      "retire over sockets: the race ends when the bots still racing have finished (no grace wait on the retired bot); its results show it DNF",
+      finished() && after < 3000 && rows.length === 3 && rows[2].id === yId && rows[2].timeMs === 0 && rows.slice(0, 2).every((r) => r.timeMs > 0),
+      `results ${after.toFixed(0)} ms after the last finish: ${rows.map((r) => `${r.name} ${r.timeMs ? (r.timeMs / 1000).toFixed(2) : "DNF"}`).join(", ")}`,
+    );
+    await waitFor("retire: lobby", () => [W, X, Y].every((b) => b.game.phase === "lobby"), RESULTS_MS + 3000);
+    const cleared = [W, X, Y].every((b) => b.game.player(yId)?.retired === false);
+    Y.afterStep = null;
+    await readyUp("retire 2", W, [W, X, Y]);
+    W.game.start();
+    await waitFor("retire 2: Y on the grid", () => W.game.phase === "countdown" && !!Y.game.car, 3000);
+    check(
+      "retire over sockets: back in the lobby the flag is clear, and the bot is on the grid for the next race",
+      cleared && W.game.phase === "countdown" && !!Y.game.car && W.game.latest?.cars.has(yId) === true,
+      `cleared ${cleared}, ${W.game.phase}, car ${!!Y.game.car}`,
+    );
+    W.game.stopRace();
+    await waitFor("retire 2: stopped", () => [W, X, Y].every((b) => b.game.phase === "lobby"), 3000);
+  } finally {
+    for (const b of [W, X, Y]) b.game.leave();
   }
 }
