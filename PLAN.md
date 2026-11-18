@@ -123,8 +123,9 @@ shake (150 ms cooldown; replays never fire it). There is no server bump event.
   last and current `s`; the finish line (s = 0) counts a lap only after all three.
 - `lap` = completed laps. Race distance `rd = lap*L + s`, with `s − L` while `cp == 0` and
   `s > L/2` (cars on the grid sit just behind the line).
-- Finish at `LAPS`; the race ends when every racer has finished or `FINISH_GRACE_MS` after
-  the winner → results for `RESULTS_MS` → lobby. A finished car keeps driving.
+- Finish at `LAPS`; the race ends when every racer still on the field has finished (retired
+  players are not waited for) or `FINISH_GRACE_MS` after the winner → results for
+  `RESULTS_MS` → lobby. A finished car keeps driving.
 
 ## Rooms and players
 
@@ -172,8 +173,20 @@ shake (150 ms cooldown; replays never fire it). There is no server bump event.
   the main menu; the chat input and the sound popover take their own Esc first), and so does
   the ☰ button under the speaker (every device, in a room; touch screens have no Esc). While it is
   open the frame loop drives with no controls: the race keeps running and the car coasts.
-  Everyone: Resume, Sound, Controls, Copy invite link, Leave room. Host only (C->S, refused
-  with an `err` from anyone else):
+  Everyone: Resume, Sound, Controls, Copy invite link, Retire to garage, Leave room.
+  - Retire (MENU-2, built 2026-11-18): `{t:"retire"}` from any racer while racing (refused with
+    an `err` in other phases, without a car, after finishing, or twice). The car leaves the
+    field at once (not stepped or solid, no inputs, not in snapshots); the player is DNF but
+    keeps their progress, so `endRace` (rows keyed on progress, not car) writes their row
+    (ranked after the racers who did not finish) and pays their wreck bonus. The race-end check
+    only waits for cars: it ends as soon as everyone left has finished; everyone retired with no
+    finisher → lobby, no results. `PlayerInfo.retired` (reset in clearRace and beginRace, so by
+    the lobby, a stop and a restart). A retired player may `buy` during the race; ammo bought
+    then is added to their start-of-race ammo, so a stop or restart keeps it. The client drops
+    its predicted car on the room message (engine and gravel silent), shows the lobby panel as
+    the garage (shop, docked chat, no start/ready, "You retired — you're in the next race"),
+    and others get a toast and a "retired" pill (lobby list, host's players list).
+  Host only (C->S, refused with an `err` from anyone else):
   - `{t:"stop"}` (countdown/race): back to the lobby as if the race never ran: no results, no
     result line, no scrap, the grid order of the last finished race kept, and every racer's
     ammo restored from a snapshot taken when the race began ("aborted race = never run").
