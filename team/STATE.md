@@ -127,6 +127,8 @@ MENU-2 re-review APPROVE (no findings). Merge waits ONLY for the user's taste ve
 MENU-2 MERGED 2026-11-18 (user: "good"): main 980fa7e (check clean, sim 387/387, bots 90/90, build ok); workers released,
 menu2 workspace + menu2-taste removed (menu1-taste stays: the user's :3004 server runs from it).
 MENU-3 123jpnbf9pj in flight: ctx_719f299ee99f (~/orca/workspaces/scrap-rally/menu3, TSandvaer/menu3, :3006).
+MENU-3 done: 8916137 (sim 420/420, bots 92/92; adds a server-side resume hold, not in the spec; design notes in
+tmp/menu3/MENU-3-report.md); reviewer ctx_97c8c95b896f; FROZEN COPY ~/orca/workspaces/scrap-rally/menu3-taste (8916137) on :3009.
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
 SND-3 done: 47606ac (sim 394/394, bots 90/90); review APPROVE (ctx_1b41cd13cc04; notes: switch-on restores the volume
 remembered at the last switch-off; storage can't tell own from default -> SND-4); FROZEN COPY ~/orca/workspaces/scrap-rally/snd3-taste
