@@ -217,6 +217,10 @@ until that merges, then: merge main + final full gate.
 Margin rule done: 01a9a39 (replay 16/16 agrees with the reviewer's rules.py; control cells; findings fixed; --judge <file>;
 live default gate of main 2a964ca vs gfx-baseline: PASS exit 0, 2 noise OVERs not confirmed). Re-check sent as ctx_fbd30d7d19f8
 (no live benches; --judge only).
+Margin rule re-check APPROVE (gap: 'partial' misses a --viewports cut; gate reports must show 30 A ratios, B 6 cells, construction
+6). MERGED 2026-11-19: main 7641946 (check clean, sim 492/492, bots 95/95, build ok). GFX-0 ticket complete; author released,
+gfx0 workspace + branch removed; reviewer ctx_fbd30d7d19f8 kept (Fable, knows the bench) for GFX-1's review.
+GFX-1 told to merge main + run the FULL default gate (msg_1d2c9db837c0).
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
@@ -274,7 +278,6 @@ Manual Deploy only on the user's go-ahead. The user's own dev server runs on :30
 | Ticket | Dispatch | Workspace | Branch | Port | Started |
 | --- | --- | --- | --- | --- | --- |
 | 123jpnbfb24 GFX-1 | ctx_b5075af01fdf | ~/orca/workspaces/scrap-rally/gfx1 | TSandvaer/gfx1 | 3008 | 2026-11-18 |
-| 123jpnbfb23 GFX-0 safeguards | ctx_38392f0824f9 | ~/orca/workspaces/scrap-rally/gfx0 | TSandvaer/gfx0 | 3006 | 2026-11-18 |
 | 123jpnbfb23 GFX-0 | ctx_27a7a271607b | ~/orca/workspaces/scrap-rally/gfx0 | TSandvaer/gfx0 | 3006 | 2026-11-18 |
 
 ## Queued (milestone 3, PLAN-M3.md; start after solid collisions 123jpnbf6cy and easier-start 123jpnbf3xa merge)
