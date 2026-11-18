@@ -290,31 +290,35 @@ render output, so pixel-diff fixtures are the only regression net).
 
 ## Baseline (GFX-0, measured 2026-11-18)
 
-The numbers every later ticket is measured against, and how to get them again. Page: `client/bench.ts`
-(`?debug=1&bench=1`, its own chunk); runner: `scripts/bench.ts` (`npm run bench`). Measured on the build of commit 9b29be5
-(render.ts as on main at 3c6d247) on an Apple M5 Pro (18 cores), macOS 26.6.2, HeadlessChrome 152 driven by agent-browser
-0.35.1, 5 us timer.
+The numbers every later ticket is measured against, the gate, and how to run both. Page: `client/bench.ts`
+(`?debug=1&bench=1`, its own chunk); runner: `scripts/bench.ts` (`npm run bench`). The tables were measured on the build of
+commit 9b29be5 (render.ts as on main at 3c6d247) on an Apple M5 Pro (18 cores), macOS 26.6.2, HeadlessChrome 152 driven by
+agent-browser 0.35.1, 5 us timer. The gate is the second one: the first (limit = baseline + 2 x spread) let a slowdown of
+0.25 ms per frame through in review, and the user replaced it on 2026-11-18 ("Stricter gate").
 
 ### Running it
 
 ```
-npm run build && npm run bench -- --vs-ref main            # this build against main, runs alternating: the gate
-npm run build && npm run bench                             # one build alone: the tables below (14.5 min here)
-npm run build && npm run bench -- --quick --only S4        # one run, metric A, 1280x720: a look, no verdict
-npm run build && npm run bench -- --pixels --vs-ref main   # pixel diff of the 16 preview scenes against main
+npm run bench -- --vs-ref gfx-baseline     # the gate: this tree against the fixed reference; exit code 1 when OVER
+npm run bench                              # this tree alone: tables like the ones below, no verdict
+npm run bench -- --quick --only S4         # one run, metric A, 1280x720: a look, no verdict
+npm run bench -- --pixels --vs-ref main    # pixel diff of the 16 preview scenes against main
 npm run bench -- --help
 ```
 
-- The runner serves the built `dist/` itself on 127.0.0.1 with cross-origin isolation, which gives the page a 5 us timer
-  (a plain URL target works too, with Chrome's 100 us timer). `--vs-ref <ref>` builds that ref's client in a temp
-  directory; no server of ours has to run.
-- One cell (metric x scene x track) per page load, so no cell warms another's caches; five runs; with a baseline the two
-  builds alternate cell by cell.
+- The runner builds what it measures: the working tree (uncommitted changes included) and the `--vs-ref` commit, each in
+  a temp directory. `dist/` is not used, so a stale one cannot be measured. It serves both builds itself on 127.0.0.1 with
+  cross-origin isolation, which gives the page a 5 us timer. (A built directory or a URL can be given by hand, as the
+  target or with `--vs`; a URL has Chrome's 100 us timer.)
+- One cell (metric x scene x track) per page load, so no cell warms another's caches; five runs; in every run the two
+  builds are loaded one right after the other, alternating which goes first.
+- The browser sessions are named `bench-<pid>-base` and `bench-<pid>-this`, so two runs at once never share a browser.
+  They still disturb each other's timing: do not benchmark while another benchmark or a test run is going on the
+  machine. Sessions, servers and temp builds are closed and removed on every way out: done, failed, Ctrl-C.
 - By hand: `?debug=1&bench=1[&metric=A|B|C][&scene=S3&track=crusher-run]` prints the table on screen and fills
   `window.scrapBench` (without scene and track every cell runs in the one page: a quick look only). `&hold=<frame>` draws
   one frame of a scene and stops.
-- Chrome is started with `--mute-audio`, no background throttling and precise heap sizes; sessions are named
-  `<--session>-base` and `<--session>-this` and are closed at the end.
+- Chrome is started with `--mute-audio`, no background throttling and precise heap sizes.
 
 ### Scenes
 
@@ -333,30 +337,46 @@ including a 12-letter one, one with æøå and one in Cyrillic.
 ### Metrics
 
 - **A (the gate):** every frame of the cell once, synchronously, each followed by a 1x1 `getImageData`, on a canvas
-  created with `willReadFrequently`, after 300 unmeasured warm-up frames on a Renderer of their own. Median, p95, p99 and
-  the count of frames over 4 ms (advisor change 9: p99 and a count replace "S4 max"). It measures main-thread JS plus CPU
-  raster. Each cell also gets a checksum (FNV-1a of every 50th frame's pixels and the last): equal checksums mean the
+  created with `willReadFrequently`. Median, p95, p99 and the count of frames over 4 ms. It measures main-thread JS plus
+  CPU raster. Each cell also gets a checksum (FNV-1a of every 50th frame's pixels and the last): equal checksums mean the
   same picture.
+- **A's warm-up:** 300 unmeasured frames first, on a Renderer of their own. S1 to S3 warm up on their own frames: their
+  steady state is what they measure. S4 and S5 warm up on their first second only, looped. So the lap ahead, the
+  recovery point and the places the leaders are get drawn for the first time in the measured run, also by a renderer that
+  keeps baked ground between Renderers (advisor change 5) or bakes a destination ahead of a recovery or a leader change
+  (advisor change 4): the warm-up shows it neither.
 - **G (informational):** the same on a canvas pinned to the GPU (`willReadFrequently: false`): JS, GPU raster and the
   read-back. Closer to what a player's browser does, but noisier; watch S4 and S5 here for the cost of uploading freshly
   baked tiles, which A cannot see.
-- **B:** 600 `requestAnimationFrame` frames of S4 on a default canvas with no read-back, after 60 warm-up frames, starting
-  at s = 0 / 3000 / 4500 (Rust Bowl / Crusher Run / Overpass Knot) so that they cross the track's features. The interval
-  between frames: median, p95 and the count over 20 ms; and how long the `frame()` call took. In its own page loads.
-  `--b-scene S1 --panel lobby` plays S1 under the lobby panel (GFX-3's check).
+- **B:** 600 `requestAnimationFrame` frames of S4 on a default canvas with no read-back, starting at s = 0 / 3000 / 4500
+  (Rust Bowl / Crusher Run / Overpass Knot) so that they cross the track's features, after the 60 frames that lead up to
+  them. The interval between frames: median, p95 and the count over 20 ms; and how long the `frame()` call took. In its
+  own page loads. `--b-scene S1 --panel lobby` plays S1 under the lobby panel (GFX-3's check).
 - **C (informational):** S3, 600 frames: the sum of the per-frame increases of `usedJSHeapSize`, less what reading it
   costs. Bytes allocated per frame by `Renderer.frame()`; the scene's own objects are built beforehand.
 
-### The budget rule
+### The gate
 
-Baseline = the median of the five runs. Spread (the ± column) = max - min of the five runs; for a time it counts as at
-least 1% of the baseline. **Limit = baseline + 2 x spread.** A build passes a cell when the median of its own five runs is
-at or below the limit; the runner prints `ok` or `OVER`. Gate on metric A (median, p95, p99, frames over 4 ms) and on
-metric B's count over 20 ms; construction stays "at or below baseline + 50 ms"; G and C are read, not gated.
+User decision 2026-11-18 ("Stricter gate"). It replaces section 4's "Metric A median at or below baseline" and "p95 at or
+below baseline x 1.05", and advisor change 9's "baseline + 2 x the measured spread".
 
-**Gate on a same-session comparison (`--vs-ref main`), not on the numbers printed here.** The machine drifts by more
-than the differences that matter (finding 4); alternating the two builds cell by cell is what cancels it. The tables
-below say what this machine did on one afternoon.
+- **The rule.** Five runs. In every run the baseline and this build are loaded one right after the other for each cell,
+  and the ratio this build / baseline is taken for that run. A value's ratio is the median of its five per-run ratios.
+  **A cell is OVER when the ratio of metric A's median, or of its p95, is above 1.05.**
+- **Information only:** metric A's p99 and its count of frames over 4 ms (in review the count printed OVER for a build
+  that differed by one 2x2 `fillRect`), and metrics G and C.
+- **Kept from section 4, checked by the runner:** metric B's frames over 20 ms at or below the baseline's (0 in headless
+  Chrome); Renderer construction at or below baseline + 50 ms.
+- **The fixed reference.** The baseline of the gate is not main, which moves with every merge, but one commit.
+  `--vs-ref gfx-baseline` reads it from `scripts/gfx-baseline.ref`; the orchestrator writes the hash of the commit that
+  merges GFX-0 into that file, once. Every ticket is measured against that same build, so a ticket's ratios hold
+  everything merged since GFX-0. Slowdowns cannot add up from ticket to ticket: it is their sum that has to stay
+  under 5%, not each step. A comparison with any other ref (`--vs-ref main`) is printed as "NOT the gate".
+- **The verdict** is the runner's "Gate: PASS" or "Gate: FAIL" block and its exit code (1 when anything is OVER). Under
+  five runs it gives none.
+- **`client/bench.ts` belongs to the reference:** the reference build runs its own copy of the page. A later ticket
+  changes the scenes or the timing loop only when the Renderer's interface forces it, keeps the scripted frames the same,
+  and says so in its report.
 
 ### Findings
 
@@ -372,81 +392,102 @@ below say what this machine did on one afternoon.
    `frame()` itself takes 0.10 to 0.16 ms there. It guards against a stall; it cannot rank two smooth builds. The check
    on a real phone (User decisions) is what covers that.
 3. **Metric A does not depend on the window size.** The checksums at 390x844@3 equal those at 1280x720 in all 15 cells,
-   and the baselines differ by -4.8% to +4.2% (medians), which is inside the spread. Both tables are given; gate on
-   either one.
-4. **The noise.** The spread of A's median over five runs is 9.3% of the baseline in the middle cell (1.8% in the best,
-   27.1% in the worst of the 30); 11.6% for p95, 13.1% for p99. It comes in spells of about a minute in which every cell
-   runs 10 to 15% faster or slower. Hypothesis, not verified: other load on the machine's performance cores.
-5. **The rule holds up against itself.** One build as both sides, five alternating runs of metric A at 1280x720: 0 of 60
-   comparisons over the limit. The two sides' medians differed by -3.3% to +13.7% (median -0.5%), so a regression under
-   roughly 10 to 15% of a cell's median can hide in the noise. That second session's medians were -2.7% to +6.5% (median
-   +1.4%) from the first session's.
-6. **A's checksum is a regression net.** All 15 cells gave one checksum over ten loads, and the same again in the second
-   session. A refactor that must not change the picture has to reproduce it (the comparison prints it as "same
-   picture"). G's checksum is not reliable: 1 of its 15 cells gave two values over ten loads.
-7. **Today's renderer allocates** about 9.1, 15.9 and 8.9 kB per frame in S3 (Rust Bowl, Crusher Run, Overpass Knot).
+   and the medians differ by -4.8% to +4.2%, which is inside the spread.
+4. **One build's numbers drift; a pair's ratio much less.** Over five runs of one build the spread of A's median is 9.3%
+   of the median in the middle cell (1.8% in the best, 27.1% in the worst of the 30); 11.6% for p95, 13.1% for p99. It
+   comes in spells of about a minute in which every cell runs 10 to 15% faster or slower. Hypothesis, not verified:
+   other load on the machine's performance cores. That is why the gate compares the two builds load by load instead of
+   against the numbers printed here.
+5. **What the gate lets through and what it stops** (metric A at 1280x720, five alternating runs; 15 cells, so 30 gated
+   ratios a run):
 
-### Metric A at 1280x720 (CPU raster, ms per frame)
+   | Compared | Gated ratios | OVER | Exit code |
+   |---|---|---:|---:|
+   | A copy of the tree with nothing changed, against its commit | 0.963 to 1.035 | 0 of 30 | 0 |
+   | A copy with 0.25 ms more per frame (a busy-wait at the top of `Renderer.frame()`), against its commit | 1.047 to 1.267 | 29 of 30, every cell | 1 |
+   | The first session's same-build run (before this gate), judged by this rule | 0.937 to 1.048 | 0 of 30 | - |
+   | The reviewer's probe data, judged by this rule: +0.25 ms cells | 1.140 to 1.168 | 4 of 4 | - |
+   | The same: +1.0 ms cells | 1.475 to 1.639 | 4 of 4 | - |
+   | The same: cells with one changed pixel and no slowdown | 0.985 to 1.016 | 0 of 4 | - |
 
-| Scene | Track | median | ± | limit | p95 | ± | limit | p99 | ± | limit | >4 ms | ± | limit | checksum |
-|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| S1 | rust-bowl | 1.665 | 0.135 | 1.935 | 1.800 | 0.195 | 2.190 | 1.920 | 0.165 | 2.250 | 0 | 0 | 0 | f8f36adf |
-| S1 | crusher-run | 1.815 | 0.090 | 1.995 | 1.950 | 0.110 | 2.170 | 2.030 | 0.145 | 2.320 | 0 | 0 | 0 | fc0beede |
-| S1 | overpass-knot | 1.700 | 0.140 | 1.980 | 1.940 | 0.180 | 2.300 | 2.010 | 0.200 | 2.410 | 0 | 1 | 2 | c5ffadae |
-| S2 | rust-bowl | 2.030 | 0.550 | 3.130 | 2.275 | 0.520 | 3.315 | 2.380 | 0.490 | 3.360 | 0 | 0 | 0 | 64f99498 |
-| S2 | crusher-run | 2.190 | 0.065 | 2.320 | 2.455 | 0.100 | 2.655 | 2.540 | 0.135 | 2.810 | 0 | 2 | 4 | 2d2279c4 |
-| S2 | overpass-knot | 3.360 | 0.330 | 4.020 | 3.685 | 0.525 | 4.735 | 3.950 | 0.535 | 5.020 | 6 | 50 | 106 | 39cf913d |
-| S3 | rust-bowl | 1.740 | 0.390 | 2.520 | 1.915 | 0.420 | 2.755 | 2.060 | 0.495 | 3.050 | 0 | 0 | 0 | 27a9f7cb |
-| S3 | crusher-run | 3.165 | 0.105 | 3.375 | 3.480 | 0.300 | 4.080 | 3.545 | 0.470 | 4.485 | 2 | 3 | 8 | 5f5a8a58 |
-| S3 | overpass-knot | 1.980 | 0.035 | 2.050 | 2.210 | 0.090 | 2.390 | 2.320 | 0.265 | 2.850 | 0 | 1 | 2 | 7fcdfb9c |
-| S4 | rust-bowl | 1.950 | 0.290 | 2.530 | 2.360 | 0.375 | 3.110 | 2.500 | 0.380 | 3.260 | 0 | 2 | 4 | a5d6f149 |
-| S4 | crusher-run | 1.955 | 0.115 | 2.185 | 2.715 | 0.450 | 3.615 | 3.065 | 0.315 | 3.695 | 1 | 1 | 3 | 2d6db32c |
-| S4 | overpass-knot | 2.145 | 0.100 | 2.345 | 3.235 | 0.310 | 3.855 | 3.475 | 0.845 | 5.165 | 0 | 33 | 66 | 3f8f1545 |
-| S5 | rust-bowl | 1.825 | 0.050 | 1.925 | 2.340 | 0.290 | 2.920 | 2.410 | 0.295 | 3.000 | 0 | 1 | 2 | bcc0ce7c |
-| S5 | crusher-run | 2.065 | 0.185 | 2.435 | 2.695 | 0.475 | 3.645 | 2.865 | 0.440 | 3.745 | 0 | 2 | 4 | ccf31322 |
-| S5 | overpass-knot | 1.965 | 0.165 | 2.295 | 2.280 | 0.190 | 2.660 | 2.445 | 0.160 | 2.765 | 0 | 0 | 0 | 90e674b6 |
+   The first rule had called the reviewer's +0.25 ms cells ok (+15.3% and +13.5% on the medians). The one ratio the new
+   rule did not flag in the +0.25 ms copy is S4 on Overpass Knot's p95, at 1.047; that cell was OVER through its
+   median (1.121).
+6. **With nothing changed, a ratio can come within a hair of the line.** The three sets above without a slowdown are
+   64 ratios from 0.937 to 1.048, and the warm-up check under "The tables" adds 12 more, up to 1.050: no false OVER in
+   76 ratios, but no room either. Single runs' ratios went from 0.851 to 1.213. Another worker's browser sessions were
+   listed on the machine around both probes (right after the second one, a benchmark's pair of sessions). So: a cell
+   that lands just over 1.05 can be noise; run that cell again alone (`--only S4:rust-bowl`) before it is believed, and
+   do not benchmark beside other load.
+7. **A's checksum is a regression net.** All 15 cells gave one checksum over ten loads, the same again in the second
+   session, and the same again after the warm-up of S4 and S5 was changed. A refactor that must not change the picture
+   has to reproduce it (the comparison prints it as "same picture"). G's checksum is not reliable: 1 of its 15 cells gave
+   two values over ten loads.
+8. **Today's renderer allocates** about 9.1, 15.9 and 8.9 kB per frame in S3 (Rust Bowl, Crusher Run, Overpass Knot).
 
-### Metric A at 390x844@3 (CPU raster, ms per frame)
+### The tables
 
-| Scene | Track | median | ± | limit | p95 | ± | limit | p99 | ± | limit | >4 ms | ± | limit | checksum |
-|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| S1 | rust-bowl | 1.735 | 0.295 | 2.325 | 1.920 | 0.240 | 2.400 | 2.030 | 0.215 | 2.460 | 0 | 0 | 0 | f8f36adf |
-| S1 | crusher-run | 1.795 | 0.375 | 2.545 | 2.045 | 0.330 | 2.705 | 2.135 | 0.390 | 2.915 | 0 | 0 | 0 | fc0beede |
-| S1 | overpass-knot | 1.730 | 0.315 | 2.360 | 1.915 | 0.280 | 2.475 | 2.005 | 0.320 | 2.645 | 0 | 1 | 2 | c5ffadae |
-| S2 | rust-bowl | 2.090 | 0.190 | 2.470 | 2.265 | 0.225 | 2.715 | 2.325 | 0.345 | 3.015 | 0 | 0 | 0 | 64f99498 |
-| S2 | crusher-run | 2.145 | 0.145 | 2.435 | 2.425 | 0.125 | 2.675 | 2.530 | 0.155 | 2.840 | 0 | 0 | 0 | 2d2279c4 |
-| S2 | overpass-knot | 3.450 | 0.385 | 4.220 | 3.805 | 0.655 | 5.115 | 4.100 | 0.765 | 5.630 | 13 | 36 | 85 | 39cf913d |
-| S3 | rust-bowl | 1.760 | 0.110 | 1.980 | 2.025 | 0.205 | 2.435 | 2.095 | 0.220 | 2.535 | 0 | 0 | 0 | 27a9f7cb |
-| S3 | crusher-run | 3.125 | 0.330 | 3.785 | 3.475 | 0.160 | 3.795 | 3.620 | 0.225 | 4.070 | 2 | 2 | 6 | 5f5a8a58 |
-| S3 | overpass-knot | 1.885 | 0.260 | 2.405 | 2.175 | 0.280 | 2.735 | 2.255 | 0.295 | 2.845 | 0 | 1 | 2 | 7fcdfb9c |
-| S4 | rust-bowl | 1.940 | 0.205 | 2.350 | 2.230 | 0.050 | 2.330 | 2.330 | 0.100 | 2.530 | 0 | 0 | 0 | a5d6f149 |
-| S4 | crusher-run | 1.940 | 0.230 | 2.400 | 2.695 | 0.305 | 3.305 | 3.290 | 0.640 | 4.570 | 1 | 2 | 5 | 2d6db32c |
-| S4 | overpass-knot | 2.125 | 0.155 | 2.435 | 3.220 | 0.380 | 3.980 | 3.405 | 0.490 | 4.385 | 0 | 3 | 6 | 3f8f1545 |
-| S5 | rust-bowl | 1.840 | 0.175 | 2.190 | 2.240 | 0.145 | 2.530 | 2.380 | 0.115 | 2.610 | 0 | 1 | 2 | bcc0ce7c |
-| S5 | crusher-run | 2.110 | 0.275 | 2.660 | 2.590 | 0.415 | 3.420 | 2.785 | 0.520 | 3.825 | 0 | 0 | 0 | ccf31322 |
-| S5 | overpass-knot | 1.920 | 0.275 | 2.470 | 2.390 | 0.310 | 3.010 | 2.550 | 0.335 | 3.220 | 0 | 1 | 2 | 90e674b6 |
+Median of five runs of one build, and their spread (± = max - min). They say what this machine did on one afternoon; the
+gate does not use them. They were measured before the warm-up of S4 and S5 was changed. The old warm-up against the new
+one on those two scenes (six cells, median and p95): the same checksums, ratios 0.987 to 1.050.
 
-### Metric B (rAF-paced, ms between frames)
+**Metric A at 1280x720 (CPU raster, ms per frame)**
 
-At 1280x720:
+| Scene | Track | median | ± | p95 | ± | p99 | ± | >4 ms | ± | checksum |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| S1 | rust-bowl | 1.665 | 0.135 | 1.800 | 0.195 | 1.920 | 0.165 | 0 | 0 | f8f36adf |
+| S1 | crusher-run | 1.815 | 0.090 | 1.950 | 0.110 | 2.030 | 0.145 | 0 | 0 | fc0beede |
+| S1 | overpass-knot | 1.700 | 0.140 | 1.940 | 0.180 | 2.010 | 0.200 | 0 | 1 | c5ffadae |
+| S2 | rust-bowl | 2.030 | 0.550 | 2.275 | 0.520 | 2.380 | 0.490 | 0 | 0 | 64f99498 |
+| S2 | crusher-run | 2.190 | 0.065 | 2.455 | 0.100 | 2.540 | 0.135 | 0 | 2 | 2d2279c4 |
+| S2 | overpass-knot | 3.360 | 0.330 | 3.685 | 0.525 | 3.950 | 0.535 | 6 | 50 | 39cf913d |
+| S3 | rust-bowl | 1.740 | 0.390 | 1.915 | 0.420 | 2.060 | 0.495 | 0 | 0 | 27a9f7cb |
+| S3 | crusher-run | 3.165 | 0.105 | 3.480 | 0.300 | 3.545 | 0.470 | 2 | 3 | 5f5a8a58 |
+| S3 | overpass-knot | 1.980 | 0.035 | 2.210 | 0.090 | 2.320 | 0.265 | 0 | 1 | 7fcdfb9c |
+| S4 | rust-bowl | 1.950 | 0.290 | 2.360 | 0.375 | 2.500 | 0.380 | 0 | 2 | a5d6f149 |
+| S4 | crusher-run | 1.955 | 0.115 | 2.715 | 0.450 | 3.065 | 0.315 | 1 | 1 | 2d6db32c |
+| S4 | overpass-knot | 2.145 | 0.100 | 3.235 | 0.310 | 3.475 | 0.845 | 0 | 33 | 3f8f1545 |
+| S5 | rust-bowl | 1.825 | 0.050 | 2.340 | 0.290 | 2.410 | 0.295 | 0 | 1 | bcc0ce7c |
+| S5 | crusher-run | 2.065 | 0.185 | 2.695 | 0.475 | 2.865 | 0.440 | 0 | 2 | ccf31322 |
+| S5 | overpass-knot | 1.965 | 0.165 | 2.280 | 0.190 | 2.445 | 0.160 | 0 | 0 | 90e674b6 |
 
-| Scene | Track | median | ± | limit | p95 | ± | limit | >20 ms | ± | limit | frame() median | ± | limit |
-|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| S4 | rust-bowl | 16.665 | 0.167 | 16.998 | 16.670 | 0.167 | 17.003 | 0 | 0 | 0 | 0.110 | 0.025 | 0.160 |
-| S4 | crusher-run | 16.665 | 0.167 | 16.998 | 16.670 | 0.167 | 17.003 | 0 | 0 | 0 | 0.155 | 0.085 | 0.325 |
-| S4 | overpass-knot | 16.665 | 0.167 | 16.998 | 16.670 | 0.167 | 17.003 | 0 | 0 | 0 | 0.130 | 0.030 | 0.190 |
+**Metric A at 390x844@3 (CPU raster, ms per frame)**
 
-At 390x844@3:
+| Scene | Track | median | ± | p95 | ± | p99 | ± | >4 ms | ± | checksum |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| S1 | rust-bowl | 1.735 | 0.295 | 1.920 | 0.240 | 2.030 | 0.215 | 0 | 0 | f8f36adf |
+| S1 | crusher-run | 1.795 | 0.375 | 2.045 | 0.330 | 2.135 | 0.390 | 0 | 0 | fc0beede |
+| S1 | overpass-knot | 1.730 | 0.315 | 1.915 | 0.280 | 2.005 | 0.320 | 0 | 1 | c5ffadae |
+| S2 | rust-bowl | 2.090 | 0.190 | 2.265 | 0.225 | 2.325 | 0.345 | 0 | 0 | 64f99498 |
+| S2 | crusher-run | 2.145 | 0.145 | 2.425 | 0.125 | 2.530 | 0.155 | 0 | 0 | 2d2279c4 |
+| S2 | overpass-knot | 3.450 | 0.385 | 3.805 | 0.655 | 4.100 | 0.765 | 13 | 36 | 39cf913d |
+| S3 | rust-bowl | 1.760 | 0.110 | 2.025 | 0.205 | 2.095 | 0.220 | 0 | 0 | 27a9f7cb |
+| S3 | crusher-run | 3.125 | 0.330 | 3.475 | 0.160 | 3.620 | 0.225 | 2 | 2 | 5f5a8a58 |
+| S3 | overpass-knot | 1.885 | 0.260 | 2.175 | 0.280 | 2.255 | 0.295 | 0 | 1 | 7fcdfb9c |
+| S4 | rust-bowl | 1.940 | 0.205 | 2.230 | 0.050 | 2.330 | 0.100 | 0 | 0 | a5d6f149 |
+| S4 | crusher-run | 1.940 | 0.230 | 2.695 | 0.305 | 3.290 | 0.640 | 1 | 2 | 2d6db32c |
+| S4 | overpass-knot | 2.125 | 0.155 | 3.220 | 0.380 | 3.405 | 0.490 | 0 | 3 | 3f8f1545 |
+| S5 | rust-bowl | 1.840 | 0.175 | 2.240 | 0.145 | 2.380 | 0.115 | 0 | 1 | bcc0ce7c |
+| S5 | crusher-run | 2.110 | 0.275 | 2.590 | 0.415 | 2.785 | 0.520 | 0 | 0 | ccf31322 |
+| S5 | overpass-knot | 1.920 | 0.275 | 2.390 | 0.310 | 2.550 | 0.335 | 0 | 1 | 90e674b6 |
 
-| Scene | Track | median | ± | limit | p95 | ± | limit | >20 ms | ± | limit | frame() median | ± | limit |
-|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| S4 | rust-bowl | 16.665 | 0.167 | 16.998 | 16.670 | 0.167 | 17.003 | 0 | 0 | 0 | 0.105 | 0.020 | 0.145 |
-| S4 | crusher-run | 16.665 | 0.167 | 16.998 | 16.670 | 0.167 | 17.003 | 0 | 0 | 0 | 0.155 | 0.010 | 0.175 |
-| S4 | overpass-knot | 16.665 | 0.167 | 16.998 | 16.670 | 0.167 | 17.003 | 0 | 0 | 0 | 0.135 | 0.020 | 0.175 |
+**Metric B (rAF-paced, ms between frames) at 1280x720**
 
-### Renderer construction and the first frame on a cold page (ms)
+| Scene | Track | median | ± | p95 | ± | >20 ms | ± | frame() median | ± |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| S4 | rust-bowl | 16.665 | 0.000 | 16.670 | 0.000 | 0 | 0 | 0.110 | 0.025 |
+| S4 | crusher-run | 16.665 | 0.000 | 16.670 | 0.000 | 0 | 0 | 0.155 | 0.085 |
+| S4 | overpass-knot | 16.665 | 0.000 | 16.670 | 0.000 | 0 | 0 | 0.130 | 0.030 |
 
-From the metric A page loads (25 per track and size). At 1280x720:
+**Metric B at 390x844@3**
+
+| Scene | Track | median | ± | p95 | ± | >20 ms | ± | frame() median | ± |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| S4 | rust-bowl | 16.665 | 0.000 | 16.670 | 0.000 | 0 | 0 | 0.105 | 0.020 |
+| S4 | crusher-run | 16.665 | 0.000 | 16.670 | 0.000 | 0 | 0 | 0.155 | 0.010 |
+| S4 | overpass-knot | 16.665 | 0.000 | 16.670 | 0.000 | 0 | 0 | 0.135 | 0.020 |
+
+**Renderer construction and the first frame on a cold page (ms), from the metric A page loads, at 1280x720**
 
 | Track | page loads | new Renderer() median | max | first frame median | max |
 |---|---|---:|---:|---:|---:|
@@ -454,7 +495,7 @@ From the metric A page loads (25 per track and size). At 1280x720:
 | crusher-run | 25 | 1.405 | 1.785 | 3.680 | 4.965 |
 | overpass-knot | 25 | 1.145 | 2.045 | 3.725 | 5.480 |
 
-At 390x844@3:
+**The same at 390x844@3**
 
 | Track | page loads | new Renderer() median | max | first frame median | max |
 |---|---|---:|---:|---:|---:|
@@ -462,7 +503,7 @@ At 390x844@3:
 | crusher-run | 25 | 1.370 | 1.775 | 3.765 | 5.560 |
 | overpass-knot | 25 | 1.145 | 1.205 | 3.430 | 5.870 |
 
-### Metric G (informational: as A on a GPU canvas, ms per frame)
+**Metric G (informational: as A on a GPU canvas, ms per frame)**
 
 | Scene | Track | median 1280x720 | ± | p99 | ± | median 390x844@3 | ± | p99 | ± |
 |---|---|---:|---:|---:|---:|---:|---:|---:|---:|
@@ -482,16 +523,19 @@ At 390x844@3:
 | S5 | crusher-run | 0.800 | 0.285 | 1.600 | 0.680 | 0.760 | 0.285 | 1.565 | 0.485 |
 | S5 | overpass-knot | 0.665 | 0.385 | 0.845 | 0.395 | 0.560 | 0.325 | 0.810 | 0.305 |
 
-### Metric C (informational: heap bytes allocated per frame, S3)
+**Metric C (informational: heap bytes allocated per frame, S3)**
 
-| Scene | Track | bytes/frame | ± | limit | GCs | ± | limit |
-|---|---|---:|---:|---:|---:|---:|---:|
-| S3 | rust-bowl | 9079 | 771 | 10621 | 2 | 2 | 6 |
-| S3 | crusher-run | 15937 | 790 | 17516 | 2 | 1 | 4 |
-| S3 | overpass-knot | 8944 | 526 | 9997 | 0 | 2 | 4 |
+| Scene | Track | bytes/frame | ± | GCs | ± |
+|---|---|---:|---:|---:|---:|
+| S3 | rust-bowl | 9079 | 771 | 2 | 2 |
+| S3 | crusher-run | 15937 | 790 | 2 | 1 |
+| S3 | overpass-knot | 8944 | 526 | 0 | 2 |
 
 ### Not measured here
 
+- The gate against the real fixed reference: `scripts/gfx-baseline.ref` is empty until GFX-0 is merged. The name was
+  tried with a local stand-in (this branch's own commit); the probes above used `--vs-ref HEAD`.
+- The gate at 390x844@3, and with metrics G, B and C in the same run: the probes ran metric A at 1280x720 only.
 - Canvas memory (the 12 MB cap): by review of the pool sizes, there is no counter for it.
 - A real phone, and any browser but headless Chrome 152.
-- GFX-3's "metric B on S1 with the lobby panel open": run `npm run bench -- --metrics B --b-scene S1 --panel lobby --vs-ref main`.
+- GFX-3's "metric B on S1 with the lobby panel open": run `npm run bench -- --metrics B --b-scene S1 --panel lobby --vs-ref gfx-baseline`.
