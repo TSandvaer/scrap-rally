@@ -442,7 +442,7 @@ spread".
    and 0.044. From three quiet sessions (90 unchanged values, none above 1.05, two above 1.04) the reviewer estimates
    that about 1.2% of unchanged values land above 1.05 on a quiet machine. Hence the two safeguards and the single
    window size.
-7. **The safeguards at work** (2026-11-18, 20:58 to 22:13, against `gfx-baseline` = 7881af6, metric A at 1280x720). The
+7. **The safeguards at work** (2026-11-18, 20:58 to 22:26, against `gfx-baseline` = 7881af6, metric A at 1280x720). The
    machine was not quiet for most of it: another project ran its tests on about 12 cores and a load test, beside
    Spotlight and the virus scanner (process samples every 5 s).
 
@@ -451,24 +451,28 @@ spread".
    | The unchanged tree, 15 cells and metric B's 3 | 30 ratios 0.964 to 1.038, 0 OVER; B and construction 0 OVER | none needed | 0.086 | PASS, 0 |
    | A copy with 0.25 ms more per frame, S1 and S4 (6 cells) | 12 ratios 1.074 to 1.163, 12 OVER | 11 confirmed (1.085 to 1.158), 1 not (S4 Rust Bowl's p95: 1.094, then 1.046) | 0.063 / 0.062 | FAIL, 1 |
    | Test injection: set 1's median of S1 Rust Bowl times 1.2, S1 (3 cells) | 6 ratios 0.996 to 1.176, 1 OVER | 1.026: not confirmed | 0.083 / 0.062 | PASS, 0 |
+   | The unchanged tree again, 15 cells, on the final runner | 30 ratios 0.934 to 1.080, 1 OVER (S5 Crusher Run's median, 1.080) | 0.977: not confirmed | 0.091 / 0.091 | PASS, 0 |
 
-   - **INVALID was the usual answer that evening: 24 of 27 gate runs**, each with exit code 2 and no verdict. The
+   The last row is the case the confirmation exists for: an unchanged build with one value over the line by noise. Under
+   the rule without it that run would have failed.
+
+   - **INVALID was the usual answer that evening: 24 of 28 gate runs**, each with exit code 2 and no verdict. The
      slowdown copy needed five attempts: three were INVALID on set 1 (noise 0.136, 0.108, 0.104) and one on set 2
      (0.116). The injection run was INVALID twice before its verdict (0.227, 0.164) and 18 times after it, in 18
      attempts (set 1 at 0.116 to 0.200 in 15 of them).
    - **The guard also refuses the obvious.** In the slowdown attempt that was INVALID on set 2, all 12 values were OVER
      in set 1 (1.082 to 1.205) and again in set 2 (1.058 to 1.173). The rule gives no verdict there; the ratios are
      printed.
-   - **Noise so far:** quiet 15-cell runs 0.044 and 0.045; that evening's sets under the limit 0.039 to 0.086; the sets
+   - **Noise so far:** quiet 15-cell runs 0.044 and 0.045; that evening's sets under the limit 0.039 to 0.091; the sets
      over it 0.104 to 0.235. The limit of 0.10 separates them, with little room on either side.
    - **A small set is a shaky judge of noise.** A set's noise is the median over its cells, and a set 2 of one cell
      rests on one number. Three of the injection attempts had a set 1 under the limit (0.039, 0.072, 0.086) and then a
      one-cell set 2 over it (0.134, 0.185, 0.205). Even in the two quiet 15-cell runs 3 of the 30 cells lay above 0.10
      on their own.
    - **Three-cell runs fared worst:** the injection run (3 cells) got its verdict in 1 of 21 attempts, the 6-cell copy
-     in 1 of 5, the 15-cell run at once.
-   - The three verdicts in the table were measured before a last one-line change to the runner (a verdict only with
-     exactly five runs). The 18 attempts after it were all INVALID; three of them ran set 2 first.
+     in 1 of 5, the 15-cell run both times at once.
+   - The first three rows were measured before a last one-line change to the runner (a verdict only with exactly five
+     runs), the fourth after it. The 18 injection attempts after it were all INVALID; three of them ran set 2 first.
    - **The lock:** a second runner printed "another benchmark is running on this machine (pid ..., its directory):
      waiting for it to finish" and started when the first was done; a lock left by a dead pid was taken over. A runner
      from before the lock (an older checkout) neither takes nor respects it.
@@ -588,8 +592,7 @@ one on those two scenes (six cells, median and p95): the same checksums, ratios 
 
 - The whole default gate in one run (all four metrics, both window sizes): the runs in finding 7 measured metric A, and
   once metric B, at 1280x720. It should take about half an hour (one build alone took 14.5 minutes), all of it quiet.
-- A value that is OVER in set 1 by noise on a real build (finding 7's third row forces one), and Ctrl-C from a terminal
-  (SIGTERM was tried).
+- Ctrl-C from a terminal (SIGTERM was tried), and a set 2 of more than one cell on an unchanged build.
 - Canvas memory (the 12 MB cap): by review of the pool sizes, there is no counter for it.
 - A real phone, and any browser but headless Chrome 152.
 - GFX-3's "metric B on S1 with the lobby panel open": run `npm run bench -- --metrics B --b-scene S1 --panel lobby --vs-ref gfx-baseline`.
