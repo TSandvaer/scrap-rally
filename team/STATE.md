@@ -123,7 +123,10 @@ menu1-taste server still runs on :3004).
 MENU-2 review APPROVE + 4 notes; user decided retired players rank by distance; fix round sent to the author (ctx_63357609b130,
 spec tmp/fix-menu2-review1.md). The menu2-taste copy (82b8fe5) predates these fixes.
 MENU-2 fix round: 903f3b1 (verified clean; sim 387/387, bots 90/90); re-review ctx_19012f3cf47a; menu2-taste moved to 903f3b1 (:3005).
-MENU-2 re-review APPROVE (no findings). Merge waits ONLY for the user's taste verdict (menu2-taste on :3005). Still pending: remove m3-t4 workspace once the
+MENU-2 re-review APPROVE (no findings). Merge waits ONLY for the user's taste verdict (menu2-taste on :3005).
+MENU-2 MERGED 2026-11-18 (user: "good"): main 980fa7e (check clean, sim 387/387, bots 90/90, build ok); workers released,
+menu2 workspace + menu2-taste removed (menu1-taste stays: the user's :3004 server runs from it).
+MENU-3 123jpnbf9pj in flight: ctx_719f299ee99f (~/orca/workspaces/scrap-rally/menu3, TSandvaer/menu3, :3006). Still pending: remove m3-t4 workspace once the
 user stops :3001 (PID 16470).
 
 **Resume (2026-11-16):** main 0dec6c9 (local, 15 ahead of origin) = ready check + engine
@@ -171,7 +174,7 @@ Manual Deploy only on the user's go-ahead. The user's own dev server runs on :30
 
 | Ticket | Dispatch | Workspace | Branch | Port | Started |
 | --- | --- | --- | --- | --- | --- |
-| 123jpnbf9ph MENU-2 | ctx_63357609b130 | ~/orca/workspaces/scrap-rally/menu2 | TSandvaer/menu2 | 3006 | 2026-11-18 |
+| 123jpnbf9pj MENU-3 | ctx_719f299ee99f | ~/orca/workspaces/scrap-rally/menu3 | TSandvaer/menu3 | 3006 | 2026-11-18 |
 
 ## Queued (milestone 3, PLAN-M3.md; start after solid collisions 123jpnbf6cy and easier-start 123jpnbf3xa merge)
 
