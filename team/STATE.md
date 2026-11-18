@@ -170,6 +170,12 @@ GHOST-RIVET 123jpnbfayd (user chose 2026-11-18; from the parked QA4 phantom-rive
 (run_fa7a81c5a7b8, ~/orca/workspaces/scrap-rally/ghost-rivet, :3006). No taste gate: reviewer APPROVE then merge.
 ghost-rivet done 2026-11-18: a837616 (test a81cfbc red on main 6/6 per author; sim 492/492, bots 95/95; merges cleanly;
 report tmp/ghost-rivet-report.md); reviewer ctx_e8ebac87fc8e (spec tmp/review-ghost-rivet.md).
+GHOST-RIVET MERGED 2026-11-18: review APPROVE (no findings; red 0/6 at a81cfbc, green 6/6 at a837616); main ab1781e (check
+clean, sim 492/492, bots 95/95, build ok); ticket ready for qa test; workers released, workspace + branch removed. Local main
+ahead of origin (3270cc8) with the fix; not pushed. NOTHING IN FLIGHT.
+NEXT (user 2026-11-18): "Polish the graphics, keeping it retro and without compromising performance" + "Use fable for
+graphics always" -> graphics plan drafted by a Fable agent, Fable advisor review, user approval; graphics workers --model
+claude-fable-5-2.
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
 SND-3 done: 47606ac (sim 394/394, bots 90/90); review APPROVE (ctx_1b41cd13cc04; notes: switch-on restores the volume
 remembered at the last switch-off; storage can't tell own from default -> SND-4); FROZEN COPY ~/orca/workspaces/scrap-rally/snd3-taste
@@ -224,7 +230,6 @@ Manual Deploy only on the user's go-ahead. The user's own dev server runs on :30
 
 | Ticket | Dispatch | Workspace | Branch | Port | Started |
 | --- | --- | --- | --- | --- | --- |
-| 123jpnbfayd ghost-rivet | ctx_9aae16a600e1 | ~/orca/workspaces/scrap-rally/ghost-rivet | TSandvaer/ghost-rivet | 3006 | 2026-11-18 |
 
 ## Queued (milestone 3, PLAN-M3.md; start after solid collisions 123jpnbf6cy and easier-start 123jpnbf3xa merge)
 

@@ -73,3 +73,4 @@
 - 2026-11-18 — SND-4 taste verdict (user, frozen copy 19ba4c8): "sound host settings approved". Merge once the WebKit fix round passes the reviewer's re-check.
 - 2026-11-18 — Default music volume (user: "default music volume need to go down 10%"; popup: 50 -> 40): built-in default music 0.4 (and new rooms' host default); legacy saves keep being compared against the old 0.5 so untouched players follow the new default. Folded into the SND-4 fix round.
 - 2026-11-18 — Deploy (user, popup): push now. main pushed a41b49b..3270cc8 (Esc menu MENU-1..3, SND-3, SND-5, SND-4, default music 0.4); the user clicks Manual Deploy; then a muted QA worker on the live site.
+- 2026-11-18 (user): "Use fable for graphics always": graphics plans, graphics author workers and graphics reviewers run on Fable (claude-fable-5-2; worker-start --model).
