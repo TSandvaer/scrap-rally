@@ -199,6 +199,8 @@ GFX-3 review 1: REQUEST_CHANGES (pressed small link buttons resize; 360 px selec
 on scroll). Fix round sent to the author as ctx_03d64bc1f2ec (tmp/gfx3-fix1.md; 360 fix only under a narrow media query, look
 kept); reviewer kept for the re-check. NOTE: 3 authors active for this fix round (GFX-1, GFX-0 safeguards, GFX-3 fix) — over
 the 2-worker cap; told the user. No new author starts until one finishes.
+GFX-3 fix round done: 438b23e (pressed links fixed; 360 px select under max-width 374px, 0 box diffs 320-720; edge lines as
+background layers, 0 scroll paints). Re-check sent to the reviewer as ctx_bd9aef13ef22. Authors active now: GFX-1, GFX-0 safeguards.
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
