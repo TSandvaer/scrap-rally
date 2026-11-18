@@ -163,6 +163,9 @@ PUSHED 2026-11-18 (user): origin/main = 3270cc8. Waiting for the user's Manual D
 LIVE 2026-11-18 (checked by curl): live serves index-DSldUeIn.js = local 3270cc8 build. snd4-taste removed (:3009 free).
 QA5 live in flight: ctx_993ce6b20edf (run_fa7a81c5a7b8, main checkout, spec tmp/spec-qa-live-5.md, report
 tmp/qa5-menu-music-live-report.md). On PASS: the 6 tickets -> complete.
+QA5 PASS 2026-11-18 (report tmp/qa5-menu-music-live-report.md): all 6 tickets PASS on live, no console errors; not checked:
+pause resume when the pauser leaves, pause during countdown, mine refunds, capped-ammo scrap-back, clipboard contents.
+Tickets 123jpnbf9pg/9ph/9pj/fa3a/fa7m/fa7e commented + complete; QA worker released. NOTHING IN FLIGHT.
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
 SND-3 done: 47606ac (sim 394/394, bots 90/90); review APPROVE (ctx_1b41cd13cc04; notes: switch-on restores the volume
 remembered at the last switch-off; storage can't tell own from default -> SND-4); FROZEN COPY ~/orca/workspaces/scrap-rally/snd3-taste
@@ -217,7 +220,6 @@ Manual Deploy only on the user's go-ahead. The user's own dev server runs on :30
 
 | Ticket | Dispatch | Workspace | Branch | Port | Started |
 | --- | --- | --- | --- | --- | --- |
-| QA5 live (6 tickets) | ctx_993ce6b20edf | main checkout | - | live site | 2026-11-18 |
 
 ## Queued (milestone 3, PLAN-M3.md; start after solid collisions 123jpnbf6cy and easier-start 123jpnbf3xa merge)
 
