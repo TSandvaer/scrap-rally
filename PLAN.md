@@ -369,6 +369,30 @@ SND-2 (built 2026-11-17): race effects, all synthesized on the effects bus.
 - Unlock after a hidden tab (review fix): on return the gesture unlock is armed while the context
   does not run, so a resume() that leaves it suspended is recovered by the next key or click.
 
+SND-4 (built 2026-11-18): the host's room sound defaults and the room's song (PLAN-SOUND.md SND-4/5).
+
+- Server: `Room.soundDefaults` {musicOn, music, effects, song} starts at the built-in defaults
+  (`shared/sound.ts` `BUILTIN_SOUND`: on, 0.5, 0.8, neon-tailpipe), is in the room message with
+  `song` (the id everyone plays), survives a handover and dies with the room. Host only
+  `{t:"soundDefaults", ...partial}` in any phase: a wrong type, a volume outside 0..1 or an unknown
+  song refuses the whole request; volumes snap to 0.05; nothing changed = no broadcast; a room budget
+  of `SOUND_BURST` (4) then `SOUND_PER_SEC` (2/s), else "Slow down". song "random": the server picks
+  another song than the one playing at once and again at each race's countdown (`beginRace`), so the
+  results screen and the lobby after it play it without a switch while the music plays.
+- Client: `AudioEngine.settings` stays the effective values; `own` holds only the keys the player
+  moved (kept in every room and across reloads), `room` the room's defaults (`soundFrame` feeds
+  `game.you ? game.soundDefaults : null`; `game.leave()` resets them), combined by `effectiveSound`.
+  Mute (M) and the engine preset are always the player's own. Saved entry v2 {own, muted, engine};
+  older entries are migrated (a value is own only if it differs from the default; SND-3's music 0 is
+  own musicOn false, musicBack the volume). The Music switch is a real musicOn flag; Music sliders
+  show the heard volume, above 0 turns the music on, 0 is off with the volume from before the drag.
+- UI: "host's" marks ("room" for the host) on the settings that follow the room and "Use host's
+  sound" (resets musicOn / music / effects, keeps mute and engine; "Default sound" outside a room)
+  on the lobby Music row, the speaker popover and the Esc menu Sound view; the host's "Room sound
+  (for everyone)" block in the Sound view (sends throttled to one per 500 ms with a trailing send),
+  which follows the room in place and is rebuilt on a handover; the lobby "Music" song pick (songs
+  + Random) under the track, host only, everyone else sees the song's name.
+
 ## Later (not in the prototype)
 
 Weapons (projectiles, mines) as entities, between-race shop with money, more tracks,
