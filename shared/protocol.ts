@@ -50,6 +50,9 @@ export interface PlayerInfo {
   inRace: boolean;
   connected: boolean;
   ready: boolean; // lobby ready check; never set for the host
+  // Left the current race from the Esc menu ("Retire to garage"): DNF, no car, garage open
+  // until the race is over; false again from the next lobby, start or restart.
+  retired: boolean;
 }
 
 /** [seq, throttle, steer, buttons]; buttons as in shared/weapons.ts */
@@ -66,6 +69,9 @@ export type ClientMsg =
   | { t: "buy"; item: string }
   | { t: "chat"; text: string } // any phase, from a bound player; cleaned and rate-limited by the server
   | { t: "leave" } // leave the room for good: removed at once (no reconnect grace)
+  // Any racer, racing only (the Esc menu's "Retire to garage"): the car leaves the race (DNF,
+  // wreck bonus kept) and the garage opens; refused with an err otherwise.
+  | { t: "retire" }
   // Host room controls (the Esc menu, PLAN-MENU.md). Host only; refused with an err otherwise.
   | { t: "stop" } // countdown or race: abort it, back to the lobby (no results, no scrap, ammo given back)
   | { t: "restart" } // countdown or race: a fresh countdown on the same track (ammo given back)
