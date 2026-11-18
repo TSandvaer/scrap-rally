@@ -19,6 +19,9 @@ import {
   FINISH_GRACE_MS,
   FORCE_START_MS,
   MAX_PLAYERS,
+  PAUSE_COOLDOWN_MS,
+  PAUSE_MAX_MS,
+  PAUSE_RESUME_MS,
   RECONNECT_GRACE_MS,
   RESULTS_MS,
   SNAPSHOT_EVERY,
@@ -57,6 +60,10 @@ const QUEUE_START = 2; // inputs needed before consuming after a start or an und
 const QUEUE_MAX = 6; // above this, drop the oldest ...
 const QUEUE_TRIM = 3; // ... down to this many
 const REPEAT_TICKS = 6; // on underrun, repeat the last input this long, then coast
+// After a resume each car waits for its driver's first inputs (QUEUE_START), at most this many
+// ticks: the client predicts from the frozen car, so a car coasting until they arrive would
+// be a reconciliation jump of a round trip's worth of driving.
+const RESUME_HOLD_TICKS = 60;
 const MAX_INPUTS_PER_MSG = 10;
 const NAME_MAX = 12;
 const CHAT_ERR_EVERY_MS = 1000; // "Slow down" at most this often per player
@@ -89,6 +96,7 @@ export interface Player extends Fighter {
   lastInput: Command;
   starved: number;
   mineBase: number | null; // mine counter of the last real input consumed
+  held: number; // ticks the car still waits for its driver's first inputs after a resume
   // Chat rate bucket: on the player, not the socket, so a reconnect does not refill it.
   chatBucket: Bucket;
   chatErrAt: number; // server time "Slow down" was last sent
@@ -171,6 +179,13 @@ export class Room {
   // Room-wide budgets (shared/protocol.ts CHAT_ROOM_*, CHAT_COMINGS_*); full at the start.
   private readonly sayBudget: Bucket = { tokens: CHAT_ROOM_BURST, at: -Infinity };
   private readonly comingsBudget: Bucket = { tokens: CHAT_COMINGS_BURST, at: -Infinity };
+  // The host's pause (MENU-3, PLAN-MENU.md): the room message carries all four.
+  paused = false;
+  pausedBy = ""; // name of who paused
+  pausedAt = 0; // server time the pause began
+  resumeAt = 0; // server time the resume 3-2-1 ends (the room steps again), 0 = none under way
+  private pausedById = ""; // their player id: their unbind or removal starts the resume
+  private pauseOkAt = 0; // server time from which the next pause is accepted (cooldown)
 
   constructor(
     readonly code: string,
@@ -247,6 +262,7 @@ export class Room {
       lastInput: NO_COMMAND,
       starved: 0,
       mineBase: null,
+      held: 0,
       chatBucket: { tokens: CHAT_BURST, at: now },
       chatErrAt: -Infinity,
     };
@@ -293,7 +309,7 @@ export class Room {
     p.session.player = null;
     p.session = null;
     p.disconnectedAt = now;
-    this.broadcastRoom();
+    if (!this.pauserGone(p, now)) this.broadcastRoom();
   }
 
   /**
@@ -305,7 +321,7 @@ export class Room {
     this.players.delete(p.id);
     if (this.hostId === p.id) this.hostId = this.players.keys().next().value ?? "";
     this.comingLine(line, p, now);
-    this.broadcastRoom();
+    if (!this.pauserGone(p, now)) this.broadcastRoom();
   }
 
   /** The leave message: the player leaves at once, without the reconnect grace. */
@@ -522,6 +538,119 @@ export class Room {
     return null;
   }
 
+  // ---- pause (MENU-3) -------------------------------------------------------------------
+  //
+  // While paused the room does not run its phase timers or the simulation: cars, shots, mines
+  // and every tick-based timer (wreck, ghost, air, fall, mine life, rivet cooldown) stand
+  // still. Everything else keeps going: inputs are taken off the queues and thrown away (acked,
+  // the mine counter moves on), offline players' grace runs out as usual, snapshots flow
+  // (frozen poses), the auto-resume and the end of the 3-2-1 are checked, and a race left with
+  // nobody on the field (a kick or a retire) ends. On the resume raceStart and a nonzero
+  // phaseEnds move on by the time paused, so the race clock, finish times, the weapons-armed
+  // delay and the finish grace go on where they stood. disconnectedAt, chat buckets and the
+  // lobby's forceStartAt are not shifted.
+
+  /**
+   * Host only, countdown or race: freeze it for everyone. Refused while paused (the 3-2-1
+   * too) and for PAUSE_COOLDOWN_MS after the room stepped again.
+   */
+  pause(p: Player, now: number): string | null {
+    if (p.id !== this.hostId) return "Only the host can pause the race";
+    if (this.phase !== "countdown" && this.phase !== "racing") return "No race to pause";
+    if (this.paused) return "The race is already paused";
+    if (now < this.pauseOkAt) return `You can pause again in ${Math.ceil((this.pauseOkAt - now) / 1000)}s`;
+    this.paused = true;
+    this.pausedBy = p.name;
+    this.pausedById = p.id;
+    this.pausedAt = now;
+    this.resumeAt = 0;
+    this.broadcastRoom();
+    return null;
+  }
+
+  /** Host only (a new host too), while paused: the 3-2-1, then the room steps again. */
+  resume(p: Player, now: number): string | null {
+    if (p.id !== this.hostId) return "Only the host can resume the race";
+    if (!this.paused) return "The race is not paused";
+    if (this.resumeAt) return null; // already counting down
+    this.beginResume(now);
+    return null;
+  }
+
+  /**
+   * Start the resume. In the race: resumeAt = now + PAUSE_RESUME_MS, still paused until then.
+   * In the countdown phase the countdown starts over at once (a full 3-2-1-GO instead of a
+   * 3-2-1 stacked on what was left of it); the cars wait on the grid either way.
+   */
+  private beginResume(now: number): void {
+    if (this.phase !== "countdown") {
+      this.resumeAt = now + PAUSE_RESUME_MS;
+      this.broadcastRoom();
+      return;
+    }
+    this.clearPause();
+    this.pauseOkAt = now + PAUSE_COOLDOWN_MS;
+    for (const q of this.players.values()) resetQueue(q);
+    this.raceStart = now + COUNTDOWN_MS;
+    this.setPhase("countdown", this.raceStart);
+  }
+
+  /**
+   * The 3-2-1 is over: shift the race's wall-clock times by the time paused and step again.
+   * Every queue starts afresh (no pre-pause input repeated on an underrun); a connected
+   * driver's car waits for their first inputs (RESUME_HOLD_TICKS).
+   */
+  private endPause(now: number): void {
+    const d = now - this.pausedAt;
+    this.raceStart += d;
+    if (this.phaseEnds) this.phaseEnds += d; // 0 = open-ended (no winner yet)
+    this.clearPause();
+    this.pauseOkAt = now + PAUSE_COOLDOWN_MS;
+    for (const q of this.players.values()) {
+      resetQueue(q);
+      if (q.car && q.session) q.held = RESUME_HOLD_TICKS;
+    }
+    this.broadcastRoom();
+  }
+
+  /** Paused, no resume under way: it starts by itself after PAUSE_MAX_MS; the 3-2-1's end. */
+  private pauseTimers(now: number): void {
+    if (!this.resumeAt && now - this.pausedAt >= PAUSE_MAX_MS) this.beginResume(now);
+    if (this.paused && this.resumeAt && now >= this.resumeAt) this.endPause(now);
+  }
+
+  /**
+   * The player who paused went offline or left (or was removed after a handover): the pause
+   * does not wait for them, the resume starts. True when it broadcast the room.
+   */
+  private pauserGone(p: Player, now: number): boolean {
+    if (!this.paused || this.resumeAt || p.id !== this.pausedById) return false;
+    this.beginResume(now);
+    return true;
+  }
+
+  private clearPause(): void {
+    this.paused = false;
+    this.pausedBy = "";
+    this.pausedById = "";
+    this.pausedAt = 0;
+    this.resumeAt = 0;
+  }
+
+  /**
+   * A paused tick: inputs are consumed and thrown away (ack and the mine counter move on, so
+   * nothing pressed during the pause fires afterwards); nothing is stepped. A race left with
+   * nobody to wait for (a kick, a retire or the grace removing the last driver on the field)
+   * ends now, as an unpaused tick would end it.
+   */
+  private pausedTick(now: number): void {
+    const racers = [...this.players.values()].filter((p) => p.car);
+    for (const p of racers) consumeInput(p);
+    if (this.phase !== "racing") return;
+    if (racers.length > 0 && racers.every((p) => p.progress!.fin)) this.endRace(now);
+    else if (racers.length === 0) this.toLobby(now);
+  }
+
   /**
    * Any racer, racing only ("Retire to garage" in the Esc menu): the car leaves the field at once
    * (not stepped, not solid, no inputs, not in the snapshots) and the player is DNF. The progress
@@ -635,6 +764,19 @@ export class Room {
 
   tick(tick: number, now: number): void {
     this.tickNo = tick;
+    if (this.paused) this.pauseTimers(now);
+    if (this.paused) this.pausedTick(now);
+    else this.simulate(tick, now);
+
+    for (const p of [...this.players.values()]) {
+      if (!p.session && now - p.disconnectedAt > RECONNECT_GRACE_MS) this.remove(p, now);
+    }
+
+    if (tick % SNAPSHOT_EVERY === 0) this.sendSnapshots(tick, now);
+  }
+
+  /** Phase timers and one simulation step (skipped while paused). */
+  private simulate(tick: number, now: number): void {
     // Phase timers first, so the first racing tick already applies inputs.
     if (this.phase === "countdown" && now >= this.phaseEnds) this.setPhase("racing", 0);
     else if (this.phase === "racing" && this.phaseEnds && now >= this.phaseEnds) this.endRace(now);
@@ -650,6 +792,11 @@ export class Room {
     for (const p of racers) {
       const c = p.car!;
       prev.set(p.id, { x: c.x, y: c.y });
+      if (p.held > 0) {
+        // Resumed: the car stands where the pause left it until its driver's inputs are in.
+        if (p.queue.length >= QUEUE_START || !p.session) p.held = 0;
+        else if (--p.held > 0) continue;
+      }
       // Consumed every tick, wrecked or not, so ack keeps moving.
       const { cmd, minePress } = consumeInput(p);
       // A car put back at a recovery point after a fall is ghosted (as after a wreck), from
@@ -689,12 +836,6 @@ export class Room {
       if (racers.length > 0 && racers.every((p) => p.progress!.fin)) this.endRace(now);
       else if (racers.length === 0) this.toLobby(now);
     }
-
-    for (const p of [...this.players.values()]) {
-      if (!p.session && now - p.disconnectedAt > RECONNECT_GRACE_MS) this.remove(p, now);
-    }
-
-    if (tick % SNAPSHOT_EVERY === 0) this.sendSnapshots(tick, now);
   }
 
   private endRace(now: number): void {
@@ -707,6 +848,7 @@ export class Room {
       rows.push({ id: p.id, fin: p.progress.fin, rd: raceDistance(this.track, p.progress), p });
     }
     rows.sort(compareStanding);
+    this.clearPause(); // a race over while paused (nobody left on the field) takes the pause with it
     const earned = payouts(rows, this.combat.wrecksCaused);
     this.lastOrder = rows.map((r) => r.id);
     const results: ResultRow[] = rows.map(({ id, fin, p }) => {
@@ -735,6 +877,7 @@ export class Room {
 
   /** Every car, shot and mine gone, offline players' too. */
   private clearRace(): void {
+    this.clearPause();
     for (const p of this.players.values()) {
       p.car = null;
       p.progress = null;
@@ -824,6 +967,10 @@ export class Room {
       forceStartAt: this.forceStartAt,
       trackId: this._trackId,
       locked: this.locked,
+      paused: this.paused,
+      pausedBy: this.pausedBy,
+      pausedAt: this.pausedAt,
+      resumeAt: this.resumeAt,
       players: this.info(),
     });
   }
@@ -834,6 +981,7 @@ export class Room {
 }
 
 function resetQueue(p: Player): void {
+  p.held = 0;
   p.queue.length = 0;
   p.buffering = true;
   p.lastInput = NO_COMMAND;
@@ -953,6 +1101,13 @@ export class Rooms {
         if (session.room && session.player) session.room.leave(session.player, now);
         session.conn.close();
         return;
+      case "pause":
+      case "resume": {
+        if (!session.room || !session.player) return;
+        const e = msg.t === "pause" ? session.room.pause(session.player, now) : session.room.resume(session.player, now);
+        if (e) err(e);
+        return;
+      }
       case "stop":
       case "restart":
       case "kick":

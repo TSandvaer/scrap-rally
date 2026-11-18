@@ -40,6 +40,12 @@ export const CHAT_COMINGS_PER_SEC = 0.5;
 // In-game menu (PLAN-MENU.md): the rejoin tokens of players the host removed are kept per
 // room, at most this many (the oldest is forgotten first); they die with the room.
 export const BLOCKLIST_MAX = 64;
+// Pause (PLAN-MENU.md, MENU-3): the host's resume is a 3-2-1 of PAUSE_RESUME_MS before the room
+// steps again; a pause nobody resumes starts that 3-2-1 by itself after PAUSE_MAX_MS; the host
+// may pause again PAUSE_COOLDOWN_MS after the room stepped again.
+export const PAUSE_RESUME_MS = 3000;
+export const PAUSE_MAX_MS = 120000;
+export const PAUSE_COOLDOWN_MS = 5000;
 
 export type Phase = "lobby" | "countdown" | "racing" | "results";
 
@@ -77,7 +83,13 @@ export type ClientMsg =
   | { t: "restart" } // countdown or race: a fresh countdown on the same track (ammo given back)
   | { t: "kick"; id: string } // remove a player at once and block their seat token in this room
   | { t: "host"; id: string } // hand the host over to a connected player
-  | { t: "lock"; locked: boolean }; // locked: no new players join (a seat rejoin with its token still does)
+  | { t: "lock"; locked: boolean } // locked: no new players join (a seat rejoin with its token still does)
+  // Countdown or race: freeze it for everyone (MENU-3). Refused while paused, or within
+  // PAUSE_COOLDOWN_MS of the room stepping again after the last pause.
+  | { t: "pause" }
+  // While paused: a 3-2-1 (resumeAt), then the room steps again; in the countdown phase the
+  // countdown starts over instead (a full 3-2-1-GO, no second 3-2-1 on top).
+  | { t: "resume" };
 
 /**
  * One line of room chat. say = a player's message (from = their id); join / leave = a player
@@ -169,6 +181,14 @@ export type ServerMsg =
       forceStartAt: number; // server time from which the host may start anyway, 0 outside the lobby
       trackId: string; // the room's track, an id in shared/tracks.ts
       locked: boolean; // the host locked the room: no new players (rejoins with a token still work)
+      // The host paused the race (MENU-3): nothing moves, the race clock stands at pausedAt
+      // (server time the pause began). pausedBy = the name of who paused. resumeAt = server
+      // time the resume 3-2-1 ends and the room steps again, 0 = no resume under way. On the
+      // resume raceStart (and phaseEnds, when nonzero) move on by the time it was paused.
+      paused: boolean;
+      pausedBy: string;
+      pausedAt: number;
+      resumeAt: number;
       players: PlayerInfo[];
     }
   | { t: "err"; msg: string; code?: ErrCode }
