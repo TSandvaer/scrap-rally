@@ -204,6 +204,19 @@ background layers, 0 scroll paints). Re-check sent to the reviewer as ctx_bd9aef
 GFX-3 MERGED 2026-11-18: re-check APPROVE (no findings); main 1146a50 (check clean, sim 492/492, bots 95/95, build ok); ticket
 ready for qa test; workers released, workspace + branch removed. In flight: GFX-1 (ctx_b5075af01fdf), GFX-0 safeguards
 (ctx_38392f0824f9). Local main ahead of origin 3270cc8 (ghost-rivet, GFX-0, GFX-3); not pushed.
+GFX-1 ready except the final gate: head 5ab1515 (4 commits + main 23f59ee merged); zero-diff extraction proven, A1-A6, edge check 0,
+npm test twice green, 64 pairs; provisional gate (A, 1280x720, 5 runs vs gfx-baseline) 30 ratios 0.069-0.707, 0 OVER. Told to WAIT
+for the safeguards merge (their validation is running now), then merge main + final full gate.
+GFX-0 safeguards done: 101a77e (lock, INVALID exit 2 at noise > 0.10, confirm-on-OVER, A at 1280x720; unchanged PASS, +0.25 ms FAIL
+11 confirmed, forced/real noise OVER not confirmed). Machine was loaded by another project (vitest, k6): 24/28 runs INVALID.
+Review sent to the Fable reviewer as ctx_7fa8414062df (incl. 'verdict stands when noise cannot change it' question).
+Safeguards review APPROVE (findings: test hook <1, PASS without A, PLAN counts, wording). MERGED 2026-11-18: main 2a964ca (check
+clean, sim 492/492, bots 95/95, build ok). User adopted the reviewer's MARGIN RULE (popup). Round sent to the GFX-0 author as
+ctx_db2f67477a12 (tmp/gfx0c-margin.md: margin rule, control cells, findings 1-4, optional stale-lock check). GFX-1 stays idle
+until that merges, then: merge main + final full gate.
+Margin rule done: 01a9a39 (replay 16/16 agrees with the reviewer's rules.py; control cells; findings fixed; --judge <file>;
+live default gate of main 2a964ca vs gfx-baseline: PASS exit 0, 2 noise OVERs not confirmed). Re-check sent as ctx_fbd30d7d19f8
+(no live benches; --judge only).
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
