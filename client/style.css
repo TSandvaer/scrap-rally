@@ -77,7 +77,8 @@ body {
 /* A panel is an opaque steel plate: a dark edge, an 8 px frame of plate metal (--panel) with a
    stud in each corner and hazard paint along the top, and a darker face let into it for the
    text. All of it is background layers that scroll with the content (a long panel on a phone);
-   no layer is wider than a hard stop. */
+   no layer is wider than a hard stop. Nothing is drawn with an inset shadow here: next to
+   layers that scroll, one would make the panel repaint on every scroll frame. */
 .panel {
   position: absolute;
   width: min(360px, calc(100vw - 32px));
@@ -86,6 +87,9 @@ body {
   padding: 24px 24px 20px;
   background-color: var(--face);
   background-image:
+    /* the plate's own edge, 1 px: lit above and left, shaded below and right */
+    linear-gradient(var(--dirt0), var(--dirt0)), linear-gradient(var(--dirt0), var(--dirt0)),
+    linear-gradient(var(--bg), var(--bg)), linear-gradient(var(--bg), var(--bg)),
     /* the studs */
     var(--rivet), var(--rivet), var(--rivet), var(--rivet),
     /* hazard paint: three 2 px rows, each 2 px along from the one below */
@@ -99,12 +103,14 @@ body {
     linear-gradient(var(--panel), var(--panel)), linear-gradient(var(--panel), var(--panel)),
     linear-gradient(var(--panel), var(--panel)), linear-gradient(var(--panel), var(--panel));
   background-position:
+    0 0, 0 0, left bottom, right top,
     2px 2px, right 2px top 2px, left 2px bottom 2px, right 2px bottom 2px,
     8px 1px, 8px 3px, 8px 5px,
     8px 8px, 8px 8px,
     left 8px bottom 8px, right 8px top 8px,
     0 0, left bottom, 0 0, right top;
   background-size:
+    100% 1px, 1px 100%, 100% 1px, 1px 100%,
     4px 4px, 4px 4px, 4px 4px, 4px 4px,
     calc(100% - 16px) 2px, calc(100% - 16px) 2px, calc(100% - 16px) 2px,
     calc(100% - 16px) 1px, 1px calc(100% - 16px),
@@ -113,10 +119,7 @@ body {
   background-repeat: no-repeat;
   background-attachment: local;
   border: 2px solid var(--soot0);
-  box-shadow:
-    inset 1px 1px 0 var(--dirt0),
-    inset -1px -1px 0 var(--bg),
-    6px 6px 0 var(--cast);
+  box-shadow: 6px 6px 0 var(--cast);
   display: flex;
   flex-direction: column;
   gap: 12px;
@@ -227,8 +230,7 @@ input {
     1px 1px 0 var(--cast);
 }
 
-.btn.link,
-.btn.link:active {
+.btn.link {
   background: none;
   border: none;
   box-shadow: none;
@@ -611,6 +613,18 @@ h2 {
 
 .track-pick select:hover {
   border-color: var(--steel);
+}
+
+/* Narrower than 375 px the lobby is as wide as its selects at their smallest, so the select
+   must not be wider there than the native control was: the key cap is 20 px, not 28. */
+@media (max-width: 374px) {
+  .track-pick select {
+    background-position:
+      right 5px top calc(50% - 2px), right 7px top 50%, right 9px top calc(50% + 2px),
+      right 20px top, right top;
+    background-size: 10px 2px, 6px 2px, 2px 2px, 2px 100%, 20px 100%;
+    padding-right: 30px;
+  }
 }
 
 .track-pick select option {
