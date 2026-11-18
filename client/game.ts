@@ -28,6 +28,7 @@ import {
   airHeight,
   BTN_RIVET,
   FALL_TICKS,
+  GHOST_TICKS,
   makeButtons,
   moveShot,
   RIVET_COOLDOWN,
@@ -35,6 +36,7 @@ import {
   stepRaceCar,
   WEAPONS_ARM_MS,
   type Command,
+  type RaceStepEvent,
   type Shot,
 } from "../shared/weapons";
 import { Contacts } from "./contact";
@@ -136,6 +138,16 @@ interface Pending {
   cmd: Command;
   fired: boolean; // a rivet left the gun on this step (predicted)
   mine: boolean; // a mine press was sent on this step
+}
+
+/**
+ * Our car's ghost ticks left after one step, as the server counts them (server/room.ts and
+ * combat.ts): GHOST_TICKS from a recovery (set before that step's shot, so the recovery step
+ * cannot fire) and from a wreck respawn (set after it), otherwise one less. The server also
+ * holds a ghost while the car overlaps another car; only the snapshot tells us that.
+ */
+function ghostAfter(ghost: number, ev: RaceStepEvent | null, respawned: boolean): number {
+  return ev === "recover" || respawned ? GHOST_TICKS : Math.max(0, ghost - 1);
 }
 
 /**
@@ -251,6 +263,8 @@ export class Game {
   readonly contact = new Contacts(); // own-car bump prediction, near cars' drawn pose
   private ownSounds: OwnCue[] = [];
   private cooldown = 0;
+  /** Predicted ghost ticks left after our last step (ghostAfter); armed() reads it with the snapshot's. */
+  private ghost = 0;
   private mineCounter = 0;
   private localShotId = 1;
 
@@ -449,6 +463,7 @@ export class Game {
     this.history.clear();
     this.localShots = [];
     this.cooldown = 0;
+    this.ghost = 0;
     this.contact.reset();
     this.ownSounds = [];
   }
@@ -701,6 +716,7 @@ export class Game {
     if (!this.car) {
       this.car = server;
       this.prevCar = cloneCar(server);
+      this.ghost = 0; // a ghost the server has now is in the snapshot
       this.pending = this.pending.filter((p) => p.seq > msg.ack);
       this.lastAck = msg.ack;
       this.contact.setBase(snap, this.you);
@@ -724,16 +740,21 @@ export class Game {
     // Rewind to the server state and replay what the server has not seen yet. Replay goes
     // through stepRaceCar, so a wreck freeze and the respawn jump, jumps, falls and the
     // recovery are predicted too, and bumps: pending[i] is applied i + 1 ticks after this
-    // snapshot.
+    // snapshot. Our ghost is replayed too, from none at ack: while the snapshot shows the car
+    // ghosted, armed() reads that instead, and when it does not, the server's ghost is 0.
     this.contact.rebase(snap, this.you, kOld, this.pending.length);
     const old = this.car!;
     const c = cloneCar(server);
+    let ghost = 0;
     this.pending.forEach((p, i) => {
-      stepRaceCar(c, p.cmd, this.stats, this.track);
+      const wrecked = c.wreck > 0;
+      const ev = stepRaceCar(c, p.cmd, this.stats, this.track);
+      ghost = ghostAfter(ghost, ev, wrecked && c.wreck === 0);
       this.contact.collide(c, i + 1);
       this.history.set(p.seq, cloneCar(c));
     });
     this.car = c;
+    this.ghost = ghost;
 
     // Hide the jump: shift the render offset (and the interpolation start) by it. Wreck, air
     // and fall state changes (a take-off, a landing, a fall or a recovery a tick off) and
@@ -785,11 +806,16 @@ export class Game {
   /**
    * Our car can shoot and drop mines: the race is on, the weapons-armed delay is over, and
    * the car is not wrecked, airborne, falling, ghosted or finished (the server's solid()).
+   * Ghosted: predicted from our own recoveries and respawns (the latest snapshot shows them a
+   * round trip late), or as the snapshot says (finished, or held while overlapping a car).
    */
   armed(): boolean {
     const c = this.car;
     const s = this.latest?.cars.get(this.you);
-    return !!c && c.wreck === 0 && c.air === 0 && c.fall === 0 && !!s && !s.ghost && this.raceOn() && this.armsInMs() === 0;
+    return (
+      !!c && c.wreck === 0 && c.air === 0 && c.fall === 0 && this.ghost === 0 && !!s && !s.ghost &&
+      this.raceOn() && this.armsInMs() === 0
+    );
   }
 
   /** Ammo minus what we already fired in inputs the server has not consumed yet. */
@@ -846,6 +872,8 @@ export class Game {
     this.prevCar = cloneCar(before);
     if (this.cooldown > 0) this.cooldown--;
     const ev = stepRaceCar(this.car, cmd, this.stats, this.track);
+    const respawned = this.prevCar.wreck > 0 && this.car.wreck === 0;
+    if (ev === "recover") this.ghost = GHOST_TICKS; // the server ghosts it before the shot
     this.contact.step(this.car, this.pending.length + 1); // the server applies it then
     if (ev) this.cue(ev);
     else if (this.prevCar.air > 0 && this.car.air === 0 && this.car.fall === 0) this.cue("land");
@@ -854,7 +882,7 @@ export class Game {
       if (into >= WALL_HIT_MIN) this.cue("wall", into);
     }
     // A respawn, a take-off or a recovery: drawn from the new state, no slide into it.
-    if ((this.prevCar.wreck > 0 && this.car.wreck === 0) || ev === "takeoff" || ev === "recover") {
+    if (respawned || ev === "takeoff" || ev === "recover") {
       this.prevCar = cloneCar(this.car);
     }
 
@@ -869,6 +897,7 @@ export class Game {
       this.cue("shot");
     }
     if (minePress && armedNow) this.cue("mine");
+    this.ghost = ghostAfter(this.ghost, ev, respawned);
     this.pending.push({ seq, cmd, fired, mine: minePress && armedNow });
     this.history.set(seq, cloneCar(this.car));
     if (this.pending.length > MAX_PENDING) {
