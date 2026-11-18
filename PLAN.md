@@ -134,7 +134,8 @@ shake (150 ms cooldown; replays never fire it). There is no server bump event.
   `RECONNECT_GRACE_MS` rebinds the same player (and car) to the new socket.
 - Max 6 players. Joining mid-race → seated for the next race (`inRace: false`); their
   camera follows the leader meanwhile. No separate spectator mode.
-- Host = first player; reassigned when the host is removed. An empty room is deleted.
+- Host = first player; reassigned when the host is removed, or handed over from the Esc
+  menu (below). An empty room is deleted.
 - Host clicks Start (works solo for testing) → 3 s countdown → race.
 - Ready check: in the lobby every player except the host toggles Ready (`ready` message;
   the host's Start counts as the host's ready). Start is refused while a connected
@@ -154,7 +155,7 @@ shake (150 ms cooldown; replays never fire it). There is no server bump event.
 - Room chat (see [PLAN-CHAT.md](PLAN-CHAT.md), built 2026-11-17): C->S `{t:"chat", text}` in
   any phase from a bound player; S->C `{t:"chat", line}` live to the room and
   `{t:"chatlog", lines}` right after every `welcome` (join, rejoin, takeover). `ChatLine =
-  {n, kind: say|join|leave|result, from?, name, color, text}`; name and colour as at the time
+  {n, kind: say|join|leave|removed|host|result, from?, name, color, text}`; name and colour as at the time
   of the line. The room keeps the last 300 lines in memory; they go with the room. Text is
   cleaned on the server (whitespace collapsed, `\p{C}` stripped except ZWNJ/ZWJ, trimmed,
   cut to 200 code points; empty or non-string ignored) and rate-limited per player (5 at
@@ -166,6 +167,33 @@ shake (150 ms cooldown; replays never fire it). There is no server bump event.
   log), "leave" only when a player is removed for good, one "result" per race from the end
   of the race (none when a race ends because every racer left). The client replaces its list
   on `chatlog` and clears it on leave and in another room.
+- In-game menu and host room controls (see [PLAN-MENU.md](PLAN-MENU.md), MENU-1 built
+  2026-11-18). Esc opens and closes the menu in a room in any phase (`client/menu.ts`; not on
+  the main menu; the chat input and the sound popover take their own Esc first). While it is
+  open the frame loop drives with no controls: the race keeps running and the car coasts.
+  Everyone: Resume, Sound, Controls, Copy invite link, Leave room. Host only (C->S, refused
+  with an `err` from anyone else):
+  - `{t:"stop"}` (countdown/race): back to the lobby as if the race never ran: no results, no
+    result line, no scrap, the grid order of the last finished race kept, and every racer's
+    ammo restored from a snapshot taken when the race began ("aborted race = never run").
+    "Start anyway" is available at once afterwards, except for a player who joined during the
+    aborted race (still `FORCE_START_MS` to shop).
+  - `{t:"restart"}` (countdown/race): the race is cleared as on the way to the lobby (an
+    offline racer's car too), ammo restored, then a fresh countdown on the same track for
+    everyone connected, ready or not (a late joiner too). The client drops its predicted car
+    when `raceStart` changes, so the grid teleport is no reconciliation jump.
+  - `{t:"kick", id}` (any phase, not yourself): the session is detached first (no chat or
+    input from it), then `err` code `kicked`, then the socket closes. One chat line "X was
+    removed" (kind `removed`, through the join/leave budget), no "left the room". The token is
+    blocked in this room (at most `BLOCKLIST_MAX` = 64, oldest forgotten; gone with the room);
+    a join with it gets `err` code `kicked`. Best effort: a join without a token (another
+    browser, cleared storage) is a new player, which a locked room refuses.
+  - `{t:"host", id}`: to a connected player; both lose a stale ready flag; chat line "X is now
+    the host" (kind `host`, budgeted).
+  - `{t:"lock", locked}`: a locked room refuses new players (`err` code `locked`); a rejoin with
+    a seat token still works. The `room` message carries `locked`.
+  The client stops on `kicked` and `locked` like on `taken` (no reconnect loop), keeps the
+  stored token (retyping the code meets the block again) and says why on the menu screen.
 
 ## Ready for weapons and shop later
 
