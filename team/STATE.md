@@ -195,6 +195,10 @@ runs, confirm-on-OVER, metric A gated at 1280x720): sent to the GFX-0 author as 
 same branch after merging main; scripts/bench.ts + PLAN Baseline section only). GFX-0 ticket stays in progress until then.
 GFX-3 done: 8d6698d (style.css only; 0/2486 boxes moved; contrast >= today; bench ok). User APPROVED the look (taste gate).
 Reviewer ctx_586956fc3a88 (Fable, tmp/review-gfx3.md). Merge on APPROVE.
+GFX-3 review 1: REQUEST_CHANGES (pressed small link buttons resize; 360 px select widens the lobby 8 px; inset shadows repaint
+on scroll). Fix round sent to the author as ctx_03d64bc1f2ec (tmp/gfx3-fix1.md; 360 fix only under a narrow media query, look
+kept); reviewer kept for the re-check. NOTE: 3 authors active for this fix round (GFX-1, GFX-0 safeguards, GFX-3 fix) — over
+the 2-worker cap; told the user. No new author starts until one finishes.
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
