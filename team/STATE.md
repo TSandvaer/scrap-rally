@@ -103,12 +103,14 @@ SND-2 re-review APPROVE (no findings). Merge waits ONLY for the user's race verd
 SND-2 MERGED 2026-11-18 (user: "its approved"): main 48aca02 (check clean, sim 319/319, bots 82/82, build ok); workers released,
 snd2 workspace and the snd2-taste copy removed. SOUND COMPLETE LOCALLY (SND-1 + SND-2). Nothing in flight. origin/main 19d759b,
 live 19d759b: the sound is not pushed or deployed; ask the user.
-PUSHED 2026-11-18 (user): origin/main = a41b49b (sound). Waiting for the user's Manual Deploy; then a muted QA worker on the live site. Still pending: remove m3-t4 workspace once the
+PUSHED 2026-11-18 (user): origin/main = a41b49b (sound). Waiting for the user's Manual Deploy; then a muted QA worker on the live site.
+DEPLOYED 2026-11-18 (user started the deploy; live bundle index-CjYhpY-u.js contains "Rust Bucket" + AudioContext). Muted QA
+worker ctx_7d867674fde1 (spec tmp/spec-qa-live-4.md) on SND-1 + SND-2. Still pending: remove m3-t4 workspace once the
 user stops :3001 (PID 16470).
 
 **Resume (2026-11-16):** main 0dec6c9 (local, 15 ahead of origin) = ready check + engine
 (pushed 4f9ef51) + easier-start (merged locally, user-approved, reviews APPROVE). Deploys are batched:
-live is 19d759b; ask before the next push. In flight on run `run_c58bb5836634`: dispatch
+live is a41b49b; ask before the next push. In flight on run `run_c58bb5836634`: dispatch
 `ctx_c8a5662fcae7` on ClickUp 123jpnbf6cy "Solid collisions" (workspace
 ~/orca/workspaces/scrap-rally/solid-collisions, branch TSandvaer/solid-collisions, port 3002; must merge main
 before its own merge). Taste test moved AFTER merge (user, 2026-11-16): merge on reviewer APPROVE + gate,
