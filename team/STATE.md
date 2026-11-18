@@ -189,6 +189,23 @@ TSandvaer/gfx3, :3007; style.css + index.html only).
 GFX-0 fix round 1 done: fb7a664 (paired-ratio gate, fixed ref file scripts/gfx-baseline.ref, runner builds itself, exit 1 on
 OVER, cleanup, unique sessions, S4/S5 cold, haz2; no-change band 0.937-1.048, +0.25 ms caught 29/30). Re-check sent to the
 reviewer as ctx_e6ea892f3257 (incl. confirm-on-OVER question). After merge: append the merge SHA to scripts/gfx-baseline.ref.
+GFX-0 MERGED 2026-11-18: re-check APPROVE; main 7881af6 (check clean, sim 492/492, bots 95/95, build ok); scripts/gfx-baseline.ref
+pinned to 7881af6 (9fdf041). Re-check found false FAILs on unchanged builds -> user approved safeguards (lock, INVALID on noisy
+runs, confirm-on-OVER, metric A gated at 1280x720): sent to the GFX-0 author as ctx_38392f0824f9 (tmp/gfx0b-safeguards.md;
+same branch after merging main; scripts/bench.ts + PLAN Baseline section only). GFX-0 ticket stays in progress until then.
+GFX-3 done: 8d6698d (style.css only; 0/2486 boxes moved; contrast >= today; bench ok). User APPROVED the look (taste gate).
+Reviewer ctx_586956fc3a88 (Fable, tmp/review-gfx3.md). Merge on APPROVE.
+GFX-3 review 1: REQUEST_CHANGES (pressed small link buttons resize; 360 px select widens the lobby 8 px; inset shadows repaint
+on scroll). Fix round sent to the author as ctx_03d64bc1f2ec (tmp/gfx3-fix1.md; 360 fix only under a narrow media query, look
+kept); reviewer kept for the re-check. NOTE: 3 authors active for this fix round (GFX-1, GFX-0 safeguards, GFX-3 fix) — over
+the 2-worker cap; told the user. No new author starts until one finishes.
+GFX-3 fix round done: 438b23e (pressed links fixed; 360 px select under max-width 374px, 0 box diffs 320-720; edge lines as
+background layers, 0 scroll paints). Re-check sent to the reviewer as ctx_bd9aef13ef22. Authors active now: GFX-1, GFX-0 safeguards.
+GFX-3 MERGED 2026-11-18: re-check APPROVE (no findings); main 1146a50 (check clean, sim 492/492, bots 95/95, build ok); ticket
+ready for qa test; workers released, workspace + branch removed. In flight: GFX-1 (ctx_b5075af01fdf), GFX-0 safeguards
+(ctx_38392f0824f9). Local main ahead of origin 3270cc8 (ghost-rivet, GFX-0, GFX-3); not pushed.
+GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
+when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
 SND-3 done: 47606ac (sim 394/394, bots 90/90); review APPROVE (ctx_1b41cd13cc04; notes: switch-on restores the volume
 remembered at the last switch-off; storage can't tell own from default -> SND-4); FROZEN COPY ~/orca/workspaces/scrap-rally/snd3-taste
@@ -243,7 +260,8 @@ Manual Deploy only on the user's go-ahead. The user's own dev server runs on :30
 
 | Ticket | Dispatch | Workspace | Branch | Port | Started |
 | --- | --- | --- | --- | --- | --- |
-| 123jpnbfb29 GFX-3 | ctx_c7bda5e6427e | ~/orca/workspaces/scrap-rally/gfx3 | TSandvaer/gfx3 | 3007 | 2026-11-18 |
+| 123jpnbfb24 GFX-1 | ctx_b5075af01fdf | ~/orca/workspaces/scrap-rally/gfx1 | TSandvaer/gfx1 | 3008 | 2026-11-18 |
+| 123jpnbfb23 GFX-0 safeguards | ctx_38392f0824f9 | ~/orca/workspaces/scrap-rally/gfx0 | TSandvaer/gfx0 | 3006 | 2026-11-18 |
 | 123jpnbfb23 GFX-0 | ctx_27a7a271607b | ~/orca/workspaces/scrap-rally/gfx0 | TSandvaer/gfx0 | 3006 | 2026-11-18 |
 
 ## Queued (milestone 3, PLAN-M3.md; start after solid collisions 123jpnbf6cy and easier-start 123jpnbf3xa merge)
