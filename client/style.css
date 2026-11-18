@@ -873,6 +873,7 @@ h2 {
 
 .panel.gm {
   position: relative;
+  background: #16110d; /* opaque: the lobby panel behind must not show through */
   width: min(380px, calc(100vw - 24px));
   max-height: calc(var(--app-h, 100dvh) - 24px);
   padding: 18px 18px 16px;
@@ -1030,16 +1031,5 @@ h2 {
 @media (hover: none) and (pointer: coarse) {
   .gm .btn {
     min-height: 44px;
-  }
-}
-
-/* The menu button (under the speaker) only where there is no Esc key: touch screens. */
-.menu-btn {
-  display: none;
-}
-
-@media (hover: none) and (pointer: coarse) {
-  .menu-btn {
-    display: grid;
   }
 }

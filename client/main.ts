@@ -208,7 +208,8 @@ const menu = new GameMenu({
   leave: leaveRoom,
   copyInvite: () => void copyInvite(),
 });
-// Touch screens have no Esc: a menu button under the speaker (shown in a room, style.css).
+// The menu button (everyone, in a room): under the speaker, so SoundControls places both
+// clear of the minimap and the HUD. Touch screens have no Esc key.
 const menuBtn = $<HTMLButtonElement>("menu-btn");
 menuBtn.addEventListener("click", () => {
   menuBtn.blur();
