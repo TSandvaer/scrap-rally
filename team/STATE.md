@@ -186,6 +186,9 @@ STRICTER speed gate (median paired ratio this/base > 1.05 = OVER; fixed ref = GF
 (gate + findings 2-7, tmp/gfx0-fix1.md) sent to the author as ctx_39371bddc46c; reviewer kept for the re-check. Merge after.
 GFX-3 in flight (palette approved; based on TSandvaer/gfx0 @ 50bbe04): ctx_c7bda5e6427e (Fable, ~/orca/workspaces/scrap-rally/gfx3,
 TSandvaer/gfx3, :3007; style.css + index.html only).
+GFX-0 fix round 1 done: fb7a664 (paired-ratio gate, fixed ref file scripts/gfx-baseline.ref, runner builds itself, exit 1 on
+OVER, cleanup, unique sessions, S4/S5 cold, haz2; no-change band 0.937-1.048, +0.25 ms caught 29/30). Re-check sent to the
+reviewer as ctx_e6ea892f3257 (incl. confirm-on-OVER question). After merge: append the merge SHA to scripts/gfx-baseline.ref.
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
 SND-3 done: 47606ac (sim 394/394, bots 90/90); review APPROVE (ctx_1b41cd13cc04; notes: switch-on restores the volume
 remembered at the last switch-off; storage can't tell own from default -> SND-4); FROZEN COPY ~/orca/workspaces/scrap-rally/snd3-taste
