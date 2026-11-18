@@ -160,6 +160,9 @@ SND-4 MERGED 2026-11-18: re-check APPROVE; main ab39ede (check clean, sim 486/48
 workspace and snd3-taste removed; snd4-taste stays while the user's :3009 server runs from it. NOTHING IN FLIGHT. Local main is ahead
 of origin/live a41b49b with: Esc menu (MENU-1..3), SND-3, SND-5, SND-4. Next: ask the user about push + deploy.
 PUSHED 2026-11-18 (user): origin/main = 3270cc8. Waiting for the user's Manual Deploy; then the muted QA worker.
+LIVE 2026-11-18 (checked by curl): live serves index-DSldUeIn.js = local 3270cc8 build. snd4-taste removed (:3009 free).
+QA5 live in flight: ctx_993ce6b20edf (run_fa7a81c5a7b8, main checkout, spec tmp/spec-qa-live-5.md, report
+tmp/qa5-menu-music-live-report.md). On PASS: the 6 tickets -> complete.
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
 SND-3 done: 47606ac (sim 394/394, bots 90/90); review APPROVE (ctx_1b41cd13cc04; notes: switch-on restores the volume
 remembered at the last switch-off; storage can't tell own from default -> SND-4); FROZEN COPY ~/orca/workspaces/scrap-rally/snd3-taste
@@ -214,6 +217,7 @@ Manual Deploy only on the user's go-ahead. The user's own dev server runs on :30
 
 | Ticket | Dispatch | Workspace | Branch | Port | Started |
 | --- | --- | --- | --- | --- | --- |
+| QA5 live (6 tickets) | ctx_993ce6b20edf | main checkout | - | live site | 2026-11-18 |
 
 ## Queued (milestone 3, PLAN-M3.md; start after solid collisions 123jpnbf6cy and easier-start 123jpnbf3xa merge)
 
