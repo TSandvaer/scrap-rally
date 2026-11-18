@@ -199,6 +199,19 @@ export class Game {
   forceStartAt = 0; // server time from which the host may "Start anyway", 0 outside the lobby
   trackId = DEFAULT_TRACK_ID; // the room's track (room message); the default outside a room
   locked = false; // the host locked the room (no new players)
+  // The host's pause (room message, MENU-3). While paused nothing is predicted or sent, and the
+  // race-time view (raceNow) stands at pausedAt. resumeAt: the end of the resume 3-2-1, 0 = none.
+  paused = false;
+  pausedBy = "";
+  pausedAt = 0;
+  resumeAt = 0;
+  /** The end of the last resume 3-2-1 (its GO), kept after the resume; 0 once a new pause or race begins. */
+  resumeGo = 0;
+  /**
+   * Counts races as this client saw them begin: a new raceStart, except the shift a resume
+   * makes (same race). The countdown cues latch on it (client/soundlogic.ts CountdownCues).
+   */
+  raceId = 0;
   track: Track = trackById(DEFAULT_TRACK_ID); // built from trackId: prediction, shots, bots, renderer
   results: ResultRow[] | null = null;
   connected = false;
@@ -318,6 +331,16 @@ export class Game {
     this.send({ t: "retire" });
   }
 
+  /** Host only, countdown or race: freeze it for everyone (refused for a while after a resume). */
+  pause(): void {
+    this.send({ t: "pause" });
+  }
+
+  /** Host only, while paused: the 3-2-1, then the race goes on (in the countdown: it starts over). */
+  resume(): void {
+    this.send({ t: "resume" });
+  }
+
   /** Host only: lock the room (no new players; seat rejoins still work) or unlock it. */
   setLocked(locked: boolean): void {
     this.send({ t: "lock", locked });
@@ -354,6 +377,8 @@ export class Game {
     this.raceStart = 0;
     this.forceStartAt = 0;
     this.locked = false;
+    this.clearPause();
+    this.resumeGo = 0;
     this.results = null;
     this.retiredSeen = null;
     this.resetOwnCar();
@@ -361,6 +386,13 @@ export class Game {
     this.latest = null;
     this.useTrack(DEFAULT_TRACK_ID);
     this.setChat([], "");
+  }
+
+  private clearPause(): void {
+    this.paused = false;
+    this.pausedBy = "";
+    this.pausedAt = 0;
+    this.resumeAt = 0;
   }
 
   private setChat(lines: ChatLine[], code: string): void {
@@ -493,11 +525,29 @@ export class Game {
         this.on.connection?.("connected");
         this.on.welcome?.();
         return;
-      case "room":
-        // A new race (a restart above all: the cars go back to the grid mid-race) drops the
-        // predicted car; the next snapshot seeds it at the new pose. Else the replay of old
-        // inputs from the grid would look like a teleport to reconciliation.
-        if (msg.raceStart !== this.raceStart) this.resetOwnCar();
+      case "room": {
+        // The resume of a paused race: raceStart moved on by the time paused, but it is the
+        // same race and the car is where the server froze it (nothing was predicted meanwhile).
+        const resumed = this.paused && msg.paused !== true && msg.phase === "racing" && this.phase === "racing";
+        // A new race (a restart above all: the cars go back to the grid mid-race; a resume in
+        // the countdown, which starts it over) drops the predicted car; the next snapshot
+        // seeds it at the new pose. Else the replay of old inputs from the grid would look
+        // like a teleport to reconciliation.
+        if (msg.raceStart !== this.raceStart && !resumed) {
+          this.resetOwnCar();
+          this.raceId++;
+          this.resumeGo = 0;
+        }
+        // phaseEnds comes with the snapshots; until the next one, follow the room message: a
+        // countdown ends at raceStart, and a resume moves the finish grace's end on too.
+        if (resumed && this.phaseEnds) this.phaseEnds += msg.raceStart - this.raceStart;
+        if (msg.phase === "countdown") this.phaseEnds = msg.raceStart;
+        this.paused = msg.paused === true;
+        this.pausedBy = msg.pausedBy ?? "";
+        this.pausedAt = msg.pausedAt ?? 0;
+        this.resumeAt = msg.resumeAt ?? 0;
+        if (this.resumeAt) this.resumeGo = this.resumeAt;
+        else if (this.paused) this.resumeGo = 0;
         // Retired: the car is off the field at once (the engine and the gravel go silent), not
         // only from the next snapshot, which no longer carries it.
         if (msg.players.some((p) => p.id === this.you && p.retired)) this.resetOwnCar();
@@ -515,6 +565,7 @@ export class Game {
         this.on.room?.();
         if (seen) for (const p of msg.players) if (retired.has(p.id) && !seen.has(p.id) && p.id !== this.you) this.on.retired?.(p);
         return;
+      }
       case "garage":
         this.scrap = msg.scrap;
         this.levels = msg.levels;
@@ -678,14 +729,28 @@ export class Game {
 
   // ---- per fixed step ---------------------------------------------------------------
 
-  /** The race is on as far as this client can tell: only then is input applied. */
+  /** The race is on as far as this client can tell (and not paused): only then is input applied. */
   raceOn(): boolean {
-    return this.phase === "racing" || (this.phase === "countdown" && this.serverNow() >= this.phaseEnds);
+    return !this.paused && this.raceOnAt(this.serverNow());
+  }
+
+  /** The race had started by server time t (the countdown was over). */
+  raceOnAt(t: number): boolean {
+    return this.phase === "racing" || (this.phase === "countdown" && t >= this.phaseEnds);
+  }
+
+  /**
+   * The server time the race view reads (clock, countdown, GO!, weapons armed, race closes):
+   * the estimated server time, standing at pausedAt while paused. After the resume raceStart
+   * and phaseEnds have moved on by the time paused, so it reads on from where it stood.
+   */
+  raceNow(): number {
+    return this.paused ? this.pausedAt : this.serverNow();
   }
 
   /** Time until weapons arm in this race (estimated server time, ms); 0 once armed. */
   armsInMs(): number {
-    return Math.max(0, this.raceStart + WEAPONS_ARM_MS - this.serverNow());
+    return Math.max(0, this.raceStart + WEAPONS_ARM_MS - this.raceNow());
   }
 
   /**
@@ -720,6 +785,13 @@ export class Game {
     if (this.connected && now - this.lastPing > PING_EVERY_MS) {
       this.lastPing = now;
       this.send({ t: "ping", c: round(now, 1) });
+    }
+    if (this.paused) {
+      // Nothing is predicted or sent (the server would throw the inputs away): the car is
+      // drawn where the snapshots put it (reconcile drops what it predicted past the pause),
+      // our cosmetic rivets hang in the air like the server's.
+      if (this.car) this.prevCar = cloneCar(this.car);
+      return;
     }
     this.moveLocalShots();
     if (!this.car || !this.connected) return;
@@ -948,6 +1020,16 @@ export class Game {
 
   isHost(): boolean {
     return !!this.you && this.hostId === this.you;
+  }
+
+  /** The host's Pause race applies: countdown or race, not paused (the server keeps a cooldown). */
+  canPause(): boolean {
+    return this.isHost() && (this.phase === "countdown" || this.phase === "racing") && !this.paused;
+  }
+
+  /** The host's Resume race applies: paused, no 3-2-1 under way yet. */
+  canResume(): boolean {
+    return this.isHost() && this.paused && !this.resumeAt;
   }
 
   /** How many players the host's Start waits for: connected, not the host, not ready. */

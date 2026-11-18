@@ -787,6 +787,9 @@ export class RaceSounds {
     v.snapTick = g.snapTick;
     v.own = g.takeOwnSounds();
     v.snap = g.you ? g.interpSnapshot() : null;
+    v.paused = g.paused;
+    v.resumeGo = g.resumeGo;
+    v.raceKey = g.raceId;
     const audible = this.audio.running();
     const out = this.triggers.frame(v, performance.now(), audible);
     if (!audible && v.own.length) this.dropped.silent += v.own.length;
@@ -863,6 +866,7 @@ export class RaceSounds {
     st.speed = Math.hypot(car.vx, car.vy);
     st.topSpeed = g.stats.topSpeed;
     st.throttle = ctl.throttle;
+    st.paused = g.paused; // the race stands still: no engine, no gravel
     this.updateGravel(st);
     const target = engineTarget(st);
     const preset = this.audio.settings.engine;

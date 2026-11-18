@@ -291,10 +291,12 @@ export class Refractory {
 /**
  * Countdown cues: beeps at 3, 2 and 1 s before the start and GO at the start, on the
  * estimated server clock (the countdown text's: phaseEnds, which is raceStart then). Latched
- * per raceStart with a monotonic index, so a clock estimate that jumps back never replays a
- * cue; nothing before the first snapshot (hasClock); a cue more than CUE_LATE_MS late (first
- * seen mid-countdown after a rejoin, a stalled frame, a hidden tab) is passed silently.
- * Returns the cue to play now: 0, 1, 2 = the beeps, 3 = GO; or null.
+ * per race (`key`: raceStart unless given; the client passes Game.raceId, which a pause's
+ * resume does not change although it moves raceStart on) with a monotonic index, so a clock
+ * estimate that jumps back never replays a cue; nothing before the first snapshot (hasClock);
+ * a cue more than CUE_LATE_MS late (first seen mid-countdown after a rejoin, a stalled frame, a
+ * hidden tab) is passed silently. While paused it is not updated (SoundTriggers.frame): the
+ * countdown stands still. Returns the cue to play now: 0, 1, 2 = the beeps, 3 = GO; or null.
  */
 export const CUE_LATE_MS = 250;
 export const COUNTDOWN_CUES = 4;
@@ -303,21 +305,50 @@ export class CountdownCues {
   private race = 0;
   private next = 0;
 
-  update(phase: string, raceStart: number, phaseEnds: number, serverNow: number, hasClock: boolean): number | null {
+  update(phase: string, raceStart: number, phaseEnds: number, serverNow: number, hasClock: boolean, key = raceStart): number | null {
     if (!hasClock || !raceStart || (phase !== "countdown" && phase !== "racing")) return null;
-    if (raceStart !== this.race) {
-      this.race = raceStart;
+    if (key !== this.race) {
+      this.race = key;
       this.next = 0;
     }
     const end = phase === "countdown" && phaseEnds > 0 ? phaseEnds : raceStart;
-    let play: number | null = null;
-    while (this.next < COUNTDOWN_CUES) {
-      const at = end - (COUNTDOWN_CUES - 1 - this.next) * 1000;
-      if (serverNow < at) break;
-      play = serverNow - at <= CUE_LATE_MS ? this.next : null;
-      this.next++;
+    const out = cueDue(this.next, end, serverNow);
+    this.next = out.next;
+    return out.play;
+  }
+}
+
+/** The latch step both 3-2-1s share: the cues due by serverNow from `next` on, before `end`. */
+function cueDue(next: number, end: number, serverNow: number): { next: number; play: number | null } {
+  let play: number | null = null;
+  while (next < COUNTDOWN_CUES) {
+    const at = end - (COUNTDOWN_CUES - 1 - next) * 1000;
+    if (serverNow < at) break;
+    play = serverNow - at <= CUE_LATE_MS ? next : null;
+    next++;
+  }
+  return { next, play };
+}
+
+/**
+ * The resume 3-2-1 of a paused race (MENU-3): beeps 3, 2 and 1 s before resumeGo and GO at it,
+ * latched per resumeGo (Game.resumeGo: kept after the resume, so the GO still plays when the
+ * room message that ends the pause comes first). Its own latch: the start countdown's cues
+ * (CountdownCues) are never replayed for it. Late cues pass silently as there.
+ */
+export class ResumeCues {
+  private key = 0;
+  private next = 0;
+
+  update(resumeGo: number, serverNow: number, hasClock: boolean): number | null {
+    if (!hasClock || !resumeGo) return null;
+    if (resumeGo !== this.key) {
+      this.key = resumeGo;
+      this.next = 0;
     }
-    return play;
+    const out = cueDue(this.next, resumeGo, serverNow);
+    this.next = out.next;
+    return out.play;
   }
 }
 
@@ -332,7 +363,7 @@ export interface WatchedSnap {
 export interface Trigger {
   kind: SfxKind;
   own: boolean; // the own car (or a global cue: the countdown): full volume, no pan
-  src: "step" | "snap" | "ev" | "bump" | "countdown";
+  src: "step" | "snap" | "ev" | "bump" | "countdown" | "resume"; // resume: the paused race's 3-2-1
   id?: string; // the car, for its position at play time when x/y are absent
   ent?: number; // the shot or mine id (snapshot triggers; debug)
   x?: number;
@@ -480,6 +511,11 @@ export interface SoundView {
   snapTick: number;
   own: readonly OwnCue[]; // drained from Game.takeOwnSounds()
   snap: WatchedSnap | null; // Game.interpSnapshot()
+  // The host's pause (MENU-3; absent = not paused): the countdown cues stand still while it
+  // lasts; resumeGo = Game.resumeGo (the resume 3-2-1's end); raceKey = Game.raceId.
+  paused?: boolean;
+  resumeGo?: number;
+  raceKey?: number;
 }
 
 /**
@@ -490,6 +526,7 @@ export interface SoundView {
  */
 export class SoundTriggers {
   readonly countdown = new CountdownCues();
+  readonly resume = new ResumeCues();
   readonly watch = new SnapWatcher();
   readonly gate: EventGate;
   readonly refractory = new Refractory();
@@ -521,8 +558,10 @@ export class SoundTriggers {
 
   frame(v: SoundView, nowMs: number, audible: boolean): Trigger[] {
     const out: Trigger[] = [];
-    const cue = this.countdown.update(v.phase, v.raceStart, v.phaseEnds, v.serverNow, v.hasClock);
+    const cue = v.paused ? null : this.countdown.update(v.phase, v.raceStart, v.phaseEnds, v.serverNow, v.hasClock, v.raceKey ?? v.raceStart);
     if (cue !== null) out.push({ kind: cue === COUNTDOWN_CUES - 1 ? "go" : "beep", own: true, src: "countdown" });
+    const rc = this.resume.update(v.resumeGo ?? 0, v.serverNow, v.hasClock);
+    if (rc !== null) out.push({ kind: rc === COUNTDOWN_CUES - 1 ? "go" : "beep", own: true, src: "resume" });
     for (const c of v.own) {
       const s = c.k;
       if (s === "wall") {
@@ -558,12 +597,12 @@ export const GRAVEL_FULL_SPEED = 300;
 
 /**
  * The own car's tyres on gravel: on while a driving car's centre is off the asphalt and it
- * rolls; silent in the air, wrecked, falling, finished, disconnected or outside races. gain
+ * rolls; silent in the air, wrecked, falling, finished, disconnected, paused or outside races. gain
  * rises with speed, density (the crackle rate) too.
  */
 export function gravelTarget(e: EngineState, offRoad: boolean): { on: boolean; gain: number; density: number } {
   const v = Math.max(0, e.speed);
-  const on = offRoad && e.hasCar && e.connected && (e.phase === "countdown" || e.phase === "racing") && e.wreck === 0 && e.fall === 0 && e.air === 0 && !e.finished && v > GRAVEL_QUIET_SPEED;
+  const on = offRoad && e.hasCar && e.connected && !e.paused && (e.phase === "countdown" || e.phase === "racing") && e.wreck === 0 && e.fall === 0 && e.air === 0 && !e.finished && v > GRAVEL_QUIET_SPEED;
   const f = Math.min(1, (v - GRAVEL_QUIET_SPEED) / (GRAVEL_FULL_SPEED - GRAVEL_QUIET_SPEED));
   return { on, gain: on ? 0.25 + 0.75 * f : 0, density: 0.5 + 1.6 * Math.min(1, v / 430) };
 }
@@ -581,16 +620,17 @@ export interface EngineState {
   speed: number;
   topSpeed: number;
   throttle: number; // -1..1, from the controls the frame loop read
+  paused?: boolean; // the host paused the race (MENU-3): engine and gravel silent
 }
 
 /**
  * The own engine: on in the countdown and the race while the car drives. rpm 0 (idle) .. 1
  * (top speed) follows the speed, revs up at a standstill on the throttle and runs higher in
  * the air (the wheels spin free); load 0..1 is the throttle (opens the filter, more grit).
- * Silent with no car, disconnected, wrecked, falling, finished or outside a race.
+ * Silent with no car, disconnected, wrecked, falling, finished, paused or outside a race.
  */
 export function engineTarget(e: EngineState): { on: boolean; rpm: number; load: number; gain: number } {
-  const on = e.hasCar && e.connected && (e.phase === "countdown" || e.phase === "racing") && e.wreck === 0 && e.fall === 0 && !e.finished;
+  const on = e.hasCar && e.connected && !e.paused && (e.phase === "countdown" || e.phase === "racing") && e.wreck === 0 && e.fall === 0 && !e.finished;
   const thr = Math.min(1, Math.abs(e.throttle));
   const v = Math.min(1, Math.max(0, e.speed / Math.max(1, e.topSpeed)));
   const rev = v < 0.2 ? thr * 0.3 * (1 - v / 0.2) : 0;
