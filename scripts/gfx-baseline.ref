@@ -1,0 +1,4 @@
+# The fixed reference of the render benchmark gate: `npm run bench -- --vs-ref gfx-baseline`
+# builds this commit as the baseline (scripts/bench.ts, PLAN-GFX.md "Baseline").
+# Set once, by the orchestrator, to the commit that merged GFX-0 into main; not moved after.
+# One commit hash on a line of its own below.

@@ -93,7 +93,7 @@ export const LIT: Readonly<Record<PaletteName, PaletteName>> = {
   steel0: "steel1", steel1: "steel2", steel2: "steel3", steel3: "bone2",
   rust0: "rust1", rust1: "rust2", rust2: "rust3", rust3: "blast",
   bone0: "bone1", bone1: "bone2", bone2: "bone2",
-  haz0: "haz1", haz1: "haz2", haz2: "bone2",
+  haz0: "haz1", haz1: "haz2", haz2: "haz2", // haz2 is the lightest of the 32: its lit tone is itself
   blast: "haz2", red: "blast", green: "haz2",
 };
 

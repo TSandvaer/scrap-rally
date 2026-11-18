@@ -6,6 +6,8 @@
 // URL: &metric=A|B|C (default A)
 //   A  every scripted frame once, synchronously, each followed by a 1x1 getImageData, on a
 //      canvas created with willReadFrequently: main-thread JS + CPU (software) raster.
+//      Before it, 300 unmeasured frames on a Renderer of their own (S4 and S5: only their
+//      first second, looped, so the ground they go on to is first drawn while measured).
 //   B  requestAnimationFrame-paced frames on a default canvas, no readback: the interval
 //      between frames as the browser presents them (the game's own path).
 //   C  JS heap growth over the frames of S3 (informational; Chrome only).
@@ -29,6 +31,7 @@ const SEED = 0x5c2a9;
 const FRAMES = 600;
 const WARM_A = 300; // unmeasured frames first (JIT, caches), on a Renderer of their own
 const WARM_B = 60;
+const LEAD_IN = 60; // S5's approach to the hazard; all of S4 and S5 that a warm-up draws (warmIndex)
 const OVER_A_MS = 4; // metric A counts the frames slower than this ...
 const OVER_B_MS = 20; // ... metric B the frame intervals longer than this
 const CHECK_EVERY = 50; // the checksum hashes every 50th frame and the last
@@ -261,7 +264,7 @@ function teleportScene(track: Track, n: number, rnd: () => number): Frame[] {
   const sRec = recoveryAt(track, sFall);
   const L = track.length;
   const others = [1, 2, 3, 4, 5].map((k) => ({ k, s0: (k * L) / 6, lat: (rnd() - 0.5) * 60 }));
-  const fallEnd = 60 + FALL_TICKS;
+  const fallEnd = LEAD_IN + FALL_TICKS;
   const half = Math.floor(n / 2);
   const cutEvery = Math.max(1, Math.floor((n - half) / 3));
   const leaders = [1, 4, 2];
@@ -274,11 +277,11 @@ function teleportScene(track: Track, n: number, rnd: () => number): Frame[] {
     let cx: number, cy: number, hud: HudView;
     if (i < half) {
       let own: CarView, speed = 0;
-      if (i < 60) {
+      if (i < LEAD_IN) {
         own = carAt(track, 0, sFall - 300 + i * 5, 0);
         speed = 300;
       } else if (i < fallEnd) {
-        own = carAt(track, 0, sFall, 0, { falling: (i - 60 + 1) / FALL_TICKS });
+        own = carAt(track, 0, sFall, 0, { falling: (i - LEAD_IN + 1) / FALL_TICKS });
       } else {
         // Put back as a ghost: a moment standing, then away at full throttle.
         const t = Math.max(0, i - fallEnd - 24) / FPS;
@@ -317,6 +320,19 @@ function script(scene: SceneId, track: Track, n: number): Frame[] {
     case "S5":
       return teleportScene(track, n, rnd);
   }
+}
+
+/**
+ * The frame a warm-up draws as its i-th. A scene with a fixed camera (S1-S3) warms up on its
+ * own frames: its steady state is what it measures. S4 and S5 move, and what they measure is
+ * ground drawn for the first time (the lap ahead, the recovery point, the places the leaders
+ * are): their warm-up loops the first second only, the stretch the measured run starts on.
+ * It never shows the own car falling or the leader changing, so a renderer that keeps baked
+ * ground between Renderers, or bakes a destination ahead of a recovery or a leader change,
+ * has seen none of it when the measurement starts.
+ */
+function warmIndex(scene: SceneId, i: number, n: number): number {
+  return scene === "S4" || scene === "S5" ? i % Math.min(LEAD_IN, n) : i % n;
 }
 
 // ---- clock ------------------------------------------------------------------------
@@ -477,7 +493,8 @@ function runA(canvas: HTMLCanvasElement, scene: SceneId, track: Track, o: Opts):
     read();
     const firstMs = realNow() - t0;
     for (let i = 1; i < warm; i++) {
-      play(warmer, frames[i], i);
+      const k = warmIndex(scene, i, n);
+      play(warmer, frames[k], k);
       read();
     }
 
@@ -527,10 +544,11 @@ function runB(canvas: HTMLCanvasElement, scene: SceneId, track: Track, o: Opts):
   const n = o.frames ?? FRAMES;
   const warm = o.warm ?? WARM_B;
   const all = script(scene, track, lap ? lapFrames(track) : n);
-  // The 600 frames of the lap start where the track's features are; the warm-up leads in.
+  // The 600 frames of the lap start where the track's features are, and its warm-up is the
+  // stretch that leads up to them; any other scene warms up as under metric A (warmIndex).
   const startFrame = lap ? Math.round((SPOTS[track.def.id].bStart / TOP) * FPS) : 0;
   const frameAt = (k: number) => {
-    const i = (((startFrame + k) % all.length) + all.length) % all.length;
+    const i = k < 0 && !lap ? warmIndex(scene, k + warm, all.length) : (((startFrame + k) % all.length) + all.length) % all.length;
     return { f: all[i], i };
   };
   const r = new Renderer(canvas, track);
@@ -575,7 +593,10 @@ function runC(canvas: HTMLCanvasElement, scene: SceneId, track: Track, o: Opts):
   pinClock(true);
   try {
     const warmer = new Renderer(canvas, track);
-    for (let i = 0; i < Math.min(n, o.warm ?? WARM_A); i++) play(warmer, frames[i], i);
+    for (let i = 0; i < Math.min(n, o.warm ?? WARM_A); i++) {
+      const k = warmIndex(scene, i, n);
+      play(warmer, frames[k], k);
+    }
     const r = new Renderer(canvas, track);
     let probeBytes = 0, last = used();
     for (let i = 0; i < n; i++) {
