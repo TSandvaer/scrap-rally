@@ -179,3 +179,4 @@ the user may trim). Host picks, everyone hears it (players can still turn music 
 
 - 2026-11-18 user decisions on SND-5: keep only Mirrorball Pit Stop (80s disco) and Neon Tailpipe (synthwave); Gravel Surf and
   Grease Monkey Strut dropped. Neon Tailpipe is the DEFAULT song (SND-4's built-in room default song = neon tailpipe).
+- 2026-11-18 user decision: the default music volume is 0.4 (was 0.5); legacy saved entries are still compared against the old 0.5 in the migration.
