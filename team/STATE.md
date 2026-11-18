@@ -166,6 +166,8 @@ tmp/qa5-menu-music-live-report.md). On PASS: the 6 tickets -> complete.
 QA5 PASS 2026-11-18 (report tmp/qa5-menu-music-live-report.md): all 6 tickets PASS on live, no console errors; not checked:
 pause resume when the pauser leaves, pause during countdown, mine refunds, capped-ammo scrap-back, clipboard contents.
 Tickets 123jpnbf9pg/9ph/9pj/fa3a/fa7m/fa7e commented + complete; QA worker released. NOTHING IN FLIGHT.
+GHOST-RIVET 123jpnbfayd (user chose 2026-11-18; from the parked QA4 phantom-rivet note) in flight: ctx_9aae16a600e1
+(run_fa7a81c5a7b8, ~/orca/workspaces/scrap-rally/ghost-rivet, :3006). No taste gate: reviewer APPROVE then merge.
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
 SND-3 done: 47606ac (sim 394/394, bots 90/90); review APPROVE (ctx_1b41cd13cc04; notes: switch-on restores the volume
 remembered at the last switch-off; storage can't tell own from default -> SND-4); FROZEN COPY ~/orca/workspaces/scrap-rally/snd3-taste
@@ -220,6 +222,7 @@ Manual Deploy only on the user's go-ahead. The user's own dev server runs on :30
 
 | Ticket | Dispatch | Workspace | Branch | Port | Started |
 | --- | --- | --- | --- | --- | --- |
+| 123jpnbfayd ghost-rivet | ctx_9aae16a600e1 | ~/orca/workspaces/scrap-rally/ghost-rivet | TSandvaer/ghost-rivet | 3006 | 2026-11-18 |
 
 ## Queued (milestone 3, PLAN-M3.md; start after solid collisions 123jpnbf6cy and easier-start 123jpnbf3xa merge)
 
