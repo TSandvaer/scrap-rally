@@ -4869,7 +4869,65 @@ function retireClient(): void {
   }
 }
 
-for (const t of [rivets, gating, mines, wrecks, finishing, garage, armDelay, engine, readyCheck, collisions, trackFeatures, roomTrack, jumpsWired, shippedTracks, botDriver, botLaps, mineCap, chatRoom, chatClient, sound, raceSounds, surfaceSounds, audioUnlock, menuHostOnly, menuStop, menuRestart, menuKick, menuLock, menuHandover, menuClient, menuRestartClient, retireRules, retireField, retireRaceEnd, retireGarage, retireRefund, retireOthers, retireNotices, retireClient]) {
+// ---- lobby Music switch (SND-3, client/audio.ts) ------------------------------------------
+
+// This section's imports (hoisted like the ones at the top).
+import { musicIsOn, musicSwitched, parseMusicBack } from "../client/audio";
+
+/**
+ * Music off is a music volume of 0 (so every Music slider shows it); off remembers the volume,
+ * on brings it back (or the default). The switch and its memory persist in the sound entry,
+ * and leave the effects and the master mute alone.
+ */
+function musicSwitch(): void {
+  const off = musicSwitched(0.7, 0);
+  const on = musicSwitched(off.music, off.remembered);
+  check("music switch: off sets the music volume to 0 and remembers 0.7; on brings 0.7 back", off.music === 0 && off.remembered === 0.7 && on.music === 0.7 && on.remembered === 0.7, JSON.stringify({ off, on }));
+  const fresh = musicSwitched(0, 0);
+  check("music switch: on with nothing remembered (slider dragged to 0) gives the default volume", fresh.music === DEFAULT_SOUND.music && fresh.music > 0, JSON.stringify(fresh));
+  check("music switch: on/off is read from the volume (0 = off)", !musicIsOn({ music: 0 }) && musicIsOn({ music: 0.05 }) && musicIsOn({ music: 1 }));
+  const parsed = [parseMusicBack(null), parseMusicBack("{"), parseMusicBack('{"musicBack":"x"}'), parseMusicBack('{"musicBack":7}'), parseMusicBack('{"musicBack":0.35}'), parseMusicBack("[1]")];
+  check("music switch: the remembered volume parses missing/broken values to 0 and clamps to 0..1", JSON.stringify(parsed) === JSON.stringify([0, 0, 0, 1, 0.35, 0]), JSON.stringify(parsed));
+
+  // AudioEngine round trip on a fake localStorage (no AudioContext: the buses come with the unlock).
+  const g = globalThis as unknown as Record<string, unknown>;
+  const had = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+  const store = new Map<string, string>();
+  const fake = { getItem: (k: string) => store.get(k) ?? null, setItem: (k: string, v: string) => void store.set(k, String(v)) };
+  Object.defineProperty(globalThis, "localStorage", { value: fake, configurable: true, writable: true });
+  try {
+    const a = new AudioEngine();
+    a.set({ music: 0.6, effects: 0.3 });
+    a.toggleMute();
+    let changes = 0;
+    a.onChange(() => changes++);
+    a.toggleMusic();
+    const afterOff = { ...a.settings, back: a.musicBack };
+    const b = new AudioEngine(); // a reload
+    const reloaded = { ...b.settings, back: b.musicBack };
+    b.toggleMusic();
+    check(
+      "music switch: off keeps effects 0.3 and the master mute; the switch notifies the controls; off and the remembered 0.6 survive a reload; on after the reload brings 0.6 back",
+      afterOff.music === 0 && afterOff.effects === 0.3 && afterOff.muted && afterOff.back === 0.6 && changes === 1 &&
+        reloaded.music === 0 && reloaded.back === 0.6 && reloaded.effects === 0.3 && reloaded.muted &&
+        b.settings.music === 0.6 && b.settings.effects === 0.3 && b.settings.muted,
+      `${JSON.stringify(afterOff)} -> reload ${JSON.stringify(reloaded)} -> on ${b.settings.music}; stored ${store.get("scrap-rally:sound")}`,
+    );
+    b.set({ music: 0 }); // a Music slider dragged to 0 is off too; the switch brings the remembered volume
+    const viaSlider = b.settings.music;
+    const offViaSlider = !musicIsOn(b.settings);
+    b.toggleMusic();
+    check("music switch: a slider dragged to 0 reads as off and the switch brings back the remembered volume", viaSlider === 0 && offViaSlider && b.settings.music === 0.6, `${viaSlider} -> ${b.settings.music}`);
+    store.set("scrap-rally:sound", '{"music":0.4,"effects":0.8,"muted":false,"engine":"v8"}'); // saved before SND-3
+    const old = new AudioEngine();
+    check("music switch: settings saved before the switch load unchanged (no remembered volume)", old.settings.music === 0.4 && old.settings.engine === "v8" && old.musicBack === 0, JSON.stringify({ ...old.settings, back: old.musicBack }));
+  } finally {
+    if (had) Object.defineProperty(globalThis, "localStorage", had);
+    else delete g.localStorage;
+  }
+}
+
+for (const t of [rivets, gating, mines, wrecks, finishing, garage, armDelay, engine, readyCheck, collisions, trackFeatures, roomTrack, jumpsWired, shippedTracks, botDriver, botLaps, mineCap, chatRoom, chatClient, sound, raceSounds, surfaceSounds, audioUnlock, menuHostOnly, menuStop, menuRestart, menuKick, menuLock, menuHandover, menuClient, menuRestartClient, retireRules, retireField, retireRaceEnd, retireGarage, retireRefund, retireOthers, retireNotices, retireClient, musicSwitch]) {
   console.log(`\n# ${t.name}`);
   try {
     t();
