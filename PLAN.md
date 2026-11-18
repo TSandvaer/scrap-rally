@@ -178,14 +178,20 @@ shake (150 ms cooldown; replays never fire it). There is no server bump event.
     an `err` in other phases, without a car, after finishing, or twice). The car leaves the
     field at once (not stepped or solid, no inputs, not in snapshots); the player is DNF but
     keeps their progress, so `endRace` (rows keyed on progress, not car) writes their row
-    (ranked after the racers who did not finish) and pays their wreck bonus. The race-end check
+    (ranked among the non-finishers by the distance driven when they retired, like any DNF:
+    user decision 2026-11-18, so retiring cannot buy the front of the reversed grid) and pays
+    their wreck bonus. The race-end check
     only waits for cars: it ends as soon as everyone left has finished; everyone retired with no
     finisher → lobby, no results. `PlayerInfo.retired` (reset in clearRace and beginRace, so by
-    the lobby, a stop and a restart). A retired player may `buy` during the race; ammo bought
-    then is added to their start-of-race ammo, so a stop or restart keeps it. The client drops
+    the lobby, a stop and a restart). A retired player may `buy` during the race; a stop or
+    restart gives back the start-of-race ammo and then replays the ammo packs they bought on it
+    as if in the lobby: a pack the cap leaves no room for is refunded (a stop or restart never
+    costs scrap, never undoes a purchase, never adds ammo). The client drops
     its predicted car on the room message (engine and gravel silent), shows the lobby panel as
     the garage (shop, docked chat, no start/ready, "You retired — you're in the next race"),
-    and others get a toast and a "retired" pill (lobby list, host's players list).
+    and others get a toast for a retirement seen live (`Game.on.retired`; not for players
+    already retired when a client joins or rejoins) and a "retired" pill (lobby list, host's
+    players list).
   Host only (C->S, refused with an `err` from anyone else):
   - `{t:"stop"}` (countdown/race): back to the lobby as if the race never ran: no results, no
     result line, no scrap, the grid order of the last finished race kept, and every racer's
