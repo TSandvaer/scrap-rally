@@ -152,6 +152,7 @@ SND-4 review 1: REQUEST_CHANGES (host Room Music drag through 0 can turn the roo
 room message; + keyboard-focused popover/lobby sliders hide host changes; + sound board slider). Sent to the author; reviewer kept.
 SND-4 fix round: 19ba4c8 (roomMusicSlid always sends musicOn + drag replay test; grabbed-only skip; board slider; sim 482/482,
 bots 95/95); re-review ctx_fabd7ad935db; snd4-taste moved to 19ba4c8 (:3009).
+SND-4 re-review: REQUEST_CHANGES #2 (grabbed sticks in WebKit) -> user: fix then merge; sent to the author; reviewer kept for a quick re-check.
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
 SND-3 done: 47606ac (sim 394/394, bots 90/90); review APPROVE (ctx_1b41cd13cc04; notes: switch-on restores the volume
 remembered at the last switch-off; storage can't tell own from default -> SND-4); FROZEN COPY ~/orca/workspaces/scrap-rally/snd3-taste
