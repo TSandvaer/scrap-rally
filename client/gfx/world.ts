@@ -21,10 +21,12 @@
 //   and the same tile is the same pixels on every machine (no canvas rasterisation involved).
 //
 // When tiles are baked (World.draw):
-// - A bake is cut into steps. A frame runs steps until its budget is used: a few for a tile
-//   that is on screen now, fewer for one baked ahead (in the direction the camera moves, and
-//   at the place the own car will be put back after a fall or a wreck). A tile that is on
-//   screen before it is ready shows as a plain dirt-coloured square.
+// - A bake is cut into steps of about a quarter of a millisecond. A frame runs steps until
+//   its share is used: a small one for tiles baked ahead (where the camera's aim is moving
+//   to, and where the own car will be put back after a fall or a wreck), a larger one while
+//   a tile round the camera's aim is missing (after a recovery, or a new leader to follow).
+//   A tile that is on screen before it is ready shows as a plain dirt-coloured square: that
+//   happens while the camera sweeps across the track to a far aim, not in a race.
 // - A camera cut (the first frame, follow(snap), frames that were skipped) bakes what is on
 //   screen at once, so a single frame is always a complete picture.
 // - The pool is module-level and keyed by track: it survives a new Renderer, and two
@@ -58,10 +60,13 @@ const FRINGE_NEAR = 5; // gravel thrown over the wall: dense this far out ...
 const FRINGE_FAR = 12; // ... thinning out to here
 const REACH = BARRIER + FRINGE_FAR; // beyond the wall line: as far as the track changes a pixel
 
-// Bake budget per frame, in cost units (about a microsecond each on the machine the
-// benchmark baseline was measured on) and in real milliseconds, whichever is used up first.
-// The units make a frame's work the same on every run; the clock protects a slower machine.
-const AHEAD_UNITS = 220;
+// A frame's share of the baking, in cost units (a step's cost is worked out from what it
+// did: about a microsecond a unit on the machine the benchmark baseline was measured on) and
+// in milliseconds, whichever is used up first. The units make a frame's work the same on
+// every run, so the same frames give the same pixels; the clock protects a slower machine.
+// (The benchmark and a held preview pin performance.now() while a frame draws: there only
+// the units count, which is also the cap that binds on a machine as fast as the baseline's.)
+const AHEAD_UNITS = 220; // tiles baked ahead
 const AHEAD_MS = 1.5;
 const URGENT_UNITS = 1500; // while a tile round the aim is missing
 const URGENT_MS = 6;
@@ -1482,7 +1487,8 @@ function claim(): Tile | null {
   if (pool.length < TILE_POOL) {
     const canvas = document.createElement("canvas");
     canvas.width = canvas.height = TILE;
-    // Opaque, and kept in main memory: it is written once and then only read.
+    // Opaque. In main memory when the view canvas is (one that is read back, as the benchmark's):
+    // a blit then never crosses between main memory and the GPU.
     const ctx = canvas.getContext("2d", { alpha: false, willReadFrequently: softTiles })!;
     const t: Tile = { canvas, ctx, key: -1, ready: false, used: -1 };
     pool.push(t);
@@ -1504,7 +1510,7 @@ function claim(): Tile | null {
 /** Counters since the page loaded, for checks and reports: tiles baked, jobs given up, squares drawn plain because their tile was not ready, and the cost units spent baking. */
 export const worldStats = { baked: 0, dropped: 0, placeholders: 0, units: 0 };
 
-/** Whether tile canvases are kept in main memory (set from the view canvas the first World draws on). */
+/** Whether tile canvases are kept in main memory: as the view canvas of the World that finds the pool empty. */
 let softTiles = true;
 
 /** Canvas memory the pool holds right now, in bytes. */
