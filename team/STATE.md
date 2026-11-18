@@ -154,6 +154,8 @@ SND-4 fix round: 19ba4c8 (roomMusicSlid always sends musicOn + drag replay test;
 bots 95/95); re-review ctx_fabd7ad935db; snd4-taste moved to 19ba4c8 (:3009).
 SND-4 re-review: REQUEST_CHANGES #2 (grabbed sticks in WebKit) -> user: fix then merge; sent to the author; reviewer kept for a quick re-check.
 SND-4: user approved the taste test; merge after the WebKit fix + re-check.
+SND-4 round 3: 770d402 (SliderGrip ends a drag on pointerup too; default music 0.4 with legacy-0.5 migration; sim 486/486, bots 95/95;
+merges cleanly); re-check ctx_3f1ecf523cbc. Merge on APPROVE.
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
 SND-3 done: 47606ac (sim 394/394, bots 90/90); review APPROVE (ctx_1b41cd13cc04; notes: switch-on restores the volume
 remembered at the last switch-off; storage can't tell own from default -> SND-4); FROZEN COPY ~/orca/workspaces/scrap-rally/snd3-taste
