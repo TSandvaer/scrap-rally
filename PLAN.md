@@ -212,6 +212,29 @@ shake (150 ms cooldown; replays never fire it). There is no server bump event.
     the host" (kind `host`, budgeted).
   - `{t:"lock", locked}`: a locked room refuses new players (`err` code `locked`); a rejoin with
     a seat token still works. The `room` message carries `locked`.
+  - Pause (MENU-3, built 2026-11-18): `{t:"pause"}` (countdown/race; refused while paused and
+    for `PAUSE_COOLDOWN_MS` = 5 s after the room stepped again) and `{t:"resume"}` (while
+    paused; a new host too). The `room` message carries `paused`, `pausedBy` (name), `pausedAt`
+    and `resumeAt` (end of the 3-2-1, 0 = none). A paused tick is not an early return: it skips
+    only the phase timers and the simulation (cars, shots, mines, every tick timer stand
+    still), while inputs are still consumed and thrown away (ack and the mine counter move on),
+    the reconnect grace runs (`disconnectedAt` and chat buckets are never shifted), snapshots
+    flow, and a race left with nobody to wait for ends (the pause with it). Resume:
+    `resumeAt = now + PAUSE_RESUME_MS` (3 s, still paused); at the first tick from it
+    `raceStart` and a nonzero `phaseEnds` move on by the time paused, every queue is reset, and
+    each connected driver's car waits for their first inputs (at most 1 s, then it coasts), so
+    the client's prediction from the frozen car is exact. In the countdown phase a resume starts
+    the countdown over at once (a full 3-2-1-GO, no 3-2-1 on top). The 3-2-1 starts by itself
+    after `PAUSE_MAX_MS` (120 s) or when the player who paused goes offline, leaves or is
+    removed. Stop and restart clear the pause; kick and retire work while paused and do not
+    unpause (orchestrator decision 2026-11-18). Client: `Game.step()` predicts and sends nothing
+    while paused; the race view (clock, countdown, GO!, weapons armed, race closes) reads
+    `raceNow()` = `pausedAt` while paused; the resume keeps the predicted car (same `raceId`);
+    the HUD shows "PAUSED by <name>" with the auto-resume time, then the 3-2-1; engine and
+    gravel are silent; the countdown cues latch on `raceId` and stand still while paused, and
+    the resume 3-2-1 has its own cue latch (`ResumeCues`, keyed on `resumeGo`). The host's menu
+    has Pause race / Resume race (both close the menu); while paused the menu's first button
+    reads "Close menu".
   The client stops on `kicked` and `locked` like on `taken` (no reconnect loop), keeps the
   stored token (retyping the code meets the block again) and says why on the menu screen.
 

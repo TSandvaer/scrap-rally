@@ -383,6 +383,7 @@ async function run(ctx: Ctx, bots: Bot[]): Promise<void> {
   await runChat(ctx, bots);
   await runMenu(ctx, bots);
   await runRetire(ctx, bots);
+  await runPause(ctx, bots);
 }
 
 const lost = new Map<string, (ConnReason | undefined)[]>();
@@ -1396,5 +1397,71 @@ async function runRetire(ctx: Ctx, bots: Bot[]): Promise<void> {
     await waitFor("retire 2: stopped", () => [W, X, Y].every((b) => b.game.phase === "lobby"), 3000);
   } finally {
     for (const b of [W, X, Y]) b.game.leave();
+  }
+}
+
+// ---- in-game menu: pause for everyone (MENU-3, PLAN-MENU.md) ----------------------------
+
+/**
+ * Pause over real sockets, with a lagged bot: the host pauses mid-race; every car stands still
+ * in the lagged bot's snapshots (which keep coming), it predicts and sends nothing, and its race
+ * clock stands. The resume's 3-2-1 plays out, raceStart moves on by the time paused, both cars
+ * drive on, and the lagged bot's reconciliation after the resume stays within the usual 50-unit
+ * bound (median < 0.5): each car waits on the server for its driver's first inputs.
+ */
+async function runPause(ctx: Ctx, bots: Bot[]): Promise<void> {
+  const P = new Bot("Papa", ctx.url, -20);
+  const Q = new Bot("Quebec", ctx.url, 20, { lag: 80, jitter: 10 });
+  bots.push(P, Q);
+  for (const b of [P, Q]) b.weapons = false;
+  try {
+    P.game.create(P.name);
+    await waitFor("P welcome", () => !!P.game.you, 3000);
+    Q.game.join(P.game.code, Q.name);
+    await waitFor("Q in P's room", () => P.game.players.length === 2 && !!Q.game.you, 3000);
+    await readyUp("pause", P, [P, Q]);
+    P.game.start();
+    await waitFor("pause: racing", () => [P, Q].every((b) => b.game.phase === "racing" && !!b.game.car), 6000);
+    await sleep(3000);
+    const start0 = P.game.raceStart;
+    const rd0 = Q.game.ownSnap()?.rd ?? 0;
+    const pausedAt = performance.now();
+    P.game.pause();
+    await waitFor("pause: both paused", () => [P, Q].every((b) => b.game.paused), 2000);
+    await sleep(600); // the inputs in flight are consumed and acked
+    const poses = () => JSON.stringify([...(Q.game.latest?.cars.values() ?? [])].map((c) => [c.id, c.x, c.y, c.h]));
+    const at0 = { poses: poses(), tick: Q.game.snapTick, seq: Q.game.seq, clock: Q.game.raceNow() - Q.game.raceStart };
+    await sleep(1500);
+    const at1 = { poses: poses(), tick: Q.game.snapTick, seq: Q.game.seq, clock: Q.game.raceNow() - Q.game.raceStart };
+    check(
+      "pause over sockets: every car stands still in the lagged bot's snapshots (which keep coming); it sends nothing, has nothing pending and its race clock stands",
+      at0.poses === at1.poses && at1.tick - at0.tick >= 60 && at1.seq === at0.seq && Q.game.pending.length === 0 && at0.clock === at1.clock &&
+        !Q.game.raceOn() && Q.game.pausedBy === P.name && P.errors.length + Q.errors.length === 0,
+      `${at1.tick - at0.tick} ticks of snapshots, seq ${at0.seq} -> ${at1.seq}, clock ${at0.clock.toFixed(0)} -> ${at1.clock.toFixed(0)}`,
+    );
+    let e0 = -1;
+    Q.afterStep = () => {
+      if (e0 < 0 && !Q.game.paused) e0 = Q.game.recErrors.length;
+    };
+    P.game.resume();
+    await waitFor("resume: 3-2-1", () => Q.game.resumeAt > 0, 2000);
+    const resumeIn = Q.game.resumeAt - Q.game.serverNow();
+    await waitFor("resume: racing again", () => [P, Q].every((b) => !b.game.paused) && e0 >= 0, 6000);
+    const pausedFor = performance.now() - pausedAt;
+    const shift = P.game.raceStart - start0;
+    await sleep(3000);
+    Q.afterStep = null;
+    const st = stats(Q.game.recErrors.slice(e0));
+    const rd1 = Q.game.ownSnap()?.rd ?? 0;
+    check(
+      "pause over sockets: after the 3-2-1 raceStart has moved on by the time paused and the race goes on; the lagged bot's reconciliation after the resume stays within the 50-unit bound (median < 0.5)",
+      resumeIn > 2500 && resumeIn <= 3100 && shift > 4000 && shift <= pausedFor + 50 && rd1 > rd0 + 300 && P.game.phase === "racing" &&
+        st.n > 60 && st.max <= 50 && st.median < 0.5 && P.errors.length + Q.errors.length === 0,
+      `3-2-1 of ${resumeIn.toFixed(0)} ms; shift ${shift.toFixed(0)} ms of ${pausedFor.toFixed(0)} paused; rd ${rd0.toFixed(0)} -> ${rd1.toFixed(0)}; after the resume n=${st.n} median ${st.median.toFixed(3)} max ${st.max.toFixed(2)}; errors ${[...P.errors, ...Q.errors].join("; ") || "-"}`,
+    );
+    P.game.stopRace();
+    await waitFor("pause: stopped", () => [P, Q].every((b) => b.game.phase === "lobby"), 3000);
+  } finally {
+    for (const b of [P, Q]) b.game.leave();
   }
 }

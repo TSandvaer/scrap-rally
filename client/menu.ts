@@ -181,7 +181,8 @@ export class GameMenu {
     const g = this.deps.game;
     const list = el("div", "gm-list");
     list.append(
-      button("Resume", "resume", () => this.close(), "primary"),
+      // While paused "Resume" would read as resuming the race: it only closes the menu.
+      g.paused ? button("Close menu", "resume", () => this.close()) : button("Resume", "resume", () => this.close(), "primary"),
       button("Sound", "sound", () => this.show("sound")),
       button("Controls", "controls", () => this.show("controls")),
       button("Copy invite link", "invite", () => this.deps.copyInvite()),
