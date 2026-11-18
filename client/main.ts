@@ -29,6 +29,9 @@ const soundBoard = debug && params.get("sounds") === "1";
 // Debug only: ?preview=1 draws a synthetic track with every feature and scripted cars
 // (client/preview.ts, loaded only then) instead of the game.
 const preview = debug && params.get("preview") === "1";
+// Debug only: ?bench=1 runs the render benchmark (client/bench.ts, loaded only then) instead
+// of the game.
+const bench = debug && params.get("bench") === "1";
 const lag = Number(params.get("lag")) || 0;
 const jitter = Number(params.get("jitter")) || 0;
 const wsUrl = `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`;
@@ -788,6 +791,9 @@ if (soundBoard) void import("./soundboard").then((m) => m.mountEffects(m.mountSo
 if (preview) {
   ui.menu.classList.add("hidden");
   void import("./preview").then((m) => m.runPreview($<HTMLCanvasElement>("view"), params));
+} else if (bench) {
+  ui.menu.classList.add("hidden");
+  void import("./bench").then((m) => m.runBench($<HTMLCanvasElement>("view"), params));
 } else {
   updatePanels();
   requestAnimationFrame(frame);

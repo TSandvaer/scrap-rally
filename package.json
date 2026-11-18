@@ -11,7 +11,8 @@
     "sim": "tsx scripts/sim-test.ts",
     "test": "tsx scripts/sim-test.ts && tsx scripts/bots.ts",
     "botplay": "tsx scripts/botplay.ts",
-    "smoke": "tsx scripts/smoke.ts"
+    "smoke": "tsx scripts/smoke.ts",
+    "bench": "tsx scripts/bench.ts"
   },
   "keywords": [],
   "author": "",
