@@ -652,6 +652,9 @@ one on those two scenes (six cells, median and p95): the same checksums, ratios 
 - The margin rule giving a verdict from a noisy set: no recorded or live run had a noisy set with every value clear of
   its margin (finding 8). A build far from the line is what would show it.
 - Metric B or construction OVER, in a quiet or a noisy set 1: every run so far had them ok.
+- Both of these were walked through only on doctored copies of recorded results, judged with `--judge` (eight cases:
+  a noisy set far below the line passes, far above it in both sets fails; B or construction OVER fails a quiet set and
+  gives INVALID in a noisy one, as does a B that is ok while this build dropped frames). They are not measurements.
 - Ctrl-C from a terminal (SIGTERM was tried).
 - Canvas memory (the 12 MB cap): by review of the pool sizes, there is no counter for it.
 - A real phone, and any browser but headless Chrome 152.
