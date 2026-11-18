@@ -217,3 +217,61 @@ scaling (the phone would letterbox to 1x); new tracks; touch-control redesign; a
    first things cut.
 5. **Phone check at the taste gates?** Headless numbers are a proxy. Recommended: the user drives the frozen copy on one
    real phone for GFX-1 and GFX-2, with the `?debug=1` frame time visible.
+
+## Advisor changes (binding; Fable 5.2 review 2026-11-18: "sound with changes"; these override the text above)
+
+1. **Memory budget.** Car sprite cells are 32x32, not 40x40 (the car is 24x13 px, 27 px diagonal), and one shared burnt sheet
+   with a colour stripe instead of one per colour. Total added canvas memory stays at or below 12 MB (tile pool ~6.3 MB).
+2. **Cars are not snapped to "scrapyard 32".** Blue, green and purple (server/room.ts:74) have no ramp there. Each car colour
+   gets its own three tones plus shared neutrals. Acceptance: the main body pixel equals the server colour (the minimap dots
+   and tag underlines use it, render.ts:765, 789).
+3. **No global nearest-colour snap on edges (replaces A2's method).** Bake per layer with an alpha threshold, then composite;
+   the lookup table is used only for fills and dither. Acceptance: no pixel on a kerb, hazard or chevron edge has a colour
+   outside its two adjacent layers.
+4. **Unbaked visible tiles.** A per-frame bake time cap with a plain dirt-colour placeholder tile, and pre-baking the
+   destination during a fall (recovery), a respawn and a spectator leader switch (render.ts:337, main.ts:744-757). New bench
+   scene S5: recovery teleport and leader cut.
+5. **Tile pool is module-level, keyed by track.** `syncRenderer` builds a new Renderer per track change (main.ts:694-697) and
+   preview.ts keeps two alive on one canvas (201-209); a per-instance pool would double or leak ~6 MB.
+6. **Sprite placement and air/fall.** Sprites are blitted in view space at integer positions with an identity transform
+   (never under the 0.8 world transform). The airborne scale up to 1.35x (render.ts:660), the fall shrink to 0.3x with
+   tumble and darkening (655-657, 691) and the height-dependent shadow alpha (639) use pre-baked size steps or an allowed
+   scaled `drawImage` (the worker picks, the reviewer checks); shadow and fall alpha are allowed (amends rule 3).
+7. **Font coverage.** `cleanName` allows every Unicode letter and digit (`\p{L}\p{N}`, room.ts:125). Names also appear in HUD
+   lines ("by NAME", the pause banner, main.ts:630-631). HUD strings need "—" (591, 593, 631) and "±" (600). A size table per
+   HUD element, each at least as tall as today (the countdown is 52 px, render.ts:835). The per-label `fillText` fallback
+   stays and is tested with a Cyrillic name.
+8. **Non-integer scale.** A 390 px phone at 3x is ~1.83 device px per view px. Before/after shots at 390x844@3x, 844x390 and
+   1440x900 for GFX-1 and GFX-2. Dither only in small areas (hole, ramp); dropped if it bands or moirés.
+9. **Benchmark.**
+   - GFX-0 confirms whether metric A's per-frame `getImageData` pushes Chrome onto its software canvas path; A and B run in
+     separate page loads; the report states that A measures CPU raster.
+   - Thresholds come from the measured noise: pass = at or below baseline + 2 x the measured run-to-run spread (replaces
+     "median at or below baseline" and "p95 x 1.05"; GFX-3, CSS only, keeps a 5% p95 allowance).
+   - "S4 max" is replaced by p99 and a count of frames over a set time.
+   - Metric C is informational only; rule 1 (no allocation) is enforced by review, scoped to `Renderer` (main.ts draw() and
+     hudView() allocate today regardless: main.ts:599-608, 719-721, 767-769).
+   - Open question 5 becomes mandatory: the user checks one real phone at the GFX-1 and GFX-2 taste gates.
+10. **Split GFX-2 and render.ts.** GFX-1's first zero-diff extraction commit also splits out `client/gfx/hud.ts` and
+    `client/gfx/actors.ts`. GFX-2 becomes GFX-2a (cars and effects: B1-B8, the main.ts wiring; owns gfx/actors.ts, main.ts)
+    and GFX-2b (font, HUD, minimap: C1-C3; owns gfx/hud.ts, gfx/font.ts), which own different files and can run in
+    parallel. B9 (decals) becomes its own later ticket, GFX-4, only if wanted.
+11. **Palette first.** `client/gfx/palette.ts` and the `:root` mirror move into GFX-0, with a palette sheet and one baked mock
+    scene as an early taste gate before GFX-1 and GFX-3 build on it.
+12. **Fixed geometry.** The minimap box (`VIEW_W - 112`) and the banner strip stay where they are (hard-coded in
+    client/audio.ts:324 and client/chat.ts:13): acceptance for GFX-1, GFX-2b and GFX-3.
+
+Adopted suggestions: heading hysteresis for remote cars (no flicker between two sprites under reconciliation noise); sample
+the high-resolution car master nearest-neighbour into indexed colour, gated on a 64-frame contact sheet of one car before all
+six; prefilter path segments per tile before stroking; spectator, pause and countdown scenes in preview.ts (no tests read
+render output, so pixel-diff fixtures are the only regression net).
+
+### Revised tickets and waves (supersedes section 5's split; its per-ticket acceptance still applies)
+
+- **Wave 1:** GFX-0 (bench + fixtures + palette.ts + palette sheet + one baked mock scene; owns client/bench.ts,
+  client/preview.ts, client/gfx/palette.ts, the main.ts import hook; taste gate: the user judges the palette sheet and mock
+  scene) alone, or with GFX-3 once the palette is approved.
+- **Wave 2:** GFX-1 (world bake; owns render.ts, gfx/world.ts, gfx/hud.ts + gfx/actors.ts as zero-diff extractions only) and
+  GFX-3 (DOM skin; style.css, index.html; mirrors the approved palette) in parallel.
+- **Wave 3:** GFX-2a (cars + effects) and GFX-2b (font + HUD + minimap) in parallel.
+- **Later, optional:** GFX-4 decals (B9).
