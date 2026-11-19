@@ -114,19 +114,32 @@ function mulberry32(seed: number): () => number {
   };
 }
 
-function hash(x: number, y: number, seed: number): number {
-  let h = Math.imul(x, 374761393) ^ Math.imul(y, 668265263) ^ Math.imul(seed, 1442695041);
-  h = Math.imul(h ^ (h >>> 13), 1274126177);
-  return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+// What corners() and stainNoise() work out. They leave it here and hand nothing back: a
+// fraction handed back from a call is boxed (see "The bake allocates nothing" below).
+const CORNERS = new Float64Array(4);
+const NOISE_OUT = new Float64Array(1);
+
+/**
+ * A hash 0..1 of each corner of lattice cell (x, y), whole numbers, into CORNERS:
+ * (x, y), (x + 1, y), (x, y + 1), (x + 1, y + 1).
+ */
+function corners(x: number, y: number, seed: number): void {
+  for (let k = 0; k < 4; k++) {
+    let h = Math.imul(x + (k & 1), 374761393) ^ Math.imul(y + (k >> 1), 668265263) ^ Math.imul(seed, 1442695041);
+    h = Math.imul(h ^ (h >>> 13), 1274126177);
+    CORNERS[k] = ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+  }
 }
 
-/** Smooth value noise 0..1: the ragged edge of a stain. */
-function vnoise(x: number, y: number, seed: number): number {
+/** Smooth value noise 0..1 on a 5 px lattice at view pixel (X, Y), into NOISE_OUT[0]: the ragged edge of a stain. */
+function stainNoise(X: number, Y: number): void {
+  const x = X / 5, y = Y / 5;
   const xi = Math.floor(x), yi = Math.floor(y);
   const fx = x - xi, fy = y - yi;
   const sx = fx * fx * (3 - 2 * fx), sy = fy * fy * (3 - 2 * fy);
-  const a = hash(xi, yi, seed), b = hash(xi + 1, yi, seed), c = hash(xi, yi + 1, seed), d = hash(xi + 1, yi + 1, seed);
-  return a + (b - a) * sx + (c - a) * sy + (a - b - c + d) * sx * sy;
+  corners(xi, yi, 9);
+  const a = CORNERS[0], b = CORNERS[1], c = CORNERS[2], d = CORNERS[3];
+  NOISE_OUT[0] = a + (b - a) * sx + (c - a) * sy + (a - b - c + d) * sx * sy;
 }
 
 /** White noise, 256x256 bytes, read at an offset of its own per tile and per use (so no tile repeats another). */
@@ -544,35 +557,63 @@ function bakeStart(art: Art, tx: number, ty: number): void {
   job.step = 0;
   job.sub = 0;
   job.patched = false;
-  const h = Math.floor(hash(tx, ty, 17) * 0x1000000);
+  // A hash of the tile, 24 bits (as corners() hashes a lattice corner, with seed 17).
+  let h = Math.imul(tx, 374761393) ^ Math.imul(ty, 668265263) ^ Math.imul(17, 1442695041);
+  h = Math.imul(h ^ (h >>> 13), 1274126177);
+  h = (h ^ (h >>> 16)) >>> 8;
   job.o1 = h & 0xffff;
   job.o2 = (Math.imul(h, 40503) >>> 4) & 0xffff;
   job.o3 = (Math.imul(h, 9973) >>> 7) & 0xffff;
 }
 
+// The bake allocates nothing once its buffers exist (tools/debug/bake-alloc.ts measures it).
+// What that takes, in this file:
+// - A number that is not whole is boxed (16 bytes) when it is handed to a function or back
+//   from one, unless the compiler happens to inline the call. So such numbers stay inside one
+//   function, or go through a typed array: a step's cost through COST, a noise value through
+//   NOISE_OUT. The bake's helpers take whole numbers, typed arrays and objects.
+// - Math.hypot is a call that boxes its arguments and its result, always: where the bake needs
+//   a distance it is spelled out as the same sum (see HYPOT below), which gives the same bits.
+// - No for...of (an iterator and a result object per step unless optimised away), no closures.
+
+/** The cost in units of the step bakeStep() just ran. */
+const COST = new Float64Array(1);
+
 /**
- * Run the next step of the job. Returns the step's cost in units, or -1 when the tile is
- * finished (its pixels are in out32). The big passes do a slice of the tile per call, so
+ * Run the next step of the job: true with the step's cost in COST[0], or false when the tile
+ * is finished (its pixels are in out32). The big passes do a slice of the tile per call, so
  * that no step takes much longer than a quarter of a millisecond.
  */
-function bakeStep(): number {
+function bakeStep(): boolean {
   switch (job.step) {
     case 0:
-      return classify();
+      classify();
+      return true;
     case 1:
-      return ground();
+      ground();
+      return true;
     case 2:
-      return yard();
+      yard();
+      return true;
     case 3:
-      return road();
+      road();
+      return true;
     case 4:
-      return details();
+      details();
+      return true;
     case 5:
-      return finish();
+      finish();
+      return true;
     default:
-      return -1;
+      return false;
   }
 }
+
+// HYPOT: Math.hypot(a, b) is, in every V8 since 2015, with u = |a|, v = |b|, m = the larger:
+//   m === 0 ? 0 : Math.sqrt((u / m) * (u / m) + (v / m) * (v / m)) * m
+// (its compensated sum has no correction to make with two terms). The bake writes that out
+// where it needs a distance whose bits decide a pixel; tools/debug/bake-alloc.ts --hypot
+// compares the two on twenty million pairs.
 
 /** The job moves on to its next step. */
 function next(step = job.step + 1): void {
@@ -581,7 +622,7 @@ function next(step = job.step + 1): void {
 }
 
 /** Per pixel: the nearest ground of the track and the gap it lies in. A few rows of blocks per call. */
-function classify(): number {
+function classify(): void {
   const art = job.art!, b = buffers();
   const { ax, ay, ex, ey, inv, nx, ny, s0, ds, gap, capA, capB } = art;
   const { bx, by } = job;
@@ -602,7 +643,8 @@ function classify(): number {
     b.dist.fill(BIG);
     if (!nc) {
       next();
-      return 30;
+      COST[0] = 30;
+      return;
     }
     b.gap.fill(-1);
     b.patch.fill(0);
@@ -736,11 +778,11 @@ function classify(): number {
   }
   if (y0 >= S) next();
   else job.sub = y0 / BLOCK;
-  return 10 + (nc + tests) * 0.6;
+  COST[0] = 10 + (nc + tests) * 0.6;
 }
 
 /** The dirt: specks whose density drifts in large patches, pebbles, and gravel thrown over the wall. Half the tile per call. */
-function ground(): number {
+function ground(): void {
   const art = job.art!, b = buffers(), N = noiseTable();
   const { bx, by, o1, o2, o3 } = job;
   const { idx, dist } = b;
@@ -759,10 +801,11 @@ function ground(): number {
       const cell = Math.floor(X / CELL);
       if (cell !== lx) {
         lx = cell;
-        a = hash(cell, ly, 11);
-        bb = hash(cell + 1, ly, 11);
-        c = hash(cell, ly + 1, 11);
-        d = hash(cell + 1, ly + 1, 11);
+        corners(cell, ly, 11);
+        a = CORNERS[0];
+        bb = CORNERS[1];
+        c = CORNERS[2];
+        d = CORNERS[3];
       }
       const fx = X / CELL - cell, sx = fx * fx * (3 - 2 * fx);
       const patch = a + (bb - a) * sx + (c - a) * sy + (a - bb - c + d) * sx * sy;
@@ -781,17 +824,19 @@ function ground(): number {
   }
   if (from + rows >= S) next();
   else job.sub++;
-  return 170;
+  COST[0] = 170;
 }
 
 /** What lies on the dirt: stains, wheel ruts, and the junk heaps with their shadows. */
-function yard(): number {
+function yard(): void {
   const art = job.art!, b = buffers(), N = noiseTable();
   const { bx, by, o2 } = job;
   const { idx, dist } = b;
   const R = art.track.wall + BARRIER;
   let cost = 8;
-  for (const st of art.stains) {
+  const stains = art.stains, ruts = art.ruts, heaps = art.junk;
+  for (let q = 0; q < stains.length; q++) {
+    const st = stains[q];
     const x0 = Math.max(0, Math.floor(st.x - st.r * 1.3 - bx)), x1 = Math.min(S - 1, Math.ceil(st.x + st.r * 1.3 - bx));
     const y0 = Math.max(0, Math.floor(st.y - st.r - by)), y1 = Math.min(S - 1, Math.ceil(st.y + st.r - by));
     if (x0 > x1 || y0 > y1) continue;
@@ -801,13 +846,17 @@ function yard(): number {
         const p = y * S + x;
         if (dist[p] <= R) continue;
         const X = bx + x, Y = by + y;
-        const d = Math.hypot(X + 0.5 - st.x, (Y + 0.5 - st.y) * 1.4) / (st.r * (0.55 + 0.6 * vnoise(X / 5, Y / 5, 9)));
+        // How far out in the stain, 0..1 at its ragged edge: Math.hypot(...) / (...), the distance spelled out (HYPOT).
+        const u = Math.abs(X + 0.5 - st.x), v = Math.abs((Y + 0.5 - st.y) * 1.4), m = u > v ? u : v;
+        stainNoise(X, Y);
+        const d = (m === 0 ? 0 : Math.sqrt((u / m) * (u / m) + (v / m) * (v / m)) * m) / (st.r * (0.55 + 0.6 * NOISE_OUT[0]));
         const n = N[((((Y + (o2 >> 8)) & 255) << 8) | ((X + o2 + 91) & 255))];
         if (d < 0.6 ? n < 215 : d < 1 && n < 105) idx[p] = DIRT1;
       }
     }
   }
-  for (const rut of art.ruts) {
+  for (let q = 0; q < ruts.length; q++) {
+    const rut = ruts[q];
     for (let k = 0; k + 3 < rut.length; k += 2) {
       const xa = rut[k] - bx, ya = rut[k + 1] - by, xb = rut[k + 2] - bx, yb = rut[k + 3] - by;
       if (Math.max(xa, xb) < 0 || Math.min(xa, xb) >= S || Math.max(ya, yb) < 0 || Math.min(ya, yb) >= S) continue;
@@ -823,18 +872,19 @@ function yard(): number {
       cost += 0.4;
     }
   }
-  for (const d of art.junk) {
+  for (let q = 0; q < heaps.length; q++) {
+    const d = heaps[q];
     const reach = d.r * 1.5 + 6;
     if (d.x + reach < bx || d.x - reach > bx + S || d.y + reach < by || d.y - reach > by + S) continue;
     junk(d);
     cost += 4;
   }
   next(job.track ? 3 : 5);
-  return cost;
+  COST[0] = cost;
 }
 
 /** The track itself: the void of a gap, then barrier, verge, kerb and tarmac with what is painted and worn on it. */
-function road(): number {
+function road(): void {
   const art = job.art!, b = buffers(), N = noiseTable();
   const { bx, by, o1 } = job;
   const { idx, cls, dist, seg, tt, lat: latOf, gap: gapOf, gapS, gapLat, patch } = b;
@@ -869,7 +919,7 @@ function road(): number {
           c = n < 18 ? SOOT0 : n < 28 ? SOOT2 : SOOT1;
         } else {
           // Which wall is this the foot of, and does it face the sun (down-right walls do)?
-          const i = nearestGapPiece(art, g, s);
+          const i = nearestGapPiece(art, g, p);
           let wx: number, wy: number; // the wall's normal, pointing into the void
           if (side <= head && side <= tail) {
             const k = l > 0 ? -1 : 1;
@@ -970,7 +1020,8 @@ function road(): number {
   const cost = 8 + (y - from) * 0.14 + work * 0.019;
   if (y < S) {
     job.sub = y;
-    return cost;
+    COST[0] = cost;
+    return;
   }
   // The joint round a repair: dark where the patch ends down-right.
   if (job.patched) {
@@ -982,11 +1033,12 @@ function road(): number {
     }
   }
   next();
-  return job.patched ? cost + 90 : cost;
+  COST[0] = job.patched ? cost + 90 : cost;
 }
 
-/** The piece of gap `g` that distance s lies on. */
-function nearestGapPiece(art: Art, g: number, s: number): number {
+/** The piece of gap `g` that pixel p of the buffer lies on (by its distance along the track there). */
+function nearestGapPiece(art: Art, g: number, p: number): number {
+  const s = buffers().gapS[p];
   for (let k = 0; k < job.nc; k++) {
     const i = cand[k];
     if (art.gap[i] === g && s >= art.s0[i] - 1e-6 && s <= art.s0[i] + art.ds[i] + 1e-6) return i;
@@ -999,7 +1051,7 @@ function nearestGapPiece(art: Art, g: number, s: number): number {
  * What is drawn over the road, a part per call: the start line, the grid marks and oil;
  * pits and a ramp's chevrons; the scrap in a gap, sixteen pieces at a time.
  */
-function details(): number {
+function details(): void {
   const art = job.art!, b = buffers(), N = noiseTable();
   const { bx, by, o2 } = job;
   const { idx, cls, mask } = b;
@@ -1022,8 +1074,9 @@ function details(): number {
       }
     }
     // Grid marks: worn paint, on tarmac only.
-    for (const quad of art.marks) {
-      if (!polyFrom(quad, bx, by)) continue;
+    const marks = art.marks, oil = art.oil;
+    for (let q = 0; q < marks.length; q++) {
+      if (!polyFrom(marks[q], bx, by)) continue;
       cost += 6;
       fillPoly(mask, 1);
       for (let y = my0; y < my1; y++) {
@@ -1035,7 +1088,8 @@ function details(): number {
       maskClear(mask);
     }
     // Oil on the tarmac: a dark blot with a ragged edge.
-    for (const st of art.oil) {
+    for (let q = 0; q < oil.length; q++) {
+      const st = oil[q];
       const xa = Math.max(0, Math.floor(st.x - st.r * 1.3 - bx)), xb = Math.min(S - 1, Math.ceil(st.x + st.r * 1.3 - bx));
       const ya = Math.max(0, Math.floor(st.y - st.r - by)), yb = Math.min(S - 1, Math.ceil(st.y + st.r - by));
       if (xa > xb || ya > yb) continue;
@@ -1045,25 +1099,32 @@ function details(): number {
           const p = y * S + x;
           if (cls[p] !== C_TARMAC || idx[p] === TAR3) continue;
           const X = bx + x, Y = by + y;
-          const d = Math.hypot(X + 0.5 - st.x, (Y + 0.5 - st.y) * 1.5) / (st.r * (0.55 + 0.6 * vnoise(X / 5, Y / 5, 9)));
+          // As a stain in the dirt: Math.hypot(...) / (...), the distance spelled out (HYPOT).
+          const u = Math.abs(X + 0.5 - st.x), v = Math.abs((Y + 0.5 - st.y) * 1.5), m = u > v ? u : v;
+          stainNoise(X, Y);
+          const d = (m === 0 ? 0 : Math.sqrt((u / m) * (u / m) + (v / m) * (v / m)) * m) / (st.r * (0.55 + 0.6 * NOISE_OUT[0]));
           if (d < 0.6 || (d < 1 && N[((((Y + (o2 >> 8)) & 255) << 8) | ((X + o2 + 91) & 255))] < 128)) idx[p] = TAR0;
         }
       }
     }
-    return cost;
+    COST[0] = cost;
+    return;
   }
   if (part === 1) {
-    for (const h of art.holes) {
+    const holes = art.holes, ramps = art.ramps;
+    for (let q = 0; q < holes.length; q++) {
+      const h = holes[q];
       const reach = h.r * 1.9 + 2;
       if (h.x + reach < bx || h.x - reach > bx + S || h.y + reach < by || h.y - reach > by + S) continue;
       pit(h);
       cost += 12 + h.r * h.r * 0.12;
     }
-    for (const rp of art.ramps) {
-      for (const pair of rp.chevrons) {
+    for (let q = 0; q < ramps.length; q++) {
+      const chevrons = ramps[q].chevrons;
+      for (let j = 0; j < chevrons.length; j++) {
         // The dark outline first, the bone-white arrow inside it; both on the plate only.
         for (let k = 0; k < 2; k++) {
-          if (!polyFrom(pair[k], bx, by)) continue;
+          if (!polyFrom(chevrons[j][k], bx, by)) continue;
           cost += 5;
           const colour = k ? BONE1 : SOOT2;
           fillPoly(mask, 1);
@@ -1072,20 +1133,25 @@ function details(): number {
         }
       }
     }
-    return cost;
+    COST[0] = cost;
+    return;
   }
   // The scrap in a gap lies in the gap: where a piece hangs over the road's end it is cut off
   // (the hazard stripes, the edge and a ramp's lip stay whole, as they always were).
   let skip = (part - 2) * 16, done = 0;
   clipClass = C_VOID;
-  for (const pile of art.piles) {
-    for (const d of pile) {
+  const piles = art.piles;
+  for (let q = 0; q < piles.length; q++) {
+    const pile = piles[q];
+    for (let j = 0; j < pile.length; j++) {
+      const d = pile[j];
       const reach = d.r * 1.5 + 6;
       if (d.x + reach < bx || d.x - reach > bx + S || d.y + reach < by || d.y - reach > by + S) continue;
       if (skip-- > 0) continue;
       if (done === 16) {
         clipClass = -1;
-        return cost + done * 8;
+        COST[0] = cost + done * 8;
+        return;
       }
       done++;
       junk(d);
@@ -1093,11 +1159,11 @@ function details(): number {
   }
   clipClass = -1;
   next();
-  return cost + done * 8;
+  COST[0] = cost + done * 8;
 }
 
 /** The barrier's depth (its cast shadow, the rail's sunlit edge, the posts), and the tile's pixels. */
-function finish(): number {
+function finish(): void {
   const art = job.art!, b = buffers();
   const { idx, cls, out32 } = b;
   const { bx, by } = job;
@@ -1135,7 +1201,7 @@ function finish(): number {
     for (let x = 0; x < TILE; x++) out32[o++] = PAL32[idx[p++]];
   }
   next();
-  return job.track ? 110 : 60;
+  COST[0] = job.track ? 110 : 60;
 }
 
 // ---- shapes -------------------------------------------------------------------------
@@ -1158,8 +1224,16 @@ function polyFrom(pts: Float64Array, bx: number, by: number): boolean {
 
 let polyN = 0;
 
-/** A rectangle w x h centred (ox, oy) from (cx, cy) in a frame turned by a, as the polygon. */
-function rect(cx: number, cy: number, cos: number, sin: number, ox: number, oy: number, w: number, h: number): void {
+// The numbers of the shape being drawn go to the functions below through these two, not as
+// arguments (they are not whole). AT: the frame of a piece of junk, its middle in buffer
+// pixels and the cosine and sine of its turn. Q: the shape, as each function says.
+const AT = new Float64Array(4);
+const Q = new Float64Array(4);
+
+/** A rectangle Q[2] x Q[3] centred (Q[0], Q[1]) in the frame AT, as the polygon. */
+function rect(): void {
+  const cx = AT[0], cy = AT[1], cos = AT[2], sin = AT[3];
+  const ox = Q[0], oy = Q[1], w = Q[2], h = Q[3];
   polyN = 4;
   for (let k = 0; k < 4; k++) {
     const u = ox + (k === 0 || k === 3 ? -w / 2 : w / 2), v = oy + (k < 2 ? -h / 2 : h / 2);
@@ -1204,8 +1278,9 @@ function fillPoly(m: Uint8Array, v: number): void {
   }
 }
 
-/** Fill a disc into mask m (pixel centres). */
-function fillDisc(m: Uint8Array, cx: number, cy: number, r: number, v: number): void {
+/** Fill the disc round (Q[0], Q[1]) of radius Q[2], buffer pixels, into mask m (pixel centres). */
+function fillDisc(m: Uint8Array, v: number): void {
+  const cx = Q[0], cy = Q[1], r = Q[2];
   const ya = Math.max(0, Math.ceil(cy - r - 0.5)), yb = Math.min(S - 1, Math.ceil(cy + r - 0.5) - 1);
   for (let y = ya; y <= yb; y++) {
     const dy = y + 0.5 - cy;
@@ -1297,9 +1372,10 @@ function inlay(c: number): void {
   }
 }
 
-/** Paint a disc in colour c inside the shape that is in the mask. */
-function inlayDisc(cx: number, cy: number, r: number, c: number): void {
+/** Paint the disc round (Q[0], Q[1]) of radius Q[2] in colour c inside the shape that is in the mask. */
+function inlayDisc(c: number): void {
   const { idx, mask } = buffers();
+  const cx = Q[0], cy = Q[1], r = Q[2];
   const ya = Math.max(my0, Math.ceil(cy - r - 0.5)), yb = Math.min(my1 - 1, Math.ceil(cy + r - 0.5) - 1);
   for (let y = ya; y <= yb; y++) {
     const dy = y + 0.5 - cy;
@@ -1312,10 +1388,11 @@ function inlayDisc(cx: number, cy: number, r: number, c: number): void {
 const SLATS = [-0.3, 0, 0.3]; // a pallet's gaps and an engine's bores, as shares of the width
 const STRAPS = [-0.17, 0.2]; // the straps round a crushed cube
 
-/** Corner k of the polygon: (px, py) in the frame at (x, y) turned by the angle whose cosine and sine are given. */
-function corner(k: number, x: number, y: number, cos: number, sin: number, px: number, py: number): void {
-  polyX[k] = x + px * cos - py * sin;
-  polyY[k] = y + px * sin + py * cos;
+/** Corner k of the polygon: (Q[0], Q[1]) in the frame AT. */
+function corner(k: number): void {
+  const px = Q[0], py = Q[1];
+  polyX[k] = AT[0] + px * AT[2] - py * AT[3];
+  polyY[k] = AT[1] + px * AT[3] + py * AT[2];
 }
 
 /** One piece of junk: two tones, a lit edge, a hard shadow. */
@@ -1324,6 +1401,10 @@ function junk(d: Junk): void {
   const x = d.x - job.bx, y = d.y - job.by, r = d.r;
   const cos = Math.cos(d.a), sin = Math.sin(d.a);
   const u = ZOOM; // one world unit, in pixels
+  AT[0] = x;
+  AT[1] = y;
+  AT[2] = cos;
+  AT[3] = sin;
   switch (d.kind) {
     case K_CUBE:
     case K_PALLET: {
@@ -1331,11 +1412,14 @@ function junk(d: Junk): void {
       const pallet = d.kind === K_PALLET;
       const w = pallet ? r * 1.6 : r * 2, h = pallet ? r * 1.6 : r * 1.4;
       const c = pallet ? GRAVEL1 : d.c;
-      rect(x, y, cos, sin, 0, 0, w, h);
+      Q[0] = 0, Q[1] = 0, Q[2] = w, Q[3] = h;
+      rect();
       fillPoly(mask, 1);
       solid(c, 3);
-      for (const k of pallet ? SLATS : STRAPS) {
-        rect(x, y, cos, sin, 0, k * h, w - 3 * u, 2.5 * u);
+      const bands = pallet ? SLATS : STRAPS;
+      for (let k = 0; k < bands.length; k++) {
+        Q[0] = 0, Q[1] = bands[k] * h, Q[2] = w - 3 * u, Q[3] = 2.5 * u;
+        rect();
         inlay(SHADE_I[c]);
       }
       break;
@@ -1343,12 +1427,17 @@ function junk(d: Junk): void {
     case K_DRUM: {
       // A drum on its end: the rim is the bevel, inside it a darker ring.
       const rr = r * 0.66;
-      fillDisc(mask, x, y, rr, 1);
+      Q[0] = x, Q[1] = y, Q[2] = rr;
+      fillDisc(mask, 1);
       solid(d.c, 3);
       const ring = r * 0.36, dark = SHADE_I[d.c];
       for (let j = my0; j < my1; j++) {
         for (let i = mx0; i < mx1; i++) {
-          if (mask[j * S + i] === 1 && Math.abs(Math.hypot(i + 0.5 - x, j + 0.5 - y) - ring) <= 1 * u) idx[j * S + i] = dark;
+          if (mask[j * S + i] !== 1) continue;
+          // The distance from the middle: Math.hypot, spelled out (HYPOT).
+          const ha = Math.abs(i + 0.5 - x), hb = Math.abs(j + 0.5 - y), hm = ha > hb ? ha : hb;
+          const q = hm === 0 ? 0 : Math.sqrt((ha / hm) * (ha / hm) + (hb / hm) * (hb / hm)) * hm;
+          if (Math.abs(q - ring) <= 1 * u) idx[j * S + i] = dark;
         }
       }
       break;
@@ -1356,14 +1445,17 @@ function junk(d: Junk): void {
     case K_COIL: {
       // A coil of cable: rings of the colour and its shade round a dark eye.
       const rr = r * 0.72;
-      fillDisc(mask, x, y, rr, 1);
+      Q[0] = x, Q[1] = y, Q[2] = rr;
+      fillDisc(mask, 1);
       solid(d.c, 3);
       const dark = SHADE_I[d.c];
       for (let j = my0 + 1; j < my1 - 1; j++) {
         for (let i = mx0 + 1; i < mx1 - 1; i++) {
           const p = j * S + i;
           if (mask[p] !== 1 || mask[p - 1] === 0 || mask[p - S] === 0 || mask[p + 1] === 0 || mask[p + S] === 0) continue; // the bevel stays
-          const q = Math.hypot(i + 0.5 - x, j + 0.5 - y);
+          // The distance from the middle: Math.hypot, spelled out (HYPOT).
+          const ha = Math.abs(i + 0.5 - x), hb = Math.abs(j + 0.5 - y), hm = ha > hb ? ha : hb;
+          const q = hm === 0 ? 0 : Math.sqrt((ha / hm) * (ha / hm) + (hb / hm) * (hb / hm)) * hm;
           idx[p] = q < rr * 0.24 ? SOOT2 : Math.floor(q / 1.6) & 1 ? dark : d.c;
         }
       }
@@ -1372,9 +1464,11 @@ function junk(d: Junk): void {
     case K_TYRES: {
       for (let k = 0; k < 3; k++) {
         const tx = x + Math.cos(d.a + k * 2.1) * r * 0.5, ty = y + Math.sin(d.a + k * 2.1) * r * 0.5;
-        fillDisc(mask, tx, ty, 7 * u, 1);
+        Q[0] = tx, Q[1] = ty, Q[2] = 7 * u;
+        fillDisc(mask, 1);
         solid(SOOT2, 3);
-        inlayDisc(tx, ty, 3.4 * u, TAR2);
+        Q[0] = tx, Q[1] = ty, Q[2] = 3.4 * u;
+        inlayDisc(TAR2);
         maskClear(mask);
       }
       return;
@@ -1383,26 +1477,40 @@ function junk(d: Junk): void {
       // A bent plate with its crease catching the sun.
       const w = r * 1.3, h = r * 0.8;
       polyN = 4;
-      corner(0, x, y, cos, sin, -w, -h * 0.6);
-      corner(1, x, y, cos, sin, w * 0.8, -h);
-      corner(2, x, y, cos, sin, w, h * 0.5);
-      corner(3, x, y, cos, sin, -w * 0.7, h);
+      Q[0] = -w, Q[1] = -h * 0.6;
+      corner(0);
+      Q[0] = w * 0.8, Q[1] = -h;
+      corner(1);
+      Q[0] = w, Q[1] = h * 0.5;
+      corner(2);
+      Q[0] = -w * 0.7, Q[1] = h;
+      corner(3);
       fillPoly(mask, 1);
       solid(d.c, 3);
+      // The crease: a thin strip, turned a little against the plate.
       const a = d.a - 0.08;
-      rect(x, y, Math.cos(a), Math.sin(a), 0, -h * 0.1, w * 1.6, 1.8 * u);
+      AT[2] = Math.cos(a);
+      AT[3] = Math.sin(a);
+      Q[0] = 0, Q[1] = -h * 0.1, Q[2] = w * 1.6, Q[3] = 1.8 * u;
+      rect();
       inlay(LIT_I[d.c]);
       break;
     }
     default: {
       // An engine block: steel, a lighter head, three bores.
       const w = r * 1.7, h = r * 1.1;
-      rect(x, y, cos, sin, 0, 0, w, h);
+      Q[0] = 0, Q[1] = 0, Q[2] = w, Q[3] = h;
+      rect();
       fillPoly(mask, 1);
       solid(STEEL1, 3);
-      rect(x, y, cos, sin, 0, -h / 2 + 1.5 * u + h * 0.18, w - 3 * u, h * 0.36);
+      Q[0] = 0, Q[1] = -h / 2 + 1.5 * u + h * 0.18, Q[2] = w - 3 * u, Q[3] = h * 0.36;
+      rect();
       inlay(STEEL2);
-      for (const k of SLATS) inlayDisc(x + k * w * cos - h * 0.18 * sin, y + k * w * sin + h * 0.18 * cos, 2.2 * u, SOOT2);
+      for (let j = 0; j < SLATS.length; j++) {
+        const k = SLATS[j];
+        Q[0] = x + k * w * cos - h * 0.18 * sin, Q[1] = y + k * w * sin + h * 0.18 * cos, Q[2] = 2.2 * u;
+        inlayDisc(SOOT2);
+      }
     }
   }
   maskClear(mask);
@@ -1418,10 +1526,13 @@ function pit(h: Art["holes"][number]): void {
   const { idx, cls, mask } = buffers();
   const { bx, by } = job;
   // Cracks: thin dark lines running out from the rim.
-  for (const line of h.cracks) {
+  for (let c = 0; c < h.cracks.length; c++) {
+    const line = h.cracks[c];
     for (let k = 0; k + 3 < line.length; k += 2) {
       const xa = line[k] - bx, ya = line[k + 1] - by, xb = line[k + 2] - bx, yb = line[k + 3] - by;
-      const len = Math.hypot(xb - xa, yb - ya) || 1;
+      // The piece's length: Math.hypot, spelled out (HYPOT).
+      const ha = Math.abs(xb - xa), hb = Math.abs(yb - ya), hm = ha > hb ? ha : hb;
+      const len = (hm === 0 ? 0 : Math.sqrt((ha / hm) * (ha / hm) + (hb / hm) * (hb / hm)) * hm) || 1;
       const px = (-(yb - ya) / len) * 0.8, py = ((xb - xa) / len) * 0.8;
       polyN = 4;
       polyX[0] = xa + px; polyY[0] = ya + py;
@@ -1456,7 +1567,9 @@ function pit(h: Art["holes"][number]): void {
     for (let x = xa; x <= xb; x++) {
       const p = y * S + x;
       if (!walled(cls[p])) continue;
-      const d = Math.hypot(x + 0.5 - fx, y + 0.5 - fy) / r;
+      // How far from the floor's middle, in radii: Math.hypot(...) / r, spelled out (HYPOT).
+      const ha = Math.abs(x + 0.5 - fx), hb = Math.abs(y + 0.5 - fy), hm = ha > hb ? ha : hb;
+      const d = (hm === 0 ? 0 : Math.sqrt((ha / hm) * (ha / hm) + (hb / hm) * (hb / hm)) * hm) / r;
       const t = (BAYER4[(by + y) & 3][(bx + x) & 3] + 0.5) / 16;
       idx[p] = d > 1 ? DIRT0 : d > 0.8 ? ((d - 0.8) / 0.2 > t ? SOOT3 : SOOT2) : d > 0.45 ? ((d - 0.45) / 0.35 > t ? SOOT2 : SOOT1) : d / 0.45 > t ? SOOT1 : SOOT0;
     }
@@ -1468,7 +1581,7 @@ function pit(h: Art["holes"][number]): void {
 interface Tile {
   canvas: HTMLCanvasElement;
   ctx: CanvasRenderingContext2D;
-  home: Map<number, Tile> | null; // the map it is in (its track's tiles), or null when it holds nothing
+  home: Map<number, Tile> | null; // its track's tiles, or null when it holds nothing
   key: number; // its tileKey there, or -1
   ready: boolean;
   used: number; // the last frame it was drawn or wanted in
@@ -1490,6 +1603,19 @@ function tileKey(tx: number, ty: number): number {
   return x >= 0 && x < 2 * KEY_HALF && y >= 0 && y < 2 * KEY_HALF ? (y << KEY_BITS) | x : -1;
 }
 
+/**
+ * The pool's tile for (tx, ty) of a track, or null. A track's map keeps its entries: taking
+ * one out for every tile given away made the map rebuild itself every few tiles (an
+ * allocation each time). An entry whose tile has since gone to another place is known by
+ * that tile's key and home, which no longer match. The map grows to the number of the
+ * track's tiles ever baked and no further.
+ */
+function tileAt(art: Art, tx: number, ty: number): Tile | null {
+  const key = tileKey(tx, ty);
+  const t = art.tiles.get(key);
+  return t !== undefined && t.key === key && t.home === art.tiles ? t : null;
+}
+
 /** A tile to bake into: a new one while the pool is not full, else the one unused for longest (never one used this frame). */
 function claim(): Tile | null {
   if (pool.length < TILE_POOL) {
@@ -1503,12 +1629,12 @@ function claim(): Tile | null {
     return t;
   }
   let best: Tile | null = null;
-  for (const t of pool) {
+  for (let i = 0; i < pool.length; i++) {
+    const t = pool[i];
     if (t === baking || t.used >= frameNo) continue;
     if (!best || t.used < best.used) best = t;
   }
   if (best) {
-    if (best.home) best.home.delete(best.key);
     best.home = null;
     best.key = -1;
     best.ready = false;
@@ -1602,7 +1728,7 @@ export class World {
     // The tiles on screen are in use, whatever happens to them below.
     for (let ty = y0; ty <= y1; ty++) {
       for (let tx = x0; tx <= x1; tx++) {
-        const t = art.tiles.get(tileKey(tx, ty));
+        const t = tileAt(art, tx, ty);
         if (t) t.used = frameNo;
       }
     }
@@ -1614,7 +1740,7 @@ export class World {
     ctx.fillStyle = P.dirt2;
     for (let ty = y0; ty <= y1; ty++) {
       for (let tx = x0; tx <= x1; tx++) {
-        const t = art.tiles.get(tileKey(tx, ty));
+        const t = tileAt(art, tx, ty);
         if (t && t.ready) ctx.drawImage(t.canvas, tx * TILE - ox, ty * TILE - oy);
         else {
           ctx.fillRect(tx * TILE - ox, ty * TILE - oy, TILE, TILE);
@@ -1626,12 +1752,12 @@ export class World {
 
   /** Bake a tile to the end, now. */
   private bakeNow(tx: number, ty: number): void {
-    const have = this.art.tiles.get(tileKey(tx, ty));
+    const have = tileAt(this.art, tx, ty);
     if (have && have.ready) return;
     if (!(baking && baking === have)) {
       if (!this.begin(tx, ty)) return;
     }
-    while (bakeStep() >= 0) { /* to the end */ }
+    while (bakeStep()) { /* to the end */ }
     this.done();
   }
 
@@ -1697,7 +1823,7 @@ export class World {
     // Wanted tiles are not given away this frame. Is one round the aim missing?
     let missing = false, urgent = false;
     for (let k = 0; k < n; k += 2) {
-      const t = art.tiles.get(tileKey(want[k], want[k + 1]));
+      const t = tileAt(art, want[k], want[k + 1]);
       if (t) t.used = frameNo;
       if (!t || !t.ready) {
         missing = true;
@@ -1715,13 +1841,12 @@ export class World {
     let used = 0, k = 0;
     for (;;) {
       if (!baking) {
-        while (k < n && art.tiles.get(tileKey(want[k], want[k + 1]))?.ready) k += 2;
+        while (k < n && tileAt(art, want[k], want[k + 1])?.ready) k += 2;
         if (k >= n || !this.begin(want[k], want[k + 1])) break; // all there, or no tile to spare
       }
       if (used >= units || (used > 0 && clock() - t0 >= ms)) break;
-      const cost = bakeStep();
-      if (cost < 0) this.done();
-      else used += cost;
+      if (bakeStep()) used += COST[0];
+      else this.done();
     }
     worldStats.units += used;
   }
@@ -1822,7 +1947,6 @@ function wantRound(margin: number): void {
 function drop(): void {
   if (!baking) return;
   worldStats.dropped++;
-  if (baking.home) baking.home.delete(baking.key);
   baking.home = null;
   baking.key = -1;
   baking.ready = false;
@@ -1837,9 +1961,8 @@ export function bakeTileIndices(track: Track, tx: number, ty: number, trace?: (s
   bakeStart(artOf(track), tx, ty);
   for (;;) {
     const step = job.step, t0 = clock();
-    const units = bakeStep();
-    if (units < 0) break;
-    trace?.(step, units, clock() - t0);
+    if (!bakeStep()) break;
+    trace?.(step, COST[0], clock() - t0);
   }
   const { idx } = buffers();
   const out = new Uint8Array(TILE * TILE);
