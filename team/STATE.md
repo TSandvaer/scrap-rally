@@ -282,6 +282,9 @@ ready for qa test; workers released, gfx2a workspace + branch removed (artefacts
 GFX-4 in flight (Fable): ctx_297e4d30b671 (~/orca/workspaces/scrap-rally/gfx4, TSandvaer/gfx4, :3006; spec tmp/spec-gfx4.md: bake allocation fix
 first, then mine scorch, skid marks only with margin). Taste copy at ffb4323 still on :3009 (pid 24346) until GFX-4's replaces it.
 Local main 57f4092 ahead of origin 3270cc8 (ghost-rivet, GFX-0, GFX-3, GFX-1, GFX-2b, GFX-2a); not pushed.
+GFX-4 done: f7ead2b (9c5fff5 bake alloc-free + 041eae9 speed; b6ebc6b scorch ring 128 + tyre marks ring 2048; full gate PASS,
+30 A ratios 0.020-0.681; stress p99 CPU 0.125->0.125, GPU 0.545->0.585 ms). Reviewer ctx_9938f1887001 (tmp/review-gfx4.md). Report +
+pairs copied to tmp/gfx4-pairs/. Taste copy gfx4-taste (detached f7ead2b) on :3009, node pid 51032 (old 24346 killed, gfx2-taste removed).
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
