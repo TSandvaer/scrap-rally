@@ -264,6 +264,9 @@ instrument first, trace script under tools/debug/). Merge order: 2b first, then 
 Taste server :3009 (pid 10368) still up for re-tests.
 2b fix 1 done: 63fa725 (gaps break >= own length; 0 distinct from O; V pointed; debug line uncut; countdown x-height left at 6;
 quick look unchanged). Re-check sent to ctx_14a5f3b78b13.
+GFX-2b MERGED 2026-11-19: re-check APPROVE (no findings); main 29041d0 (check clean, sim 492/492, bots 95/95, build ok); ticket
+ready for qa test; workers released, gfx2b workspace + branch removed (artefacts in tmp/gfx2b-pairs/). 2a told to merge main +
+delete the unused render.ts line after its jitter fix.
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
@@ -321,7 +324,6 @@ Manual Deploy only on the user's go-ahead. The user's own dev server runs on :30
 | Ticket | Dispatch | Workspace | Branch | Port | Started |
 | --- | --- | --- | --- | --- | --- |
 | 123jpnbfb26 GFX-2a | ctx_a885a3b7e8ba | ~/orca/workspaces/scrap-rally/gfx2a | TSandvaer/gfx2a | 3006 | 2026-11-19 |
-| 123jpnbfb28 GFX-2b | ctx_6fe6fc1725f2 | ~/orca/workspaces/scrap-rally/gfx2b | TSandvaer/gfx2b | 3008 | 2026-11-19 |
 | 123jpnbfb23 GFX-0 | ctx_27a7a271607b | ~/orca/workspaces/scrap-rally/gfx0 | TSandvaer/gfx0 | 3006 | 2026-11-18 |
 
 ## Queued (milestone 3, PLAN-M3.md; start after solid collisions 123jpnbf6cy and easier-start 123jpnbf3xa merge)
