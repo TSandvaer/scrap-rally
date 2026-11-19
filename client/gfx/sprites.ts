@@ -502,6 +502,15 @@ function paint(ctx: CanvasRenderingContext2D, w: number, h: number, fill: (out: 
   ctx.putImageData(img, 0, 0);
 }
 
+/**
+ * A colour's sheet painted on its canvas. Its own function, for carSheet()'s sake, which runs
+ * for every car drawn: a function holding a closure over one of its own variables makes a
+ * context for them on every call, also on a call that never gets as far as the closure.
+ */
+function paintCar(ctx: CanvasRenderingContext2D, color: string): void {
+  paint(ctx, SHEET_W, SHEET_H, (out) => carPixels(color, out));
+}
+
 const carSheets = new Map<string, CarSheet>();
 let clock = 0;
 
@@ -523,7 +532,7 @@ export function carSheet(color: string): HTMLCanvasElement {
       s.color = color;
     }
     carSheets.set(color, s);
-    paint(s.ctx, SHEET_W, SHEET_H, (out) => carPixels(color, out));
+    paintCar(s.ctx, color);
   }
   s.used = clock;
   return s.canvas;
