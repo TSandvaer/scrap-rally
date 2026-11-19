@@ -250,6 +250,12 @@ resumed 11:22 via reply. GFX-2a running its full gate since ~11:04 (bench pid 35
 GFX-2b done: 62daa9e (font 8a307e2 + HUD/minimap; full gate PASS, noise 0.006, 30 A ratios 0.029-0.692, B 6, construction 6; HUD
 0.02 B/frame; merges cleanly with main and with gfx2a). Reviewer ctx_2720833e1432 (Fable, tmp/review-gfx2b.md; judge-only, no live
 bench). Pairs copied to tmp/gfx2b-pairs/. Plan: ONE combined frozen taste copy (main + gfx2a + gfx2b) once 2a reports.
+GFX-2a done: 19b1c52 (full gate PASS, noise 0.012, 30 A ratios 0.064-0.780, B 6, construction 6; actors/effects ~0 B/frame; sprite
+canvases 4,882,432 B, 11,173,888 B with the tile pool). Reviewer ctx_e30089c1bd60 (Fable, tmp/review-gfx2a.md). Pairs in tmp/gfx2a-pairs/.
+SEMANTIC MERGE CONFLICT 2a+2b: textually clean, but render.ts:120 `const cx = vx / ZOOM, cy = vy / ZOOM;` becomes unused -> tsc
+TS6199. The second branch to merge must delete it (merge main, fix, re-check). Taste copy: ~/orca/workspaces/scrap-rally/gfx2-taste
+(detached main a6af6f7 + merge 520778e of gfx2a+gfx2b, that one line deleted locally, built) served on :3009 by node pid 10368
+(nohup; log ~/orca/workspaces/scrap-rally/gfx2-taste-server.log); LAN now 172.16.0.31. Kill by PID after the taste gate.
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
