@@ -9,6 +9,14 @@
 // - A car is one cell of its colour's sheet, picked by its heading (128 steps). Another
 //   player's car changes cell only once its heading is clearly past the step (HYSTERESIS), so
 //   the noise of interpolation and reconciliation cannot flip it between two cells.
+// - Where a car lands is a whole pixel, and whole pixels can make a car shake: two things
+//   that move together, each rounded by itself, step at different moments and so move a
+//   pixel back and forth against each other. While the view follows a car, that car is put
+//   where the Renderer says (render.ts, ahead). Another car is put, on each axis,
+//   on the road's pixels (it stands, or moves unlike the followed car: it then never steps
+//   back against the road), or a whole number of pixels from the followed car (it moves with
+//   it: it then stands still beside it while the road runs under both). A shadow is a whole
+//   offset from its car. (tools/debug/jitter-trace.ts counts the steps back.)
 // - Battered (hp under BATTERED) and wrecked cars get one more sheet on top; the shadow is the
 //   car's silhouette in the same cell.
 // - In the air a car grows to 1.35x, in a fall it shrinks to 0.3x: the same cell, blitted
@@ -57,12 +65,38 @@ const RANDOM = 65536;
 
 // Numbers that are not whole go from one function here to the next through this array, not as
 // arguments or results: handed over in a call they are boxed (16 bytes each, in Node).
-const F = new Float64Array(5);
+const F = new Float64Array(11);
 const DT = 0; // this frame's step, seconds
 const NOW = 1; // this frame's time, ms
 const QX = 2; // nearTrack: the point ...
 const QY = 3;
 const QDIST = 4; // ... and its distance from the centreline
+const LX = 5; // the car the view follows: where it truly is, in view pixels of the track's plane ...
+const LY = 6;
+const LVX = 7; // ... and how far it came since the frame before
+const LVY = 8;
+const PG = 9; // place(): a car's step over the ground on the axis, view pixels ...
+const PD = 10; // ... and its true place from the followed car's
+
+// ---- Whole pixels ---------------------------------------------------------------------
+//
+// Things drawn at whole pixels that move together cannot each be the rounding of its own
+// true value: they step at different moments, and one goes a pixel forth and a pixel back
+// against the other while nothing reverses. The view and the car it follows are stepped
+// together by the Renderer (render.ts, ahead). For any other car, see place().
+
+// A car rides with the car the view follows, on an axis, once its step against that car is
+// under RIDE_IN of its step over the ground (squared) and it moves at all (RIDE_MIN, view
+// pixels a frame, squared); it stops when it moves more against that car than over the
+// ground, at a moment both ways put it on the same pixel.
+const RIDE_IN = 0.5;
+const RIDE_MIN = 0.0025;
+/** Riding, its whole-pixel place from that car changes once its true place is this far past the middle between two pixels ... */
+const RIDE_SLACK = 0.25;
+/** ... but a change that would step it back on the road waits for the followed car's next step there (the two cancel), up to this far off. */
+const RIDE_MAX = 1.5;
+/** And a step it is on its way to is taken early, from this far off, when the followed car moves a pixel on screen the other way: it then stays where it is on screen. */
+const RIDE_EARLY = 0.35;
 
 /** The centreline segment nearest to (F[QX], F[QY]) among `count` from `from`; the distance goes to F[QDIST]. */
 function nearTrack(track: Track, from: number, count: number): number {
@@ -93,6 +127,8 @@ export class Actors {
   // This frame's cars, by their place in the list.
   private readonly cell = new Int16Array(MAX_CARS);
   private readonly kind = new Uint8Array(MAX_CARS);
+  private readonly sx = new Int32Array(MAX_CARS); // the middle of its sprite on screen
+  private readonly sy = new Int32Array(MAX_CARS);
   private readonly up = new Float64Array(MAX_CARS); // 0..1 height in the air
   private readonly fall = new Float64Array(MAX_CARS); // 0..1 of the fall, -1 = not falling
   private readonly order = new Uint8Array(MAX_CARS); // the airborne ones, lowest first
@@ -105,6 +141,18 @@ export class Actors {
   private readonly lastUp = new Float32Array(SLOTS); // its height then
   private readonly seg = new Int32Array(SLOTS).fill(-1); // where on the track it was (the search hint)
   private readonly owed = new Float32Array(SLOTS); // distance driven off the tarmac since its last speck
+  // Per slot and axis (slot * 2 + axis): 1 = placed from the car the view follows, 0 = on the road's pixels ...
+  private readonly rides = new Uint8Array(SLOTS * 2);
+  private readonly rel = new Int32Array(SLOTS * 2); // ... and its whole-pixel place from that car
+  // The car the view follows this frame: its place in the list (-1 = none); per axis its pixel
+  // in the track's plane as drawn, and its steps there and on screen since the frame before
+  // (`led`: it was there then).
+  private lead = -1;
+  private led = false;
+  private readonly leadRoad = new Int32Array(2);
+  private readonly leadAt = new Int32Array(2);
+  private readonly leadStep = new Int32Array(2);
+  private readonly leadShift = new Int32Array(2);
   // The dust.
   private readonly dustX = new Float32Array(DUST);
   private readonly dustY = new Float32Array(DUST);
@@ -126,8 +174,10 @@ export class Actors {
   /**
    * Draw the frame's cars and effects on the world already drawn, the view's top-left at view
    * pixel (ox, oy) of the track's plane. `now` (ms) drives the blinks, the smoke and the dust.
+   * `lead`: the place in `cars` of the car the view follows (-1 = it follows none), and
+   * (leadX, leadY) that car's pixel in the track's plane, as the Renderer's view has it.
    */
-  draw(cars: readonly CarView[], fx: WorldFx, ox: number, oy: number, now: number): void {
+  draw(cars: readonly CarView[], fx: WorldFx, ox: number, oy: number, now: number, lead = -1, leadX = 0, leadY = 0): void {
     const ctx = this.ctx;
     const sheets = this.sheets ?? (this.sheets = sharedSheets());
     const kind = this.kind, order = this.order, ups = this.up;
@@ -139,9 +189,29 @@ export class Actors {
     this.last[0] = now;
     this.frameNo++;
     spriteFrame();
+    this.lead = lead >= 0 && lead < n ? lead : -1;
+    if (this.lead < 0) this.led = false;
+    else {
+      // Before the cars are gone through: what the others are placed by.
+      const c = cars[this.lead];
+      const s = this.slot(c.id);
+      this.led = this.seen[s] === this.frameNo - 1; // its steps are steps only if it was there the frame before
+      F[LX] = c.x * ZOOM;
+      F[LY] = c.y * ZOOM;
+      F[LVX] = (c.x - this.lastX[s]) * ZOOM;
+      F[LVY] = (c.y - this.lastY[s]) * ZOOM;
+      this.leadStep[0] = leadX - this.leadRoad[0];
+      this.leadStep[1] = leadY - this.leadRoad[1];
+      this.leadShift[0] = leadX - ox - this.leadAt[0];
+      this.leadShift[1] = leadY - oy - this.leadAt[1];
+      this.leadRoad[0] = leadX;
+      this.leadRoad[1] = leadY;
+      this.leadAt[0] = leadX - ox;
+      this.leadAt[1] = leadY - oy;
+    }
     let flying = 0;
     for (let i = 0; i < n; i++) {
-      this.note(cars[i], i);
+      this.note(cars[i], i, ox, oy);
       if (kind[i] === AIR) {
         // Lowest first: a higher car is drawn over a lower one.
         let j = flying++;
@@ -167,13 +237,13 @@ export class Actors {
     }
     // Falling cars sink below the road (drawn first, no shadow); airborne cars fly above
     // everything (drawn last, lowest first) and their shadows do land on other cars.
-    for (let i = 0; i < n; i++) if (kind[i] === FALLING) this.car(cars[i], i, ox, oy);
+    for (let i = 0; i < n; i++) if (kind[i] === FALLING) this.car(cars[i], i);
     // Grounded cars: shadows first so no car's shadow lands on another car.
     ctx.globalAlpha = SHADOW_ALPHA;
-    for (let i = 0; i < n; i++) if (kind[i] === GROUND) this.shadow(cars[i], i, ox, oy);
+    for (let i = 0; i < n; i++) if (kind[i] === GROUND) this.shadow(i);
     ctx.globalAlpha = 1;
     if (this.dustLive) this.dustDraw(ox, oy);
-    for (let i = 0; i < n; i++) if (kind[i] === GROUND) this.car(cars[i], i, ox, oy);
+    for (let i = 0; i < n; i++) if (kind[i] === GROUND) this.car(cars[i], i);
     for (let i = 0; i < n; i++) if (cars[i].wreck) this.smoke(cars[i], ox, oy);
     this.shots(fx, ox, oy);
     // Hit sparks and mine blasts: a strip each, the frame picked by the age.
@@ -199,10 +269,10 @@ export class Actors {
     for (let j = 0; j < flying; j++) {
       const i = order[j];
       ctx.globalAlpha = SHADOW_ALPHA * (1 - 0.4 * ups[i]);
-      this.shadow(cars[i], i, ox, oy);
+      this.shadow(i);
     }
     ctx.globalAlpha = 1;
-    for (let j = 0; j < flying; j++) this.car(cars[order[j]], order[j], ox, oy);
+    for (let j = 0; j < flying; j++) this.car(cars[order[j]], order[j]);
   }
 
   /** The slot a car is remembered in; a car not seen before takes the one unused for longest. */
@@ -216,13 +286,35 @@ export class Actors {
     this.lastCell[s] = -1;
     this.seg[s] = -1;
     this.owed[s] = 0;
+    this.rides[s * 2] = this.rides[s * 2 + 1] = 0;
     return s;
   }
 
-  /** A car's state for this frame (its cell, where it is drawn in the order), and the dust it throws up. */
-  private note(c: CarView, i: number): void {
+  /** A car's state for this frame (its cell, its place on screen, where it is drawn in the order), and the dust it throws up. */
+  private note(c: CarView, i: number, ox: number, oy: number): void {
     const dt = F[DT];
     const s = this.slot(c.id);
+    const known = this.seen[s] === this.frameNo - 1; // drawn in the frame before: the way it came is known
+    // Its place on screen. On the road's pixels; the followed car where the Renderer has it;
+    // a car beside a followed car per axis as place() says, when both were there the frame
+    // before and it was driven here, not put.
+    const px = c.x * ZOOM, py = c.y * ZOOM;
+    const wx = c.x - this.lastX[s], wy = c.y - this.lastY[s];
+    let x = Math.round(px) - ox, y = Math.round(py) - oy;
+    if (i === this.lead) {
+      x = this.leadAt[0];
+      y = this.leadAt[1];
+      this.rides[s * 2] = this.rides[s * 2 + 1] = 0;
+    } else if (this.led && known && wx * wx + wy * wy < JUMP * JUMP) {
+      F[PG] = wx * ZOOM;
+      F[PD] = px - F[LX];
+      x = this.place(s * 2, 0, x);
+      F[PG] = wy * ZOOM;
+      F[PD] = py - F[LY];
+      y = this.place(s * 2 + 1, 1, y);
+    } else this.rides[s * 2] = this.rides[s * 2 + 1] = 0;
+    this.sx[i] = x;
+    this.sy[i] = y;
     // 0..1 of the fall elapsed (-1 = not falling) and 0..1 height in the air (0 = on the
     // ground), kept for the rest of the frame.
     const f = c.falling, h = c.height;
@@ -247,7 +339,6 @@ export class Actors {
     if (kind !== FALLING) this.lastCell[s] = cell;
 
     // Dust. Only for a car that was drawn in the frame before: its speed is the way it came.
-    const known = this.seen[s] === this.frameNo - 1;
     this.seen[s] = this.frameNo;
     if (known && dt > 0 && kind === GROUND && !c.wreck) {
       const mx = c.x - this.lastX[s], my = c.y - this.lastY[s];
@@ -286,6 +377,45 @@ export class Actors {
     this.lastX[s] = c.x;
     this.lastY[s] = c.y;
     this.lastUp[s] = kind === AIR ? up : 0;
+  }
+
+  /**
+   * One axis (k: 0 = x, 1 = y) of the place on screen of a car that is not the one the view
+   * follows: `at` on the road's pixels, or a whole number of pixels from the followed car
+   * while it moves with it on this axis. j = its slot * 2 + k; its step over the ground and
+   * its true place from the followed car come in F[PG] and F[PD].
+   */
+  private place(j: number, k: number, at: number): number {
+    const g = F[PG], r = g - F[LVX + k]; // its step over the ground, and against the followed car
+    const gg = g * g, rr = r * r;
+    const lead = this.leadAt[k];
+    if (!this.rides[j]) {
+      if (!(gg > RIDE_MIN && rr < RIDE_IN * gg)) return at;
+      // It starts where it is drawn now: no step at the change.
+      this.rides[j] = 1;
+      this.rel[j] = at - lead;
+    }
+    let rel = this.rel[j];
+    const off = F[PD] - rel;
+    const far = off > RIDE_MAX || off < -RIDE_MAX;
+    // Back onto the road's pixels: at a moment the two places agree, so it does not step.
+    if ((rr > gg || gg < RIDE_MIN / 4) && (lead + rel === at || far)) {
+      this.rides[j] = 0;
+      return at;
+    }
+    const step = this.leadStep[k], shift = this.leadShift[k];
+    if ((shift === 1 || shift === -1) && off * shift < -RIDE_EARLY && (step - shift) * g >= 0) {
+      // The followed car moved a pixel on screen, and this car was on its way to the next
+      // pixel the other way: it takes that step now and so stays where it is on screen
+      // (later it would go a pixel forth with the followed car and then a pixel back).
+      this.rel[j] = rel -= shift;
+    } else if (off > 0.5 + RIDE_SLACK || off < -0.5 - RIDE_SLACK) {
+      // On the road it then steps by the followed car's step and this change together: not
+      // back against its own way, unless it has fallen too far off.
+      const next = Math.round(F[PD]);
+      if ((step + next - rel) * g >= 0 || far) this.rel[j] = rel = next;
+    }
+    return lead + rel;
   }
 
   /** A landing: a ring of specks thrown outward. */
@@ -346,17 +476,21 @@ export class Actors {
     }
   }
 
-  /** A car's shadow: its silhouette, down-right; further away the higher the car is. The caller sets the alpha. */
-  private shadow(c: CarView, i: number, ox: number, oy: number): void {
+  /**
+   * A car's shadow: its silhouette, down-right; further away the higher the car is. A whole
+   * offset from the car's own place on screen, so it never slides against the car. The caller
+   * sets the alpha.
+   */
+  private shadow(i: number): void {
     const up = this.up[i];
-    const x = Math.round((c.x + 3 + up * AIR_SHADOW_X) * ZOOM) - ox, y = Math.round((c.y + 4 + up * AIR_SHADOW_Y) * ZOOM) - oy;
+    const x = this.sx[i] + Math.round((3 + up * AIR_SHADOW_X) * ZOOM), y = this.sy[i] + Math.round((4 + up * AIR_SHADOW_Y) * ZOOM);
     if (x < -OFF || y < -OFF || x > VIEW_W + OFF || y > VIEW_H + OFF) return;
     const k = this.cell[i];
     this.ctx.drawImage(this.sheets!.shade, (k & 15) * CELL, (k >> 4) * CELL, CELL, CELL, x - HALF, y - HALF, CELL, CELL);
   }
 
-  private car(c: CarView, i: number, ox: number, oy: number): void {
-    const x = Math.round(c.x * ZOOM) - ox, y = Math.round(c.y * ZOOM) - oy;
+  private car(c: CarView, i: number): void {
+    const x = this.sx[i], y = this.sy[i];
     if (x < -OFF || y < -OFF || x > VIEW_W + OFF || y > VIEW_H + OFF) return;
     const ctx = this.ctx, sheets = this.sheets!;
     const k = this.cell[i];

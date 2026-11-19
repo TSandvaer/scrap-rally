@@ -751,17 +751,23 @@ function draw(alpha: number, elapsed: number): void {
   const own: DrawPose | null = game.ownPose(alpha);
   if (own) cars.push(view(own, own, true));
 
-  // Camera: own car with a little look-ahead; else the leader; else a slow tour.
+  // Camera: own car with a little look-ahead; else the leader; else a slow tour. The renderer
+  // is told which car it follows: it steps the view in whole pixels together with that car.
   let target: { x: number; y: number } | null = null;
+  let followed = "";
   if (own && game.car) {
     target = { x: own.x + game.car.vx * 0.28, y: own.y + game.car.vy * 0.28 };
+    followed = own.id;
   } else {
     const leader = game.standings()[0];
     const pose = leader && drawn.find((o) => o.id === leader.id);
-    if (pose) target = pose;
+    if (pose) {
+      target = pose;
+      followed = pose.id;
+    }
   }
   if (target) {
-    renderer.follow(target.x, target.y, elapsed, !hadTarget);
+    renderer.follow(target.x, target.y, elapsed, !hadTarget, followed);
     hadTarget = true;
   } else {
     attract += elapsed / 1000;
