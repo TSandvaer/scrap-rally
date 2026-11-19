@@ -274,6 +274,9 @@ User re-tested ffb4323: car steady, approved (popup). Merge on the reviewer's AP
 2a re-check (ctx_7e34aa105676): jitter fix correct on all 5 checks; REQUEST_CHANGES on one older rule-1 line: carSheet's arrow
 closure allocates a 40 B context per car sprite per frame (~166 B/frame, sprites.ts:526). First REQUEST_CHANGES on 2a. Fix worker
 ctx_91f1287793f6 (tmp/gfx2a-fix2.md; reviewer diff + probes in tmp/gfx2a-review/). Taste server :3009 pid 24346 still up.
+2a fix 2 done: 5302085 (paintCar; probe 166 -> ~0 B/frame; no context in carSheet bytecode; 0 px diff). Re-check sent to
+ctx_0c0c0bf40bef but it never ran (reviewer process had exited; stopped 20:30). Fresh Fable reviewer ctx_c7c1344222df
+(tmp/review-gfx2a-r3.md). GFX-4 spec ready: tmp/spec-gfx4.md (dispatch after the 2a merge).
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
