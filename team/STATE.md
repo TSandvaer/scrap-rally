@@ -247,6 +247,9 @@ GFX-2a contact sheet: user said GO (popup) on the car design for all six colours
 (4 px; user). Orchestrator allowed 2a ONE appended preview.ts scene 'blast' (no existing scene may change).
 2026-11-19 ~10:42 GFX-2b hit the Claude 5-hour session limit (commits 8a307e2 font, 62daa9e hud/minimap); user said go ->
 resumed 11:22 via reply. GFX-2a running its full gate since ~11:04 (bench pid 3593, lock held; commits up to 19b1c52).
+GFX-2b done: 62daa9e (font 8a307e2 + HUD/minimap; full gate PASS, noise 0.006, 30 A ratios 0.029-0.692, B 6, construction 6; HUD
+0.02 B/frame; merges cleanly with main and with gfx2a). Reviewer ctx_2720833e1432 (Fable, tmp/review-gfx2b.md; judge-only, no live
+bench). Pairs copied to tmp/gfx2b-pairs/. Plan: ONE combined frozen taste copy (main + gfx2a + gfx2b) once 2a reports.
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
