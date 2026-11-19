@@ -223,7 +223,8 @@ export class Actors {
   private note(c: CarView, i: number): void {
     const dt = F[DT];
     const s = this.slot(c.id);
-    // As airOf and fallOf, kept for the rest of the frame.
+    // 0..1 of the fall elapsed (-1 = not falling) and 0..1 height in the air (0 = on the
+    // ground), kept for the rest of the frame.
     const f = c.falling, h = c.height;
     const fall = f !== undefined && f > 0 ? (f < 1 ? f : 1) : -1;
     const up = h !== undefined && h > 0 ? (h < 1 ? h : 1) : 0;
@@ -414,7 +415,7 @@ export class Actors {
         if (pass === 2) ctx.fillRect(x - 1, y - 1, 3, 3);
         else {
           const back = (pass ? 3 : 5) / (Math.sqrt(s.vx * s.vx + s.vy * s.vy) || 1);
-          ctx.fillRect(Math.round(x - s.vx * back), Math.round(y - s.vy * back), 1, 1);
+          ctx.fillRect(Math.round(x - s.vx * back) | 0, Math.round(y - s.vy * back) | 0, 1, 1); // | 0: never a -0
         }
       }
     }
@@ -521,16 +522,4 @@ export class Effects {
     fx.nSparks = shown;
     return fx;
   }
-}
-
-/** 0..1 airborne height (0 = on the ground). */
-export function airOf(c: CarView): number {
-  const h = c.height ?? 0;
-  return h > 0 ? Math.min(1, h) : 0;
-}
-
-/** 0..1 of the fall elapsed, or -1 when the car is not falling. */
-export function fallOf(c: CarView): number {
-  const f = c.falling;
-  return f !== undefined && f > 0 ? Math.min(1, f) : -1;
 }

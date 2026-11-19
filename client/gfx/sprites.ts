@@ -152,10 +152,11 @@ let carIndex: CarIndex | null = null;
 /** The three index sheets every colour shares, built on first use. */
 export function carIndexSheets(): CarIndex {
   if (carIndex) return carIndex;
-  // The masters: materials, damage and the open part, MASTER samples a view pixel.
+  // The masters: materials, damage and the open part, MASTER samples a view pixel. Only the
+  // box the car lies in is worked out (13 x 9 view pixels either way); the rest stays empty.
   const mat = new Uint8Array(MSIZE * MSIZE), dmg = new Uint8Array(MSIZE * MSIZE), flags = new Uint8Array(MSIZE * MSIZE);
-  for (let j = 0; j < MSIZE; j++) {
-    for (let i = 0; i < MSIZE; i++) {
+  for (let j = (HALF - 9) * MASTER; j < (HALF + 9) * MASTER; j++) {
+    for (let i = (HALF - 13) * MASTER; i < (HALF + 13) * MASTER; i++) {
       const u = (i + 0.5) / MASTER - HALF, v = (j + 0.5) / MASTER - HALF;
       const m = material(u, v);
       mat[j * MSIZE + i] = m;
@@ -166,9 +167,11 @@ export function carIndexSheets(): CarIndex {
     }
   }
   const car = new Uint8Array(SHEET_W * SHEET_H), dents = new Uint8Array(SHEET_W * SHEET_H), burnt = new Uint8Array(SHEET_W * SHEET_H);
-  const cell = new Uint8Array(CELL * CELL); // materials of the cell being made
-  const at = new Int32Array(CELL * CELL); // ... and where in the master each came from
-  const hull = (x: number, y: number): boolean => x >= 0 && y >= 0 && x < CELL && y < CELL && cell[y * CELL + x] >= M_BODY;
+  // The cell being made: its materials with two pixels of nothing all round (so a look at a
+  // neighbour needs no bounds check), and where in the master each pixel came from.
+  const PADDED = CELL + 4;
+  const cell = new Uint8Array(PADDED * PADDED);
+  const at = new Int32Array(CELL * CELL);
   for (let k = 0; k < HEADINGS; k++) {
     const cos = Math.cos(k * HEADING_STEP), sin = Math.sin(k * HEADING_STEP);
     for (let y = 0; y < CELL; y++) {
@@ -177,32 +180,33 @@ export function carIndexSheets(): CarIndex {
         const mi = Math.floor((dx * cos + dy * sin + HALF) * MASTER), mj = Math.floor((dy * cos - dx * sin + HALF) * MASTER);
         const inside = mi >= 0 && mj >= 0 && mi < MSIZE && mj < MSIZE;
         at[y * CELL + x] = inside ? mj * MSIZE + mi : -1;
-        cell[y * CELL + x] = inside ? mat[mj * MSIZE + mi] : M_NONE;
+        cell[(y + 2) * PADDED + x + 2] = inside ? mat[mj * MSIZE + mi] : M_NONE;
       }
     }
     const ox = (k % COLS) * CELL, oy = Math.floor(k / COLS) * CELL;
     let glint = -1, glintAt = 1e9;
     for (let y = 0; y < CELL; y++) {
       for (let x = 0; x < CELL; x++) {
-        const p = y * CELL + x, o = (oy + y) * SHEET_W + ox + x;
-        const m = cell[p];
+        const p = y * CELL + x, q = (y + 2) * PADDED + x + 2, o = (oy + y) * SHEET_W + ox + x;
+        const m = cell[q];
+        // Is the pixel to the left, right, above, below part of the hull?
+        const left = cell[q - 1] >= M_BODY, right = cell[q + 1] >= M_BODY, above = cell[q - PADDED] >= M_BODY, below = cell[q + PADDED] >= M_BODY;
         let t = T_NONE, b = 0;
         if (m === M_NONE) {
           // The outline: one pixel round the hull, on the four sides.
-          if (hull(x - 1, y) || hull(x + 1, y) || hull(x, y - 1) || hull(x, y + 1)) {
+          if (left || right || above || below) {
             t = T_OUTLINE;
             b = B_PIT;
           }
         } else if (m === M_TYRE) {
-          const bare = (qx: number, qy: number) => qx < 0 || qy < 0 || qx >= CELL || qy >= CELL || cell[qy * CELL + qx] === M_NONE;
-          t = bare(x - 1, y) || bare(x, y - 1) ? T_TREAD : T_TYRE;
+          t = cell[q - 1] === M_NONE || cell[q - PADDED] === M_NONE ? T_TREAD : T_TYRE;
           b = B_PIT;
         } else {
-          const lit = !hull(x - 1, y) || !hull(x, y - 1);
-          const shade = !hull(x + 1, y) || !hull(x, y + 1);
+          const lit = !left || !above;
+          const shade = !right || !below;
           const f = flags[at[p]];
-          if (m === M_BODY) t = lit ? T_LIT : shade || !hull(x + 1, y + 1) ? T_SHADE : T_BODY;
-          else if (m === M_ROOF) t = cell[p - 1] !== M_ROOF && cell[p - CELL] !== M_ROOF ? T_LIT : T_BODY; // the roof's sunlit corner
+          if (m === M_BODY) t = lit ? T_LIT : shade || cell[q + PADDED + 1] < M_BODY ? T_SHADE : T_BODY;
+          else if (m === M_ROOF) t = cell[q - 1] !== M_ROOF && cell[q - PADDED] !== M_ROOF ? T_LIT : T_BODY; // the roof's sunlit corner
           else if (m === M_STRIPE) t = T_LIT;
           else if (m === M_WING) t = lit ? T_BODY : T_SHADE;
           else if (m === M_LAMP) t = T_LAMP;
@@ -222,7 +226,7 @@ export function carIndexSheets(): CarIndex {
           else if (shade) b = B_DARK;
           else if (f & 2) b = (x + y) & 1 ? B_RUST : B_EMBER;
           else b = m === M_WING ? B_DARK : B_CHAR;
-          if (b === B_CHAR && (!hull(x - 2, y) || !hull(x, y - 2))) b = B_EDGE;
+          if (b === B_CHAR && (cell[q - 2] < M_BODY || cell[q - 2 * PADDED] < M_BODY)) b = B_EDGE;
           dents[o] = dmg[at[p]];
         }
         car[o] = t;
