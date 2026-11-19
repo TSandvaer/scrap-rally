@@ -237,6 +237,12 @@ Fix 1b done: eeb8951 (aim via reused Float64Array; World.aim+draw 0.01/0.15/0.01
 identical; S1/S4 0.949-1.017). Re-check by a new Fable reviewer ctx_a78759883f3e (tmp/review-gfx1-r2.md). GFX-1 pairs + reports
 copied to tmp/gfx1-pairs/ and tmp/gfx1-review/. Specs ready: tmp/spec-gfx2a.md (:3006) + tmp/spec-gfx2b.md (:3008), dispatch both
 (Fable) right after the GFX-1 merge.
+GFX-1 MERGED 2026-11-19: re-check APPROVE (no findings); main dc74e80 (check clean, sim 492/492, bots 95/95, build ok); ticket ready
+for qa test; workers released, gfx1 workspace + branch removed. Parked (bake steps allocate 1.8-2.4 kB/frame while baking) added
+to GFX-4's scope (ClickUp comment).
+WAVE 3 in flight (Fable): GFX-2a ctx_a885a3b7e8ba (~/orca/workspaces/scrap-rally/gfx2a, TSandvaer/gfx2a, :3006; contact sheet of
+one car comes via `ask` -> show the user) and GFX-2b ctx_6fe6fc1725f2 (~/orca/workspaces/scrap-rally/gfx2b, TSandvaer/gfx2b, :3008).
+Both touch render.ts call sites only; the second to merge merges main first. Local main ahead of origin 3270cc8; not pushed.
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
@@ -293,7 +299,8 @@ Manual Deploy only on the user's go-ahead. The user's own dev server runs on :30
 
 | Ticket | Dispatch | Workspace | Branch | Port | Started |
 | --- | --- | --- | --- | --- | --- |
-| 123jpnbfb24 GFX-1 | ctx_b5075af01fdf | ~/orca/workspaces/scrap-rally/gfx1 | TSandvaer/gfx1 | 3008 | 2026-11-18 |
+| 123jpnbfb26 GFX-2a | ctx_a885a3b7e8ba | ~/orca/workspaces/scrap-rally/gfx2a | TSandvaer/gfx2a | 3006 | 2026-11-19 |
+| 123jpnbfb28 GFX-2b | ctx_6fe6fc1725f2 | ~/orca/workspaces/scrap-rally/gfx2b | TSandvaer/gfx2b | 3008 | 2026-11-19 |
 | 123jpnbfb23 GFX-0 | ctx_27a7a271607b | ~/orca/workspaces/scrap-rally/gfx0 | TSandvaer/gfx0 | 3006 | 2026-11-18 |
 
 ## Queued (milestone 3, PLAN-M3.md; start after solid collisions 123jpnbf6cy and easier-start 123jpnbf3xa merge)
