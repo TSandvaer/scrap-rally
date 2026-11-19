@@ -22,6 +22,7 @@ import { rgbOf } from "./palette";
  * height to the baseline; nine go two rows below it. Lowercase letters are five rows high
  * (rows 2-6). Round shapes are flat-sided with one cut corner pixel; A has a flat top, 4 an
  * open one; Q carries its tail below the baseline: all of these stay clear when made bold.
+ * The zero has a dot in it, so it is no O; V tapers over its lower three rows, so it is no U.
  */
 const MASTER: Record<string, string> = {
   "!": "..#.. ..#.. ..#.. ..#.. ..#.. ..... ..#..",
@@ -39,7 +40,7 @@ const MASTER: Record<string, string> = {
   "-": "..... ..... ..... .###. ..... ..... .....",
   ".": "..... ..... ..... ..... ..... ..... ..#..",
   "/": "....# ...#. ...#. ..#.. .#... .#... #....",
-  "0": ".###. #...# #...# #...# #...# #...# .###.",
+  "0": ".###. #...# #...# #.#.# #...# #...# .###.",
   "1": "..#.. .##.. ..#.. ..#.. ..#.. ..#.. .###.",
   "2": ".###. #...# ....# ...#. ..#.. .#... #####",
   "3": ".###. #...# ....# ..##. ....# #...# .###.",
@@ -77,7 +78,7 @@ const MASTER: Record<string, string> = {
   S: ".#### #.... #.... .###. ....# ....# ####.",
   T: "##### ..#.. ..#.. ..#.. ..#.. ..#.. ..#..",
   U: "#...# #...# #...# #...# #...# #...# .###.",
-  V: "#...# #...# #...# #...# #...# .#.#. ..#..",
+  V: "#...# #...# #...# #...# .#.#. .#.#. ..#..",
   W: "#...# #...# #...# #.#.# #.#.# ##.## #...#",
   X: "#...# #...# .#.#. ..#.. .#.#. #...# #...#",
   Y: "#...# #...# .#.#. ..#.. ..#.. ..#.. ..#..",
@@ -175,7 +176,9 @@ const MASTER: Record<string, string> = {
 
 /**
  * The bold cut's own drawings, 6 wide, for the letters whose strokes would run together
- * when every pixel lights its right neighbour (M, N, W, m, w, ø, æ, the busy signs).
+ * when every pixel lights its right neighbour (M, N, W, m, w, ø, æ, the busy signs), and two
+ * that need another way to stay themselves: the zero is narrow with a slit (a dot would
+ * close its two-pixel counter and make an 8 of it), V thins to a point (thickened, it is a U).
  */
 const BOLD_OWN: Record<string, string> = {
   '"': "##.##. ##.##. ...... ...... ...... ...... ......",
@@ -185,7 +188,9 @@ const BOLD_OWN: Record<string, string> = {
   "*": "...... ..##.. #.##.# .####. #.##.# ..##.. ......",
   "@": ".####. ##..## ##.### ##.#.# ##.### ##.... .#####",
   "~": "...... ...... .##..# #..##. ...... ...... ......",
+  "0": ".###.. ##.##. ##.##. ##.##. ##.##. ##.##. .###..",
   M: "##..## ###### ##..## ##..## ##..## ##..## ##..##",
+  V: "##..## ##..## ##..## .#..#. .#..#. ..##.. ..##..",
   N: "##..## ###.## ###.## ###### ##.### ##.### ##..##",
   W: "##..## ##..## ##..## ##..## ##..## ###### ##..##",
   m: "...... ...... #####. ##.#.# ##.#.# ##.#.# ##.#.#",
@@ -229,8 +234,8 @@ const OVER_SMALL: Record<string, [string, string]> = {
 };
 const CEDILLA: [string, string] = ["..#.. .##..", "..##.. .###.."];
 
-/** The two rows of the seven that the tall cut doubles; a letter with a dot doubles the dot's row. */
-const DOUBLED: Record<string, [number, number]> = { ".": [1, 6], ",": [1, 6], "!": [1, 6], "?": [1, 6], ";": [1, 6], i: [0, 5], j: [0, 5] };
+/** The two rows of the seven that the tall cut doubles; a letter with a dot doubles the dot's row, V its taper. */
+const DOUBLED: Record<string, [number, number]> = { ".": [1, 6], ",": [1, 6], "!": [1, 6], "?": [1, 6], ";": [1, 6], V: [1, 3], i: [0, 5], j: [0, 5] };
 const DOUBLED_ELSE: [number, number] = [1, 5];
 
 const MARKS = 2; // rows above the capital height
