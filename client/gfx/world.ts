@@ -1531,6 +1531,9 @@ export function tilePoolBytes(): number {
 
 const want = new Int32Array(96); // this frame's tiles to have, as tx, ty pairs, most wanted first
 let wanted = 0; // ... and how many numbers of it are in use
+// The view centre wantRound() works round, in view pixels. It is handed over here and not in
+// the call: a number that is not whole was boxed on the way in (16 bytes each, in Node).
+const centre = new Float64Array(2);
 const clock = (): number => performance.now();
 
 export class World {
@@ -1666,15 +1669,29 @@ export class World {
   private bakeAhead(ox: number, oy: number): void {
     const art = this.art;
     wanted = 0;
-    wantRound(this.aimX, this.aimY, MARGIN);
+    centre[0] = this.aimX;
+    centre[1] = this.aimY;
+    wantRound(MARGIN);
     // A camera easing in to a far aim (a recovery, a new leader): once it is near, what it
     // shows on the way counts too. Further out the view changes every frame and is left plain.
     const off = Math.abs(ox + VIEW_W / 2 - this.aimX) + Math.abs(oy + VIEW_H / 2 - this.aimY);
-    if (off > MARGIN && off < NEAR) wantRound(ox + VIEW_W / 2, oy + VIEW_H / 2, 0);
+    if (off > MARGIN && off < NEAR) {
+      centre[0] = ox + VIEW_W / 2;
+      centre[1] = oy + VIEW_H / 2;
+      wantRound(0);
+    }
     const nAim = wanted;
     const lx = Math.max(-LEAD_MAX, Math.min(LEAD_MAX, this.velX * LEAD_MS)), ly = Math.max(-LEAD_MAX, Math.min(LEAD_MAX, this.velY * LEAD_MS));
-    if (Math.abs(lx) + Math.abs(ly) > 8) wantRound(this.aimX + lx, this.aimY + ly, MARGIN);
-    if (this.dest) wantRound(this.destX, this.destY, 0);
+    if (Math.abs(lx) + Math.abs(ly) > 8) {
+      centre[0] = this.aimX + lx;
+      centre[1] = this.aimY + ly;
+      wantRound(MARGIN);
+    }
+    if (this.dest) {
+      centre[0] = this.destX;
+      centre[1] = this.destY;
+      wantRound(0);
+    }
     const n = wanted;
 
     // Wanted tiles are not given away this frame. Is one round the aim missing?
@@ -1768,8 +1785,9 @@ export class World {
   }
 }
 
-/** Add the tiles under a view centred on (cx, cy), `margin` wider all round, to this frame's list: nearest to the centre first. */
-function wantRound(cx: number, cy: number, margin: number): void {
+/** Add the tiles under a view centred on `centre`, `margin` wider all round, to this frame's list: nearest to the centre first. */
+function wantRound(margin: number): void {
+  const cx = centre[0], cy = centre[1];
   const x0 = Math.floor((cx - VIEW_W / 2 - margin) / TILE), x1 = Math.floor((cx + VIEW_W / 2 - 1 + margin) / TILE);
   const y0 = Math.floor((cy - VIEW_H / 2 - margin) / TILE), y1 = Math.floor((cy + VIEW_H / 2 - 1 + margin) / TILE);
   const from = wanted;
