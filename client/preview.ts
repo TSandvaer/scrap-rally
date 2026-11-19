@@ -6,7 +6,8 @@
 // Keys 1-9 pick one of the nine feature scenes, the arrows step through those and the seven
 // fixture scenes after them (fx, wreck, damage, mine, spectator, pause, countdown: the states
 // no feature scene shows; no test reads the renderer's output, so these frames are the
-// regression net of the graphics work). URL: &scene=<name> to start on one, &freeze=1 to hold
+// regression net of the graphics work), then the scenes added since (blast: a mine's blast,
+// a landing's puff and dust from the verge). URL: &scene=<name> to start on one, &freeze=1 to hold
 // the scene's key moment, &t=<seconds> to hold any moment, &hud=0 to hide the caption.
 // A held moment pins performance.now() too while it draws (smoke and the mine blink read it),
 // so the same URL gives the same pixels on every load.
@@ -70,11 +71,14 @@ interface Scene {
   cars: (t: number) => CarView[];
   key: number; // seconds: the moment &freeze=1 holds
   fx?: (t: number) => WorldFx; // fixture scenes: shots, mines, sparks
+  lead?: number; // seconds drawn frame by frame before a held moment (dust comes from the frames before it)
   hud?: (t: number) => Partial<HudView>; // fixture scenes: the game's own HUD (its banner replaces the caption)
 }
 
 /** The feature scenes come first; keys 1-9 and their captions count only these. */
 const CLASSIC = 9;
+/** The fixture scenes after them; scenes added later are counted apart, so these keep their captions. */
+const FIXTURES = 7;
 const NO_HUD: HudView = { topLeft: [], time: "", notice: "", center: "", centerSub: "", banner: "", corner: "", debug: [], hp: null };
 const NO_FX: WorldFx = { shots: [], mines: [], sparks: [] };
 
@@ -226,8 +230,8 @@ function fixtures(track: Track, rust: Track): Scene[] {
     return { id: `p${i}`, x: g.x, y: g.y, h: g.h, color: COLORS[i], name: `Car ${i + 1}`, me: i === 0, wreck: false, ghost: false, ...more };
   };
   const raceHud: Partial<HudView> = { topLeft: ["LAP 2/3", "POS 3/6", "RIV  42 MINE 2"], time: "1:23.4", corner: "23 ms", hp: 0.62 };
-  // Damage: the hp each car of the grid has (the own car first). The renderer draws no
-  // damage yet; each car carries its hp as an extra field for the ticket that will.
+  // Damage: the hp each car of the grid has (the own car first). Under 40% a car is drawn
+  // battered (gfx/actors.ts).
   const HP = [0.39, 1, 0.8, 0.6, 0.2, 0.05];
   const holeRun = driver(track, 3, 950, 800, 240, 2);
   return [
@@ -317,6 +321,30 @@ function fixtures(track: Track, rust: Track): Scene[] {
       hud: (t) => ({ topLeft: ["LAP 1/3", "POS 1/6", "RIV  60 MINE 3"], hp: 1, center: ["3", "2", "1", "GO!"][Math.floor(t) % 4], corner: "23 ms" }),
       key: 0,
     },
+    {
+      name: "blast",
+      title: "Mine blast (its 8 frames), a landing's puff, dust off the verge",
+      rust: true,
+      cam: at(rust, 120),
+      // The own car stands; one drives along the verge; one comes down from a hop at 0.5 s.
+      cars: (t) => [
+        car(rust, 0, 20, -22),
+        car(rust, 1, 40 + ((t * 260) % 400), rust.def.halfWidth + 22),
+        car(rust, 2, 30 + ((t * 200) % 400), 26, { height: t % 2 < 0.5 ? 4 * ((t % 2) / 0.5) * (1 - (t % 2) / 0.5) : 0 }),
+      ],
+      fx: (t) => ({
+        shots: [],
+        mines: [spot(rust, 250, -30), spot(rust, 265, 8)].map((p, k) => ({ x: p.x, y: p.y, armed: k === 0 })),
+        // A row of blasts through their whole life, each a frame further than the one before.
+        sparks: Array.from({ length: 8 }, (_, k) => {
+          const p = spot(rust, 60 + k * 2, -150 + k * 34);
+          const a = (k + 0.5) / 8 + (t - 0.6) / 0.1333;
+          return { x: p.x, y: p.y, age: a - Math.floor(a), blast: true };
+        }),
+      }),
+      lead: 0.6,
+      key: 0.6,
+    },
   ];
 }
 
@@ -338,6 +366,7 @@ export function runPreview(canvas: HTMLCanvasElement, params: URLSearchParams): 
   const fixedT = params.has("t") ? Number(params.get("t")) : params.get("freeze") === "1" ? null : undefined;
   const hud = params.get("hud") !== "0";
   const start = performance.now();
+  let led: Scene | null = null; // the held scene whose lead-up has been drawn
 
   window.addEventListener("keydown", (e) => {
     const n = Number(e.key);
@@ -358,14 +387,23 @@ export function runPreview(canvas: HTMLCanvasElement, params: URLSearchParams): 
       ? ""
       : index < CLASSIC
         ? `PREVIEW ${index + 1}/${CLASSIC}  ${scene.title}  (keys 1-${CLASSIC})`
-        : `FIXTURE ${index - CLASSIC + 1}/${list.length - CLASSIC}  ${scene.title}  (arrows)`;
+        : index < CLASSIC + FIXTURES
+          ? `FIXTURE ${index - CLASSIC + 1}/${FIXTURES}  ${scene.title}  (arrows)`
+          : `EXTRA ${index - CLASSIC - FIXTURES + 1}  ${scene.title}  (arrows)`;
     const view: HudView | null = scene.hud ? { ...NO_HUD, banner: caption, ...scene.hud(t) } : caption ? { ...NO_HUD, banner: caption } : null;
-    // The renderer reads the real clock for the smoke and the mine blink: pin it while held.
-    if (held) performance.now = () => t * 1000;
-    try {
-      r.frame(scene.cars(t), scene.fx ? scene.fx(t) : NO_FX, view, held ? t * 1000 : now);
-    } finally {
-      if (held) delete (performance as { now?: unknown }).now;
+    // A held moment of a scene with a lead-up: the frames before it are drawn first, once,
+    // each at its own time (after that the held frame is redrawn as it is: no time passes).
+    const from = held && scene.lead && led !== scene ? t - scene.lead : t;
+    led = held ? scene : null;
+    for (let k = Math.round((t - from) / DT); k >= 0; k--) {
+      const u = t - k * DT;
+      // The renderer reads the real clock for the smoke and the mine blink: pin it while held.
+      if (held) performance.now = () => u * 1000;
+      try {
+        r.frame(scene.cars(u), scene.fx ? scene.fx(u) : NO_FX, view, held ? u * 1000 : now);
+      } finally {
+        if (held) delete (performance as { now?: unknown }).now;
+      }
     }
     requestAnimationFrame(frame);
   };

@@ -4,12 +4,55 @@
 // static world), actors.ts (cars and effects), hud.ts (name tags, minimap, HUD panels).
 
 import type { Track } from "../shared/track";
-import { Actors, airOf, fallOf } from "./gfx/actors";
+import { Actors } from "./gfx/actors";
 import { Hud } from "./gfx/hud";
 import { VIEW_H, VIEW_W, World, ZOOM } from "./gfx/world";
 
 export { VIEW_H, VIEW_W };
 const SHAKE_MS = 180;
+
+// ---- Whole pixels: the view and the car it follows (Renderer.ahead) -----------------------
+//
+// Three whole-pixel values hang together on each axis while the camera follows a car: the
+// car's pixel on the road, the view's scroll, and the car's pixel on screen, which is the
+// first less the second. They cannot each be the rounding of its own true value: they would
+// step at different moments, and the car would go a pixel forth and a pixel back on screen
+// while it drives steadily. Instead each keeps its value from frame to frame and steps by
+// these rules:
+// - only toward its true value, and not past the middle beyond it: so it never has cause to
+//   step back while its true value moves one way;
+// - it may wait (be up to LAG behind) when the others cannot step with it this frame;
+// - it does not step yet while its true value is within SLACK of the middle between two
+//   pixels, unless the others need it to (timer noise in the camera's easing cannot then
+//   flip the car between two pixels).
+// Of the steps that fit together, the ones that leave the least to be wished for are taken.
+// (tools/debug/jitter-trace.ts counts the steps back.)
+
+/** A value steps once its true value is this far past the middle between two pixels ... */
+const SLACK = 0.3;
+/** ... and it may be left this far behind its true value. */
+const LAG = 1.5;
+/** What a step costs that is taken before that (in squared pixels of error, the measure of the rest). */
+const UNDUE = 1;
+
+// How far the true values are ahead of the whole-pixel ones (view pixels): [0] the car on the
+// road, [1] the view, [2] the car on screen; [3] the bill. Kept in an array: numbers that are
+// not whole are boxed when handed over in a call.
+const AHEAD = new Float64Array(4);
+
+/** May value i step by d whole pixels, by the rules above? */
+function maySteps(i: number, d: number): boolean {
+  const e = AHEAD[i];
+  if (d === 0) return e <= LAG && e >= -LAG;
+  const r = Math.round(e);
+  return (d > 0 ? e > 0 && d <= r : e < 0 && d >= r) && e - d <= LAG && e - d >= -LAG;
+}
+
+/** Add to the bill (AHEAD[3]) what a step of d leaves to be wished for in value i. */
+function bill(i: number, d: number): void {
+  const e = AHEAD[i], left = e - d;
+  AHEAD[3] += left * left + (d !== 0 && e <= 0.5 + SLACK && e >= -0.5 - SLACK ? UNDUE : 0);
+}
 
 export interface CarView {
   id: string;
@@ -25,6 +68,8 @@ export interface CarView {
   height?: number;
   /** 0..1 of the fall elapsed (FALL_TICKS); absent = not falling. */
   falling?: number;
+  /** 0..1 of the car's full health; under 0.4 it is drawn battered. Absent = not known: drawn whole. */
+  hp?: number;
 }
 
 /**
@@ -44,7 +89,10 @@ export interface DrawPose {
 export interface WorldFx {
   shots: { x: number; y: number; vx: number; vy: number }[];
   mines: { x: number; y: number; armed: boolean }[];
-  sparks: { x: number; y: number; age: number }[]; // age 0..1
+  sparks: { x: number; y: number; age: number; blast?: boolean }[]; // age 0..1; blast = a mine went off there, else a hit spark
+  /** For a caller that keeps its arrays from frame to frame (main.ts): how many entries count. Absent = all of them. */
+  nShots?: number;
+  nSparks?: number;
 }
 
 export interface HudView {
@@ -65,6 +113,13 @@ export class Renderer {
   private readonly actors: Actors;
   private readonly hud: Hud;
   readonly cam = { x: 0, y: 0 };
+  // Following a car (follow): its id ("" = none) and, per axis, as drawn in the frame before
+  // (`led`: for which car): the view's middle and that car's pixel, both in whole view pixels
+  // of the track's plane.
+  private followed = "";
+  private led = "";
+  private readonly view = new Int32Array(2);
+  private readonly carAt = new Int32Array(2);
   private shakeAmp = 0;
   private shakeStart = 0;
 
@@ -74,12 +129,19 @@ export class Renderer {
     this.ctx = canvas.getContext("2d")!;
     this.ctx.imageSmoothingEnabled = false;
     this.world = new World(this.ctx, track);
-    this.actors = new Actors(this.ctx);
+    this.actors = new Actors(this.ctx, track);
     this.hud = new Hud(this.ctx, track);
   }
 
-  /** Ease the camera toward a target (world coords). snap = jump straight there. */
-  follow(x: number, y: number, dtMs: number, snap = false): void {
+  /**
+   * Ease the camera toward a target (world coords). snap = jump straight there.
+   * `car`: the id of the car the camera follows (the own car, or the leader a spectator
+   * watches), "" when it follows none (a fixed view, the tour). View and car are then stepped
+   * together in whole pixels (ahead), so the car does not move a pixel back and forth on
+   * screen while it drives.
+   */
+  follow(x: number, y: number, dtMs: number, snap = false, car = ""): void {
+    this.followed = car;
     this.world.aim(x, y, dtMs, snap);
     if (snap) {
       this.cam.x = x;
@@ -104,42 +166,73 @@ export class Renderer {
     return t < 1 ? this.shakeAmp * (1 - t) : 0;
   }
 
+  /**
+   * One axis (k: 0 = x, 1 = y) of the view's middle while the camera follows `car`, in whole
+   * view pixels; the car's pixel goes to carAt[k]. The two are stepped together by the rules
+   * of "Whole pixels" at the top. `fresh`: followed from this frame on, nothing to step from.
+   */
+  private ahead(k: number, car: CarView, fresh: boolean): number {
+    const at = k ? car.y : car.x, cam = k ? this.cam.y : this.cam.x; // world units
+    if (fresh) {
+      this.carAt[k] = Math.round(at * ZOOM);
+      return (this.view[k] = Math.round(cam * ZOOM));
+    }
+    // How far the true values are ahead of the drawn ones: the car on the road, the view, the car on screen.
+    AHEAD[0] = at * ZOOM - this.carAt[k];
+    AHEAD[1] = cam * ZOOM - this.view[k];
+    AHEAD[2] = AHEAD[0] - AHEAD[1];
+    const r0 = Math.round(AHEAD[0]), v0 = Math.round(AHEAD[1]);
+    let dCar = r0, dView = v0, least = Infinity;
+    // Tried: the step each of the two asks for, or one less (it waits for the other).
+    for (let i = 0; i < 4; i++) {
+      const dc = i & 1 ? r0 - (r0 > 0 ? 1 : r0 < 0 ? -1 : 0) : r0, dv = i & 2 ? v0 - (v0 > 0 ? 1 : v0 < 0 ? -1 : 0) : v0;
+      if (!maySteps(0, dc) || !maySteps(1, dv) || !maySteps(2, dc - dv)) continue;
+      AHEAD[3] = 0;
+      bill(0, dc);
+      bill(1, dv);
+      bill(2, dc - dv);
+      if (AHEAD[3] < least) {
+        least = AHEAD[3];
+        dCar = dc;
+        dView = dv;
+      }
+    }
+    this.carAt[k] += dCar;
+    return (this.view[k] += dView);
+  }
+
   /** Draw one frame. `now` (ms) drives the camera shake and the car blinks. */
   frame(cars: CarView[], fx: WorldFx, hud: HudView | null, now = performance.now()): void {
     const ctx = this.ctx;
-    const actors = this.actors;
     const amp = this.shakeLeft(now) / ZOOM;
     const ph = (now - this.shakeStart) / 16;
-    // The camera, snapped to whole view pixels: the baked world is blitted 1:1.
-    const vx = Math.round((this.cam.x + Math.sin(ph * 1.7) * amp) * ZOOM);
-    const vy = Math.round((this.cam.y + Math.cos(ph * 2.3) * amp) * ZOOM);
-    const cx = vx / ZOOM, cy = vy / ZOOM;
+    // The view's middle, in whole view pixels: the baked world is blitted 1:1.
+    let lead = -1; // the car the camera follows, by its place in the list
+    if (this.followed) for (let i = 0; i < cars.length && lead < 0; i++) if (cars[i].id === this.followed) lead = i;
+    let vx: number, vy: number;
+    if (lead < 0) {
+      // The camera itself, rounded.
+      this.led = "";
+      vx = Math.round((this.cam.x + Math.sin(ph * 1.7) * amp) * ZOOM);
+      vy = Math.round((this.cam.y + Math.cos(ph * 2.3) * amp) * ZOOM);
+    } else {
+      // The view and the car it follows, stepped together; the shake on top, in whole pixels.
+      const car = cars[lead];
+      const fresh = this.led !== this.followed;
+      this.led = this.followed;
+      vx = this.ahead(0, car, fresh) + Math.round(Math.sin(ph * 1.7) * amp * ZOOM);
+      vy = this.ahead(1, car, fresh) + Math.round(Math.cos(ph * 2.3) * amp * ZOOM);
+    }
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     this.world.draw(vx - VIEW_W / 2, vy - VIEW_H / 2, cars);
 
-    ctx.setTransform(ZOOM, 0, 0, ZOOM, VIEW_W / 2 - cx * ZOOM, VIEW_H / 2 - cy * ZOOM);
-    // Mines and sparks set no line cap or join of their own: the ones the track's strokes used to leave.
-    ctx.lineJoin = "round";
-    ctx.lineCap = "butt";
-
-    for (const m of fx.mines) actors.mine(m.x, m.y, m.armed);
-    // Falling cars sink below the road (drawn first, no shadow); airborne cars fly above
-    // everything (drawn last, lowest first) and their shadows do land on other cars.
-    const falling = cars.filter((c) => fallOf(c) >= 0);
-    const ground = cars.filter((c) => fallOf(c) < 0 && airOf(c) === 0);
-    const air = cars.filter((c) => fallOf(c) < 0 && airOf(c) > 0).sort((a, b) => airOf(a) - airOf(b));
-    for (const c of falling) actors.car(c, now);
-    // Grounded cars: shadows first so no car's shadow lands on another car.
-    for (const c of ground) actors.carShadow(c);
-    for (const c of ground) actors.car(c, now);
-    for (const c of cars) if (c.wreck) actors.smoke(c);
-    for (const s of fx.shots) actors.shot(s.x, s.y, s.vx, s.vy);
-    for (const s of fx.sparks) actors.spark(s.x, s.y, s.age);
-    for (const c of air) actors.carShadow(c);
-    for (const c of air) actors.car(c, now);
+    // Cars and effects: sprites in view space, at whole pixels.
+    this.actors.draw(cars, fx, vx - VIEW_W / 2, vy - VIEW_H / 2, now, lead, this.carAt[0], this.carAt[1]);
 
     ctx.setTransform(1, 0, 0, 1, 0, 0);
-    for (const c of cars) if (!c.me) this.hud.nameTag(c, vx, vy);
+    // A name tag is placed by its car's true place: the view it is given is moved by as much
+    // as the car's sprite is off that (a pixel at most), so the tag stays put over the sprite.
+    for (let i = 0; i < cars.length; i++) if (!cars[i].me) this.hud.nameTag(cars[i], vx + this.actors.off(i, 0), vy + this.actors.off(i, 1));
     this.hud.minimap(cars);
     if (hud) this.hud.hud(hud);
   }
