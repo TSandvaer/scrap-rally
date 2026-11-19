@@ -585,7 +585,7 @@ export class Hud {
       ctx.fillStyle = DARK;
       ctx.fillRect(6, VIEW_H - 40 - n * 11, 220, 6 + n * 11);
       for (let i = 0; i < n; i++) {
-        if (i === k.debug.length) k.debug.push(new Label(384, DEBUG.h, k.soft));
+        if (i === k.debug.length) k.debug.push(new Label(VIEW_W - 10, DEBUG.h, k.soft)); // a long line runs to the view's edge
         const l = k.debug[i], text = h.debug[i];
         if (l.text !== text) write(l, text, DEBUG);
         if (l.w) ctx.drawImage(l.g.canvas, 0, 0, l.w, DEBUG.h, 10, VIEW_H - 34 - (n - 1 - i) * 11 - 11 - 3 - SMALL.capTop, l.w, DEBUG.h);
