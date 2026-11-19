@@ -237,6 +237,36 @@ Fix 1b done: eeb8951 (aim via reused Float64Array; World.aim+draw 0.01/0.15/0.01
 identical; S1/S4 0.949-1.017). Re-check by a new Fable reviewer ctx_a78759883f3e (tmp/review-gfx1-r2.md). GFX-1 pairs + reports
 copied to tmp/gfx1-pairs/ and tmp/gfx1-review/. Specs ready: tmp/spec-gfx2a.md (:3006) + tmp/spec-gfx2b.md (:3008), dispatch both
 (Fable) right after the GFX-1 merge.
+GFX-1 MERGED 2026-11-19: re-check APPROVE (no findings); main dc74e80 (check clean, sim 492/492, bots 95/95, build ok); ticket ready
+for qa test; workers released, gfx1 workspace + branch removed. Parked (bake steps allocate 1.8-2.4 kB/frame while baking) added
+to GFX-4's scope (ClickUp comment).
+WAVE 3 in flight (Fable): GFX-2a ctx_a885a3b7e8ba (~/orca/workspaces/scrap-rally/gfx2a, TSandvaer/gfx2a, :3006; contact sheet of
+one car comes via `ask` -> show the user) and GFX-2b ctx_6fe6fc1725f2 (~/orca/workspaces/scrap-rally/gfx2b, TSandvaer/gfx2b, :3008).
+Both touch render.ts call sites only; the second to merge merges main first. Local main ahead of origin 3270cc8; not pushed.
+GFX-2a contact sheet: user said GO (popup) on the car design for all six colours; mine shake only when the own car is hit
+(4 px; user). Orchestrator allowed 2a ONE appended preview.ts scene 'blast' (no existing scene may change).
+2026-11-19 ~10:42 GFX-2b hit the Claude 5-hour session limit (commits 8a307e2 font, 62daa9e hud/minimap); user said go ->
+resumed 11:22 via reply. GFX-2a running its full gate since ~11:04 (bench pid 3593, lock held; commits up to 19b1c52).
+GFX-2b done: 62daa9e (font 8a307e2 + HUD/minimap; full gate PASS, noise 0.006, 30 A ratios 0.029-0.692, B 6, construction 6; HUD
+0.02 B/frame; merges cleanly with main and with gfx2a). Reviewer ctx_2720833e1432 (Fable, tmp/review-gfx2b.md; judge-only, no live
+bench). Pairs copied to tmp/gfx2b-pairs/. Plan: ONE combined frozen taste copy (main + gfx2a + gfx2b) once 2a reports.
+GFX-2a done: 19b1c52 (full gate PASS, noise 0.012, 30 A ratios 0.064-0.780, B 6, construction 6; actors/effects ~0 B/frame; sprite
+canvases 4,882,432 B, 11,173,888 B with the tile pool). Reviewer ctx_e30089c1bd60 (Fable, tmp/review-gfx2a.md). Pairs in tmp/gfx2a-pairs/.
+SEMANTIC MERGE CONFLICT 2a+2b: textually clean, but render.ts:120 `const cx = vx / ZOOM, cy = vy / ZOOM;` becomes unused -> tsc
+TS6199. The second branch to merge must delete it (merge main, fix, re-check). Taste copy: ~/orca/workspaces/scrap-rally/gfx2-taste
+(detached main a6af6f7 + merge 520778e of gfx2a+gfx2b, that one line deleted locally, built) served on :3009 by node pid 10368
+(nohup; log ~/orca/workspaces/scrap-rally/gfx2-taste-server.log); LAN now 172.16.0.31. Kill by PID after the taste gate.
+TASTE 2a+2b (user, laptop only): everything looks good EXCEPT the own car jitters ~1 px against the road while driving (user
+confirmed own car in a popup). Reviews: 2a APPROVE no findings (ctx_e30089c1bd60); 2b REQUEST_CHANGES (minimap gap breaks shrink to
+notches on Crusher Run; non-blocking 0=O, V~U, countdown x-height, debug line cut) (ctx_2720833e1432).
+Fix rounds: 2b -> ctx_7f37d62580e8 (tmp/gfx2b-fix1.md: gaps + 0/O + V/U); 2a -> ctx_b625f2dff27b (tmp/gfx2a-fix1.md: own-car jitter,
+instrument first, trace script under tools/debug/). Merge order: 2b first, then 2a merges main + deletes the unused render.ts line.
+Taste server :3009 (pid 10368) still up for re-tests.
+2b fix 1 done: 63fa725 (gaps break >= own length; 0 distinct from O; V pointed; debug line uncut; countdown x-height left at 6;
+quick look unchanged). Re-check sent to ctx_14a5f3b78b13.
+GFX-2b MERGED 2026-11-19: re-check APPROVE (no findings); main 29041d0 (check clean, sim 492/492, bots 95/95, build ok); ticket
+ready for qa test; workers released, gfx2b workspace + branch removed (artefacts in tmp/gfx2b-pairs/). 2a told to merge main +
+delete the unused render.ts line after its jitter fix.
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
@@ -293,7 +323,7 @@ Manual Deploy only on the user's go-ahead. The user's own dev server runs on :30
 
 | Ticket | Dispatch | Workspace | Branch | Port | Started |
 | --- | --- | --- | --- | --- | --- |
-| 123jpnbfb24 GFX-1 | ctx_b5075af01fdf | ~/orca/workspaces/scrap-rally/gfx1 | TSandvaer/gfx1 | 3008 | 2026-11-18 |
+| 123jpnbfb26 GFX-2a | ctx_a885a3b7e8ba | ~/orca/workspaces/scrap-rally/gfx2a | TSandvaer/gfx2a | 3006 | 2026-11-19 |
 | 123jpnbfb23 GFX-0 | ctx_27a7a271607b | ~/orca/workspaces/scrap-rally/gfx0 | TSandvaer/gfx0 | 3006 | 2026-11-18 |
 
 ## Queued (milestone 3, PLAN-M3.md; start after solid collisions 123jpnbf6cy and easier-start 123jpnbf3xa merge)

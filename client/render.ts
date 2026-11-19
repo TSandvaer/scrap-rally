@@ -231,7 +231,7 @@ export class Renderer {
     this.actors.draw(cars, fx, vx - VIEW_W / 2, vy - VIEW_H / 2, now, lead, this.carAt[0], this.carAt[1]);
 
     ctx.setTransform(1, 0, 0, 1, 0, 0);
-    for (const c of cars) if (!c.me) this.hud.nameTag(c, cx, cy);
+    for (const c of cars) if (!c.me) this.hud.nameTag(c, vx, vy);
     this.hud.minimap(cars);
     if (hud) this.hud.hud(hud);
   }
