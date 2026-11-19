@@ -226,6 +226,11 @@ fixed ref, noise 0.011, 30 A ratios 0.073-0.758, B 6 ok, construction 6 ok). Til
 4.97x, max 2.45 ms) and cold first frame 24-46 ms vs ~4 ms: for the reviewer + the phone check. Review sent to ctx_8759db0cfc1e.
 TASTE: frozen copy ~/orca/workspaces/scrap-rally/gfx1-taste (detached b9802ef, built), served by the orchestrator on :3009
 (node pid 65779, background task b9ob7nwth); phone via http://192.168.50.109:3009/?debug=1. Stop it by PID after the gate.
+GFX-1 taste gate: user APPROVED (popup). Review APPROVE (ctx_8759db0cfc1e; finding 1: tileKey > 2^31 boxes map keys, ~0.5 kB/frame,
+rule 1; finding 2: plain dirt squares 8-19 frames after a far leader switch, allowed; metric G tail + cold first frame judged
+acceptable, cheap fix noted at world.ts:1598-1600 if the phone shows it). Taste server stopped (background limit), gfx1-taste removed.
+Orca restarted 2026-11-19: GFX-1 author/reviewer exited. Fix round for finding 1 as a new Fable worker in the gfx1 workspace:
+ctx_ac24c4c10030 (tmp/gfx1-fix1.md; world.ts only; probe tmp/gfx1-review/alloc.mts). Merge after a quick re-check.
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
