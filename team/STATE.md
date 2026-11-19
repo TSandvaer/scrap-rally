@@ -262,6 +262,8 @@ notches on Crusher Run; non-blocking 0=O, V~U, countdown x-height, debug line cu
 Fix rounds: 2b -> ctx_7f37d62580e8 (tmp/gfx2b-fix1.md: gaps + 0/O + V/U); 2a -> ctx_b625f2dff27b (tmp/gfx2a-fix1.md: own-car jitter,
 instrument first, trace script under tools/debug/). Merge order: 2b first, then 2a merges main + deletes the unused render.ts line.
 Taste server :3009 (pid 10368) still up for re-tests.
+2b fix 1 done: 63fa725 (gaps break >= own length; 0 distinct from O; V pointed; debug line uncut; countdown x-height left at 6;
+quick look unchanged). Re-check sent to ctx_14a5f3b78b13.
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
