@@ -256,6 +256,12 @@ SEMANTIC MERGE CONFLICT 2a+2b: textually clean, but render.ts:120 `const cx = vx
 TS6199. The second branch to merge must delete it (merge main, fix, re-check). Taste copy: ~/orca/workspaces/scrap-rally/gfx2-taste
 (detached main a6af6f7 + merge 520778e of gfx2a+gfx2b, that one line deleted locally, built) served on :3009 by node pid 10368
 (nohup; log ~/orca/workspaces/scrap-rally/gfx2-taste-server.log); LAN now 172.16.0.31. Kill by PID after the taste gate.
+TASTE 2a+2b (user, laptop only): everything looks good EXCEPT the own car jitters ~1 px against the road while driving (user
+confirmed own car in a popup). Reviews: 2a APPROVE no findings (ctx_e30089c1bd60); 2b REQUEST_CHANGES (minimap gap breaks shrink to
+notches on Crusher Run; non-blocking 0=O, V~U, countdown x-height, debug line cut) (ctx_2720833e1432).
+Fix rounds: 2b -> ctx_7f37d62580e8 (tmp/gfx2b-fix1.md: gaps + 0/O + V/U); 2a -> ctx_b625f2dff27b (tmp/gfx2a-fix1.md: own-car jitter,
+instrument first, trace script under tools/debug/). Merge order: 2b first, then 2a merges main + deletes the unused render.ts line.
+Taste server :3009 (pid 10368) still up for re-tests.
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
