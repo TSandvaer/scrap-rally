@@ -4,7 +4,7 @@
 // static world), actors.ts (cars and effects), hud.ts (name tags, minimap, HUD panels).
 
 import type { Track } from "../shared/track";
-import { Actors, airOf, fallOf } from "./gfx/actors";
+import { Actors } from "./gfx/actors";
 import { Hud } from "./gfx/hud";
 import { VIEW_H, VIEW_W, World, ZOOM } from "./gfx/world";
 
@@ -25,6 +25,8 @@ export interface CarView {
   height?: number;
   /** 0..1 of the fall elapsed (FALL_TICKS); absent = not falling. */
   falling?: number;
+  /** 0..1 of the car's full health; under 0.4 it is drawn battered. Absent = not known: drawn whole. */
+  hp?: number;
 }
 
 /**
@@ -44,7 +46,10 @@ export interface DrawPose {
 export interface WorldFx {
   shots: { x: number; y: number; vx: number; vy: number }[];
   mines: { x: number; y: number; armed: boolean }[];
-  sparks: { x: number; y: number; age: number }[]; // age 0..1
+  sparks: { x: number; y: number; age: number; blast?: boolean }[]; // age 0..1; blast = a mine went off there, else a hit spark
+  /** For a caller that keeps its arrays from frame to frame (main.ts): how many entries count. Absent = all of them. */
+  nShots?: number;
+  nSparks?: number;
 }
 
 export interface HudView {
@@ -74,7 +79,7 @@ export class Renderer {
     this.ctx = canvas.getContext("2d")!;
     this.ctx.imageSmoothingEnabled = false;
     this.world = new World(this.ctx, track);
-    this.actors = new Actors(this.ctx);
+    this.actors = new Actors(this.ctx, track);
     this.hud = new Hud(this.ctx, track);
   }
 
@@ -107,7 +112,6 @@ export class Renderer {
   /** Draw one frame. `now` (ms) drives the camera shake and the car blinks. */
   frame(cars: CarView[], fx: WorldFx, hud: HudView | null, now = performance.now()): void {
     const ctx = this.ctx;
-    const actors = this.actors;
     const amp = this.shakeLeft(now) / ZOOM;
     const ph = (now - this.shakeStart) / 16;
     // The camera, snapped to whole view pixels: the baked world is blitted 1:1.
@@ -117,26 +121,8 @@ export class Renderer {
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     this.world.draw(vx - VIEW_W / 2, vy - VIEW_H / 2, cars);
 
-    ctx.setTransform(ZOOM, 0, 0, ZOOM, VIEW_W / 2 - cx * ZOOM, VIEW_H / 2 - cy * ZOOM);
-    // Mines and sparks set no line cap or join of their own: the ones the track's strokes used to leave.
-    ctx.lineJoin = "round";
-    ctx.lineCap = "butt";
-
-    for (const m of fx.mines) actors.mine(m.x, m.y, m.armed);
-    // Falling cars sink below the road (drawn first, no shadow); airborne cars fly above
-    // everything (drawn last, lowest first) and their shadows do land on other cars.
-    const falling = cars.filter((c) => fallOf(c) >= 0);
-    const ground = cars.filter((c) => fallOf(c) < 0 && airOf(c) === 0);
-    const air = cars.filter((c) => fallOf(c) < 0 && airOf(c) > 0).sort((a, b) => airOf(a) - airOf(b));
-    for (const c of falling) actors.car(c, now);
-    // Grounded cars: shadows first so no car's shadow lands on another car.
-    for (const c of ground) actors.carShadow(c);
-    for (const c of ground) actors.car(c, now);
-    for (const c of cars) if (c.wreck) actors.smoke(c);
-    for (const s of fx.shots) actors.shot(s.x, s.y, s.vx, s.vy);
-    for (const s of fx.sparks) actors.spark(s.x, s.y, s.age);
-    for (const c of air) actors.carShadow(c);
-    for (const c of air) actors.car(c, now);
+    // Cars and effects: sprites in view space, at whole pixels.
+    this.actors.draw(cars, fx, vx - VIEW_W / 2, vy - VIEW_H / 2, now);
 
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     for (const c of cars) if (!c.me) this.hud.nameTag(c, cx, cy);

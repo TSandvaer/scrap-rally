@@ -9,12 +9,13 @@ import { BotDriver } from "../scripts/bot-ai";
 import { AudioEngine, SoundControls } from "./audio";
 import { ChatPanel, fitViewport } from "./chat";
 import { Game, lostMessage, NO_CONTROLS, type Controls, type TokenStore } from "./game";
+import { Effects } from "./gfx/actors";
 import { Keyboard } from "./input";
 import { JerkMeter } from "./jerk";
 import { GameMenu } from "./menu";
 import { MusicPlayer, songById } from "./music";
 import { connectWs } from "./net";
-import { Renderer, type CarView, type DrawPose, type HudView, type WorldFx } from "./render";
+import { Renderer, type CarView, type DrawPose, type HudView } from "./render";
 import { RaceSounds } from "./sfx";
 
 const STEP_MS = 1000 / 60;
@@ -121,9 +122,11 @@ if (pilot) pilot.weapons = false;
 
 let connState: "connected" | "reconnecting" | "lost" = "connected";
 let restartNotice = false;
-// Hit sparks wait out the interpolation delay so they line up with the visible hit.
-let sparks: { id: string; start: number; x?: number; y?: number }[] = [];
-const SPARK_MS = 260;
+// Hit sparks and mine blasts wait out the interpolation delay so they line up with the visible
+// hit. They and the rest of a frame's effects are kept in one pooled WorldFx (gfx/actors.ts
+// Effects): the effects cost no allocation per frame.
+const effects = new Effects();
+const BLAST_SHAKE = 4; // view pixels: a mine under the own car (bumps are 1..3)
 const INTERP_DELAY_MS = 100;
 // Race effects (client/sfx.ts); other cars' event sounds wait out the same delay as the sparks.
 const sounds = new RaceSounds(audio, game, INTERP_DELAY_MS);
@@ -311,7 +314,12 @@ game.on.event = (ev: GameEvent, tick: number) => {
     }
     else toast(`${who} finished ${ordinal(ev.place)} — ${formatTime(ev.timeMs)}`);
   }
-  if (ev.k === "hit") sparks.push({ id: ev.id, start: performance.now() + (mine ? 0 : INTERP_DELAY_MS) });
+  if (ev.k === "hit") {
+    // A mine goes off in a blast; under the own car it shakes the view too.
+    const blast = ev.w === "mine";
+    effects.spark(ev.id, performance.now() + (mine ? 0 : INTERP_DELAY_MS), blast);
+    if (blast && mine) renderer.shake(BLAST_SHAKE);
+  }
   if (ev.k === "wreck") {
     const by = game.player(ev.by)?.name ?? "?";
     if (mine) flashText(ev.by === ev.id ? "WRECKED YOURSELF" : `WRECKED BY ${by.toUpperCase()}`, 1500);
@@ -713,7 +721,8 @@ function draw(alpha: number, elapsed: number): void {
     const wreck = me ? (game.car?.wreck ?? 0) > 0 : !!s?.wreck;
     const ghost = !!(st.ghost || s?.ghost);
     const { x, y, h } = at;
-    return { id, x, y, h, me, color: p?.color ?? "#888", name: p?.name ?? "?", wreck, ghost, height: st.height, falling: st.falling };
+    const hp = s && s.maxHp > 0 ? s.hp / s.maxHp : 1;
+    return { id, x, y, h, me, color: p?.color ?? "#888", name: p?.name ?? "?", wreck, ghost, height: st.height, falling: st.falling, hp };
   };
   // Other cars at the interpolation time; near ones are drawn at their predicted pose,
   // where the own car bumps into them (client/contact.ts). The state stays the pose's, except
@@ -763,27 +772,11 @@ function draw(alpha: number, elapsed: number): void {
   const now = performance.now();
   // Own predicted bumps: sparks at the contact point and a small shake, right away.
   for (const im of game.contact.takeImpacts()) {
-    sparks.push({ id: "", start: now, x: im.x, y: im.y });
+    effects.spark("", now, false, im.x, im.y);
     renderer.shake(Math.max(1, Math.min(BUMP_SHAKE_MAX, im.speed / BUMP_SHAKE_PER)));
     sounds.bump(im.speed, im.x, im.y, renderer.cam);
   }
-  sparks = sparks.filter((s) => now < s.start + SPARK_MS);
-  const fx: WorldFx = {
-    shots: [...game.otherShots(), ...game.localShots],
-    mines: game.visibleMines(),
-    sparks: [],
-  };
-  for (const s of sparks) {
-    if (now < s.start) continue;
-    if (s.x === undefined) {
-      // Hit sparks stay at the interpolation time (also on near cars drawn predicted).
-      const pose = s.id === game.you ? own : others.find((c) => c.id === s.id);
-      if (!pose) continue;
-      s.x = pose.x;
-      s.y = pose.y;
-    }
-    fx.sparks.push({ x: s.x, y: s.y!, age: (now - s.start) / SPARK_MS });
-  }
+  const fx = effects.frame(now, game.otherShots(), game.localShots, game.visibleMines(), game.you, own, others);
   renderer.frame(cars, fx, hudView());
 }
 
