@@ -231,6 +231,8 @@ rule 1; finding 2: plain dirt squares 8-19 frames after a far leader switch, all
 acceptable, cheap fix noted at world.ts:1598-1600 if the phone shows it). Taste server stopped (background limit), gfx1-taste removed.
 Orca restarted 2026-11-19: GFX-1 author/reviewer exited. Fix round for finding 1 as a new Fable worker in the gfx1 workspace:
 ctx_ac24c4c10030 (tmp/gfx1-fix1.md; world.ts only; probe tmp/gfx1-review/alloc.mts). Merge after a quick re-check.
+Fix 1 done: 41c20ff (two-level tile map, 30-bit tx/ty key; probe ~600 -> 129-176 B/frame vs probe-alone 104-106; checksums 15/15 same,
+--pixels 0 diff, S1/S3 ratios 0.974-1.000). Leftover aim boxing (world.ts:1669, 0-32 B/frame) sent back as fix 1b: ctx_c2193c866446.
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
