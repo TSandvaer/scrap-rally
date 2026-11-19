@@ -1,5 +1,7 @@
 // Cars and effects on the world: shadows, cars (grounded, airborne, falling, ghost, battered,
 // wreck), smoke, mines, rivets, hit sparks, mine blasts and dust. PLAN-GFX.md, items B1-B8.
+// What the track keeps of them is told to the world here, where it is known (B9): a mine's
+// blast leaves a scorch, a car sliding sideways its tyre marks (gfx/world.ts, track marks).
 //
 // Everything here is a sprite (gfx/sprites.ts) or a small rectangle, drawn in view space:
 // identity transform, whole view pixels, never under the world's 0.8 zoom. A frame allocates
@@ -28,7 +30,7 @@ import type { Track } from "../../shared/track";
 import type { CarView, DrawPose, WorldFx } from "../render";
 import { P } from "./palette";
 import { BLAST_FRAMES, carSheet, CELL, FX_BLAST, FX_COLS, FX_MINE, FX_PUFF, FX_SPARK, HEADING_STEP, HEADINGS, SHADOW_ALPHA, sharedSheets, SPARK_FRAMES, SPARK_KINDS, spriteFrame, spritesFor, type SharedSheets } from "./sprites";
-import { VIEW_H, VIEW_W, ZOOM } from "./world";
+import { MARK, scorch, skid, VIEW_H, VIEW_W, ZOOM } from "./world";
 
 /** Airborne cars: drawn up to this much bigger at the top of the arc ... */
 const AIR_SCALE = 0.35;
@@ -62,6 +64,16 @@ const PUFF = 10; // specks of a landing
 const PUFF_LIFE = 0.34;
 const JUMP = 40; // a car that moved further than this in a frame was put there, not driven
 const RANDOM = 65536;
+
+// Tyre marks: a car on the ground sliding sideways faster than SKID (units/s; full lock at top
+// speed is about 165 on tarmac) marks the track under its rear wheels, a stamp every
+// SKID_EVERY frames at most, each a line from where the wheels were at the stamp before.
+const SKID = 105;
+const SKID_EVERY = 2;
+const SKID_GAP = 4; // frames without a slide after which the next mark starts afresh
+const AXLE = 9; // the rear wheels: this far behind the car's middle (world units) ...
+const WHEEL = 6; // ... and to either side of it
+const BLASTS = 32; // mine blasts remembered as having left their scorch
 
 // Numbers that are not whole go from one function here to the next through this array, not as
 // arguments or results: handed over in a call they are boxed (16 bytes each, in Node).
@@ -142,6 +154,12 @@ export class Actors {
   private readonly lastUp = new Float32Array(SLOTS); // its height then
   private readonly seg = new Int32Array(SLOTS).fill(-1); // where on the track it was (the search hint)
   private readonly owed = new Float32Array(SLOTS); // distance driven off the tarmac since its last speck
+  private readonly skidAt = new Int32Array(SLOTS); // the frame its rear wheels were last noted in a slide (0 = not) ...
+  private readonly wheels = new Float64Array(SLOTS * 4); // ... and where they were: left x, y, right x, y
+  // The mine blasts that have left their scorch, by their place (a blast keeps it for life).
+  private readonly blastX = new Float64Array(BLASTS).fill(NaN);
+  private readonly blastY = new Float64Array(BLASTS).fill(NaN);
+  private blastNext = 0;
   // Per slot and axis (slot * 2 + axis): 1 = placed from the car the view follows, 0 = on the road's pixels ...
   private readonly rides = new Uint8Array(SLOTS * 2);
   private readonly rel = new Int32Array(SLOTS * 2); // ... and its whole-pixel place from that car
@@ -252,6 +270,7 @@ export class Actors {
     const count = fx.nSparks ?? sparks.length;
     for (let i = 0; i < count; i++) {
       const s = sparks[i];
+      if (s.blast) this.scorched(s);
       const x = Math.round(s.x * ZOOM) - ox, y = Math.round(s.y * ZOOM) - oy;
       if (x < -HALF || y < -HALF || x > VIEW_W + HALF || y > VIEW_H + HALF) continue;
       const age = s.age < 0 ? 0 : s.age;
@@ -276,6 +295,19 @@ export class Actors {
     for (let j = 0; j < flying; j++) this.car(cars[order[j]], order[j]);
   }
 
+  /** A mine blast, in view or not: the first time it is seen it leaves its scorch on the track. */
+  private scorched(s: { x: number; y: number }): void {
+    const bx = this.blastX, by = this.blastY;
+    for (let k = 0; k < BLASTS; k++) if (bx[k] === s.x && by[k] === s.y) return;
+    const k = this.blastNext;
+    this.blastNext = (k + 1) % BLASTS;
+    bx[k] = s.x;
+    by[k] = s.y;
+    MARK[0] = s.x;
+    MARK[1] = s.y;
+    scorch(this.track);
+  }
+
   /**
    * How far car i of the frame just drawn sits from where its own rounding would put it, in
    * whole view pixels on axis k (0 = x, 1 = y): for what is drawn by the car's true place
@@ -296,6 +328,7 @@ export class Actors {
     this.lastCell[s] = -1;
     this.seg[s] = -1;
     this.owed[s] = 0;
+    this.skidAt[s] = 0;
     this.rides[s * 2] = this.rides[s * 2 + 1] = 0;
     return s;
   }
@@ -357,6 +390,36 @@ export class Actors {
       const moved = Math.sqrt(mx * mx + my * my);
       if (moved < JUMP) {
         if (this.lastUp[s] > 0) this.landing(c);
+        // Tyre marks. It cannot slide sideways faster than it moves: most frames stop at the first test.
+        if (moved > SKID * dt) {
+          const cos = Math.cos(c.h), sin = Math.sin(c.h);
+          const side = my * cos - mx * sin; // this frame's step sideways
+          if (side > SKID * dt || side < -SKID * dt) {
+            const w = this.wheels, j = s * 4;
+            const lx = c.x - cos * AXLE + sin * WHEEL, ly = c.y - sin * AXLE - cos * WHEEL;
+            const rx = c.x - cos * AXLE - sin * WHEEL, ry = c.y - sin * AXLE + cos * WHEEL;
+            const since = this.skidAt[s] > 0 ? this.frameNo - this.skidAt[s] : SKID_GAP + 1;
+            if (since >= SKID_EVERY || since > SKID_GAP) {
+              if (since <= SKID_GAP) {
+                MARK[0] = w[j];
+                MARK[1] = w[j + 1];
+                MARK[2] = lx;
+                MARK[3] = ly;
+                MARK[4] = w[j + 2];
+                MARK[5] = w[j + 3];
+                MARK[6] = rx;
+                MARK[7] = ry;
+                skid(this.track);
+              }
+              // Else the slide begins here: the next stamp draws from these.
+              w[j] = lx;
+              w[j + 1] = ly;
+              w[j + 2] = rx;
+              w[j + 3] = ry;
+              this.skidAt[s] = this.frameNo;
+            }
+          }
+        }
         if (moved > DUST_MIN_SPEED * dt) {
           const track = this.track;
           F[QX] = c.x;
