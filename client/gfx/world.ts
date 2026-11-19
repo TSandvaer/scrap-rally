@@ -172,7 +172,7 @@ interface Frame {
 
 /** Everything a track's tiles are baked from, prepared once per track. */
 interface Art {
-  key: number;
+  tiles: Map<number, Tile>; // its tiles in the pool, by tileKey
   track: Track;
   // The centreline cut into pieces that are all ground or all gap, in view pixels.
   n: number;
@@ -208,12 +208,11 @@ interface Art {
 }
 
 const arts = new WeakMap<Track, Art>();
-let nextKey = 1;
 
 function artOf(track: Track): Art {
   let a = arts.get(track);
   if (!a) {
-    a = buildArt(track, nextKey++);
+    a = buildArt(track);
     arts.set(track, a);
   }
   return a;
@@ -230,7 +229,7 @@ function inFrame(f: Frame, u: number, v: number, out: Float64Array, at: number):
   out[at + 1] = f.y + (u * f.sin + v * f.cos) * ZOOM;
 }
 
-function buildArt(track: Track, key: number): Art {
+function buildArt(track: Track): Art {
   const { pts, cum, length: L, wall } = track;
   const hw = track.def.halfWidth;
   const R = wall + BARRIER;
@@ -258,7 +257,7 @@ function buildArt(track: Track, key: number): Art {
   const n = cuts.length;
   const f64 = () => new Float64Array(n);
   const art: Art = {
-    key, track, n,
+    tiles: new Map(), track, n,
     ax: f64(), ay: f64(), ex: f64(), ey: f64(), inv: f64(), nx: f64(), ny: f64(), s0: f64(), ds: f64(), dash0: f64(), groove0: f64(), groove1: f64(),
     gap: new Int16Array(n), capA: new Uint8Array(n), capB: new Uint8Array(n),
     junk: [], piles: [], stains: [], ruts: [], oil: [], patches: [], posts: new Int32Array(0), holes: [], ramps: [], ends: [],
@@ -1469,18 +1468,26 @@ function pit(h: Art["holes"][number]): void {
 interface Tile {
   canvas: HTMLCanvasElement;
   ctx: CanvasRenderingContext2D;
-  key: number; // tileKey, or -1 when it holds nothing
+  home: Map<number, Tile> | null; // the map it is in (its track's tiles), or null when it holds nothing
+  key: number; // its tileKey there, or -1
   ready: boolean;
   used: number; // the last frame it was drawn or wanted in
 }
 
 const pool: Tile[] = [];
-const byKey = new Map<number, Tile>();
 let frameNo = 0;
 let baking: Tile | null = null; // the tile the job bakes into
 
-function tileKey(art: Art, tx: number, ty: number): number {
-  return (art.key * 65536 + (ty + 32768)) * 65536 + (tx + 32768);
+// A tile's key among its track's tiles: ty and tx in 15 bits each, so a key is under 2^30, a
+// small integer to the engine, and looking it up allocates nothing. (One key for all tracks
+// was a number above 2^32, boxed for every lookup: about half a kilobyte a frame in Node.)
+const KEY_BITS = 15;
+const KEY_HALF = 1 << (KEY_BITS - 1); // tiles -16384 .. 16383: 4.2 million view pixels either way
+
+/** The key of tile (tx, ty), or -1 when it lies further out than a key holds: such a tile is never baked. */
+function tileKey(tx: number, ty: number): number {
+  const x = tx + KEY_HALF, y = ty + KEY_HALF;
+  return x >= 0 && x < 2 * KEY_HALF && y >= 0 && y < 2 * KEY_HALF ? (y << KEY_BITS) | x : -1;
 }
 
 /** A tile to bake into: a new one while the pool is not full, else the one unused for longest (never one used this frame). */
@@ -1491,7 +1498,7 @@ function claim(): Tile | null {
     // Opaque. In main memory when the view canvas is (one that is read back, as the benchmark's):
     // a blit then never crosses between main memory and the GPU.
     const ctx = canvas.getContext("2d", { alpha: false, willReadFrequently: softTiles })!;
-    const t: Tile = { canvas, ctx, key: -1, ready: false, used: -1 };
+    const t: Tile = { canvas, ctx, home: null, key: -1, ready: false, used: -1 };
     pool.push(t);
     return t;
   }
@@ -1500,8 +1507,9 @@ function claim(): Tile | null {
     if (t === baking || t.used >= frameNo) continue;
     if (!best || t.used < best.used) best = t;
   }
-  if (best && best.key >= 0) byKey.delete(best.key);
   if (best) {
+    if (best.home) best.home.delete(best.key);
+    best.home = null;
     best.key = -1;
     best.ready = false;
   }
@@ -1591,7 +1599,7 @@ export class World {
     // The tiles on screen are in use, whatever happens to them below.
     for (let ty = y0; ty <= y1; ty++) {
       for (let tx = x0; tx <= x1; tx++) {
-        const t = byKey.get(tileKey(art, tx, ty));
+        const t = art.tiles.get(tileKey(tx, ty));
         if (t) t.used = frameNo;
       }
     }
@@ -1603,7 +1611,7 @@ export class World {
     ctx.fillStyle = P.dirt2;
     for (let ty = y0; ty <= y1; ty++) {
       for (let tx = x0; tx <= x1; tx++) {
-        const t = byKey.get(tileKey(art, tx, ty));
+        const t = art.tiles.get(tileKey(tx, ty));
         if (t && t.ready) ctx.drawImage(t.canvas, tx * TILE - ox, ty * TILE - oy);
         else {
           ctx.fillRect(tx * TILE - ox, ty * TILE - oy, TILE, TILE);
@@ -1615,26 +1623,27 @@ export class World {
 
   /** Bake a tile to the end, now. */
   private bakeNow(tx: number, ty: number): void {
-    const art = this.art;
-    const key = tileKey(art, tx, ty);
-    const have = byKey.get(key);
+    const have = this.art.tiles.get(tileKey(tx, ty));
     if (have && have.ready) return;
-    if (!(baking && baking.key === key)) {
+    if (!(baking && baking === have)) {
       if (!this.begin(tx, ty)) return;
     }
     while (bakeStep() >= 0) { /* to the end */ }
     this.done();
   }
 
-  /** Point the job at a tile; false when the pool has no tile to spare. */
+  /** Point the job at a tile; false when the pool has no tile to spare (or the tile is beyond what a key holds). */
   private begin(tx: number, ty: number): boolean {
+    const key = tileKey(tx, ty);
+    if (key < 0) return false;
     drop(); // a job for another tile: its turn comes again if it is still wanted
     const t = claim();
     if (!t) return false;
-    t.key = tileKey(this.art, tx, ty);
+    t.home = this.art.tiles;
+    t.key = key;
     t.ready = false;
     t.used = frameNo;
-    byKey.set(t.key, t);
+    t.home.set(key, t);
     baking = t;
     bakeStart(this.art, tx, ty);
     return true;
@@ -1671,7 +1680,7 @@ export class World {
     // Wanted tiles are not given away this frame. Is one round the aim missing?
     let missing = false, urgent = false;
     for (let k = 0; k < n; k += 2) {
-      const t = byKey.get(tileKey(art, want[k], want[k + 1]));
+      const t = art.tiles.get(tileKey(want[k], want[k + 1]));
       if (t) t.used = frameNo;
       if (!t || !t.ready) {
         missing = true;
@@ -1689,7 +1698,7 @@ export class World {
     let used = 0, k = 0;
     for (;;) {
       if (!baking) {
-        while (k < n && byKey.get(tileKey(art, want[k], want[k + 1]))?.ready) k += 2;
+        while (k < n && art.tiles.get(tileKey(want[k], want[k + 1]))?.ready) k += 2;
         if (k >= n || !this.begin(want[k], want[k + 1])) break; // all there, or no tile to spare
       }
       if (used >= units || (used > 0 && clock() - t0 >= ms)) break;
@@ -1795,7 +1804,8 @@ function wantRound(cx: number, cy: number, margin: number): void {
 function drop(): void {
   if (!baking) return;
   worldStats.dropped++;
-  byKey.delete(baking.key);
+  if (baking.home) baking.home.delete(baking.key);
+  baking.home = null;
   baking.key = -1;
   baking.ready = false;
   baking = null;
