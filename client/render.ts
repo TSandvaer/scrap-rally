@@ -223,7 +223,6 @@ export class Renderer {
       vx = this.ahead(0, car, fresh) + Math.round(Math.sin(ph * 1.7) * amp * ZOOM);
       vy = this.ahead(1, car, fresh) + Math.round(Math.cos(ph * 2.3) * amp * ZOOM);
     }
-    const cx = vx / ZOOM, cy = vy / ZOOM;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     this.world.draw(vx - VIEW_W / 2, vy - VIEW_H / 2, cars);
 
@@ -231,7 +230,9 @@ export class Renderer {
     this.actors.draw(cars, fx, vx - VIEW_W / 2, vy - VIEW_H / 2, now, lead, this.carAt[0], this.carAt[1]);
 
     ctx.setTransform(1, 0, 0, 1, 0, 0);
-    for (const c of cars) if (!c.me) this.hud.nameTag(c, vx, vy);
+    // A name tag is placed by its car's true place: the view it is given is moved by as much
+    // as the car's sprite is off that (a pixel at most), so the tag stays put over the sprite.
+    for (let i = 0; i < cars.length; i++) if (!cars[i].me) this.hud.nameTag(cars[i], vx + this.actors.off(i, 0), vy + this.actors.off(i, 1));
     this.hud.minimap(cars);
     if (hud) this.hud.hud(hud);
   }

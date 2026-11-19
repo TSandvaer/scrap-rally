@@ -129,6 +129,7 @@ export class Actors {
   private readonly kind = new Uint8Array(MAX_CARS);
   private readonly sx = new Int32Array(MAX_CARS); // the middle of its sprite on screen
   private readonly sy = new Int32Array(MAX_CARS);
+  private readonly shift = new Int32Array(MAX_CARS * 2); // ... less that on the road's pixels, by its own rounding (x, y)
   private readonly up = new Float64Array(MAX_CARS); // 0..1 height in the air
   private readonly fall = new Float64Array(MAX_CARS); // 0..1 of the fall, -1 = not falling
   private readonly order = new Uint8Array(MAX_CARS); // the airborne ones, lowest first
@@ -275,6 +276,15 @@ export class Actors {
     for (let j = 0; j < flying; j++) this.car(cars[order[j]], order[j]);
   }
 
+  /**
+   * How far car i of the frame just drawn sits from where its own rounding would put it, in
+   * whole view pixels on axis k (0 = x, 1 = y): for what is drawn by the car's true place
+   * and must stay with its sprite (the name tag).
+   */
+  off(i: number, k: number): number {
+    return i < MAX_CARS ? this.shift[i * 2 + k] : 0;
+  }
+
   /** The slot a car is remembered in; a car not seen before takes the one unused for longest. */
   private slot(id: string): number {
     const ids = this.ids, seen = this.seen;
@@ -315,6 +325,8 @@ export class Actors {
     } else this.rides[s * 2] = this.rides[s * 2 + 1] = 0;
     this.sx[i] = x;
     this.sy[i] = y;
+    this.shift[i * 2] = Math.round(px) - ox - x;
+    this.shift[i * 2 + 1] = Math.round(py) - oy - y;
     // 0..1 of the fall elapsed (-1 = not falling) and 0..1 height in the air (0 = on the
     // ground), kept for the rest of the frame.
     const f = c.falling, h = c.height;

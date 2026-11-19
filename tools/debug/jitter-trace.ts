@@ -21,8 +21,10 @@
 // - where each car is drawn (the middle of its sprite; of its body in the old vector renderer),
 // - where its shadow is drawn,
 // - the view's scroll (the world's top-left pixel), from World.draw.
+// - where name tags are drawn, in builds that draw them as pictures (GFX-2b on).
 // From those: the car on screen, the car against the road (screen + scroll), the shadow
-// against its car, and a car against the own car. A car is counted only while it is in view.
+// against its car, a car against the own car, a name tag against its car. A car is counted
+// only while it is in view.
 //
 // A REVERSAL is a step of a drawn coordinate opposite to its step before, while the true
 // (unrounded) value it stands for moved one way all the while between the two steps. It is
@@ -58,20 +60,28 @@ const IN_VIEW = 24; // a car this far outside the view (its middle, view pixels)
 
 // ---- a canvas that records -------------------------------------------------------------
 
-interface Hit { kind: "car" | "shadow"; key: unknown; x: number; y: number }
+interface Hit { kind: "car" | "shadow" | "tag"; key: unknown; x: number; y: number }
 let hits: Hit[] = [];
 let shadeSheet: unknown = null; // the new renderer's silhouette sheet
 let made = 0;
+let tagged = false; // this build draws name tags as pictures (else they are text, which is not read here)
 
 function fakeCanvas(): unknown {
-  return { width: 0, height: 0, tag: ++made, getContext: () => fakeCtx() };
+  const canvas: Record<string, unknown> = { width: 0, height: 0, tag: ++made };
+  let ctx: unknown = null;
+  canvas.getContext = () => (ctx ??= fakeCtx(canvas));
+  return canvas;
 }
 
 /** A context that keeps its transform and notes where car bodies, car sprites and shadows land. */
-function fakeCtx(): Record<string, unknown> {
+function fakeCtx(canvas: unknown): Record<string, unknown> {
   let m = [1, 0, 0, 1, 0, 0];
   const stack: number[][] = [];
+  const pixels = (w: number, h: number) => ({ width: w, height: h, data: new Uint8ClampedArray(w * h * 4) });
   const ctx: Record<string, unknown> = {
+    canvas,
+    createImageData: pixels,
+    getImageData: (_x: number, _y: number, w: number, h: number) => pixels(w, h),
     fillStyle: "", strokeStyle: "", globalAlpha: 1, lineWidth: 1, lineJoin: "", lineCap: "", font: "", textAlign: "", textBaseline: "", imageSmoothingEnabled: false,
     setTransform(a: number, b: number, c: number, d: number, e: number, f: number) { m = [a, b, c, d, e, f]; },
     translate(x: number, y: number) { m = [m[0], m[1], m[2], m[3], m[4] + m[0] * x + m[2] * y, m[5] + m[1] * x + m[3] * y]; },
@@ -93,12 +103,14 @@ function fakeCtx(): Record<string, unknown> {
       if (src === shadeSheet) {
         if ((ctx.globalAlpha as number) < 0.39) hits.push({ kind: "shadow", key: null, x, y });
       } else if (sheetColour.has(src)) hits.push({ kind: "car", key: sheetColour.get(src), x, y });
+      // A name tag (the HUD of GFX-2b on): a label canvas drawn whole from its corner, 20 px above its car's middle.
+      else if (_sx === 0 && _sy === 0) hits.push({ kind: "tag", key: src, x, y: m[5] + dy + 6 + 20 });
     },
-    putImageData() {}, clearRect() {}, beginPath() {}, moveTo() {}, lineTo() {}, arc() {}, fill() {}, stroke() {}, fillText() {}, closePath() {},
     measureText: () => ({ width: 30 }),
     getContextAttributes: () => ({ willReadFrequently: false }),
   };
-  return ctx;
+  // Anything else a renderer calls draws nothing here.
+  return new Proxy(ctx, { get: (t, k: string) => (k in t ? t[k] : () => {}) });
 }
 const sheetColour = new Map<unknown, string>();
 (globalThis as Record<string, unknown>).document = { createElement: () => fakeCanvas() };
@@ -151,6 +163,7 @@ const SIGNALS = [
   "slower car on screen", "slower car against the road",
   "parked car against the road",
   "shadow against its car (4 on the ground)", "shadow against its car (the hopping one)",
+  "name tag against its car (4 cars)",
 ] as const;
 type Signal = (typeof SIGNALS)[number];
 
@@ -171,6 +184,7 @@ async function trace(root: string, label: string): Promise<Record<Signal, Tally>
   } else shadeSheet = null;
 
   const total = Object.fromEntries(SIGNALS.map((s) => [s, { reversals: 0, moved: 0, steps: 0 }])) as Record<Signal, Tally>;
+  tagged = false;
   for (const trackId of TRACKS) {
     const track = trackById(trackId);
     for (const speed of SPEEDS) {
@@ -207,7 +221,7 @@ async function trace(root: string, label: string): Promise<Record<Signal, Tally>
         const cars = COLORS.slice(0, 5).map((color, i) => ({ id: `t${i}`, x: 0, y: 0, h: 0, color, name: `T${i}`, me: i === 0, wreck: false, ghost: false, height: 0 }));
         const fx = { shots: [], mines: [], sparks: [] };
         // Per car: drawn on screen, drawn shadow, true position in world pixels; per frame: scroll, true camera.
-        const drawn = cars.map(() => ({ x: [] as number[], y: [] as number[], sx: [] as number[], sy: [] as number[], tx: [] as number[], ty: [] as number[], lift: [] as number[] }));
+        const drawn = cars.map(() => ({ x: [] as number[], y: [] as number[], sx: [] as number[], sy: [] as number[], tx: [] as number[], ty: [] as number[], lift: [] as number[], nx: [] as number[], ny: [] as number[] }));
         const scroll = { x: [] as number[], y: [] as number[], tx: [] as number[], ty: [] as number[] };
         let t = 0;
         notes = [];
@@ -228,7 +242,8 @@ async function trace(root: string, label: string): Promise<Record<Signal, Tally>
           r.follow(tx, ty, elapsed, f === 0, own.id);
           hits = [];
           r.frame(cars, fx, null, 10_000 + t * 1000);
-          const bodies = hits.filter((h) => h.kind === "car"), shadows = hits.filter((h) => h.kind === "shadow");
+          const bodies = hits.filter((h) => h.kind === "car"), shadows = hits.filter((h) => h.kind === "shadow"), tags = hits.filter((h) => h.kind === "tag");
+          if (tags.length) tagged = true;
           cars.forEach((c, i) => {
             const d = drawn[i];
             const body = bodies.find((h) => h.key === c.color);
@@ -244,6 +259,11 @@ async function trace(root: string, label: string): Promise<Record<Signal, Tally>
             d.y.push(seen ? body.y : NaN);
             d.sx.push(seen ? shade!.x - body.x : NaN);
             d.sy.push(seen ? shade!.y - body.y : NaN);
+            // Its name tag (another player's car has one): the nearest to where it belongs.
+            let tag: Hit | null = null;
+            if (seen && i) for (const g of tags) if (Math.hypot(g.x - body.x, g.y - body.y) < 4 && (!tag || Math.hypot(g.x - body.x, g.y - body.y) < Math.hypot(tag.x - body.x, tag.y - body.y))) tag = g;
+            d.nx.push(tag ? tag.x - body.x : NaN);
+            d.ny.push(tag ? tag.y - body.y : NaN);
             d.tx.push(c.x * ZOOM);
             d.ty.push(c.y * ZOOM);
             d.lift.push(c.height);
@@ -281,6 +301,8 @@ async function trace(root: string, label: string): Promise<Record<Signal, Tally>
         // A shadow's true place against its car: 3 and 4 world units down-right, further with the height (render: +14, +20 at the top).
         for (const i of [0, 1, 2, 3]) both("shadow against its car (4 on the ground)", drawn[i].sx, drawn[i].sy, drawn[i].lift.map(() => 3 * ZOOM), drawn[i].lift.map(() => 4 * ZOOM));
         both("shadow against its car (the hopping one)", drawn[4].sx, drawn[4].sy, drawn[4].lift.map((u) => (3 + u * 14) * ZOOM), drawn[4].lift.map((u) => (4 + u * 20) * ZOOM));
+        // A name tag belongs a fixed way above its car: any step forth and back is a reversal.
+        for (const i of [1, 2, 3, 4]) both("name tag against its car (4 cars)", drawn[i].nx, drawn[i].ny, drawn[i].lift.map(() => 0), drawn[i].lift.map(() => 0));
         for (const s of SIGNALS) {
           total[s].reversals += run[s].reversals;
           total[s].moved += run[s].moved;
@@ -290,6 +312,7 @@ async function trace(root: string, label: string): Promise<Record<Signal, Tally>
       }
     }
   }
+  if (!tagged) total["name tag against its car (4 cars)"].reversals = NaN; // not read in this build
   return total;
 }
 
@@ -315,4 +338,4 @@ console.log(`\nJitter trace: ${runs} runs (${TRACKS.join(", ")}; ${SPEEDS.join("
 console.log("Reversals: steps opposite to the step before while the true value moved one way; both axes; (px) = pixels taken back in all.\n");
 console.log(`| Signal | ${results.map((r) => r.label).join(" | ")} |`);
 console.log(`|---|${results.map(() => "---:").join("|")}|`);
-for (const s of SIGNALS) console.log(`| ${s} | ${results.map((r) => `${r.total[s].reversals} (${r.total[s].moved.toFixed(r.total[s].moved % 1 ? 1 : 0)} px)`).join(" | ")} |`);
+for (const s of SIGNALS) console.log(`| ${s} | ${results.map((r) => (Number.isNaN(r.total[s].reversals) ? "not read (tags are text)" : `${r.total[s].reversals} (${r.total[s].moved.toFixed(r.total[s].moved % 1 ? 1 : 0)} px)`)).join(" | ")} |`);
