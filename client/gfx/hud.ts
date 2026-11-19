@@ -11,7 +11,7 @@
 //
 // A frame allocates nothing here: labels, tags and the countdown's texts are fixed pools.
 
-import { pointAt, type Track } from "../../shared/track";
+import { pointAt, type Track, type Vec } from "../../shared/track";
 import type { CarView, HudView } from "../render";
 import { artCanvas, BOLD, covers, print, SMALL, TALL, widthOf, type Strike } from "./font";
 import { P, rgbOf } from "./palette";
@@ -358,8 +358,8 @@ function word(hex: string): number {
 
 /**
  * The minimap of a track, baked once: the box with its frame, the track as a 2 px line in a
- * dark casing (broken where the road has a gap), and the start line as a tick across it.
- * Hard pixels: the line is stamped along the centreline, not stroked.
+ * dark casing (broken where the road has a gap, for the gap's whole length), and the start
+ * line as a tick across it. Hard pixels: the line is stamped along the centreline, not stroked.
  */
 function miniOf(k: Kit, track: Track): Mini {
   let m = k.minis.get(track);
@@ -382,39 +382,83 @@ function miniOf(k: Kit, track: Track): Mini {
     px[i] = px[i * MAP] = lit;
     px[(MAP - 1) * MAP + i] = px[i * MAP + MAP - 1] = dark;
   }
-  // A 2 x 2 dot at a point of the map, or the 4 x 4 around it without its corners (the casing).
-  const dot = (x: number, y: number, casing: boolean, colour: number) => {
-    const x0 = Math.round(x - (MAP_X + 1)), y0 = Math.round(y - (MAP_Y + 1));
+  // Map pixels from here on: the box's top-left corner is (0, 0).
+  const mx = ox - MAP_X, my = oy - MAP_Y;
+  // The two ends of the run being stamped (a gap's edges): a point and the unit vector along the
+  // road there, pointing into the run at its head and out of it at its tail. `need` is how far
+  // inside a pixel's middle must lie for the whole pixel to be inside.
+  const head = { x: 0, y: 0, dx: 0, dy: 0, need: 0 }, tail = { x: 0, y: 0, dx: 0, dy: 0, need: 0 };
+  /**
+   * A 2 x 2 dot at a point of the map, or the 4 x 4 around it without its corners (the casing).
+   * Near an end of its run (atHead, atTail) it stamps only the pixels that lie wholly inside the
+   * run, so line and casing stop flat at a gap and the break is at least the gap's own length.
+   */
+  const dot = (x: number, y: number, casing: boolean, colour: number, atHead: boolean, atTail: boolean) => {
+    const x0 = Math.round(x - 1), y0 = Math.round(y - 1);
     const a = casing ? -1 : 0, b = casing ? 2 : 1;
     for (let j = a; j <= b; j++) {
       for (let i = a; i <= b; i++) {
         if (casing && (i === a || i === b) && (j === a || j === b)) continue;
         const u = x0 + i, v = y0 + j;
-        if (u > 0 && u < MAP - 1 && v > 0 && v < MAP - 1) px[v * MAP + u] = colour;
+        if (u <= 0 || u >= MAP - 1 || v <= 0 || v >= MAP - 1) continue;
+        if (atHead && (u + 0.5 - head.x) * head.dx + (v + 0.5 - head.y) * head.dy < head.need) continue;
+        if (atTail && (u + 0.5 - tail.x) * tail.dx + (v + 0.5 - tail.y) * tail.dy > -tail.need) continue;
+        px[v * MAP + u] = colour;
       }
     }
   };
-  const stroke = (ax: number, ay: number, bx: number, by: number, casing: boolean, colour: number) => {
-    const steps = Math.max(1, Math.ceil(Math.hypot(bx - ax, by - ay) * 2));
-    for (let i = 0; i <= steps; i++) dot(ax + ((bx - ax) * i) / steps, ay + ((by - ay) * i) / steps, casing, colour);
+  /** Set an end from the run's end point p and the next point q along the road (q after p). */
+  const end = (e: typeof head, p: Vec, q: Vec) => {
+    const d = Math.hypot(q.x - p.x, q.y - p.y);
+    e.dx = (q.x - p.x) / d;
+    e.dy = (q.y - p.y) / d;
+    e.need = (Math.abs(e.dx) + Math.abs(e.dy)) / 2;
   };
+  const REACH = 4; // a casing stamp is 4 px wide: further from an end than this, nothing can cross it
   const runs = groundRuns(track);
   const closed = !track.gaps.length;
   for (const casing of [true, false]) {
     const colour = word(casing ? P.dirt0 : P.bone0);
     for (const run of runs) {
       const n = closed ? run.length : run.length - 1;
+      let total = 0;
       for (let i = 0; i < n; i++) {
         const a = run[i], b = run[(i + 1) % run.length];
-        stroke(ox + a.x * scale, oy + a.y * scale, ox + b.x * scale, oy + b.y * scale, casing, colour);
+        total += Math.hypot(b.x - a.x, b.y - a.y) * scale;
+      }
+      if (!closed) {
+        // The road's direction at each end, from the nearest point of the run that is not the end itself.
+        const first = run[0], last = run[run.length - 1];
+        let i = 1, j = run.length - 2;
+        while (i < run.length - 1 && run[i].x === first.x && run[i].y === first.y) i++;
+        while (j > 0 && run[j].x === last.x && run[j].y === last.y) j--;
+        head.x = mx + first.x * scale;
+        head.y = my + first.y * scale;
+        end(head, first, run[i]);
+        tail.x = mx + last.x * scale;
+        tail.y = my + last.y * scale;
+        end(tail, run[j], last);
+      }
+      let done = 0;
+      for (let i = 0; i < n; i++) {
+        const a = run[i], b = run[(i + 1) % run.length];
+        const ax = mx + a.x * scale, ay = my + a.y * scale, bx = mx + b.x * scale, by = my + b.y * scale;
+        const len = Math.hypot(bx - ax, by - ay);
+        const steps = Math.max(1, Math.ceil(len * 2));
+        for (let k = 0; k <= steps; k++) {
+          const along = done + (len * k) / steps;
+          dot(ax + ((bx - ax) * k) / steps, ay + ((by - ay) * k) / steps, casing, colour, !closed && along < REACH, !closed && total - along < REACH);
+        }
+        done += len;
       }
     }
   }
   // The start line: a bright tick across the track, 3 px either side of its middle.
   const s = pointAt(track, 0);
-  const sx = ox + s.x * scale, sy = oy + s.y * scale, nx = -Math.sin(s.h) * 3, ny = Math.cos(s.h) * 3;
-  stroke(sx - nx, sy - ny, sx + nx, sy + ny, true, dark);
-  stroke(sx - nx, sy - ny, sx + nx, sy + ny, false, word(P.bone2));
+  const sx = mx + s.x * scale, sy = my + s.y * scale, nx = -Math.sin(s.h) * 3, ny = Math.cos(s.h) * 3;
+  for (const casing of [true, false]) {
+    for (let k = 0; k <= 12; k++) dot(sx + (nx * (k - 6)) / 6, sy + (ny * (k - 6)) / 6, casing, casing ? dark : word(P.bone2), false, false);
+  }
   g.putImageData(img, 0, 0);
   m = { canvas: g.canvas, scale, ox, oy };
   k.minis.set(track, m);
