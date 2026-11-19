@@ -230,8 +230,8 @@ function fixtures(track: Track, rust: Track): Scene[] {
     return { id: `p${i}`, x: g.x, y: g.y, h: g.h, color: COLORS[i], name: `Car ${i + 1}`, me: i === 0, wreck: false, ghost: false, ...more };
   };
   const raceHud: Partial<HudView> = { topLeft: ["LAP 2/3", "POS 3/6", "RIV  42 MINE 2"], time: "1:23.4", corner: "23 ms", hp: 0.62 };
-  // Damage: the hp each car of the grid has (the own car first). The renderer draws no
-  // damage yet; each car carries its hp as an extra field for the ticket that will.
+  // Damage: the hp each car of the grid has (the own car first). Under 40% a car is drawn
+  // battered (gfx/actors.ts).
   const HP = [0.39, 1, 0.8, 0.6, 0.2, 0.05];
   const holeRun = driver(track, 3, 950, 800, 240, 2);
   return [
