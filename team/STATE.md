@@ -277,6 +277,11 @@ ctx_91f1287793f6 (tmp/gfx2a-fix2.md; reviewer diff + probes in tmp/gfx2a-review/
 2a fix 2 done: 5302085 (paintCar; probe 166 -> ~0 B/frame; no context in carSheet bytecode; 0 px diff). Re-check sent to
 ctx_0c0c0bf40bef but it never ran (reviewer process had exited; stopped 20:30). Fresh Fable reviewer ctx_c7c1344222df
 (tmp/review-gfx2a-r3.md). GFX-4 spec ready: tmp/spec-gfx4.md (dispatch after the 2a merge).
+GFX-2a MERGED 2026-11-19: re-check APPROVE (no findings); main 57f4092 (check clean, sim 492/492, bots 95/95, build ok); ticket
+ready for qa test; workers released, gfx2a workspace + branch removed (artefacts in tmp/gfx2a-pairs/).
+GFX-4 in flight (Fable): ctx_297e4d30b671 (~/orca/workspaces/scrap-rally/gfx4, TSandvaer/gfx4, :3006; spec tmp/spec-gfx4.md: bake allocation fix
+first, then mine scorch, skid marks only with margin). Taste copy at ffb4323 still on :3009 (pid 24346) until GFX-4's replaces it.
+Local main 57f4092 ahead of origin 3270cc8 (ghost-rivet, GFX-0, GFX-3, GFX-1, GFX-2b, GFX-2a); not pushed.
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
@@ -333,7 +338,7 @@ Manual Deploy only on the user's go-ahead. The user's own dev server runs on :30
 
 | Ticket | Dispatch | Workspace | Branch | Port | Started |
 | --- | --- | --- | --- | --- | --- |
-| 123jpnbfb26 GFX-2a | ctx_a885a3b7e8ba | ~/orca/workspaces/scrap-rally/gfx2a | TSandvaer/gfx2a | 3006 | 2026-11-19 |
+| 123jpnbfb2c GFX-4 | ctx_297e4d30b671 | ~/orca/workspaces/scrap-rally/gfx4 | TSandvaer/gfx4 | 3006 | 2026-11-19 |
 | 123jpnbfb23 GFX-0 | ctx_27a7a271607b | ~/orca/workspaces/scrap-rally/gfx0 | TSandvaer/gfx0 | 3006 | 2026-11-18 |
 
 ## Queued (milestone 3, PLAN-M3.md; start after solid collisions 123jpnbf6cy and easier-start 123jpnbf3xa merge)
