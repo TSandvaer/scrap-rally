@@ -475,17 +475,16 @@ interface CarSheet {
 
 let bytes = 0;
 let soft = true;
-let softKnown = false;
 
 /**
  * Sprite canvases live where the view canvas lives (as the world's tiles do): in main memory
  * when the view is one that is read back (the benchmark's), so a blit never crosses between
- * main memory and the GPU. The first Renderer's view decides.
+ * main memory and the GPU. The view of the Renderer that is there when the first sheet is made
+ * decides: a page builds a Renderer on its own canvas before it draws on another (main.ts
+ * does, before the benchmark takes over), and that one must not settle it.
  */
 export function spritesFor(view: CanvasRenderingContext2D): void {
-  if (softKnown) return;
-  softKnown = true;
-  soft = view.getContextAttributes?.().willReadFrequently !== false;
+  if (!bytes) soft = view.getContextAttributes?.().willReadFrequently !== false;
 }
 
 function sheetCanvas(w: number, h: number): { canvas: HTMLCanvasElement; ctx: CanvasRenderingContext2D } {
