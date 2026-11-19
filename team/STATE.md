@@ -271,6 +271,9 @@ GFX-2a fix 1 done: ffb4323 (a22bd84 view+followed car stepped together; main 77a
 trace tools/debug/jitter-trace.ts: own car on screen 1450 -> 0 reversals, race 715 -> 1 flips; 20 pacing-car steps in bends left).
 Re-check ctx_7e34aa105676. New taste copy gfx2-taste detached at ffb4323, served on :3009 by node pid 24346 (old pid 10368 killed).
 User re-tested ffb4323: car steady, approved (popup). Merge on the reviewer's APPROVE; then GFX-4.
+2a re-check (ctx_7e34aa105676): jitter fix correct on all 5 checks; REQUEST_CHANGES on one older rule-1 line: carSheet's arrow
+closure allocates a 40 B context per car sprite per frame (~166 B/frame, sprites.ts:526). First REQUEST_CHANGES on 2a. Fix worker
+ctx_91f1287793f6 (tmp/gfx2a-fix2.md; reviewer diff + probes in tmp/gfx2a-review/). Taste server :3009 pid 24346 still up.
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
