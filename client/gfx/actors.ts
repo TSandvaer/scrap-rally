@@ -65,9 +65,11 @@ const PUFF_LIFE = 0.34;
 const JUMP = 40; // a car that moved further than this in a frame was put there, not driven
 const RANDOM = 65536;
 
-// Tyre marks: a car on the ground sliding sideways faster than SKID (units/s; full lock at top
-// speed is about 165 on tarmac) marks the track under its rear wheels, a stamp every
-// SKID_EVERY frames at most, each a line from where the wheels were at the stamp before.
+// Tyre marks: a car on the ground sliding sideways faster than SKID (units/s) marks the track
+// under its rear wheels, a stamp every SKID_EVERY frames at most, each a line from where the
+// wheels were at the stamp before. (shared/physics.ts, full lock on tarmac: from top speed a
+// car slides at up to 156 and is past 105 after a tenth of a second; from 255 units/s it
+// peaks at 110; from 230 and below it never gets there.)
 const SKID = 105;
 const SKID_EVERY = 2;
 const SKID_GAP = 4; // frames without a slide after which the next mark starts afresh
