@@ -245,6 +245,8 @@ one car comes via `ask` -> show the user) and GFX-2b ctx_6fe6fc1725f2 (~/orca/wo
 Both touch render.ts call sites only; the second to merge merges main first. Local main ahead of origin 3270cc8; not pushed.
 GFX-2a contact sheet: user said GO (popup) on the car design for all six colours; mine shake only when the own car is hit
 (4 px; user). Orchestrator allowed 2a ONE appended preview.ts scene 'blast' (no existing scene may change).
+2026-11-19 ~10:42 GFX-2b hit the Claude 5-hour session limit (commits 8a307e2 font, 62daa9e hud/minimap); user said go ->
+resumed 11:22 via reply. GFX-2a running its full gate since ~11:04 (bench pid 3593, lock held; commits up to 19b1c52).
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
