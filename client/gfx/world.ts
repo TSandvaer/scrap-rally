@@ -793,6 +793,8 @@ function ground(): void {
   for (let y = from; y < from + rows; y++) {
     const Y = by + y;
     const ly = Math.floor(Y / CELL), fy = Y / CELL - ly, sy = fy * fy * (3 - 2 * fy);
+    // The row's share of its cells' hashes (seed 11): this row of the lattice and the next.
+    const hy0 = Math.imul(ly, 668265263) ^ Math.imul(11, 1442695041), hy1 = Math.imul(ly + 1, 668265263) ^ Math.imul(11, 1442695041);
     let lx = -1e9, a = 0, c = 0, bb = 0, d = 0;
     for (let x = 0; x < S; x++) {
       const p = y * S + x;
@@ -800,12 +802,18 @@ function ground(): void {
       const X = bx + x;
       const cell = Math.floor(X / CELL);
       if (cell !== lx) {
+        // The hashes of the cell's four corners, as corners() works them out, written out
+        // here: this is the dirt's inner loop, and a call per cell showed in the bake's time.
         lx = cell;
-        corners(cell, ly, 11);
-        a = CORNERS[0];
-        bb = CORNERS[1];
-        c = CORNERS[2];
-        d = CORNERS[3];
+        const hx0 = Math.imul(cell, 374761393), hx1 = Math.imul(cell + 1, 374761393);
+        let h = Math.imul(hx0 ^ hy0 ^ ((hx0 ^ hy0) >>> 13), 1274126177);
+        a = ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+        h = Math.imul(hx1 ^ hy0 ^ ((hx1 ^ hy0) >>> 13), 1274126177);
+        bb = ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+        h = Math.imul(hx0 ^ hy1 ^ ((hx0 ^ hy1) >>> 13), 1274126177);
+        c = ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+        h = Math.imul(hx1 ^ hy1 ^ ((hx1 ^ hy1) >>> 13), 1274126177);
+        d = ((h ^ (h >>> 16)) >>> 0) / 4294967296;
       }
       const fx = X / CELL - cell, sx = fx * fx * (3 - 2 * fx);
       const patch = a + (bb - a) * sx + (c - a) * sy + (a - bb - c + d) * sx * sy;
@@ -893,6 +901,7 @@ function road(): void {
   const R = wall + BARRIER, hw5 = hw + KERB, W = wall - 1;
   const { s0, ds, dash0, groove0, groove1 } = art;
   const gaps = track.gaps, ramps = art.ramps, ends = art.ends, patches = art.patches;
+  const nc = job.nc, pieceGap = art.gap;
   const from = job.sub;
   let work = 0, y = from;
   for (; y < S && work < 11000; y++) {
@@ -918,8 +927,23 @@ function road(): void {
         } else if (e >= 30) {
           c = n < 18 ? SOOT0 : n < 28 ? SOOT2 : SOOT1;
         } else {
-          // Which wall is this the foot of, and does it face the sun (down-right walls do)?
-          const i = nearestGapPiece(art, g, p);
+          // Which wall is this the foot of, and does it face the sun (down-right walls do)? By the
+          // piece of the gap the pixel lies on: the first of the tile's pieces that holds its
+          // distance along the track (looked up here, in place: a call per pixel showed in the bake's time).
+          let i = -1;
+          for (let q = 0; q < nc && i < 0; q++) {
+            const o = cand[q];
+            if (pieceGap[o] === g && s >= s0[o] - 1e-6 && s <= s0[o] + ds[o] + 1e-6) i = o;
+          }
+          if (i < 0) {
+            i = 0;
+            for (let o = 0; o < art.n; o++) {
+              if (pieceGap[o] === g) {
+                i = o;
+                break;
+              }
+            }
+          }
           let wx: number, wy: number; // the wall's normal, pointing into the void
           if (side <= head && side <= tail) {
             const k = l > 0 ? -1 : 1;
@@ -1034,17 +1058,6 @@ function road(): void {
   }
   next();
   COST[0] = job.patched ? cost + 90 : cost;
-}
-
-/** The piece of gap `g` that pixel p of the buffer lies on (by its distance along the track there). */
-function nearestGapPiece(art: Art, g: number, p: number): number {
-  const s = buffers().gapS[p];
-  for (let k = 0; k < job.nc; k++) {
-    const i = cand[k];
-    if (art.gap[i] === g && s >= art.s0[i] - 1e-6 && s <= art.s0[i] + art.ds[i] + 1e-6) return i;
-  }
-  for (let i = 0; i < art.n; i++) if (art.gap[i] === g) return i;
-  return 0;
 }
 
 /**
