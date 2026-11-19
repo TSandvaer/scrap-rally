@@ -267,6 +267,9 @@ quick look unchanged). Re-check sent to ctx_14a5f3b78b13.
 GFX-2b MERGED 2026-11-19: re-check APPROVE (no findings); main 29041d0 (check clean, sim 492/492, bots 95/95, build ok); ticket
 ready for qa test; workers released, gfx2b workspace + branch removed (artefacts in tmp/gfx2b-pairs/). 2a told to merge main +
 delete the unused render.ts line after its jitter fix.
+GFX-2a fix 1 done: ffb4323 (a22bd84 view+followed car stepped together; main 77a48d6 merged as 707e57d; unused cx/cy removed;
+trace tools/debug/jitter-trace.ts: own car on screen 1450 -> 0 reversals, race 715 -> 1 flips; 20 pacing-car steps in bends left).
+Re-check ctx_7e34aa105676. New taste copy gfx2-taste detached at ffb4323, served on :3009 by node pid 24346 (old pid 10368 killed).
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
