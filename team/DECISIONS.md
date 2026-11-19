@@ -81,3 +81,4 @@
 - 2026-11-18 — GFX-3 taste gate (user, popup): DOM skin approved as is (subtle plates, key caps, own select arrow, native sliders).
 - 2026-11-18 — Speed gate margin rule (user, popup "Adopt margin rule"; Fable reviewer's proposal): in a noisy set (noise > 0.10) each value gets a margin m = max(set noise, its own spread); ok at <= 1.05 - m, OVER above 1.05 + m, open in between; FAIL needs the same value OVER in both sets; PASS needs no open value; anything else INVALID. Quiet sets keep the plain 1.05 rule. Set 2 gets control cells (>= 5 metric A cells) for its noise figure. Verdict only with exactly five runs.
 - 2026-11-19 — GFX-1 taste gate (user, popup): world bake approved (desktop + phone).
+- 2026-11-19 — GFX-2a (user, popups): car sprite design approved from the contact sheets (128 headings, all six colours, battered + burnt looks); a mine blast shakes the screen only when it hits your own car (4 px), never for other cars' blasts.

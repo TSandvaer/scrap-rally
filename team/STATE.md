@@ -243,6 +243,8 @@ to GFX-4's scope (ClickUp comment).
 WAVE 3 in flight (Fable): GFX-2a ctx_a885a3b7e8ba (~/orca/workspaces/scrap-rally/gfx2a, TSandvaer/gfx2a, :3006; contact sheet of
 one car comes via `ask` -> show the user) and GFX-2b ctx_6fe6fc1725f2 (~/orca/workspaces/scrap-rally/gfx2b, TSandvaer/gfx2b, :3008).
 Both touch render.ts call sites only; the second to merge merges main first. Local main ahead of origin 3270cc8; not pushed.
+GFX-2a contact sheet: user said GO (popup) on the car design for all six colours; mine shake only when the own car is hit
+(4 px; user). Orchestrator allowed 2a ONE appended preview.ts scene 'blast' (no existing scene may change).
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
