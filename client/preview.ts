@@ -7,9 +7,13 @@
 // fixture scenes after them (fx, wreck, damage, mine, spectator, pause, countdown: the states
 // no feature scene shows; no test reads the renderer's output, so these frames are the
 // regression net of the graphics work), then the scenes added since (blast: a mine's blast,
-// a landing's puff and dust from the verge; looks: the three car looks driving a bend).
+// a landing's puff and dust from the verge; looks: the three car looks driving a bend; and the
+// catch-up visuals of M4-FX: cells, boost, draft, catchup).
 // URL: &scene=<name> to start on one, &freeze=1 to hold
 // the scene's key moment, &t=<seconds> to hold any moment, &hud=0 to hide the caption.
+// &cues=0 leaves the catch-up fields out of what the renderer is handed (CarView.draft and
+// .boost, WorldFx.cells, HudView.draft and .boost): the same scene as a caller that does not
+// fill them gets it, which is the picture before M4-FX.
 // A held moment pins performance.now() too while it draws (smoke and the mine blink read it),
 // so the same URL gives the same pixels on every load.
 //
@@ -22,7 +26,7 @@ import { buildTrack, gridSlot, pointAt, queryTrack, queryTrackNear, type Track, 
 import { trackById } from "../shared/tracks";
 import { airTicksFor, FALL_TICKS, GHOST_TICKS } from "../shared/weapons";
 import { BAYER4, CAR_COLORS, CAR_NEUTRALS, carTones, CSS_MIRROR, LIT, P, PALETTE, RAMPS, rgbOf, SHADE, type PaletteName } from "./gfx/palette";
-import { Renderer, VIEW_H, VIEW_W, type CarView, type HudView, type WorldFx } from "./render";
+import { Renderer, VIEW_H, VIEW_W, type CarView, type CellView, type HudView, type WorldFx } from "./render";
 
 const COLORS = ["#e8552d", "#33a3e8", "#f2c230", "#5cc46b", "#c46ad6", "#e8e2d4"];
 const DT = 1 / 60;
@@ -369,6 +373,145 @@ function fixtures(track: Track, rust: Track): Scene[] {
       lead: 0.6,
       key: 1,
     },
+    ...catchUp(track, rust),
+  ];
+}
+
+/**
+ * The catch-up scenes (M4-FX; PLAN-M4.md 2.5, 2.8): the lightning cells, the flames of a
+ * boost, the streaks of a slipstream and the HUD's two cues, as the game will hand them to
+ * the renderer (the optional fields of CarView, WorldFx and HudView).
+ */
+function catchUp(track: Track, rust: Track): Scene[] {
+  const at = (t: Track, s: number) => () => pointAt(t, s);
+  const cell = (t: Track, s: number, lat: number, air: boolean, state: number): CellView => {
+    const p = pointAt(t, s);
+    return { x: p.x - Math.sin(p.h) * lat, y: p.y + Math.cos(p.h) * lat, air, state };
+  };
+  const raceHud: Partial<HudView> = { topLeft: ["LAP 2/3", "POS 3/6", "RIV  42 MINE 2"], time: "1:23.4", corner: "23 ms", hp: 0.62 };
+  const kerb = rust.def.halfWidth - 6; // PLAN-M4 2.5: ground cells lie on the kerb
+
+  // cells: the chasm of the preview track. A car jumps it again and again and takes the
+  // floating cell on its line at the top of its arc; that cell is then an outline until the
+  // car comes round again (its wait runs out as the lap does).
+  const v = 380;
+  const flight = (v * airTicksFor(v)) / 60;
+  const from = 5200, lap = 900, line = -22;
+  const jumper = driver(track, 0, from, lap, v, line);
+  const top = 5600 + flight / 2; // the top of the arc
+  const tTake = (top - from) / v, period = lap / v;
+  const takenBy = (t: number): number => {
+    const u = t % period;
+    return u < tTake ? 0 : Math.max(0.01, 1 - (u - tTake) / (period - tTake));
+  };
+
+  // boost: five cars down Rust Bowl's first straight, each with a boost that runs out and
+  // comes again; the fifth hops while it burns.
+  const burn = (i: number, t: number): number => Math.max(0, 90 - ((t * 60 + i * 23) % 120)); // ticks left: 90 down to 0, then 30 ticks without
+  const boosted = (t: number): CarView[] => {
+    const run = (i: number, lat: number, more: Partial<CarView>) => car(rust, i, -40 + ((t * 300 + i * 83) % 330), lat, { boost: burn(i, t), ...more });
+    const hop = (t * 0.9) % 1;
+    return [
+      run(0, -40, { car: "sport" }),
+      run(1, -8, { car: "racer", name: "Racer" }),
+      run(2, 26, { car: "truck", name: "Truck" }),
+      run(3, 58, { car: "sport", name: "Ending", boost: 1 + ((t * 60) % 9) }),
+      run(4, -72, { car: "truck", name: "In the air", height: hop < 0.6 ? 4 * (hop / 0.6) * (1 - hop / 0.6) : 0, boost: 60 }),
+    ];
+  };
+
+  // draft: three pairs down the same straight, the follower 50, 110 and 160 units behind its
+  // leader: a slipstream of 1, 0.58 and 0.17 (PLAN-M4 2.8: 1 up to 60 units, 0 at 180).
+  const GAPS = [110, 50, 160];
+  const strength = (gap: number) => Math.max(0, Math.min(1, (180 - gap) / 120));
+  const drafted = (t: number): CarView[] => {
+    const out: CarView[] = [];
+    const s0 = 60 + ((t * 430) % 260);
+    GAPS.forEach((gap, k) => {
+      // The own car is the follower of the middle pair; the pairs either side are further back, so no name tag covers a car.
+      const s = s0 - [110, 0, 60][k], lat = (k - 1) * 42;
+      const w = strength(gap);
+      out.push(car(rust, k === 1 ? 0 : k + 2, s, lat, { draft: w, name: `Draft ${Math.round(w * 100)}%`, car: k === 2 ? "truck" : "sport" }));
+      out.push(car(rust, k === 1 ? 1 : k + 3, s + gap, lat, { name: "Lead", car: k === 0 ? "racer" : "sport" }));
+    });
+    return out;
+  };
+
+  // catchup: a pack through Rust Bowl's first bend with all of it at once. (The cars drive up
+  // the screen and to the right there: no name tag lies over a flame.)
+  const pack = (t: number): CarView[] => {
+    const lapOf = (i: number, lat: number, start: number, more: Partial<CarView>) => car(rust, i, 1010 + ((t * 380 + start) % 520), lat, more);
+    return [
+      lapOf(0, -6, 60, { car: "sport", draft: 0.75, boost: Math.max(0, 54 - ((t * 60) % 90)) }),
+      lapOf(1, -4, 122, { car: "racer", name: "Racer", boost: 40 }),
+      lapOf(2, 30, 300, { car: "truck", name: "Truck" }),
+      lapOf(3, 34, 235, { car: "sport", name: "Sport", draft: 0.4 }),
+      lapOf(4, -40, 400, { car: "racer", name: "Racer 2", draft: 1 }),
+      lapOf(5, -42, 452, { car: "truck", name: "Truck 2", boost: 5 }),
+    ];
+  };
+  const bendCells = (t: number): CellView[] => [
+    cell(rust, 1130, -kerb, false, 0),
+    cell(rust, 1230, kerb, false, 0),
+    cell(rust, 1310, -kerb, false, 1), // taken
+    cell(rust, 1370, kerb, false, 0.05), // about to be back
+    cell(rust, 1450, -kerb, false, 0),
+    cell(rust, 1345, 8, true, t % 3 < 2 ? 0 : 1 - ((t % 3) - 2)), // floats over the road
+  ];
+
+  return [
+    {
+      name: "cells",
+      title: "Lightning cells: on the kerbs, floating over the chasm; taken; about to be back",
+      cam: at(track, 5660),
+      cars: (t) => [jumper(t), car(track, 1, 5415, 36), car(track, 2, 5950, -30, { car: "truck" })],
+      fx: (t) => ({
+        ...NO_FX,
+        cells: [
+          cell(track, 5400, -58, false, 0),
+          cell(track, 5455, 58, false, 0),
+          cell(track, 5500, -58, false, 1), // taken
+          cell(track, 5360, 58, false, 0.05), // about to be back
+          cell(track, 5330, -92, false, 0), // off the road, on the verge
+          cell(track, top, line, true, takenBy(t)), // on the jumper's line
+          cell(track, top - 10, 34, true, 0),
+          cell(track, top + 55, 6, true, 1), // taken
+          cell(track, top - 60, -62, true, 0.05), // about to be back
+          cell(track, 5900, 58, false, 0),
+          cell(track, 5950, -58, false, 0),
+        ],
+      }),
+      key: tTake - 0.1,
+    },
+    {
+      name: "boost",
+      title: "Boost: flames on sport, racer and truck; one ending, one in the air",
+      rust: true,
+      cam: at(rust, 120),
+      cars: boosted,
+      hud: (t) => ({ ...raceHud, boost: burn(0, t) }),
+      key: 0.3,
+    },
+    {
+      name: "draft",
+      title: "Slipstream: streaks past the follower at strength 0.58, 1 and 0.17",
+      rust: true,
+      cam: at(rust, 120),
+      cars: drafted,
+      hud: () => ({ ...raceHud, draft: strength(GAPS[1]) }),
+      key: 0.1,
+    },
+    {
+      name: "catchup",
+      title: "Catch-up: drafting and boosting through a bend, cells on its kerbs",
+      rust: true,
+      cam: at(rust, 1270),
+      cars: pack,
+      fx: (t) => ({ ...NO_FX, cells: bendCells(t) }),
+      hud: (t) => ({ ...raceHud, draft: 0.75, boost: Math.max(0, 54 - ((t * 60) % 90)) }),
+      lead: 0.6,
+      key: 0.5,
+    },
   ];
 }
 
@@ -389,6 +532,7 @@ export function runPreview(canvas: HTMLCanvasElement, params: URLSearchParams): 
   let index = Math.max(0, list.findIndex((s) => s.name === params.get("scene")));
   const fixedT = params.has("t") ? Number(params.get("t")) : params.get("freeze") === "1" ? null : undefined;
   const hud = params.get("hud") !== "0";
+  const cues = params.get("cues") !== "0";
   const start = performance.now();
   let led: Scene | null = null; // the held scene whose lead-up has been drawn
 
@@ -415,6 +559,7 @@ export function runPreview(canvas: HTMLCanvasElement, params: URLSearchParams): 
           ? `FIXTURE ${index - CLASSIC + 1}/${FIXTURES}  ${scene.title}  (arrows)`
           : `EXTRA ${index - CLASSIC - FIXTURES + 1}  ${scene.title}  (arrows)`;
     const view: HudView | null = scene.hud ? { ...NO_HUD, banner: caption, ...scene.hud(t) } : caption ? { ...NO_HUD, banner: caption } : null;
+    if (!cues && view) delete view.draft, delete view.boost;
     // A held moment of a scene with a lead-up: the frames before it are drawn first, once,
     // each at its own time (after that the held frame is redrawn as it is: no time passes).
     const from = held && scene.lead && led !== scene ? t - scene.lead : t;
@@ -424,7 +569,12 @@ export function runPreview(canvas: HTMLCanvasElement, params: URLSearchParams): 
       // The renderer reads the real clock for the smoke and the mine blink: pin it while held.
       if (held) performance.now = () => u * 1000;
       try {
-        r.frame(scene.cars(u), scene.fx ? scene.fx(u) : NO_FX, view, held ? u * 1000 : now);
+        const cars = scene.cars(u), fx = scene.fx ? scene.fx(u) : NO_FX;
+        if (!cues) {
+          for (const c of cars) delete c.draft, delete c.boost;
+          delete fx.cells, delete fx.nCells;
+        }
+        r.frame(cars, fx, view, held ? u * 1000 : now);
       } finally {
         if (held) delete (performance as { now?: unknown }).now;
       }
