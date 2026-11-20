@@ -447,3 +447,63 @@ export function validateRunUps(track: Track, stats: CarStats = BASE_STATS): stri
   }
   return errors;
 }
+
+// ---- jumps at overspeed (M4-DRAFT/M4-CELLS, PLAN-M4 advisor change 7) -------------------
+
+/** Lanes (lateral offsets) the overspeed sweep takes off from: the centre and both sides. */
+const SWEEP_LANES = [-32, 0, 32];
+/** Arrival speeds are swept in steps of this (u/s), and the maximum itself. */
+const SWEEP_STEP = 4;
+
+/**
+ * The overspeed sweep: a car arriving at a ramp's lip faster than validateRunUps' run from rest
+ * ever gets (the slipstream's ~473 u/s, a boost's ~537) must still land. For every lip, on the
+ * centre and on lanes either side, heading along the track, arrival speeds from MIN_TAKEOFF_SPEED
+ * up to maxSpeed are flown: the slowest ones may fall short into the gap (validateRunUps proves a
+ * run-up gets fast enough), but from the slowest speed that lands up to maxSpeed every one must
+ * land without falling. A landing on the dirt verge (inside the walls) counts as landed: running
+ * wide is what overspeed costs; with `onAsphalt` it does not (the strict form, as validateRunUps).
+ * A flight is frozen (velocity and heading), so the car type does not change it: `stats` drives
+ * only the roll after the landing. Empty = every jump lands.
+ */
+export function validateJumpSweep(track: Track, maxSpeed: number, stats: CarStats = BASE_STATS, onAsphalt = false): string[] {
+  const errors: string[] = [];
+  const speeds: number[] = [];
+  for (let v = MIN_TAKEOFF_SPEED; v < maxSpeed; v += SWEEP_STEP) speeds.push(v);
+  speeds.push(maxSpeed);
+  for (const ramp of track.ramps) {
+    const lip = ramp.s + ramp.len;
+    for (const lane of SWEEP_LANES) {
+      let landed = -1; // the slowest speed that lands
+      const bad: { v: number; why: string }[] = [];
+      for (const v of speeds) {
+        const why = flyOff(track, lip, lane, v, stats, onAsphalt);
+        if (!why && landed < 0) landed = v;
+        else if (why && landed >= 0) bad.push({ v, why });
+      }
+      const at = `jump at the lip s=${lip.toFixed(1)}, lane ${lane}`;
+      if (landed < 0) errors.push(`${at}: no take-off up to ${maxSpeed.toFixed(0)} u/s lands`);
+      else if (bad.length) errors.push(`${at}: lands from ${landed} u/s, but not at ${bad.map((b) => b.v.toFixed(0)).join(", ")} u/s (${bad[0].why})`);
+    }
+  }
+  return errors;
+}
+
+/** Fly off the lip at s=lip, `lane` units right of the centerline, at speed v: "" = lands on the asphalt. */
+function flyOff(track: Track, lip: number, lane: number, v: number, stats: CarStats, onAsphalt: boolean): string {
+  const p = pointAt(track, lip + 0.5);
+  const c: CarState = {
+    x: p.x - Math.sin(p.h) * lane, y: p.y + Math.cos(p.h) * lane, h: p.h, vx: Math.cos(p.h) * v, vy: Math.sin(p.h) * v,
+    seg: p.seg, wreck: 0, air: 0, fall: 0, boost: 0,
+  };
+  const env = raceEnv(track);
+  for (let i = 0; i < MAX_AIR_TICKS + 2; i++) {
+    const wasAir = c.air > 0;
+    const ev = stepRaceCar(c, { throttle: 1, steer: 0 }, stats, env);
+    const q = queryTrackNear(track, c.x, c.y, c.seg);
+    if (ev === "fall") return `falls at s=${q.s.toFixed(1)}, ${q.dist.toFixed(1)} from the centerline`;
+    if (i === 0 && ev !== "takeoff") return "does not take off";
+    if (wasAir && c.air === 0) return onAsphalt && q.dist > track.def.halfWidth ? `lands off the asphalt at s=${q.s.toFixed(1)} (${q.dist.toFixed(1)} from the centerline)` : "";
+  }
+  return "still in the air";
+}

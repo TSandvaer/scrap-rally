@@ -8349,7 +8349,351 @@ function envClient(): void {
   );
 }
 
-for (const t of [rivets, gating, mines, wrecks, finishing, garage, armDelay, engine, readyCheck, collisions, trackFeatures, roomTrack, jumpsWired, shippedTracks, botDriver, botLaps, mineCap, chatRoom, chatClient, sound, raceSounds, surfaceSounds, audioUnlock, menuHostOnly, menuStop, menuRestart, menuKick, menuLock, menuHandover, menuClient, menuRestartClient, retireRules, retireField, retireRaceEnd, retireGarage, retireRefund, retireOthers, retireNotices, retireClient, pauseRefused, pauseFreeze, pauseResume, pauseHold, pauseAuto, pauseCooldown, pauseGrace, pauseCountdown, pauseControls, pauseClient, musicSwitch, soundMigration, soundLayers, soundServer, soundRandom, soundRoomDrag, soundSliderGrip, soundClient, songs, songPlayer, ghostRivets, minesSetting, minesStay, minesCap, minesFade, minesAtStart, minesCleared, minesPaused, minesClient, botsPointAt, botsAdd, botsKickHost, botsHandover, botsFullRoom, botsSoloStart, botsRace, botsShop, botsTick, botsCpu, botsClient, carsTypes, carsStats, carsPick, carsRejoin, carsBots, carsRunUps, carsBalance, carsCut, carsClient, envRt, envStep, envClient]) {
+// ---- slipstream (M4-DRAFT, PLAN-M4.md 2.8, ClickUp 123jpnbfffj, 2026-11-20) ----------------------
+
+// This section's imports (hoisted like the ones at the top).
+import {
+  DRAFT_DRAG_CUT,
+  DRAFT_FAR,
+  DRAFT_FULL,
+  DRAFT_LEAD_MIN_SPEED,
+  DRAFT_NEAR,
+  DRAFT_SHAPE,
+  DRAFT_TAPER,
+  DRAFT_WIDTH,
+  DRAFT_SPREAD,
+  draftFrom,
+  draftsFor,
+  draftTopSpeed,
+  givesDraft,
+  takesDraft,
+  type DraftEntry,
+} from "../shared/catchup";
+import { validateJumpSweep } from "../shared/weapons";
+import { DRAFT_STRAIGHT } from "../tools/debug/draft-tune";
+import { draftRace, type DraftRaceOut } from "../tools/debug/draft-race";
+
+/** Run fn with the slipstream switched off (DRAFT_SHAPE.far = 0: nobody is ever in a wake). */
+function withoutDraft<T>(fn: () => T): T {
+  const far = DRAFT_SHAPE.far;
+  DRAFT_SHAPE.far = 0;
+  try {
+    return fn();
+  } finally {
+    DRAFT_SHAPE.far = far;
+  }
+}
+
+function draftRule(): void {
+  // Geometry: a leader at the origin heading +x, the follower d behind and lat across.
+  const at = (d: number, lat = 0) => draftFrom(-d, lat, 0, 0, 0);
+  check(
+    `draft rule: none up to ${DRAFT_NEAR} behind (alongside), full from there to ${DRAFT_FULL}, falling linearly to 0 at ${DRAFT_FAR}; none ahead`,
+    at(10) === 0 && at(DRAFT_NEAR) === 0 && at(DRAFT_NEAR + 0.5) === 1 && at(DRAFT_FULL) === 1 && Math.abs(at(120) - 0.5) < 1e-9 && at(DRAFT_FAR) === 0 && at(DRAFT_FAR + 20) === 0 && at(-50) === 0,
+    [10, 20, 21, 60, 120, 179, 180].map((d) => `${d}:${at(d).toFixed(3)}`).join(" "),
+  );
+  // Across the wake: full within DRAFT_TAPER inside the edge (DRAFT_WIDTH + DRAFT_SPREAD * d), 0
+  // DRAFT_TAPER outside it, linear between (no hard edge: advisor change 8), the same either side.
+  const edge = DRAFT_WIDTH + DRAFT_SPREAD * 50;
+  let maxStep = 0;
+  for (let lat = 0; lat < 45; lat += 0.01) maxStep = Math.max(maxStep, Math.abs(at(50, lat + 0.01) - at(50, lat)));
+  check(
+    "draft rule: tapered across the wake (full near its line, half at its edge, none past it, no step anywhere), the same on both sides",
+    at(50, edge - DRAFT_TAPER) === 1 && Math.abs(at(50, edge) - 0.5) < 1e-9 && at(50, edge + DRAFT_TAPER) === 0 && at(50, -edge) === at(50, edge) &&
+      maxStep <= 0.01 / (2 * DRAFT_TAPER) + 1e-9,
+    `edge at 50 behind: ${edge}; largest change per 0.01 across: ${maxStep.toFixed(5)}`,
+  );
+  const car = (o: Partial<CarState> = {}): CarState => ({ x: 0, y: 0, h: 0, vx: DRAFT_LEAD_MIN_SPEED, vy: 0, seg: 0, wreck: 0, air: 0, fall: 0, boost: 0, ...o });
+  check(
+    `draft rule: a draft only from a car on the ground, not wrecked, ghosted or finished, at ${DRAFT_LEAD_MIN_SPEED} u/s or more; only for a car on the ground`,
+    givesDraft(car(), false, false) && !givesDraft(car({ vx: DRAFT_LEAD_MIN_SPEED - 1 }), false, false) && !givesDraft(car(), true, false) && !givesDraft(car(), false, true) &&
+      !givesDraft(car({ air: 5 }), false, false) && givesDraft(car({ air: 5 }), false, false, 0) && !givesDraft(car({ fall: 9 }), false, false) && !givesDraft(car({ wreck: 9 }), false, false) &&
+      takesDraft(car()) && !takesDraft(car({ air: 1 })) && !takesDraft(car({ fall: 1 })) && !takesDraft(car({ wreck: 1 })),
+  );
+  // draftsFor: the strongest wake a car is in, never its own, nothing from a car behind.
+  const field: DraftEntry[] = [
+    { car: car({ x: 0, vx: 430 }), ghost: false, finished: false }, // the leader
+    { car: car({ x: -120, vx: 430 }), ghost: false, finished: false }, // 120 behind it: 0.5
+    { car: car({ x: -160, vx: 430 }), ghost: false, finished: false }, // 40 behind the second: 1
+    { car: car({ x: -100, y: 200, vx: 430 }), ghost: false, finished: false }, // off to the side: none
+  ];
+  const out = draftsFor(field, []);
+  const ghosted = draftsFor(field.map((f, i) => (i === 1 ? { ...f, ghost: true } : f)), []);
+  check(
+    "draft rule: draftsFor gives each car the strongest wake it is in (never its own; nothing from a car behind or a ghost)",
+    out.join() === "0,0.5,1,0" && ghosted.join() === `0,0.5,${draftFrom(-160, 0, 0, 0, 0)},0`,
+    `${out.join(",")} / with the second ghosted ${ghosted.join(",")}`,
+  );
+  // stepCar: the drag cut; draft 0 is exactly the step without it; full draft tops out at ~+10 %.
+  const t = buildTrack(DRAFT_STRAIGHT);
+  const drive = (draft: number | null, ticks: number) => {
+    const p = pointAt(t, 1000);
+    const c: CarState = { x: p.x, y: p.y, h: p.h, vx: 0, vy: 0, seg: p.seg, wreck: 0, air: 0, fall: 0, boost: 0 };
+    for (let i = 0; i < ticks; i++) {
+      if (draft === null) stepCar(c, { throttle: 1, steer: 0 }, BASE_STATS, t);
+      else stepCar(c, { throttle: 1, steer: 0 }, BASE_STATS, t, draft);
+    }
+    return c;
+  };
+  const full = speedOf(drive(1, 420)), none = speedOf(drive(0, 420)), half = speedOf(drive(0.5, 420));
+  // The fixed step's terminal speed: v = a (1 - k DT) / k for drag k (421.3 u/s for the Sport's nominal 430).
+  const k = BASE_STATS.accel / BASE_STATS.topSpeed;
+  const term = (kk: number) => (BASE_STATS.accel * (1 - kk * DT)) / kk;
+  check(
+    `draft physics: drag x (1 - ${DRAFT_DRAG_CUT} w): full draft tops out ~+10 % faster (nominal ${draftTopSpeed(430).toFixed(1)} u/s for 430), half way between; draft 0 is bit for bit the step without it`,
+    JSON.stringify(drive(0, 300)) === JSON.stringify(drive(null, 300)) && Math.abs(none - term(k)) < 0.5 && Math.abs(full - term(k * (1 - DRAFT_DRAG_CUT))) < 0.5 &&
+      full / none > 1.095 && full / none < 1.105 && half > none + 15 && half < full - 15,
+    `after 7 s flat out on the straight: alone ${none.toFixed(1)}, half draft ${half.toFixed(1)}, full ${full.toFixed(1)} u/s (+${(100 * (full / none - 1)).toFixed(1)} %)`,
+  );
+}
+
+const DRAFT_ID = DRAFT_STRAIGHT.id;
+
+/** Steer at a point ahead on the lane `lat` units right of the centerline (the A4 drivers). */
+function laneSteer(t: Track, c: CarState, lat: number): number {
+  const q = queryTrackNear(t, c.x, c.y, c.seg);
+  const p = pointAt(t, q.s + 60 + speedOf(c) * 0.2);
+  const tx = p.x - Math.sin(p.h) * lat, ty = p.y + Math.cos(p.h) * lat;
+  return clamp(angleDiff(c.h, Math.atan2(ty - c.y, tx - c.x)) * 2.2, -1, 1);
+}
+
+/**
+ * Two cars on the draft straight, through the real room (its draft pass, the jitter buffer):
+ * cars[i] = [s, lane]; all at v0, full throttle, holding their lanes. Returns per tick each
+ * car's s and pose. Without `cars[1]` the first car drives alone.
+ */
+function straightRun(cars: [number, number][], ticks: number, v0 = 430): { s: number[][]; pose: string[][] } {
+  const t = trackById(DRAFT_ID);
+  const sim = new Sim(1);
+  const ps = cars.map((_, i) => sim.add(`D${i}`));
+  if (sim.room.setTrack(ps[0], DRAFT_ID)) throw new Error("track");
+  sim.startRace(ps[0]);
+  cars.forEach(([s0, lat], i) => {
+    const pt = pointAt(t, s0);
+    const x = pt.x - Math.sin(pt.h) * lat, y = pt.y + Math.cos(pt.h) * lat;
+    ps[i].car = { x, y, h: pt.h, vx: Math.cos(pt.h) * v0, vy: Math.sin(pt.h) * v0, seg: pt.seg, wreck: 0, air: 0, fall: 0, boost: 0 };
+    ps[i].progress = { s: s0, cp: 1, lap: 0, fin: 0 };
+  });
+  const out = { s: cars.map(() => [] as number[]), pose: cars.map(() => [] as string[]) };
+  for (let k = 0; k < ticks; k++) {
+    sim.run(1, (p) => ({ throttle: 1, steer: laneSteer(t, p.car!, cars[ps.indexOf(p)][1]) }));
+    ps.forEach((p, i) => {
+      const c = p.car!;
+      out.s[i].push(queryTrackNear(t, c.x, c.y, c.seg).s);
+      out.pose[i].push(`${c.x},${c.y},${c.h},${c.vx},${c.vy}`);
+    });
+  }
+  return out;
+}
+
+function draftStraight(): void {
+  // PLAN-M4 2.8's test, through the server: a follower 50 behind the leader at 430 u/s, 18 across
+  // (in the wake, clear of its side: side by side the capsules touch at 16). With the draft its
+  // centre gets ahead of the leader's within 4 s and stays there (the passed car is beside it, not
+  // in its wake: no tug of war); with no draft the gap stays within +-1. Getting a whole car length
+  // ahead takes the next bend: the extra speed (<= ~43 u/s) dies out in ~0.8 s (draft-tune.ts).
+  registerTestTrack(DRAFT_STRAIGHT);
+  const lead = 1500, gap = 50, lane = 18;
+  const on = straightRun([[lead, 0], [lead - gap, lane]], 240);
+  const ahead = on.s[1].map((s, k) => s - on.s[0][k]); // the follower's lead (+ = ahead)
+  const first = ahead.findIndex((a) => a > 0);
+  const best = Math.max(...ahead);
+  check(
+    "draft straight: a follower 50 behind at 430 u/s (in the wake, 18 across) gets its centre ahead of the leader's within 4 s, and is still ahead at 4 s",
+    first >= 0 && first < 240 && ahead[239] > 0,
+    `centre ahead after ${((first + 1) / 60).toFixed(2)} s, best lead ${best.toFixed(1)}, at 4 s ${ahead[239].toFixed(1)} units (a car length ahead: the next bend)`,
+  );
+  const off = withoutDraft(() => straightRun([[lead, 0], [lead - gap, lane]], 240));
+  const gaps = off.s[0].map((s, k) => s - off.s[1][k]);
+  check(
+    "draft straight: with no draft the same two cars keep their gap within +-1 for 4 s",
+    gaps.every((g) => Math.abs(g - gap) <= 1),
+    `gap ${Math.min(...gaps).toFixed(2)}..${Math.max(...gaps).toFixed(2)}`,
+  );
+  // A car 250 behind is in no wake: it drives exactly as it does alone, bit for bit.
+  const far = straightRun([[lead - 250, 0], [lead, 0]], 300);
+  const alone = straightRun([[lead - 250, 0]], 300);
+  check(
+    "draft straight: a car 250 behind another drives exactly as it does alone (every pose, bit for bit, for 5 s)",
+    far.pose[0].join("|") === alone.pose[0].join("|"),
+    `last speed ${Math.hypot(...far.pose[0][299].split(",").slice(3).map(Number) as [number, number]).toFixed(2)} u/s`,
+  );
+}
+
+/**
+ * The own car's draft over a lagged in-process link (oneWayMs each way): a client driven by the
+ * socket bots' BotDriver (a Normal driver: it tucks in behind the car ahead and passes) and an
+ * Easy server bot on Rust Bowl (no weapons either). Per applied input: the server's draft for
+ * the client's car, and the client's prediction live and after the last replay; and the reconcile
+ * errors.
+ */
+function draftClientRun(oneWayMs: number, ticks = 60 * 70): { truth: Map<number, number>; log: [number, number, number][]; errs: number[]; stateErrs: number; drafted: number } {
+  const realNow = performance.now.bind(performance);
+  const clock = { now: 1_000_000 };
+  performance.now = () => clock.now;
+  try {
+    const rooms = new Rooms(1);
+    const A = laggedGame(rooms, clock, oneWayMs);
+    A.game.create("Ann");
+    A.open();
+    const settle = () => {
+      for (let i = 0; i < 30; i++) {
+        clock.now += 1000 / 60;
+        A.up();
+        rooms.step(clock.now);
+        A.down();
+      }
+    };
+    settle();
+    const room = [...rooms.rooms.values()][0];
+    A.game.addBot("easy"); // slower (throttle 0.85: ~365 u/s): the client catches it, tucks in and passes
+    settle();
+    A.game.start();
+    const d = new BotDriver(A.game, 0);
+    d.weapons = false;
+    const truth = new Map<number, number>();
+    let last = -1, drafted = 0, racing = 0;
+    const drafts = (room as unknown as { drafts: number[] }).drafts;
+    for (let i = 0; i < ticks; i++) {
+      clock.now += 1000 / 60;
+      A.up();
+      rooms.step(clock.now);
+      const p = room.players.get(A.game.you)!;
+      if (p.car && p.ack !== last && room.phase === "racing") {
+        last = p.ack;
+        const k = [...room.players.values()].filter((q) => q.car).indexOf(p);
+        truth.set(p.ack, drafts[k]);
+        if (drafts[k] > 0) drafted++;
+      }
+      A.down();
+      if (room.phase === "racing") racing++;
+      const ctl = d.controls();
+      A.game.step(racing < 240 ? { ...ctl, throttle: 0 } : ctl, 1000 / 60); // 4 s on the line: the bot gets ahead
+    }
+    return { truth, log: A.game.draftLog.filter(([seq]) => truth.has(seq)), errs: A.game.recErrors, stateErrs: A.game.recStateErrors, drafted };
+  } finally {
+    performance.now = realNow;
+  }
+}
+
+function draftClient(): void {
+  // Contacts.draft: the own car's draft at step k from the others' poses at k - 1; none past the cap.
+  const cap = Math.round((PREDICT_MAX_MS * TICK_HZ) / 1000);
+  const ct = new Contacts();
+  const lead: CarSnap = { ...snapCar("L", { x: 1000, y: 0, h: 0, vx: 430, vy: 0, seg: 0, wreck: 0, air: 0, fall: 0, boost: 0 }) };
+  ct.setBase({ cars: new Map([["L", lead], ["Me", snapCar("Me", { x: 950, y: 0, h: 0, vx: 430, vy: 0, seg: 0, wreck: 0, air: 0, fall: 0, boost: 0 })]]) }, "Me");
+  const me = (x: number): CarState => ({ x, y: 0, h: 0, vx: 430, vy: 0, seg: 0, wreck: 0, air: 0, fall: 0, boost: 0 });
+  // At step k the leader is predicted (k - 1) * 430 / 60 further on.
+  const kAt = 10, lx = 1000 + ((kAt - 1) * 430) / 60;
+  check(
+    "draft client: the own car's draft for step k is taken from the others' poses predicted k - 1 steps on; none past CAP_STEPS, none in the air",
+    ct.draft(me(lx - 50), kAt) === 1 && ct.draft(me(lx - 120), kAt) === draftFrom(lx - 120, 0, lx, 0, 0) && ct.draft(me(1000 + (cap * 430) / 60 - 50), cap + 1) === 0 &&
+      ct.draft({ ...me(lx - 50), air: 3 }, kAt) === 0,
+    `cap ${cap} steps`,
+  );
+  // Over a lagged link the prediction (after the replay) matches the server's draft closely, and
+  // the reconcile stays small while drafting (PLAN-M4 section 3: "small and continuous").
+  for (const ms of [0, 50, 90]) {
+    const r = draftClientRun(ms);
+    const diffs = r.log.map(([seq, , rep]) => Math.abs(rep - r.truth.get(seq)!));
+    const live = r.log.map(([seq, l]) => Math.abs(l - r.truth.get(seq)!));
+    const inDraft = r.log.filter(([seq]) => r.truth.get(seq)! > 0).length;
+    const sorted = [...r.errs].sort((a, b) => a - b);
+    const med = sorted[Math.floor(sorted.length / 2)] ?? NaN, p95 = sorted[Math.floor(sorted.length * 0.95)] ?? NaN, max = sorted[sorted.length - 1] ?? NaN;
+    const mean = (xs: number[]) => xs.reduce((a, b) => a + b, 0) / Math.max(1, xs.length);
+    console.log(
+      `      lag ${ms} ms each way: ${r.log.length} inputs, ${inDraft} in a draft; |predicted - server draft| after replay mean ${mean(diffs).toFixed(4)} max ${Math.max(0, ...diffs).toFixed(3)}, live mean ${mean(live).toFixed(4)} max ${Math.max(0, ...live).toFixed(3)}; ` +
+        `reconcile error median ${med.toFixed(3)} p95 ${p95.toFixed(3)} max ${max.toFixed(2)}; state mismatches ${r.stateErrs}`,
+    );
+    check(
+      `draft client: lag ${ms} ms each way: the client predicts its own draft (after its replay within 0.05 of the server's for >= 95% of its inputs), and its reconcile error stays small (median < 0.5, p95 < ${LARGE_ERR}, max <= 15)`,
+      r.log.length > 2000 && inDraft > 100 && diffs.filter((x) => x <= 0.05).length >= 0.95 * diffs.length && med < 0.5 && p95 < LARGE_ERR && max <= 15,
+      `${inDraft} drafted inputs; within 0.05: ${((100 * diffs.filter((x) => x <= 0.05).length) / Math.max(1, diffs.length)).toFixed(1)}%; reconcile median ${med.toFixed(3)} p95 ${p95.toFixed(3)} max ${max.toFixed(2)}`,
+    );
+  }
+}
+
+function draftJumps(): void {
+  // A3 (advisor change 7): every jump on every shipped track lands from its slowest landing speed
+  // up to the full-draft top speed, for every car type at L0 and L3 (the flight is frozen: the
+  // type only drives the roll-out). And a track built to fail it does.
+  const top = draftTopSpeed(430);
+  const rows: string[] = [];
+  let ok = true;
+  for (const id of CAR_TRACKS) {
+    for (const car of CAR_TYPES) {
+      for (const lv of [0, 3]) {
+        const e = validateJumpSweep(trackById(id), top, statsFor(car, { engine: lv, tyres: lv, welder: lv }));
+        if (e.length) {
+          ok = false;
+          rows.push(`${id} ${car} L${lv}: ${e.join("; ")}`);
+        }
+      }
+    }
+    rows.push(`${id}: ${trackById(id).ramps.length} lips ok; strict (asphalt only): ${validateJumpSweep(trackById(id), top, BASE_STATS, true).length} problems`);
+  }
+  check(`draft jumps: on every shipped track every jump lands at every arrival speed up to ${top.toFixed(1)} u/s (full draft), for all car types at L0 and L3`, ok, rows.join(" | "));
+  // A straight with a 120-unit gap and a pit on the left lane right where a 473 u/s flight comes
+  // down (~450 past the lip): from rest the car lands short of it and drives around it; at full
+  // draft on that lane it lands in it.
+  const lip = 2000 + 80;
+  const bad = buildTrack({
+    ...DRAFT_STRAIGHT,
+    id: "draft-pit",
+    features: [{ k: "ramp", s: 2000, len: 80 }, { k: "gap", s0: lip, s1: lip + 120 }, { k: "hole", s: lip + 450, lat: -32, r: 26 }],
+    recovery: [0, 1500],
+  });
+  const errs = validateJumpSweep(bad, top), at400 = validateJumpSweep(bad, 400), fromRest = validateRunUps(bad);
+  check(
+    "draft jumps: the sweep catches a jump that only fails at overspeed (a pit where a full-draft flight lands), which the run-up check from rest passes",
+    fromRest.length === 0 && errs.some((e) => e.includes("lane -32") && e.includes("falls")) && at400.length === 0,
+    `up to ${top.toFixed(0)}: ${errs.join(" | ")}; up to 400: ${at400.join(" | ") || "none"}; from rest: ${fromRest.join(" | ") || "none"}`,
+  );
+}
+
+function draftBots(): void {
+  // Two Normal server bots (as added: a Sport and a Racer) on Rust Bowl over 3 laps: with the
+  // slipstream (and Normal bots using it) the lead changes hands 1-4 times a lap on average and
+  // never more than 4 times in a lap (no tug of war); before M4-DRAFT (no draft, every bot on its
+  // lane) it did not change at all. Counted when the new leader is a car length clear.
+  const after = draftRace({ track: "rust-bowl", levels: ["normal", "normal"], laps: 3 });
+  const before = draftRace({ track: "rust-bowl", levels: ["normal", "normal"], laps: 3, nodraft: true, nowake: true });
+  const sum = (xs: number[]) => xs.reduce((a, b) => a + b, 0);
+  check(
+    "draft bots: two Normal server bots, Rust Bowl, 3 laps: 1-4 lead changes per lap on average, never more than 4 in a lap (with the draft); a rerun is identical",
+    sum(after.changes) >= 3 && sum(after.changes) <= 12 && after.changes.every((n) => n <= 4) && JSON.stringify(after) === JSON.stringify(draftRace({ track: "rust-bowl", levels: ["normal", "normal"], laps: 3 })),
+    `per lap ${after.changes.join(",")} (before M4-DRAFT: ${before.changes.join(",")}); finish ${after.finish.map((f) => (f / 60).toFixed(2)).join("/")} s (before ${before.finish.map((f) => (f / 60).toFixed(2)).join("/")} s)`,
+  );
+  // Crashes (contacts closing at >= IMPACT_MIN_SPEED), wall hits and wrecks, before and after, on
+  // every shipped track: two Normal bots, and the autopilot (a zero-lag Normal driver on the
+  // centre line, weapons off) with three Normal bots.
+  const tot = (rs: DraftRaceOut[]) => ({
+    crashes: sum(rs.map((r) => r.crashes)), contacts: sum(rs.map((r) => r.contacts)), walls: sum(rs.map((r) => r.walls)), mineWalls: sum(rs.map((r) => r.mineWalls)),
+    wrecks: sum(rs.map((r) => r.wrecks)), falls: sum(rs.map((r) => r.falls)),
+  });
+  const runs = (b: boolean) =>
+    CAR_TRACKS.flatMap((track) => [
+      draftRace({ track, levels: ["normal", "normal"], laps: 3, nodraft: b, nowake: b }),
+      draftRace({ track, levels: ["normal", "normal", "normal"], laps: 3, pilot: true, nodraft: b, nowake: b }),
+    ]);
+  const b = tot(runs(true)), a = tot(runs(false));
+  const fmt = (t: ReturnType<typeof tot>) => `crashes ${t.crashes} (contacts ${t.contacts}), wall hits ${t.walls} (+${t.mineWalls} sliding after a mine), wrecks ${t.wrecks}, falls ${t.falls}`;
+  check(
+    "draft bots: no more crashes, wall hits (other than a car a mine spun) or falls than before M4-DRAFT over 6 races on the shipped tracks",
+    a.crashes <= b.crashes && a.walls <= b.walls && a.falls <= b.falls,
+    `before: ${fmt(b)}; after: ${fmt(a)} (wrecks are rivets and mines: closer racing, more hits)`,
+  );
+  // The wake: Normal bots tuck in and pass; Easy bots never do.
+  const easy = draftRace({ track: "rust-bowl", levels: ["easy", "easy"], laps: 1 });
+  const normal = draftRace({ track: "rust-bowl", levels: ["normal", "normal", "normal"], laps: 3, pilot: true });
+  check(
+    "draft bots: Normal bots use the wake (tuck in, pass); Easy bots never do",
+    normal.wake.tuck > 60 && normal.wake.passes > 0 && easy.wake.tuck === 0 && easy.wake.pass === 0,
+    `Normal: tuck ${(normal.wake.tuck / 60).toFixed(1)} s, pass ${(normal.wake.pass / 60).toFixed(1)} s, ${normal.wake.passes} passes (${normal.wake.done} done, ${normal.wake.gaveUp} given up); Easy: ${easy.wake.tuck}/${easy.wake.pass}`,
+  );
+}
+
+for (const t of [rivets, gating, mines, wrecks, finishing, garage, armDelay, engine, readyCheck, collisions, trackFeatures, roomTrack, jumpsWired, shippedTracks, botDriver, botLaps, mineCap, chatRoom, chatClient, sound, raceSounds, surfaceSounds, audioUnlock, menuHostOnly, menuStop, menuRestart, menuKick, menuLock, menuHandover, menuClient, menuRestartClient, retireRules, retireField, retireRaceEnd, retireGarage, retireRefund, retireOthers, retireNotices, retireClient, pauseRefused, pauseFreeze, pauseResume, pauseHold, pauseAuto, pauseCooldown, pauseGrace, pauseCountdown, pauseControls, pauseClient, musicSwitch, soundMigration, soundLayers, soundServer, soundRandom, soundRoomDrag, soundSliderGrip, soundClient, songs, songPlayer, ghostRivets, minesSetting, minesStay, minesCap, minesFade, minesAtStart, minesCleared, minesPaused, minesClient, botsPointAt, botsAdd, botsKickHost, botsHandover, botsFullRoom, botsSoloStart, botsRace, botsShop, botsTick, botsCpu, botsClient, carsTypes, carsStats, carsPick, carsRejoin, carsBots, carsRunUps, carsBalance, carsCut, carsClient, envRt, envStep, envClient, draftRule, draftStraight, draftClient, draftJumps, draftBots]) {
   console.log(`\n# ${t.name}`);
   try {
     t();

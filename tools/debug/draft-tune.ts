@@ -19,12 +19,16 @@ import { angleDiff, CAR_LENGTH, clamp, speedOf, type CarState, type CarStats } f
 import { buildTrack, pointAt, queryTrackNear, type Track, type TrackDef } from "../../shared/track";
 import { raceEnv, stepRaceCar } from "../../shared/weapons";
 
-/** A stadium with two 4500-unit straights: room for any pass. */
+/**
+ * A stadium whose bottom straight is dead straight from x = 1000 to x = 6000 (s ~ 1000..6000:
+ * Catmull-Rom between collinear neighbours is a line): room for any pass.
+ */
 export const DRAFT_STRAIGHT: TrackDef = {
   id: "draft-straight",
   name: "Draft Straight",
   control: [
-    [0, 0], [1500, 0], [3000, 0], [4500, 0], [5200, 600], [4500, 1200], [3000, 1200], [1500, 1200], [0, 1200], [-700, 600],
+    [0, 0], [1000, 0], [2000, 0], [3000, 0], [4000, 0], [5000, 0], [6000, 0], [7000, 0], [7800, 700],
+    [7000, 1400], [6000, 1400], [5000, 1400], [4000, 1400], [3000, 1400], [2000, 1400], [1000, 1400], [0, 1400], [-800, 700],
   ],
   halfWidth: 64,
   verge: 44,
@@ -60,7 +64,7 @@ export interface PassRun {
 export function passRun(
   t: Track, stats: CarStats, opts: { gap: number; v0: number; lat: number; pull: number; shape?: DraftShape; cutScale?: number; limit?: number },
 ): PassRun {
-  const s0 = 1000;
+  const s0 = 1500;
   const mk = (s: number, lat: number): CarState => {
     const p = pointAt(t, s);
     return { x: p.x - Math.sin(p.h) * lat, y: p.y + Math.cos(p.h) * lat, h: p.h, vx: Math.cos(p.h) * opts.v0, vy: Math.sin(p.h) * opts.v0, seg: p.seg, wreck: 0, air: 0, fall: 0, boost: 0 };

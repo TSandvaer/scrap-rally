@@ -26,8 +26,13 @@ function arg(name: string, def: string): string {
   return i >= 0 && i + 1 < process.argv.length ? process.argv[i + 1] : def;
 }
 
-class NullConn implements Conn {
-  send(_m: ServerMsg): void {}
+/** The host's socket: notes the tick of each mine hit per car id (a spun car sliding into a wall is the mine's doing). */
+class HostConn implements Conn {
+  readonly mineHits = new Map<string, number>();
+  tick = 0;
+  send(m: ServerMsg): void {
+    if (m.t === "ev" && m.ev.k === "hit" && m.ev.w === "mine") this.mineHits.set(m.ev.id, this.tick);
+  }
   close(): void {}
 }
 
@@ -40,7 +45,8 @@ export interface DraftRaceOut {
   gaps: { mean: number; max: number; end: number }[]; // race distance behind the autopilot (pilot runs; + = behind; end: as it finished)
   contacts: number; // car-car contacts begun (a pair of solid cars touching)
   crashes: number; // ... of them with a closing speed >= IMPACT_MIN_SPEED (sparks and shake: a crash, not a rub)
-  walls: number; // wall hits (a car reaching the wall)
+  walls: number; // wall hits (a car reaching the wall), not counting mineWalls
+  mineWalls: number; // ... within 2 s of the car being spun by a mine
   wrecks: number;
   falls: number;
   wake: { tuck: number; pass: number; passes: number; done: number; gaveUp: number }; // bots' slipstream use: ticks, passes begun, completed, given up
@@ -58,7 +64,8 @@ export function draftRace(opts: {
   try {
     const room = new Room("TUNE", opts.laps, CAR_HP);
     let now = 1000, tick = 0;
-    const host = room.addPlayer("Pilot", { conn: new NullConn(), room: null, player: null } as Session, now) as Player;
+    const conn = new HostConn();
+    const host = room.addPlayer("Pilot", { conn, room: null, player: null } as Session, now) as Player;
     if (room.trackId !== opts.track) {
       const e = room.setTrack(host, opts.track);
       if (e) throw new Error(e);
@@ -90,6 +97,7 @@ export function draftRace(opts: {
       feedHost();
       tick++;
       now += 1000 / 60;
+      conn.tick = tick;
       room.tick(tick, now);
     };
     while (room.phase !== "racing") step();
@@ -97,7 +105,7 @@ export function draftRace(opts: {
     const field = opts.pilot ? [host, ...bots] : bots;
     const out: DraftRaceOut = {
       names: field.map((p) => p.name), finish: field.map(() => 0), changes: Array(opts.laps).fill(0), rawChanges: 0, draftTicks: field.map(() => 0),
-      gaps: bots.map(() => ({ mean: 0, max: -Infinity, end: 0 })), contacts: 0, crashes: 0, walls: 0, wrecks: 0, falls: 0,
+      gaps: bots.map(() => ({ mean: 0, max: -Infinity, end: 0 })), contacts: 0, crashes: 0, walls: 0, mineWalls: 0, wrecks: 0, falls: 0,
       wake: { tuck: 0, pass: 0, passes: 0, done: 0, gaveUp: 0 },
     };
     const wasPass = new Map<Player, boolean>();
@@ -122,7 +130,10 @@ export function draftRace(opts: {
         if (c.fall > 0 && was.fall === 0) out.falls++;
         prevState.set(a, { wreck: c.wreck, fall: c.fall });
         const wall = c.air === 0 && c.fall === 0 && queryTrackNear(room.track, c.x, c.y, c.seg).dist >= wallLimit(room.track) - 0.01;
-        if (wall && !atWall.has(a)) out.walls++;
+        if (wall && !atWall.has(a)) {
+          if (tick - (conn.mineHits.get(a.id) ?? -Infinity) <= 120) out.mineWalls++;
+          else out.walls++;
+        }
         if (wall) atWall.add(a);
         else atWall.delete(a);
         for (let j = i + 1; j < racers.length; j++) {
@@ -196,7 +207,7 @@ function main(): void {
     for (const after of [false, true]) {
       const r = draftRace({ ...base, track, nodraft: !after, nowake: !after });
       const head = `${after ? "AFTER (draft + wake)" : "BEFORE (no draft, lanes held)"} on ${track}, ${base.laps} laps${base.pilot ? `, host = autopilot${pilotLevels ? ` at levels ${pilotLevels.join("/")}` : ""}` : ""}${base.weapons ? "" : ", bots without weapons"}`;
-      const tally = `contacts ${r.contacts} (crashes ${r.crashes}), wall hits ${r.walls}, wrecks ${r.wrecks}, falls ${r.falls}; wake: tuck ${(r.wake.tuck / 60).toFixed(1)} s, pass ${(r.wake.pass / 60).toFixed(1)} s, passes ${r.wake.passes} (done ${r.wake.done}, given up ${r.wake.gaveUp})`;
+      const tally = `contacts ${r.contacts} (crashes ${r.crashes}), wall hits ${r.walls} (+${r.mineWalls} after a mine), wrecks ${r.wrecks}, falls ${r.falls}; wake: tuck ${(r.wake.tuck / 60).toFixed(1)} s, pass ${(r.wake.pass / 60).toFixed(1)} s, passes ${r.wake.passes} (done ${r.wake.done}, given up ${r.wake.gaveUp})`;
       if (process.argv.includes("--all")) {
         console.log(`${head}: lead changes ${r.changes.join(",")}; ${tally}; finish ${r.finish.map((f) => (f / 60).toFixed(1)).join("/")} s`);
         continue;

@@ -159,6 +159,8 @@ interface Pending {
   seq: number;
   rt: number; // the race tick this step is predicted at (rtAt), as of the latest replay
   rt0: number; // ... and as of the live step
+  draft: number; // the slipstream this step is predicted with (Contacts.draft), as of the latest replay
+  draft0: number; // ... and as of the live step
   cmd: Command;
   fired: boolean; // a rivet left the gun on this step (predicted)
   mine: boolean; // a mine press was sent on this step
@@ -297,6 +299,8 @@ export class Game {
    * and tests: the rt skew against the server's).
    */
   readonly rtLog: [number, number, number][] = [];
+  /** Debug (M4-DRAFT): per acked input, [seq, predicted draft live, ... after the last replay]. */
+  readonly draftLog: [number, number, number][] = [];
   localShots: Shot[] = []; // cosmetic: our own rivets, drawn before the server confirms
   readonly contact = new Contacts(); // own-car bump prediction, near cars' drawn pose
   private ownSounds: OwnCue[] = [];
@@ -814,6 +818,7 @@ export class Game {
     while (this.pending.length && this.pending[0].seq <= ack) {
       const p = this.pending.shift()!;
       if (this.rtLog.length < MAX_ERROR_SAMPLES) this.rtLog.push([p.seq, p.rt0, p.rt]);
+      if (this.draftLog.length < MAX_ERROR_SAMPLES) this.draftLog.push([p.seq, p.draft0, p.draft]);
     }
     for (const k of this.history.keys()) if (k <= ack) this.history.delete(k);
 
@@ -830,7 +835,7 @@ export class Game {
     this.pending.forEach((p, i) => {
       const wrecked = c.wreck > 0;
       p.rt = env.rt = rtAt(snap, i);
-      env.draft = this.contact.draft(c, i + 1);
+      p.draft = env.draft = this.contact.draft(c, i + 1);
       const ev = stepRaceCar(c, p.cmd, this.stats, env);
       ghost = ghostAfter(ghost, ev, wrecked && c.wreck === 0);
       this.contact.collide(c, i + 1);
@@ -984,7 +989,7 @@ export class Game {
     }
     if (minePress && armedNow) this.cue("mine");
     this.ghost = ghostAfter(this.ghost, ev, respawned);
-    this.pending.push({ seq, rt, rt0: rt, cmd, fired, mine: minePress && armedNow });
+    this.pending.push({ seq, rt, rt0: rt, draft: this.draft, draft0: this.draft, cmd, fired, mine: minePress && armedNow });
     this.history.set(seq, cloneCar(this.car));
     if (this.pending.length > MAX_PENDING) {
       const dropped = this.pending.shift()!;

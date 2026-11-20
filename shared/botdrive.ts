@@ -107,7 +107,7 @@ const WAKE_MINE_CLEAR = 28; // ... and this close to a wake lane rules the lane 
 // less than this far across (side by side the capsules touch at 16) that the bot is closing on
 // makes it lift. The slipstream makes a follower faster than the car it follows, so without this
 // it would run into the back of it; with it, it waits until it is beside it.
-const BLOCK_AHEAD = 42;
+const BLOCK_AHEAD = 36;
 const BLOCK_ACROSS = 19;
 
 /** Everything a bot reads to drive one step. */
@@ -432,7 +432,8 @@ export function botControls(view: BotView, mem: BotMem): BotControls {
   if (easy) target *= EASY_CORNER;
   if (hole.holes) target = Math.min(target, HOLE_SPEED);
   let throttle = v > target + 25 ? -1 : v > target ? 0 : 1;
-  if ((coast || (mem.useWake && !easy && closingOnCar(view, c, dir))) && throttle > 0) throttle = 0; // no ramming
+  // No ramming; never on a ramp approach (the jump needs the speed: a bump costs less than a fall).
+  if (!ramp && (coast || (mem.useWake && !easy && closingOnCar(view, c, dir))) && throttle > 0) throttle = 0;
   if (ramp) throttle = 1; // Easy too: the cap would leave it short of some jumps
   else if (easy && throttle > EASY_THROTTLE) throttle = EASY_THROTTLE;
   // About to roll into a hole on the current heading (spun, bumped)? Brake while turning away.
