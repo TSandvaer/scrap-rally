@@ -1,7 +1,7 @@
 // Browser entry: menu / lobby / results panels, HUD text, camera and the fixed-step loop.
 
 import { pointAt } from "../shared/track";
-import { PAUSE_MAX_MS, type GameEvent, type ResultRow } from "../shared/protocol";
+import { MAX_PLAYERS, PAUSE_MAX_MS, type GameEvent, type ResultRow } from "../shared/protocol";
 import { AMMO, AMMO_IDS, priceOf, UPGRADE_IDS, UPGRADES, type ItemId, type Wallet } from "../shared/shop";
 import { DEFAULT_SONG_ID, isSongChoice, RANDOM_SONG } from "../shared/sound";
 import { trackList, trackName } from "../shared/tracks";
@@ -68,6 +68,9 @@ const ui = {
   lobbyCode: $("lobby-code"),
   copy: $<HTMLButtonElement>("copy"),
   players: $("lobby-players"),
+  botAdd: $("bot-add"),
+  botEasy: $<HTMLButtonElement>("bot-easy"),
+  botNormal: $<HTMLButtonElement>("bot-normal"),
   trackSelect: $<HTMLSelectElement>("track-select"),
   trackName: $("track-name"),
   songSelect: $<HTMLSelectElement>("song-select"),
@@ -219,6 +222,8 @@ ui.minesSelect.addEventListener("change", () => {
   if (isMineMode(mode)) game.setMines(mode);
   ui.minesSelect.blur();
 });
+ui.botEasy.addEventListener("click", () => game.addBot("easy"));
+ui.botNormal.addEventListener("click", () => game.addBot("normal"));
 ui.start.addEventListener("click", () => game.start());
 ui.startAnyway.addEventListener("click", () => game.start(true));
 ui.ready.addEventListener("click", () => game.setReady(!game.me()?.ready));
@@ -379,6 +384,7 @@ function updatePanels(): void {
   if (!inRoom) return;
 
   ui.lobbyCode.textContent = game.code;
+  const hostLobby = game.isHost() && game.phase === "lobby";
   ui.players.replaceChildren(
     ...game.players.map((p) => {
       const li = document.createElement("li");
@@ -387,17 +393,43 @@ function updatePanels(): void {
       if (p.id === game.you) li.append(span("tag-pill", "you"));
       if (p.id === game.hostId) li.append(span("tag-pill host", "host"));
       if (!p.connected) li.append(span("tag-pill", "offline"));
-      if (p.ready && p.id !== game.hostId) li.append(span("tag-pill ready", "ready"));
+      // A bot is always ready: its BOT tag (with the level when Easy) says enough.
+      if (p.bot) li.append(span("tag-pill bot", p.bot === "easy" ? "easy bot" : "bot"));
+      else if (p.ready && p.id !== game.hostId) li.append(span("tag-pill ready", "ready"));
       if (p.retired) li.append(span("tag-pill", "retired"));
+      if (p.bot && hostLobby) li.append(removeBotButton(p.id, p.name));
       return li;
     }),
   );
+  renderBotAdd(hostLobby);
   renderTrackPick();
   renderSongPick();
   renderMinesPick();
   renderLobbyButtons();
   if (game.results) renderResults(game.results);
   if (garage) renderGarage(true);
+}
+
+/** A bot row's Remove (host, lobby): the bot leaves at once (kick; nothing is blocked). */
+function removeBotButton(id: string, name: string): HTMLButtonElement {
+  const b = document.createElement("button");
+  b.type = "button";
+  b.className = "btn small row-x";
+  b.textContent = "×";
+  b.title = `Remove ${name}`;
+  b.setAttribute("aria-label", `Remove ${name}`);
+  b.addEventListener("click", () => game.kick(id));
+  return b;
+}
+
+/** The host's Add bot row (lobby only): off while the room is full. Room messages only. */
+function renderBotAdd(on: boolean): void {
+  show(ui.botAdd, on);
+  const full = game.players.length >= MAX_PLAYERS;
+  for (const b of [ui.botEasy, ui.botNormal]) {
+    b.disabled = full;
+    b.title = full ? "The room is full" : `Add ${b === ui.botEasy ? "an Easy" : "a Normal"} bot`;
+  }
 }
 
 /**
