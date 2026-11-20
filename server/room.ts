@@ -44,7 +44,7 @@ import { AMMO, buy, clampAmmo, isItem, payouts, startingWallet, statsFor, type A
 import { BUILTIN_SOUND, DEFAULT_SONG_ID, isSongChoice, isSongId, RANDOM_SONG, snapVolume, SONG_IDS, type RoomSound, type SongId } from "../shared/sound";
 import { gridSlot, type Track } from "../shared/track";
 import { DEFAULT_TRACK_ID, isTrackId, trackById } from "../shared/tracks";
-import { BTN_RIVET, CAR_HP, DEFAULT_MINE_MODE, GHOST_TICKS, isMineMode, mineCount, NO_COMMAND, stepRaceCar, WEAPONS_ARM_MS, type Command, type MineMode } from "../shared/weapons";
+import { BTN_RIVET, CAR_HP, DEFAULT_MINE_MODE, GHOST_TICKS, isMineMode, mineCount, NO_COMMAND, raceEnv, stepRaceCar, WEAPONS_ARM_MS, type Command, type MineMode } from "../shared/weapons";
 import { isBotLevel, type BotLevel } from "../shared/botdrive";
 import { DEFAULT_CAR, isCarType, type CarType } from "../shared/cars";
 import { BOT_SLOTS, botCar, botName, botStep, maxBotsFromEnv, newBotSeat, resetBotSeat, shopBot, type BotSeat } from "./bots";
@@ -176,6 +176,9 @@ export class Room {
   raceStart = 0;
   private finishers = 0;
   private tickNo = 0;
+  // The race tick (M4-ENV, shared/weapons.ts RaceEnv): simulate ticks run while racing (paused
+  // ticks are not simulated, so they do not count); 0 before GO, back to 0 for every new race.
+  private raceTick = 0;
   private lastOrder: string[] = []; // last race's standings, for the reverse grid
   private lobbyAt = 0; // server time the lobby last opened (back from results)
   private lastJoinAt = 0; // server time the last new player joined (the creator included)
@@ -222,6 +225,11 @@ export class Room {
     this._track = trackById(trackId);
     this._combat = this.newCombat();
     this.resolveSong();
+  }
+
+  /** The race tick: ticks simulated while racing in this race (0 before GO); in every snapshot. */
+  get rt(): number {
+    return this.raceTick;
   }
 
   /** The host's sound defaults (a copy); changed only through setSound. */
@@ -514,11 +522,12 @@ export class Room {
     }
     this.combat.reset();
     this.combat.mode = this.mineMode; // this race's, whatever the host sets while it runs
+    this.raceTick = 0;
     this.startAmmo.clear();
     this.retiredBuys.clear();
     this.gridOrder().forEach((q, slot) => {
       const g = gridSlot(this.track, slot);
-      q.car = { x: g.x, y: g.y, h: g.h, vx: 0, vy: 0, seg: g.seg, wreck: 0, air: 0, fall: 0 };
+      q.car = { x: g.x, y: g.y, h: g.h, vx: 0, vy: 0, seg: g.seg, wreck: 0, air: 0, fall: 0, boost: 0 };
       q.progress = newProgress(this.track, q.car);
       q.inRace = true;
       q.finished = false;
@@ -972,6 +981,8 @@ export class Room {
     else if (this.phase === "results" && now >= this.phaseEnds) this.toLobby(now);
 
     const racing = this.phase === "racing";
+    if (racing) this.raceTick++; // this tick's race tick: 1 on the first tick after GO
+    const env = raceEnv(this.track, this.raceTick);
     // Weapons stay cold for the first seconds after GO. consumeInput still moves mineBase,
     // so a mine press in that window is discarded rather than dropped later.
     const armed = racing && now >= this.raceStart + WEAPONS_ARM_MS;
@@ -993,7 +1004,7 @@ export class Room {
       const { cmd, minePress } = botCmds.get(p) ?? consumeInput(p);
       // A car put back at a recovery point after a fall is ghosted (as after a wreck), from
       // this tick's car-car pass on.
-      if (stepRaceCar(c, racing ? cmd : NO_INPUT, p.stats, this.track) === "recover") {
+      if (stepRaceCar(c, racing ? cmd : NO_INPUT, p.stats, env) === "recover") {
         p.ghost = GHOST_TICKS;
         recovered.add(p);
       }
@@ -1084,6 +1095,7 @@ export class Room {
     this.combat.reset();
     this.startAmmo.clear();
     this.retiredBuys.clear();
+    this.raceTick = 0;
   }
 
   private setPhase(phase: Phase, ends: number): void {
@@ -1122,6 +1134,7 @@ export class Room {
         wreck: c.wreck,
         air: c.air,
         fall: c.fall,
+        boost: c.boost,
         ghost: p.ghost > 0 || p.finished,
       });
     }
@@ -1134,6 +1147,7 @@ export class Room {
         time,
         phase: this.phase,
         phaseEnds: this.phaseEnds,
+        rt: this.raceTick,
         ack: p.ack,
         ammo: [p.wallet.ammo.rivets, p.wallet.ammo.mines],
         ents,

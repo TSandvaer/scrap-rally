@@ -116,6 +116,26 @@ export interface Mine {
   age: number;
 }
 
+/**
+ * What a race step needs besides the car, its input and its stats (M4-ENV, PLAN-M4 3): the
+ * track, the race tick and the slipstream. Server and client build it the same way, so time-
+ * and draft-dependent rules (moving obstacles, boosts, drafting) predict exactly.
+ * - rt: the race tick this step runs at: 1 = the first tick after GO, counted while racing and
+ *   not paused (server/room.ts); 0 = before GO (the countdown). The client predicts it from the
+ *   latest snapshot's rt (game.ts rtAt). Nothing reads it yet.
+ * - draft: slipstream strength 0..1 (M4-DRAFT); 0 for now.
+ */
+export interface RaceEnv {
+  track: Track;
+  rt: number;
+  draft: number;
+}
+
+/** A RaceEnv (no slipstream unless given). */
+export function raceEnv(track: Track, rt = 0, draft = 0): RaceEnv {
+  return { track, rt, draft };
+}
+
 /** What stepRaceCar did this tick, beyond driving: the server sets the ghost on "recover". */
 export type RaceStepEvent = "takeoff" | "fall" | "recover";
 
@@ -164,7 +184,8 @@ function startFall(c: CarState): void {
  *   falls. On the last air tick it lands if it is inside the walls of its own section and
  *   not over a gap or a hole, otherwise it falls.
  */
-export function stepRaceCar(c: CarState, input: Input, stats: CarStats, track: Track): RaceStepEvent | null {
+export function stepRaceCar(c: CarState, input: Input, stats: CarStats, env: RaceEnv): RaceStepEvent | null {
+  const track = env.track;
   if (c.wreck > 0) {
     c.vx = 0;
     c.vy = 0;
@@ -386,7 +407,8 @@ export function validateRunUps(track: Track, stats: CarStats = BASE_STATS): stri
     const hz = hazardsAhead(track, r);
     if (!hz) continue;
     const p = pointAt(track, r);
-    const c: CarState = { x: p.x, y: p.y, h: p.h, vx: 0, vy: 0, seg: p.seg, wreck: 0, air: 0, fall: 0 };
+    const c: CarState = { x: p.x, y: p.y, h: p.h, vx: 0, vy: 0, seg: p.seg, wreck: 0, air: 0, fall: 0, boost: 0 };
+    const env = raceEnv(track);
     let sPrev = r;
     let ahead = 0; // distance driven forward from r
     let tookOff = -1; // speed at the last take-off, -1 = none yet
@@ -395,7 +417,8 @@ export function validateRunUps(track: Track, stats: CarStats = BASE_STATS): stri
     for (let i = 0; i < RUN_UP_MAX_TICKS && !problem && !ok; i++) {
       const wasAir = (c.air ?? 0) > 0;
       const v0 = speedOf(c);
-      const ev = stepRaceCar(c, runUpInput(track, c), stats, track);
+      env.rt = i + 1; // as if the run started at GO
+      const ev = stepRaceCar(c, runUpInput(track, c), stats, env);
       const q = queryTrackNear(track, c.x, c.y, c.seg);
       let d = q.s - sPrev;
       if (d > L / 2) d -= L;

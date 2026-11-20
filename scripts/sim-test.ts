@@ -12,6 +12,7 @@ import {
   makeButtons,
   MINE_DAMAGE,
   RIVET_DAMAGE,
+  raceEnv,
   shotHits,
   spinOut,
   SPIN_KICK,
@@ -168,7 +169,7 @@ class Sim {
     const pt = pointAt(track, s);
     const x = pt.x - Math.sin(pt.h) * lateral;
     const y = pt.y + Math.cos(pt.h) * lateral;
-    p.car = { x, y, h: pt.h, vx: Math.cos(pt.h) * speed, vy: Math.sin(pt.h) * speed, seg: pt.seg, wreck: 0, air: 0, fall: 0 };
+    p.car = { x, y, h: pt.h, vx: Math.cos(pt.h) * speed, vy: Math.sin(pt.h) * speed, seg: pt.seg, wreck: 0, air: 0, fall: 0, boost: 0 };
     p.progress = { s: queryTrackNear(track, x, y, pt.seg).s, cp: 1, lap: 0, fin: 0 };
   }
 
@@ -300,7 +301,7 @@ function mines(): void {
   if (!m) return;
   // B parks 2 units off the mine, before it arms.
   const pt = pointAt(track, 0);
-  b.car = { x: m.x, y: m.y + 2, h: pt.h, vx: 0, vy: 0, seg: a.car!.seg, wreck: 0, air: 0, fall: 0 };
+  b.car = { x: m.x, y: m.y + 2, h: pt.h, vx: 0, vy: 0, seg: a.car!.seg, wreck: 0, air: 0, fall: 0, boost: 0 };
   const h0 = b.car.h;
   let hitAt = -1;
   for (let i = 0; i < 40 && hitAt < 0; i++) {
@@ -326,7 +327,7 @@ function mines(): void {
   check("an armed mine also hits its owner", a.hp === 85, `a.hp=${a.hp}`);
   check("no wreck credit for hurting yourself", !sim.room.combat.wrecksCaused.has(a.id));
 
-  const c = { x: 0, y: 0, h: 0, vx: 100, vy: 0, seg: 0, wreck: 0, air: 0, fall: 0 };
+  const c = { x: 0, y: 0, h: 0, vx: 100, vy: 0, seg: 0, wreck: 0, air: 0, fall: 0, boost: 0 };
   spinOut(c, 0, 10);
   check("spin-out is deterministic: away from the mine, speed x0.3", c.h === -SPIN_KICK && Math.abs(c.vx - 30) < 1e-9);
 }
@@ -353,7 +354,7 @@ function wrecks(): void {
   const frozenAt = { x: b.car!.x, y: b.car!.y };
   sim.run(WRECK_TICKS - 1, (p) => (p === b ? { throttle: 1 } : {}));
   check("wrecked car stays put with the throttle held", b.car!.x === frozenAt.x && b.car!.y === frozenAt.y && b.car!.wreck === 1);
-  for (let i = 0; i < WRECK_TICKS; i++) stepRaceCar(clone, { throttle: 1, steer: 0 }, b.stats, track);
+  for (let i = 0; i < WRECK_TICKS; i++) stepRaceCar(clone, { throttle: 1, steer: 0 }, b.stats, raceEnv(track));
   sim.run(1, (p) => (p === b ? { throttle: 1 } : {}));
   const q = queryTrackNear(track, b.car!.x, b.car!.y, b.car!.seg);
   check("respawn on the centerline at the same distance", q.dist < 0.5 && Math.abs(q.s - sAtWreck) < 0.5, `dist=${q.dist.toFixed(2)} ds=${(q.s - sAtWreck).toFixed(2)}`);
@@ -616,7 +617,7 @@ function garage(): void {
 
 // ---- solid car collisions -------------------------------------------------------------
 
-const body = (x: number, y: number, h: number, vx = 0, vy = 0): CarState => ({ x, y, h, vx, vy, seg: 0, wreck: 0, air: 0, fall: 0 });
+const body = (x: number, y: number, h: number, vx = 0, vy = 0): CarState => ({ x, y, h, vx, vy, seg: 0, wreck: 0, air: 0, fall: 0, boost: 0 });
 
 /** b relative to a, in a's frame: along a's heading and sideways. */
 function relPos(a: CarState, b: CarState): { along: number; lat: number } {
@@ -647,7 +648,7 @@ function drive(a: CarState, b: CarState, n: number): { overlap: number; touched:
 
 /** Snapshot-shaped car (what the client's prediction sees). */
 function snapCar(id: string, c: CarState, extra: Partial<CarSnap> = {}): CarSnap {
-  return { k: "car", id, x: c.x, y: c.y, h: c.h, vx: c.vx, vy: c.vy, seg: 0, lap: 0, rd: 0, fin: 0, hp: 100, maxHp: 100, wreck: c.wreck, air: c.air, fall: c.fall, ghost: false, ...extra };
+  return { k: "car", id, x: c.x, y: c.y, h: c.h, vx: c.vx, vy: c.vy, seg: 0, lap: 0, rd: 0, fin: 0, hp: 100, maxHp: 100, wreck: c.wreck, air: c.air, fall: c.fall, boost: c.boost, ghost: false, ...extra };
 }
 
 function collisions(): void {
@@ -1090,7 +1091,7 @@ function engine(): void {
   const SECONDS = 8;
   const drive = (level: number) => {
     const stats = statsFor("sport", { engine: level, tyres: 0, welder: 0 });
-    const c: CarState = { x: 1500, y: 0, h: 0, vx: 0, vy: 0, seg: 0, wreck: 0, air: 0, fall: 0 };
+    const c: CarState = { x: 1500, y: 0, h: 0, vx: 0, vy: 0, seg: 0, wreck: 0, air: 0, fall: 0, boost: 0 };
     let t300 = -1;
     for (let i = 1; i <= SECONDS * TICK_HZ; i++) {
       stepCar(c, { throttle: 1, steer: 0 }, stats, flat);
@@ -1146,7 +1147,7 @@ function trackFeatures(): void {
   });
   const jt = buildTrack(jumpsDef());
   const carAt = (t: Track, x: number, y: number, speed: number, h = 0): CarState => ({
-    x, y, h, vx: Math.cos(h) * speed, vy: Math.sin(h) * speed, seg: queryTrack(t, x, y).seg, wreck: 0, air: 0, fall: 0,
+    x, y, h, vx: Math.cos(h) * speed, vy: Math.sin(h) * speed, seg: queryTrack(t, x, y).seg, wreck: 0, air: 0, fall: 0, boost: 0,
   });
   type Ev = { i: number; ev: RaceStepEvent; x: number; y: number; v: number };
   /** Step n ticks; returns the events with the pose after the step and the speed before it. */
@@ -1154,7 +1155,7 @@ function trackFeatures(): void {
     const evs: Ev[] = [];
     for (let i = 0; i < n; i++) {
       const v = speedOf(c);
-      const ev = stepRaceCar(c, input, BASE_STATS, t);
+      const ev = stepRaceCar(c, input, BASE_STATS, raceEnv(t));
       if (ev) {
         const e = { i, ev, x: c.x, y: c.y, v };
         evs.push(e);
@@ -1178,8 +1179,8 @@ function trackFeatures(): void {
     let same = true, frozenOk = true, peak = 0;
     let ticks = 0;
     while (c.air! > 0 && ticks < 200) {
-      stepRaceCar(c, { throttle: 1, steer: 0 }, BASE_STATS, jt);
-      stepRaceCar(twin, { throttle: -1, steer: 1 }, BASE_STATS, jt);
+      stepRaceCar(c, { throttle: 1, steer: 0 }, BASE_STATS, raceEnv(jt));
+      stepRaceCar(twin, { throttle: -1, steer: 1 }, BASE_STATS, raceEnv(jt));
       ticks++;
       peak = Math.max(peak, airHeight(c));
       same &&= c.x === twin.x && c.y === twin.y && c.h === twin.h && c.vx === twin.vx && c.air === twin.air;
@@ -1223,7 +1224,7 @@ function trackFeatures(): void {
     let still = true, ticks = 0, ev: RaceStepEvent | null = null;
     const counts: number[] = [];
     while (!ev && ticks < 200) {
-      ev = stepRaceCar(c, { throttle: 1, steer: 1 }, BASE_STATS, jt);
+      ev = stepRaceCar(c, { throttle: 1, steer: 1 }, BASE_STATS, raceEnv(jt));
       ticks++;
       if (!ev) {
         counts.push(c.fall!);
@@ -1256,7 +1257,7 @@ function trackFeatures(): void {
     // the same car moving backward through it does not.
     const fwd = carAt(jt, 2503, 0, 300);
     const back = carAt(jt, 2503, 0, 300, Math.PI);
-    const ef = stepRaceCar(fwd, NO_COMMAND, BASE_STATS, jt), eb = stepRaceCar(back, NO_COMMAND, BASE_STATS, jt);
+    const ef = stepRaceCar(fwd, NO_COMMAND, BASE_STATS, raceEnv(jt)), eb = stepRaceCar(back, NO_COMMAND, BASE_STATS, raceEnv(jt));
     check("jump: take-off is level-triggered in the lip zone, forward only", ef === "takeoff" && eb === "fall", `forward ${ef}, backward ${eb}`);
   }
 
@@ -1279,7 +1280,7 @@ function trackFeatures(): void {
     const c = carAt(jt, 6000, 0, 0);
     c.y = 2 * jt.wall + 10;
     const q = queryTrackNear(jt, c.x, c.y, c.seg);
-    const ev = stepRaceCar(c, { throttle: 1, steer: 0 }, BASE_STATS, jt);
+    const ev = stepRaceCar(c, { throttle: 1, steer: 0 }, BASE_STATS, raceEnv(jt));
     check("lost: > 2 * wall from its own section falls", ev === "fall" && c.fall === FALL_TICKS && Math.abs(q.dist - (2 * jt.wall + 10)) < 1e-6, `dist ${q.dist.toFixed(1)}`);
     // A sideways jump that lands beyond the walls falls.
     const side = carAt(jt, 2503, 0, 380, 0.5);
@@ -1313,31 +1314,31 @@ function trackFeatures(): void {
     c.wreck = 3;
     c.fall = 50;
     c.air = 10;
-    const ev = stepRaceCar(c, { throttle: 1, steer: 0 }, BASE_STATS, jt);
+    const ev = stepRaceCar(c, { throttle: 1, steer: 0 }, BASE_STATS, raceEnv(jt));
     check("precedence: a wreck beats fall and air (only the wreck counts down)", ev === null && c.wreck === 2 && c.fall === 50 && c.air === 10 && c.x === 3000);
-    stepRaceCar(c, { throttle: 1, steer: 0 }, BASE_STATS, jt);
-    stepRaceCar(c, { throttle: 1, steer: 0 }, BASE_STATS, jt);
+    stepRaceCar(c, { throttle: 1, steer: 0 }, BASE_STATS, raceEnv(jt));
+    stepRaceCar(c, { throttle: 1, steer: 0 }, BASE_STATS, raceEnv(jt));
     check("precedence: the respawn clears fall and air", c.wreck === 0 && c.fall === 0 && c.air === 0 && Math.abs(c.y) < 1e-9);
     const f = carAt(jt, 3000, 0, 200);
     f.fall = 10;
     f.air = 10;
-    const e2 = stepRaceCar(f, { throttle: 1, steer: 0 }, BASE_STATS, jt);
+    const e2 = stepRaceCar(f, { throttle: 1, steer: 0 }, BASE_STATS, raceEnv(jt));
     check("precedence: a fall beats air (frozen, no flight)", e2 === null && f.fall === 9 && f.air === 10 && f.x === 3000 && f.vx === 0);
     // A wreck respawn over a gap goes to the recovery point; on the road it stays put.
     const w = carAt(jt, 2600, 0, 0);
     wreckCar(w);
-    for (let i = 0; i < WRECK_TICKS; i++) stepRaceCar(w, NO_COMMAND, BASE_STATS, jt);
+    for (let i = 0; i < WRECK_TICKS; i++) stepRaceCar(w, NO_COMMAND, BASE_STATS, raceEnv(jt));
     const rec = pointAt(jt, sx(2000));
     const r = carAt(jt, 3000, 20, 0);
     wreckCar(r);
-    for (let i = 0; i < WRECK_TICKS; i++) stepRaceCar(r, NO_COMMAND, BASE_STATS, jt);
+    for (let i = 0; i < WRECK_TICKS; i++) stepRaceCar(r, NO_COMMAND, BASE_STATS, raceEnv(jt));
     check(
       "wreck respawn onto a gap goes to the recovery point",
       w.wreck === 0 && Math.abs(w.x - rec.x) < 1e-9 && Math.abs(r.x - 3000) < 1e-6 && Math.abs(r.y) < 1e-9,
       `gap wreck -> x=${w.x.toFixed(1)}, road wreck -> x=${r.x.toFixed(1)}`,
     );
     const a = carAt(jt, 2503, 0, 300);
-    stepRaceCar(a, NO_COMMAND, BASE_STATS, jt);
+    stepRaceCar(a, NO_COMMAND, BASE_STATS, raceEnv(jt));
     const wasAir = a.air!;
     wreckCar(a);
     check("wreckCar ends a jump or a fall", wasAir > 0 && a.air === 0 && a.fall === 0 && a.wreck === WRECK_TICKS);
@@ -1354,7 +1355,7 @@ function trackFeatures(): void {
       // Drive the jump, then brake back and roll the wrong way into the gap.
       const inp = i < 200 ? { throttle: 1, steer: Math.sin(i / 30) * 0.05 } : { throttle: -1, steer: 0 };
       inputs.push(inp);
-      const ev = stepRaceCar(ref, inp, BASE_STATS, jt);
+      const ev = stepRaceCar(ref, inp, BASE_STATS, raceEnv(jt));
       if (ev) evs.push(ev);
       states.push(cloneCar(ref));
     }
@@ -1364,7 +1365,7 @@ function trackFeatures(): void {
       const c = cloneCar(states[k]);
       starts++;
       for (let i = k; i < inputs.length; i++) {
-        stepRaceCar(c, inputs[i], BASE_STATS, jt);
+        stepRaceCar(c, inputs[i], BASE_STATS, raceEnv(jt));
         if (fields.some((f) => c[f] !== states[i + 1][f])) mismatches++;
       }
     }
@@ -1373,7 +1374,7 @@ function trackFeatures(): void {
       mismatches === 0 && evs.includes("takeoff") && evs.includes("fall") && evs.includes("recover"),
       `${starts} clones, events ${evs.join(",")}, ${mismatches} mismatches`,
     );
-    const src: CarState = { x: 1, y: 2, h: 3, vx: 4, vy: 5, seg: 6, wreck: 0, air: 7, fall: 8 };
+    const src: CarState = { x: 1, y: 2, h: 3, vx: 4, vy: 5, seg: 6, wreck: 0, air: 7, fall: 8, boost: 0 };
     const cl = cloneCar(src);
     check("cloneCar copies air and fall", cl.air === 7 && cl.fall === 8 && cl !== src);
   }
@@ -1416,14 +1417,14 @@ function trackFeatures(): void {
 
     // Jump over the lower road: the car keeps its own section all the way (no snap).
     const rec = pointAt(good, good.recovery[1]);
-    const c: CarState = { x: rec.x, y: rec.y, h: rec.h, vx: 0, vy: 0, seg: rec.seg, wreck: 0, air: 0, fall: 0 };
+    const c: CarState = { x: rec.x, y: rec.y, h: rec.h, vx: 0, vy: 0, seg: rec.seg, wreck: 0, air: 0, fall: 0, boost: 0 };
     const segs: number[] = [];
     const evs: RaceStepEvent[] = [];
     for (let i = 0; i < 300; i++) {
       const q = queryTrackNear(good, c.x, c.y, c.seg);
       const t = pointAt(good, q.s + 60 + speedOf(c) * 0.25);
       const steer = clamp(angleDiff(c.h, Math.atan2(t.y - c.y, t.x - c.x)) * 2.2, -1, 1);
-      const ev = stepRaceCar(c, { throttle: 1, steer }, BASE_STATS, good);
+      const ev = stepRaceCar(c, { throttle: 1, steer }, BASE_STATS, raceEnv(good));
       if (ev) evs.push(ev);
       if (c.air! > 0) segs.push(c.seg);
     }
@@ -1446,13 +1447,13 @@ function trackFeatures(): void {
     );
     // The lower road runs under the gap: a car on it drives straight through.
     const lp = pointAt(good, queryTrackNear(good, 0, 0, lowerSeg).s - 300);
-    const d: CarState = { x: lp.x, y: lp.y, h: lp.h, vx: Math.cos(lp.h) * 250, vy: Math.sin(lp.h) * 250, seg: lp.seg, wreck: 0, air: 0, fall: 0 };
+    const d: CarState = { x: lp.x, y: lp.y, h: lp.h, vx: Math.cos(lp.h) * 250, vy: Math.sin(lp.h) * 250, seg: lp.seg, wreck: 0, air: 0, fall: 0, boost: 0 };
     const devs: RaceStepEvent[] = [];
     const dsegs: number[] = [];
     for (let i = 0; i < 150; i++) {
       const q = queryTrackNear(good, d.x, d.y, d.seg);
       const t = pointAt(good, q.s + 60 + speedOf(d) * 0.25);
-      const ev = stepRaceCar(d, { throttle: 0.6, steer: clamp(angleDiff(d.h, Math.atan2(t.y - d.y, t.x - d.x)) * 2.2, -1, 1) }, BASE_STATS, good);
+      const ev = stepRaceCar(d, { throttle: 0.6, steer: clamp(angleDiff(d.h, Math.atan2(t.y - d.y, t.x - d.x)) * 2.2, -1, 1) }, BASE_STATS, raceEnv(good));
       if (ev) devs.push(ev);
       dsegs.push(d.seg);
     }
@@ -1511,7 +1512,7 @@ function placeOn(t: Track, p: Player, s: number, lateral = 0, speed = 0): void {
   const pt = pointAt(t, s);
   const x = pt.x - Math.sin(pt.h) * lateral;
   const y = pt.y + Math.cos(pt.h) * lateral;
-  p.car = { x, y, h: pt.h, vx: Math.cos(pt.h) * speed, vy: Math.sin(pt.h) * speed, seg: pt.seg, wreck: 0, air: 0, fall: 0 };
+  p.car = { x, y, h: pt.h, vx: Math.cos(pt.h) * speed, vy: Math.sin(pt.h) * speed, seg: pt.seg, wreck: 0, air: 0, fall: 0, boost: 0 };
   p.progress = { s: queryTrackNear(t, x, y, pt.seg).s, cp: 1, lap: 0, fin: 0 };
 }
 
@@ -1955,7 +1956,7 @@ function jumpsWired(): void {
     g.prevCar = cloneCar(car);
     g.phase = "racing";
     g.raceStart = -1e12;
-    g.latest = { time: 0, cars: new Map([["me", snapCar("me", car)]]), shots: new Map(), mines: [] };
+    g.latest = { time: 0, rtBase: 0, rtOpen: true, cars: new Map([["me", snapCar("me", car)]]), shots: new Map(), mines: [] };
     const armedGround = g.armed();
     car.air = 5;
     const armedAir = g.armed();
@@ -2001,7 +2002,7 @@ function jumpsWired(): void {
 
     // Other cars: interpolated height; no slide across a recovery between two snapshots.
     const now = performance.now(); // serverNow() without a clock offset; drawn at now - 100 ms
-    const snapOf = (time: number, s: CarSnap) => ({ time, cars: new Map([["o", s]]), shots: new Map(), mines: [] });
+    const snapOf = (time: number, s: CarSnap) => ({ time, rtBase: 0, rtOpen: true, cars: new Map([["o", s]]), shots: new Map(), mines: [] });
     g.car = null;
     const fly = body(0, 0, 0, 300, 0);
     g.snaps = [snapOf(now - 150, snapCar("o", { ...fly, air: 20 })), snapOf(now - 50, snapCar("o", { ...fly, x: 10, air: 18 }, { ghost: true }))];
@@ -2158,10 +2159,10 @@ function hazardStretches(t: Track): { what: string; s0: number; s1: number }[] {
 function flyFrom(t: Track, lipS: number, v: number, lat: number): { fell: boolean; landS: number; landDist: number } {
   const p = pointAt(t, lipS + 1);
   const x = p.x - Math.sin(p.h) * lat, y = p.y + Math.cos(p.h) * lat;
-  const c: CarState = { x, y, h: p.h, vx: Math.cos(p.h) * v, vy: Math.sin(p.h) * v, seg: p.seg, wreck: 0, air: 0, fall: 0 };
+  const c: CarState = { x, y, h: p.h, vx: Math.cos(p.h) * v, vy: Math.sin(p.h) * v, seg: p.seg, wreck: 0, air: 0, fall: 0, boost: 0 };
   let fell = false;
   for (let i = 0; i < 200; i++) {
-    const ev = stepRaceCar(c, NO_COMMAND, BASE_STATS, t);
+    const ev = stepRaceCar(c, NO_COMMAND, BASE_STATS, raceEnv(t));
     if (ev === "fall") fell = true;
     if (c.air === 0) break;
   }
@@ -2299,7 +2300,7 @@ function botDriver(): void {
   // and then clears the gap. Full throttle from there instead falls short.
   const run = (backUp: boolean) => {
     const p = pointAt(knot, lip - 160);
-    const car: CarState = { x: p.x, y: p.y, h: p.h, vx: Math.cos(p.h) * 120, vy: Math.sin(p.h) * 120, seg: p.seg, wreck: 0, air: 0, fall: 0 };
+    const car: CarState = { x: p.x, y: p.y, h: p.h, vx: Math.cos(p.h) * 120, vy: Math.sin(p.h) * 120, seg: p.seg, wreck: 0, air: 0, fall: 0, boost: 0 };
     const bot = new BotDriver(stubGame(knot, car), 0);
     bot.weapons = false;
     let reversed = false, fell = false, took = 0;
@@ -2307,7 +2308,7 @@ function botDriver(): void {
       const ctl = backUp ? bot.controls() : { throttle: 1, steer: 0 };
       if (ctl.throttle < 0 && speedOf(car) > 5 && car.vx * Math.cos(car.h) + car.vy * Math.sin(car.h) < 0) reversed = true;
       const v0 = speedOf(car);
-      const ev = stepRaceCar(car, ctl, BASE_STATS, knot);
+      const ev = stepRaceCar(car, ctl, BASE_STATS, raceEnv(knot));
       if (ev === "takeoff") took = v0;
       if (ev === "fall") fell = true;
       if (took && car.air === 0) break;
@@ -2339,12 +2340,12 @@ function botDriver(): void {
     const rust = trackById("rust-bowl");
     const hold = [-24, 0, 24].map((lane) => {
       const g = gridSlot(rust, 0);
-      const car: CarState = { x: g.x, y: g.y, h: g.h, vx: 0, vy: 0, seg: g.seg, wreck: 0, air: 0, fall: 0 };
+      const car: CarState = { x: g.x, y: g.y, h: g.h, vx: 0, vy: 0, seg: g.seg, wreck: 0, air: 0, fall: 0, boost: 0 };
       const bot = new BotDriver(stubGame(rust, car), lane);
       bot.weapons = false;
       let off = 0, n = 0, dist = 0, prev = queryTrackNear(rust, car.x, car.y, car.seg).s;
       for (let i = 0; i < 60 * 60 && dist < rust.length; i++) {
-        stepRaceCar(car, bot.controls(), BASE_STATS, rust);
+        stepRaceCar(car, bot.controls(), BASE_STATS, raceEnv(rust));
         const q = queryTrackNear(rust, car.x, car.y, car.seg);
         let ds = q.s - prev;
         if (ds < -rust.length / 2) ds += rust.length;
@@ -2367,7 +2368,7 @@ function botDriver(): void {
 
   // Weapons: never at an airborne or falling car (the server ignores those shots).
   const p = pointAt(knot, 3000);
-  const me: CarState = { x: p.x, y: p.y, h: p.h, vx: 0, vy: 0, seg: p.seg, wreck: 0, air: 0, fall: 0 };
+  const me: CarState = { x: p.x, y: p.y, h: p.h, vx: 0, vy: 0, seg: p.seg, wreck: 0, air: 0, fall: 0, boost: 0 };
   const ahead = { id: "x", x: p.x + Math.cos(p.h) * 200, y: p.y + Math.sin(p.h) * 200, h: p.h };
   const fires = (snap: Partial<CarSnap>) => {
     const b = new BotDriver(stubGame(knot, cloneCar(me), [{ pose: ahead, snap }]), 0);
@@ -2382,7 +2383,7 @@ function botDriver(): void {
   fb.weapons = false;
   for (let i = 0; i < 90; i++) {
     fb.controls();
-    stepRaceCar(fc, NO_COMMAND, BASE_STATS, knot);
+    stepRaceCar(fc, NO_COMMAND, BASE_STATS, raceEnv(knot));
   }
   const after = fb.controls();
   check("bot: no reversing after a fall's 90 frozen ticks", fc.fall === 0 && after.throttle === 1, `throttle ${after.throttle}`);
@@ -3690,18 +3691,18 @@ function surfaceSounds(): void {
   const t1b = trackById(T1B_ID);
   const limit = wallLimit(t1b);
   const into = (vy: number) => {
-    const c: CarState = { x: 3000, y: limit - 1, h: 0.3, vx: 250, vy, seg: pointAt(t1b, 3000).seg, wreck: 0, air: 0, fall: 0 };
+    const c: CarState = { x: 3000, y: limit - 1, h: 0.3, vx: 250, vy, seg: pointAt(t1b, 3000).seg, wreck: 0, air: 0, fall: 0, boost: 0 };
     const before = cloneCar(c);
-    stepRaceCar(c, { throttle: 1, steer: 0 }, BASE_STATS, t1b);
+    stepRaceCar(c, { throttle: 1, steer: 0 }, BASE_STATS, raceEnv(t1b));
     return { speed: wallHitSpeed(before, c, t1b), vyAfter: c.vy, atWall: Math.abs(c.y - limit) < 0.02 };
   };
   const hard = into(180);
   const soft = into(30);
   const away = into(-80);
   const free = { ...into(0) };
-  const mid: CarState = { x: 3000, y: 0, h: 0, vx: 250, vy: 120, seg: pointAt(t1b, 3000).seg, wreck: 0, air: 0, fall: 0 };
+  const mid: CarState = { x: 3000, y: 0, h: 0, vx: 250, vy: 120, seg: pointAt(t1b, 3000).seg, wreck: 0, air: 0, fall: 0, boost: 0 };
   const midBefore = cloneCar(mid);
-  stepRaceCar(mid, { throttle: 1, steer: 0 }, BASE_STATS, t1b);
+  stepRaceCar(mid, { throttle: 1, steer: 0 }, BASE_STATS, raceEnv(t1b));
   check(
     "sfx wall hit: the speed into the wall that collideWalls removes (velocity before the step, wall normal after it); none away from the wall or moving off it; the 50 u/s threshold",
     hard.atWall && Math.abs(hard.speed - 180) < 1 && hard.vyAfter < 0 && hard.speed >= WALL_HIT_MIN && soft.speed < WALL_HIT_MIN &&
@@ -4855,7 +4856,7 @@ function retireClient(): void {
     // Host finishes (put just before the line on the server): results, Guest DNF.
     const hp = room.players.get(H.game.you)!;
     const pt = pointAt(room.track, room.track.length - 40);
-    hp.car = { x: pt.x, y: pt.y, h: pt.h, vx: Math.cos(pt.h) * 300, vy: Math.sin(pt.h) * 300, seg: pt.seg, wreck: 0, air: 0, fall: 0 };
+    hp.car = { x: pt.x, y: pt.y, h: pt.h, vx: Math.cos(pt.h) * 300, vy: Math.sin(pt.h) * 300, seg: pt.seg, wreck: 0, air: 0, fall: 0, boost: 0 };
     hp.progress = { s: queryTrackNear(room.track, pt.x, pt.y, pt.seg).s, cp: 3, lap: 0, fin: 0 };
     for (let i = 0; i < 30 && room.phase === "racing"; i++) drive(1);
     const rows = G.game.results ?? [];
@@ -6591,7 +6592,7 @@ function dropMine(sim: Sim, p: Player): void {
 /** Park p's car on the spot (x, y) and step once; true if a mine hit it. */
 function driveOver(sim: Sim, p: Player, x: number, y: number): boolean {
   const hits = sim.eventsOf("hit").length;
-  p.car = { ...p.car!, x, y, vx: 0, vy: 0, seg: queryTrack(sim.room.track, x, y).seg, wreck: 0, air: 0, fall: 0 };
+  p.car = { ...p.car!, x, y, vx: 0, vy: 0, seg: queryTrack(sim.room.track, x, y).seg, wreck: 0, air: 0, fall: 0, boost: 0 };
   p.ghost = 0;
   sim.run(1);
   return sim.eventsOf("hit").length > hits;
@@ -7595,7 +7596,7 @@ function botsCpu(): void {
   // The driver itself, called straight (no room): same order of cost.
   const t = trackById("crusher-run");
   const p = pointAt(t, 500);
-  const car: CarState = { x: p.x, y: p.y, h: p.h, vx: Math.cos(p.h) * 300, vy: Math.sin(p.h) * 300, seg: p.seg, wreck: 0, air: 0, fall: 0 };
+  const car: CarState = { x: p.x, y: p.y, h: p.h, vx: Math.cos(p.h) * 300, vy: Math.sin(p.h) * 300, seg: p.seg, wreck: 0, air: 0, fall: 0, boost: 0 };
   const mem = newBotMem(0, "normal");
   const t0 = performance.now();
   for (let i = 0; i < 10_000; i++) botControls({ car, track: t, stats: BASE_STATS, raceOn: true, raceSteps: i, others: [] }, mem);
@@ -7712,7 +7713,7 @@ function carsStats(): void {
   });
   const drive = (t: CarType, y: number) => {
     const stats = statsFor(t, { engine: 0, tyres: 0, welder: 0 });
-    const c: CarState = { x: 1500, y, h: 0, vx: 0, vy: 0, seg: 0, wreck: 0, air: 0, fall: 0 };
+    const c: CarState = { x: 1500, y, h: 0, vx: 0, vy: 0, seg: 0, wreck: 0, air: 0, fall: 0, boost: 0 };
     let t300 = -1;
     for (let i = 1; i <= 15 * TICK_HZ && c.x < 11000; i++) {
       stepCar(c, { throttle: 1, steer: 0 }, stats, flat);
@@ -7992,14 +7993,14 @@ function cutLap(t: Track, car: CarType, cut: { s0: number; s1: number; side: num
   const mem = newBotMem(0, "normal");
   mem.weapons = false;
   const p = pointAt(t, 0);
-  const c: CarState = { x: p.x, y: p.y, h: p.h, vx: 0, vy: 0, seg: p.seg, wreck: 0, air: 0, fall: 0 };
+  const c: CarState = { x: p.x, y: p.y, h: p.h, vx: 0, vy: 0, seg: p.seg, wreck: 0, air: 0, fall: 0, boost: 0 };
   const L = t.length;
   const inCut = (s: number) => !!cut && [s, s + L].some((x) => x >= cut.s0 - 80 && x <= cut.s1 + 40);
   let dist = 0, prev = 0, t1 = 0, dirt = 0, falls = 0, i = 0;
   for (; i < 60 * 200 && dist < 2 * L; i++) {
     const q = queryTrackNear(t, c.x, c.y, c.seg);
     mem.lateral = dist >= L && inCut(q.s) ? cut!.side * lane : 0;
-    const ev = stepRaceCar(c, botControls({ car: c, track: t, stats, raceOn: true, raceSteps: i, others: [], carType: car }, mem), stats, t);
+    const ev = stepRaceCar(c, botControls({ car: c, track: t, stats, raceOn: true, raceSteps: i, others: [], carType: car }, mem), stats, raceEnv(t));
     if (ev === "fall") falls++;
     const q2 = queryTrackNear(t, c.x, c.y, c.seg);
     if (dist >= L && c.air === 0 && q2.dist > t.def.halfWidth) dirt++;

@@ -29,6 +29,9 @@ export interface CarState {
   // Jumps and falls (shared/weapons.ts stepRaceCar).
   air: number; // ticks left in the air (committed flight: velocity and heading frozen), 0 = grounded
   fall: number; // ticks left falling (frozen, blinking), then the car is placed at a recovery point
+  // Ticks of speed boost left (M4-ENV plumbing for the lightning cells, PLAN-M4 2.5): always 0
+  // until a ticket gives it a meaning; carried in snapshots and the prediction already.
+  boost: number;
 }
 
 /**
@@ -64,7 +67,7 @@ const WALL_BOUNCE = 0.35;
 const WALL_SCRAPE = 0.97;
 
 export function cloneCar(c: CarState): CarState {
-  return { x: c.x, y: c.y, h: c.h, vx: c.vx, vy: c.vy, seg: c.seg, wreck: c.wreck, air: c.air, fall: c.fall };
+  return { x: c.x, y: c.y, h: c.h, vx: c.vx, vy: c.vy, seg: c.seg, wreck: c.wreck, air: c.air, fall: c.fall, boost: c.boost };
 }
 
 export function speedOf(c: { vx: number; vy: number }): number {

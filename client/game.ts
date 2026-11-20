@@ -35,6 +35,7 @@ import {
   isMineMode,
   makeButtons,
   moveShot,
+  raceEnv,
   RIVET_COOLDOWN,
   spawnShot,
   stepRaceCar,
@@ -109,9 +110,17 @@ export interface Pose {
   ghost?: boolean; // ghosted (after a recovery or a wreck respawn, or finished): blinks
 }
 
-/** A car's air/fall/wreck state, as far as drawing and the no-slide rules care. */
-function sameState(a: { air: number; fall: number; wreck: number }, b: { air: number; fall: number; wreck: number }): boolean {
-  return a.air > 0 === b.air > 0 && a.fall > 0 === b.fall > 0 && a.wreck > 0 === b.wreck > 0;
+/** A car's air/fall/wreck/boost state, as far as drawing and the no-slide rules care. */
+function sameState(
+  a: { air: number; fall: number; wreck: number; boost: number },
+  b: { air: number; fall: number; wreck: number; boost: number },
+): boolean {
+  return a.air > 0 === b.air > 0 && a.fall > 0 === b.fall > 0 && a.wreck > 0 === b.wreck > 0 && a.boost > 0 === b.boost > 0;
+}
+
+/** The race tick input step i after snapshot s runs at on the server (Snapshot.rtBase). */
+export function rtAt(s: Snapshot, i: number): number {
+  return s.rtOpen ? Math.max(0, s.rtBase + i + 1) : s.rtBase;
 }
 
 /** Fraction of the fall elapsed, or undefined when the car is not falling. */
@@ -133,6 +142,14 @@ function airFall(a: CarState, b: CarState, t: number): { height: number; falling
 
 export interface Snapshot {
   time: number;
+  /**
+   * The race tick (M4-ENV) of the input step i after this snapshot (pending[i]) is max(0,
+   * rtBase + i + 1), the server consuming one input per tick. Racing: the snapshot's rt. In the
+   * countdown: 1 - the ticks until GO (the clamp at GO: steps before it run at 0). Otherwise
+   * (lobby, results): no race tick runs, see rtOpen.
+   */
+  rtBase: number;
+  rtOpen: boolean; // racing or the countdown: race ticks still count
   cars: Map<string, CarSnap>;
   shots: Map<number, ShotSnap>;
   mines: MineSnap[];
@@ -140,6 +157,8 @@ export interface Snapshot {
 
 interface Pending {
   seq: number;
+  rt: number; // the race tick this step is predicted at (rtAt), as of the latest replay
+  rt0: number; // ... and as of the live step
   cmd: Command;
   fired: boolean; // a rivet left the gun on this step (predicted)
   mine: boolean; // a mine press was sent on this step
@@ -271,6 +290,11 @@ export class Game {
   readonly recErrors: number[] = [];
   /** Acked steps whose predicted air/fall/wreck state differed from the server's. */
   recStateErrors = 0;
+  /**
+   * Acked steps' race ticks as predicted: [seq, at the live step, at the last replay] (debug
+   * and tests: the rt skew against the server's).
+   */
+  readonly rtLog: [number, number, number][] = [];
   localShots: Shot[] = []; // cosmetic: our own rivets, drawn before the server confirms
   readonly contact = new Contacts(); // own-car bump prediction, near cars' drawn pose
   private ownSounds: OwnCue[] = [];
@@ -731,7 +755,10 @@ export class Game {
     this.phaseEnds = msg.phaseEnds;
     this.serverAmmo = msg.ammo;
     this.snapTick = msg.tick;
-    const snap: Snapshot = { time: msg.time, cars: new Map(), shots: new Map(), mines: [] };
+    const rtOpen = msg.phase === "racing" || msg.phase === "countdown";
+    const goIn = msg.phase === "countdown" ? Math.max(1, Math.ceil((msg.phaseEnds - msg.time) / (1000 / TICK_HZ))) : 0;
+    const rt = Number.isFinite(msg.rt) ? msg.rt : 0; // absent from an older server
+    const snap: Snapshot = { time: msg.time, rtBase: msg.phase === "countdown" ? 1 - goIn : rt, rtOpen, cars: new Map(), shots: new Map(), mines: [] };
     for (const e of msg.ents) {
       if (e.k === "car") snap.cars.set(e.id, e);
       else if (e.k === "shot") snap.shots.set(e.id, e);
@@ -758,6 +785,7 @@ export class Game {
       wreck: mine.wreck,
       air: mine.air,
       fall: mine.fall,
+      boost: mine.boost ?? 0,
     };
     if (!this.car) {
       this.car = server;
@@ -780,7 +808,10 @@ export class Game {
       if (!sameState(predicted, server)) this.recStateErrors++;
     }
     if (ack > this.lastAck) this.lastAck = ack;
-    while (this.pending.length && this.pending[0].seq <= ack) this.pending.shift();
+    while (this.pending.length && this.pending[0].seq <= ack) {
+      const p = this.pending.shift()!;
+      if (this.rtLog.length < MAX_ERROR_SAMPLES) this.rtLog.push([p.seq, p.rt0, p.rt]);
+    }
     for (const k of this.history.keys()) if (k <= ack) this.history.delete(k);
 
     // Rewind to the server state and replay what the server has not seen yet. Replay goes
@@ -792,9 +823,11 @@ export class Game {
     const old = this.car!;
     const c = cloneCar(server);
     let ghost = 0;
+    const env = raceEnv(this.track);
     this.pending.forEach((p, i) => {
       const wrecked = c.wreck > 0;
-      const ev = stepRaceCar(c, p.cmd, this.stats, this.track);
+      p.rt = env.rt = rtAt(snap, i);
+      const ev = stepRaceCar(c, p.cmd, this.stats, env);
       ghost = ghostAfter(ghost, ev, wrecked && c.wreck === 0);
       this.contact.collide(c, i + 1);
       this.history.set(p.seq, cloneCar(c));
@@ -917,7 +950,8 @@ export class Game {
     const before = this.car;
     this.prevCar = cloneCar(before);
     if (this.cooldown > 0) this.cooldown--;
-    const ev = stepRaceCar(this.car, cmd, this.stats, this.track);
+    const rt = this.latest ? rtAt(this.latest, this.pending.length) : 0;
+    const ev = stepRaceCar(this.car, cmd, this.stats, raceEnv(this.track, rt));
     const respawned = this.prevCar.wreck > 0 && this.car.wreck === 0;
     if (ev === "recover") this.ghost = GHOST_TICKS; // the server ghosts it before the shot
     this.contact.step(this.car, this.pending.length + 1); // the server applies it then
@@ -944,7 +978,7 @@ export class Game {
     }
     if (minePress && armedNow) this.cue("mine");
     this.ghost = ghostAfter(this.ghost, ev, respawned);
-    this.pending.push({ seq, cmd, fired, mine: minePress && armedNow });
+    this.pending.push({ seq, rt, rt0: rt, cmd, fired, mine: minePress && armedNow });
     this.history.set(seq, cloneCar(this.car));
     if (this.pending.length > MAX_PENDING) {
       const dropped = this.pending.shift()!;
