@@ -307,6 +307,10 @@ Pushing main to origin now (user popup "Push right after GFX-4"); then the user 
 PUSHED 2026-11-20: origin/main 3270cc8..4819a45. Waiting for the user's Manual Deploy, then muted live QA. GFX-4 ticket ready for qa
 test; GFX-4 workers released, gfx4 workspace + branch removed (taste copy gfx4-taste on :3009 still up).
 MINES-1 in flight (Fable): ctx_7199ccb0ef4c (~/orca/workspaces/scrap-rally/mines1, TSandvaer/mines1, :3006; spec tmp/spec-mines1.md).
+LIVE 2026-11-20 (checked by curl): live serves index-SEQmFjen.js (= the 4819a45 build). Muted live QA6 on Opus: ctx_8dbb75aa73c1
+(tmp/spec-qa-live-6.md -> tmp/qa6-graphics-live-report.md). On PASS: the 6 tickets -> complete.
+MINES-1 done: cfc7cb0 (sim 532/532, bots 100/100; blink 0 B/frame; 40 mines +0.03 ms). Opus reviewer ctx_84e0d120f6e7 (tmp/review-mines1.md).
+Taste copy mines1-taste (detached cfc7cb0) on :3009, node pid 28890 (gfx4-taste removed, old pid 12549 killed).
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
