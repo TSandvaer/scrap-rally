@@ -869,7 +869,7 @@ export class Room {
     this._trackId = id;
     this._track = trackById(id);
     this._combat = this.newCombat(); // no shots or mines exist in the lobby
-    for (const q of this.players.values()) q.ready = false;
+    for (const q of this.players.values()) q.ready = !!q.bot; // a bot is always ready
     this.broadcastRoom();
     return null;
   }
