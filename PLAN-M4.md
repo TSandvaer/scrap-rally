@@ -328,3 +328,12 @@ off-centre (or the lane-0 bot always takes them). Wave 1 (M4-BOTS + M4-LOOKS) co
 - **Catch-up always on**, no host toggle (add one later only if the taste gate asks). Boost duration weighted by the gap to the
   leader, shown on the HUD.
 - Wave 1 starts now: M4-BOTS (Opus) and M4-LOOKS (Fable).
+
+## Notes from implementation (2026-11-20)
+
+- M4-ENV review: after an input gap (underrun or resume hold) the client's live `rt` can be off by up to ~7 ticks for about one round
+  trip (scripts/bots.ts bounds live <= 10, replay <= 3). Section 3's "one tick" understates this; M4-MOVE must size its lagged parity bound
+  for moving obstacles accordingly (a barrel at ~110 u/s can be mispredicted by up to ~13 units in that window).
+- M4-CARS: bot corner scaling uses (grip/7.5)^(1/4) (the square root gave ~5% spread); with equal bot caution all three types lap within
+  ~1%, so the types differ in feel (acceleration, grip, dirt, recovery), not raw lap time.
+

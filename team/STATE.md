@@ -346,6 +346,10 @@ its branch head before that: 6dffaea (sim 628/628, bots 109/109).
 M4-CARS+ENV done: 6149c7d (sim 628/628, bots 109/109 twice; Sport byte-identical; lap times per type within 3% (bot corner scaling
 (grip/7.5)^(1/4)); lagged recon err 0.005; rt skew live max 7). Opus reviewer ctx_18b31c4f294b (tmp/review-m4-cars.md). Report/shots in
 tmp/m4-cars/. Taste copy m4-cars-taste (detached 6149c7d) on :3009, node pid 45260 (m4-bots-taste removed, old pid 38107 killed).
+M4-CARS+ENV review APPROVE (ctx_18b31c4f294b; no findings). Notes: cars lap within ~1% at equal bot caution; the Truck (forgiving,
+no lap-time cost) is the one to watch for 'none dominant'; FOR M4-MOVE: live rt skew up to ~7 ticks for about one round trip after an
+input gap (bots.ts:1672 bounds live <=10, replay <=3): size M4-MOVE's lagged parity bound accordingly. Merge waits for the user's
+car-feel taste gate.
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
