@@ -27,8 +27,10 @@ import { DEFAULT_TRACK_ID, findTrack, trackById } from "../shared/tracks";
 import {
   airHeight,
   BTN_RIVET,
+  DEFAULT_MINE_MODE,
   FALL_TICKS,
   GHOST_TICKS,
+  isMineMode,
   makeButtons,
   moveShot,
   RIVET_COOLDOWN,
@@ -36,6 +38,7 @@ import {
   stepRaceCar,
   WEAPONS_ARM_MS,
   type Command,
+  type MineMode,
   type RaceStepEvent,
   type Shot,
 } from "../shared/weapons";
@@ -219,6 +222,11 @@ export class Game {
    */
   soundDefaults: RoomSound = { ...BUILTIN_SOUND };
   song: string = DEFAULT_SONG_ID;
+  /**
+   * The host's mines setting (room message, MINES-1): what the next race begins with. The
+   * default outside a room, and for a room message without it (an older server).
+   */
+  mines: MineMode = DEFAULT_MINE_MODE;
   // The host's pause (room message, MENU-3). While paused nothing is predicted or sent, and the
   // race-time view (raceNow) stands at pausedAt. resumeAt: the end of the resume 3-2-1, 0 = none.
   paused = false;
@@ -373,6 +381,11 @@ export class Game {
     this.send({ t: "soundDefaults", ...patch });
   }
 
+  /** Host only, any phase: the room's mines setting ("stay" or "fade"); it applies from the next race. */
+  setMines(mode: MineMode): void {
+    this.send({ t: "mines", mode });
+  }
+
   /** Say something in the room chat. The server cleans it; it comes back as a chat line. */
   say(text: string): void {
     const t = [...text.trim()].slice(0, CHAT_MAX).join("");
@@ -406,6 +419,7 @@ export class Game {
     this.locked = false;
     this.soundDefaults = { ...BUILTIN_SOUND };
     this.song = DEFAULT_SONG_ID;
+    this.mines = DEFAULT_MINE_MODE;
     this.clearPause();
     this.resumeGo = 0;
     this.results = null;
@@ -600,6 +614,7 @@ export class Game {
         this.forceStartAt = msg.forceStartAt;
         this.locked = msg.locked === true;
         this.useSound(msg.soundDefaults, msg.song);
+        this.mines = isMineMode(msg.mines) ? msg.mines : DEFAULT_MINE_MODE;
         this.useTrack(msg.trackId);
         this.players = msg.players;
         if (msg.phase !== "results") this.results = null;

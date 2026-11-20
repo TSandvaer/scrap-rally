@@ -27,6 +27,7 @@
 //   two at a time.
 
 import type { Track } from "../../shared/track";
+import { MINE_BLINK_FAST_TICKS } from "../../shared/weapons";
 import type { CarView, DrawPose, WorldFx } from "../render";
 import { P } from "./palette";
 import { BLAST_FRAMES, carSheet, CELL, FX_BLAST, FX_COLS, FX_MINE, FX_PUFF, FX_SPARK, HEADING_STEP, HEADINGS, SHADOW_ALPHA, sharedSheets, SPARK_FRAMES, SPARK_KINDS, spriteFrame, spritesFor, type SharedSheets } from "./sprites";
@@ -95,6 +96,13 @@ const SLIDES = 0.6 * SKID;
 const TOUCHING = 100; // ms
 const AXLE = 9; // the rear wheels: this far behind the car's middle (world units) ...
 const WHEEL = 6; // ... and to either side of it
+// A mine on its way out (shared/protocol.ts MineSnap: `out`, the ticks until it is gone) blinks:
+// drawn and left out in turn, BLINK_SLOW ms each, BLINK_FAST over its last MINE_BLINK_FAST_TICKS
+// (8 and 4 display frames at 60 Hz). A mine left out costs a comparison; nothing is kept per mine.
+const BLINK_SLOW = (8 * 1000) / 60;
+const BLINK_FAST = (4 * 1000) / 60;
+/** A mine as the game hands it over: the frame's WorldFx entry, with the snapshot's `out` when it has one. */
+type MineView = WorldFx["mines"][number] & { out?: number };
 const BLASTS = 32; // mine blasts remembered as having left their scorch
 // The marks are cleared at a new race and a restart (world.ts clearMarks); the blasts
 // remembered go with them. A blast of the race before may still burn then, or still wait to
@@ -299,8 +307,11 @@ export class Actors {
     const fxSheet = sheets.fx;
     const mines = fx.mines;
     const lit = Math.floor(now / 250) % 2 === 0;
+    const slow = Math.floor(now / BLINK_SLOW) % 2 === 0, fast = Math.floor(now / BLINK_FAST) % 2 === 0;
     for (let i = 0; i < mines.length; i++) {
-      const m = mines[i];
+      const m: MineView = mines[i];
+      const out = m.out;
+      if (out !== undefined && !(out > MINE_BLINK_FAST_TICKS ? slow : fast)) continue; // blinking out: not shown this frame
       const x = Math.round(m.x * ZOOM) - ox, y = Math.round(m.y * ZOOM) - oy;
       if (x < -SMALL || y < -SMALL || x > VIEW_W + SMALL || y > VIEW_H + SMALL) continue;
       const c = FX_MINE + (m.armed ? (lit ? 0 : 1) : 2);

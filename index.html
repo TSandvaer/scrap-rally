@@ -49,6 +49,13 @@
               <select id="song-select" class="hidden" aria-label="Song"></select>
               <span id="song-name" class="track-name"></span>
             </div>
+            <!-- Mines in the race (MINES-1, client/main.ts renderMinesPick): the host picks whether they
+                 stay or fade; it applies from the next race. -->
+            <div class="track-pick mines-pick">
+              <span class="label">Mines</span>
+              <select id="mines-select" class="hidden" aria-label="Mines"></select>
+              <span id="mines-name" class="track-name"></span>
+            </div>
             <button id="start" class="btn primary">Start race</button>
             <button id="start-anyway" class="btn hidden">Start anyway</button>
             <button id="ready" class="btn primary hidden">I'm ready</button>
