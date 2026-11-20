@@ -70,6 +70,8 @@ export interface CarView {
   falling?: number;
   /** 0..1 of the car's full health; under 0.4 it is drawn battered. Absent = not known: drawn whole. */
   hp?: number;
+  /** The car's look (gfx/sprites.ts LOOKS). Absent = the sport. */
+  car?: "sport" | "racer" | "truck";
 }
 
 /**
