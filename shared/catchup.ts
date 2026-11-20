@@ -132,3 +132,83 @@ export function draftsFor(field: readonly DraftEntry[], out: number[], shape: Dr
   }
   return out;
 }
+
+// ---- lightning cells and the boost (M4-CELLS, PLAN-M4.md 2.5) -----------------------------
+
+/**
+ * While CarState.boost > 0 (ticks left) the car's acceleration is BOOST_ACCEL times and its top
+ * speed BOOST_TOP times its own (430 -> 537 u/s; shared/physics.ts stepCar, no slipstream on top
+ * of it). When it runs out the extra speed dies away with the car's own drag (~0.8 s).
+ */
+export const BOOST_ACCEL = 1.6;
+export const BOOST_TOP = 1.25;
+
+/** The fastest a boosted car can go: what the jumps are checked at (shared/weapons.ts). */
+export function boostTopSpeed(topSpeed: number): number {
+  return topSpeed * BOOST_TOP;
+}
+
+/**
+ * A cell's boost by the taker's gap to the leader (race distance, from the latest snapshot's rd on
+ * the client; the leader is the leading car that has not finished, advisor change 10): the leader
+ * BOOST_LEADER_TICKS; up to BOOST_GAPS[0] behind BOOST_TICKS[0]; up to BOOST_GAPS[1] behind
+ * BOOST_TICKS[1]; further behind BOOST_TICKS[2]. Shown on the HUD.
+ */
+export const BOOST_LEADER_TICKS = 36; // 0.6 s
+export const BOOST_GAPS = [400, 1200] as const;
+export const BOOST_TICKS = [54, 72, 90] as const; // 0.9, 1.2, 1.5 s
+
+/** Boost ticks a cell gives a car `gap` race distance behind the leader (<= 0: it leads). */
+export function boostTicksFor(gap: number): number {
+  if (!(gap > 0)) return BOOST_LEADER_TICKS;
+  return gap <= BOOST_GAPS[0] ? BOOST_TICKS[0] : gap <= BOOST_GAPS[1] ? BOOST_TICKS[1] : BOOST_TICKS[2];
+}
+
+/**
+ * The boost a car would get now, from the race distances of a field: `rd` its own, `field` every
+ * car still racing with a car (rd, finished). The leader = the leading car that has not finished.
+ */
+export function boostOffer(rd: number, field: Iterable<{ rd: number; fin: boolean }>): number {
+  let lead = -Infinity;
+  for (const f of field) if (!f.fin && f.rd > lead) lead = f.rd;
+  return boostTicksFor(lead === -Infinity ? 0 : lead - rd);
+}
+
+/** A cell's radius (drawn and touched). */
+export const CELL_RADIUS = 14;
+/**
+ * A car takes a cell when its centre comes this close to the cell's: the cell's radius plus the
+ * car's round hit shape (CAR_RADIUS 13, shared/physics.ts, as for mines; checked in sim-test).
+ */
+export const CELL_TOUCH = CELL_RADIUS + 13;
+/** A cell is back this many race ticks after it was taken (8 s). */
+export const CELL_RESPAWN = 480;
+/** An air cell is only taken by a car this high in its jump or higher (shared/weapons.ts airHeight). */
+export const CELL_AIR_HEIGHT = 0.4;
+
+/**
+ * Is a cell available at race tick rt? back: the race tick it comes back (the snapshot's
+ * cells[i]), 0 = it is there.
+ */
+export function cellOpen(back: number, rt: number): boolean {
+  return back === 0 || rt >= back;
+}
+
+/**
+ * The earliest fraction (0..1) of a tick at which a car moving in a straight line from (x0, y0) to
+ * (x1, y1) touches a cell at (cx, cy) (its centre within CELL_TOUCH), or -1 if it does not.
+ */
+export function cellTouch(x0: number, y0: number, x1: number, y1: number, cx: number, cy: number): number {
+  const ax = x0 - cx, ay = y0 - cy;
+  const dx = x1 - x0, dy = y1 - y0;
+  const r2 = CELL_TOUCH * CELL_TOUCH;
+  const c = ax * ax + ay * ay - r2;
+  if (c <= 0) return 0; // touching from the start
+  const a = dx * dx + dy * dy;
+  if (a === 0) return -1;
+  const b = ax * dx + ay * dy;
+  const disc = b * b - a * c;
+  if (disc < 0) return -1;
+  const t = (-b - Math.sqrt(disc)) / a;
+  return t >= 0 && t <= 1 ? t : -1;
+}

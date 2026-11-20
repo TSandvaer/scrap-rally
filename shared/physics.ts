@@ -2,7 +2,7 @@
 // client runs the same code to predict its own car. Bit-exact agreement is not needed;
 // reconciliation absorbs tiny floating-point differences between JS engines.
 
-import { DRAFT_DRAG_CUT } from "./catchup";
+import { BOOST_ACCEL, BOOST_TOP, DRAFT_DRAG_CUT } from "./catchup";
 import { queryTrackNear, type Track } from "./track";
 
 export const TICK_HZ = 60;
@@ -30,8 +30,9 @@ export interface CarState {
   // Jumps and falls (shared/weapons.ts stepRaceCar).
   air: number; // ticks left in the air (committed flight: velocity and heading frozen), 0 = grounded
   fall: number; // ticks left falling (frozen, blinking), then the car is placed at a recovery point
-  // Ticks of speed boost left (M4-ENV plumbing for the lightning cells, PLAN-M4 2.5): always 0
-  // until a ticket gives it a meaning; carried in snapshots and the prediction already.
+  // Ticks of speed boost left (M4-CELLS, PLAN-M4 2.5: a lightning cell gives it, shared/catchup.ts):
+  // while > 0 stepCar drives with BOOST_ACCEL x the acceleration and BOOST_TOP x the top speed;
+  // stepRaceCar counts it down; a wreck, a fall and a recovery end it.
   boost: number;
 }
 
@@ -78,7 +79,8 @@ export function speedOf(c: { vx: number; vy: number }): number {
 /**
  * Advance one fixed step (DT). Mutates the car. draft: slipstream strength 0..1 (shared/catchup.ts
  * draftsFor): the drag is cut by DRAFT_DRAG_CUT at full strength, so the car runs up to ~10 %
- * faster behind another; 0 = alone (exactly the step without it).
+ * faster behind another; 0 = alone (exactly the step without it). Boosted (c.boost > 0): the
+ * acceleration times BOOST_ACCEL and the top speed times BOOST_TOP, and no slipstream on top.
  */
 export function stepCar(c: CarState, input: Input, stats: CarStats, track: Track, draft = 0): void {
   const throttle = clamp(input.throttle, -1, 1);
@@ -92,14 +94,16 @@ export function stepCar(c: CarState, input: Input, stats: CarStats, track: Track
   const q = queryTrackNear(track, c.x, c.y, c.seg);
   c.seg = q.seg;
   const onRoad = q.dist <= track.def.halfWidth;
-  let drag = (stats.accel / stats.topSpeed) * (onRoad ? 1 : stats.dirtDrag);
-  if (draft > 0) drag *= 1 - DRAFT_DRAG_CUT * draft;
+  const boosted = c.boost > 0;
+  const accel = boosted ? stats.accel * BOOST_ACCEL : stats.accel;
+  let drag = (accel / (boosted ? stats.topSpeed * BOOST_TOP : stats.topSpeed)) * (onRoad ? 1 : stats.dirtDrag);
+  if (draft > 0 && !boosted) drag *= 1 - DRAFT_DRAG_CUT * draft;
   const grip = stats.grip * (onRoad ? 1 : stats.dirtGrip);
 
   if (throttle > 0) {
-    vf += (vf < 0 ? BRAKE : stats.accel) * throttle * DT;
+    vf += (vf < 0 ? BRAKE : accel) * throttle * DT;
   } else if (throttle < 0) {
-    vf -= (vf > 0 ? BRAKE : stats.accel * REVERSE_FACTOR) * -throttle * DT;
+    vf -= (vf > 0 ? BRAKE : accel * REVERSE_FACTOR) * -throttle * DT;
   } else {
     const roll = ROLL * DT;
     vf = Math.abs(vf) <= roll ? 0 : vf - Math.sign(vf) * roll;

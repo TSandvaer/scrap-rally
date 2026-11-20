@@ -2180,6 +2180,7 @@ function stubGame(t: Track, car: CarState, others: { pose: Pose; snap: Partial<C
     raceOn: () => true,
     otherPoses: () => others.map((o) => o.pose),
     visibleMines: () => [],
+    raceTickNow: () => 0,
     latest: { time: 0, cars, shots: new Map(), mines: [] },
   } as unknown as Game;
 }

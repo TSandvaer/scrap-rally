@@ -51,6 +51,8 @@ export class BotDriver {
         car, track: g.track, stats: g.stats, raceOn, raceSteps: this.raceSteps, carType: g.carType,
         others: grounded && (this.mem.weapons || this.mem.useWake) ? this.others() : [],
         mines: grounded && this.mem.useWake ? g.visibleMines() : [],
+        cells: g.cellsPred,
+        rt: g.raceTickNow(),
       },
       this.mem,
     );

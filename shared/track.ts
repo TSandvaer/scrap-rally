@@ -27,7 +27,16 @@ export interface Gap { k: "gap"; s0: number; s1: number; scrap?: boolean }
  */
 export interface Hole { k: "hole"; s: number; lat: number; r: number }
 
-export type Feature = Ramp | Gap | Hole;
+/**
+ * A lightning cell (M4-CELLS, PLAN-M4.md 2.5): a speed pickup at distance s, `lat` units sideways
+ * (+ = right of travel). A ground cell is taken by a car on the ground; an air cell (air: true)
+ * floats over a jump and is taken only by a car high in the air (shared/catchup.ts). Placed where
+ * it is a little hard to reach (validateTrack, validateCells): a ground cell on the kerb or in the
+ * dirt, an air cell on the arc of a fast take-off, off-centre.
+ */
+export interface Cell { k: "cell"; s: number; lat: number; air?: boolean }
+
+export type Feature = Ramp | Gap | Hole | Cell;
 
 export interface TrackDef {
   /** Registry id (e.g. "rust-bowl"): the key in shared/tracks.ts and on the wire. */
@@ -45,6 +54,9 @@ export interface TrackDef {
 /** A hole with its centre in world coordinates (computed once by buildTrack). */
 export interface PlacedHole extends Hole { x: number; y: number }
 
+/** A cell with its centre in world coordinates (buildTrack). Track.cells' order is the snapshot's (cells[i]). */
+export interface PlacedCell extends Cell { x: number; y: number; seg: number }
+
 export interface Track {
   def: TrackDef;
   pts: Vec[]; // sampled centerline, closed (pts[n-1] connects back to pts[0])
@@ -55,6 +67,7 @@ export interface Track {
   ramps: Ramp[]; // sorted by s
   gaps: Gap[]; // sorted by s0
   holes: PlacedHole[]; // sorted by s
+  cells: PlacedCell[]; // sorted by s (then lat): the index is the snapshot's
   recovery: number[]; // sorted, never empty
 }
 
@@ -67,7 +80,7 @@ export interface TrackQuery {
 }
 
 // Original layout: long left straight, a sweeping top section, a chicane in the
-// middle, and a hairpin loop at the bottom right.
+// middle, and a hairpin loop at the bottom right. No ramps, gaps or holes.
 export const RUST_BOWL: TrackDef = {
   id: "rust-bowl",
   name: "Rust Bowl",
@@ -78,6 +91,13 @@ export const RUST_BOWL: TrackDef = {
   ],
   halfWidth: 64,
   verge: 44,
+  // Lightning cells (M4-CELLS) on the kerbs: the inside of the left-hander and of the right-hander
+  // at their apexes (cut the corner tight), and the left kerb of the back straight.
+  features: [
+    { k: "cell", s: 2200, lat: -58 },
+    { k: "cell", s: 7450, lat: 58 },
+    { k: "cell", s: 8600, lat: -58 },
+  ],
 };
 
 // Original layout: a scrapyard run. A long start straight, then past the first bend a straight
@@ -109,6 +129,8 @@ export const CRUSHER_RUN: TrackDef = {
     // The chasm: 220 units, a take-off at ~340 u/s or more.
     { k: "ramp", s: 6650, len: 80 },
     { k: "gap", s0: 6730, s1: 6950 },
+    // A lightning cell (M4-CELLS) over the chasm, right of centre: a jump on that side takes it.
+    { k: "cell", s: 6900, lat: 34, air: true },
   ],
   recovery: [0, 3150, 3880, 4800, 6150],
 };
@@ -136,6 +158,8 @@ export const OVERPASS_KNOT: TrackDef = {
     // Over the crossing: a take-off at ~350 u/s or more clears the 236-unit gap.
     { k: "ramp", s: 7695, len: 80 },
     { k: "gap", s0: 7775, s1: 8011 },
+    // A lightning cell (M4-CELLS) over the crossing, left of centre: a jump on that side takes it.
+    { k: "cell", s: 7950, lat: -34, air: true },
   ],
   recovery: [0, 4950, 7193],
 };
@@ -191,6 +215,7 @@ export function buildTrack(def: TrackDef): Track {
     ramps: [],
     gaps: [],
     holes: [],
+    cells: [],
     recovery: [],
   };
   for (const f of def.features ?? []) {
@@ -198,12 +223,15 @@ export function buildTrack(def: TrackDef): Track {
     else if (f.k === "gap") track.gaps.push({ ...f });
     else {
       const p = pointAt(track, f.s);
-      track.holes.push({ ...f, x: p.x - Math.sin(p.h) * f.lat, y: p.y + Math.cos(p.h) * f.lat });
+      const at = { x: p.x - Math.sin(p.h) * f.lat, y: p.y + Math.cos(p.h) * f.lat };
+      if (f.k === "hole") track.holes.push({ ...f, ...at });
+      else track.cells.push({ ...f, ...at, seg: p.seg });
     }
   }
   track.ramps.sort((a, b) => a.s - b.s);
   track.gaps.sort((a, b) => a.s0 - b.s0);
   track.holes.sort((a, b) => a.s - b.s);
+  track.cells.sort((a, b) => a.s - b.s || a.lat - b.lat);
   const rec = def.recovery?.length ? def.recovery : [0];
   track.recovery = rec.map((r) => wrapS(track, r)).sort((a, b) => a - b);
   return track;
@@ -376,6 +404,10 @@ export function minSelfClearance(track: Track): number {
 const SAME_SECTION = 4; // * wall
 /** Clearance kept between a recovery point and a hole's edge (about half a car). */
 const RECOVERY_HOLE_MARGIN = 16;
+/** A cell's extent for placement (its radius, shared/catchup.ts CELL_RADIUS: no runtime import here). */
+const CELL_EDGE = 14;
+/** The kerb: the asphalt's outer band this wide. A ground cell sits on it or further out (in the dirt). */
+export const CELL_KERB = 8;
 
 /** A piece of one centerline segment that is either all ground or all gap. */
 interface Piece { seg: number; s0: number; s1: number; ground: boolean; quad: Vec[]; cx: number; cy: number; rad: number }
@@ -451,6 +483,9 @@ function quadsOverlap(a: Vec[], b: Vec[]): boolean {
  * - Sections whose corridors (gaps included) overlap, e.g. at a crossing, are more than
  *   2 * LOCAL_WINDOW + SECTION_INDEX_MARGIN segment indices apart, so queryTrackNear around a
  *   car's hint never sees the other road.
+ * - Cells (M4-CELLS) lie inside the walls and outside the start zone; a ground cell on the kerb or
+ *   in the dirt, not in a gap or over a hole. Whether an air cell can be reached from a jump is a
+ *   simulation: validateCells in shared/weapons.ts.
  * The run-up check (every jump can be made from its recovery point) is validateRunUps in
  * shared/weapons.ts.
  */
@@ -478,6 +513,19 @@ export function validateTrack(track: Track): string[] {
     if (Math.abs(h.lat) + h.r > track.wall) errors.push(`hole at s=${f1(h.s)}: reaches past the wall`);
     zone(`hole at s=${f1(h.s)}`, h.s - h.r, h.s + h.r);
     if (gapAt(track, h.s)) errors.push(`hole at s=${f1(h.s)}: inside a gap`);
+  }
+  for (const c of track.cells) {
+    const at = `${c.air ? "air" : "ground"} cell at s=${f1(c.s)}`;
+    zone(at, c.s - CELL_EDGE, c.s + CELL_EDGE);
+    if (Math.abs(c.lat) + CELL_EDGE > track.wall) errors.push(`${at}: reaches past the wall`);
+    if (!c.air) {
+      // A little hard to reach: on the kerb (the asphalt's outer CELL_KERB units) or in the dirt.
+      if (Math.abs(c.lat) < track.def.halfWidth - CELL_KERB) errors.push(`${at}: lat ${f1(c.lat)} is on the open road (a ground cell sits on the kerb, |lat| >= ${track.def.halfWidth - CELL_KERB}, or in the dirt)`);
+      if (gapAt(track, c.s)) errors.push(`${at}: in a gap (no ground under it)`);
+      if (track.holes.some((h) => Math.hypot(h.x - c.x, h.y - c.y) < h.r + CELL_EDGE && Math.min(Math.abs(h.s - c.s), L - Math.abs(h.s - c.s)) < h.r + track.wall)) {
+        errors.push(`${at}: over a hole`);
+      }
+    }
   }
   for (const r of track.recovery) {
     const p = pointAt(track, r);

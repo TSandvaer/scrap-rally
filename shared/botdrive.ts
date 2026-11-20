@@ -16,6 +16,10 @@
 // to its racing line. Bounded: a tuck or a pass that takes too long is given up and the bot rests
 // on its own line for a while, so two bots never fight side by side for ever; a lane with a mine
 // ahead is never taken. Easy bots keep their lane.
+//
+// Lightning cells (M4-CELLS, PLAN-M4 2.5): a Normal bot takes a cell that is there and within
+// CELL_LANE of its lane: a ground cell when no ramp or hole is near, an air cell over the jump it
+// is lining up for. Easy bots ignore them.
 
 import { CARS, DEFAULT_CAR, type CarType } from "./cars";
 import { angleDiff, CAR_WIDTH, clamp, DT, speedOf, type CarState, type CarStats } from "./physics";
@@ -103,6 +107,9 @@ const WAKE_PASS_MAX = 240; // a pass not done by then is given up (4 s)
 const WAKE_REST = 240; // after giving up: no new tuck for this long (4 s), on the racing line
 const WAKE_MINE_LOOK = 300; // a mine this far ahead ...
 const WAKE_MINE_CLEAR = 28; // ... and this close to a wake lane rules the lane out (car + mine radii + margin)
+/** Cells (M4-CELLS): a Normal bot goes for one within CELL_LANE of its lane, CELL_LOOK ahead at most. */
+const CELL_LANE = 30;
+const CELL_LOOK = 320;
 // No ramming (Normal): a car this far ahead at most (centre to centre; nose to tail is 31) and
 // less than this far across (side by side the capsules touch at 16) that the bot is closing on
 // makes it lift. The slipstream makes a follower faster than the car it follows, so without this
@@ -120,6 +127,10 @@ export interface BotView {
   others: readonly BotOther[]; // the other cars (the rivet gun, the slipstream)
   carType?: CarType; // the car type it drives (M4-CARS); absent = the Sport
   mines?: readonly BotMine[]; // the mines on the track (the slipstream lanes avoid them)
+  // The lightning cells (M4-CELLS): the race tick each comes back (track.cells order, 0 = there)
+  // and the race tick now. Absent: no cells.
+  cells?: readonly number[];
+  rt?: number;
 }
 
 /** A bot's settings (by seat) and the state it keeps between steps. */
@@ -359,6 +370,31 @@ function wakeLane(
   return { lane, coast: false };
 }
 
+/**
+ * The lane to a cell worth taking, or null: the nearest cell ahead (CELL_LOOK at most) that is there
+ * at the race tick and within CELL_LANE of `lane`. On a ramp approach (toLip >= 0) only an air cell
+ * past that lip (the jump it is lining up for); otherwise only a ground cell. max: the furthest a
+ * lane may lie from the centerline (the car's centre gets within reach of a kerb cell from there).
+ */
+function cellLane(view: BotView, s: number, lane: number, toLip: number, max: number): number | null {
+  const cells = view.track.cells, back = view.cells!;
+  const rt = view.rt ?? 0;
+  let best: number | null = null, bestD = Infinity;
+  for (let i = 0; i < cells.length; i++) {
+    const c = cells[i];
+    if (!(back[i] === 0 || rt >= (back[i] ?? 0))) continue;
+    if (Math.abs(c.lat - lane) > CELL_LANE) continue;
+    const d = ahead(view.track, s, c.s);
+    if (d > CELL_LOOK + (c.air ? 400 : 0) || d < 10) continue;
+    if (toLip >= 0 ? !c.air || d < toLip : c.air) continue;
+    if (d < bestD) {
+      best = clamp(c.lat, -max, max);
+      bestD = d;
+    }
+  }
+  return best;
+}
+
 /** Is a solid car right ahead of the bot on its line (BLOCK_AHEAD, BLOCK_ACROSS) and the bot closing on it? */
 function closingOnCar(view: BotView, c: CarState, dir: number): boolean {
   const ux = Math.cos(dir), uy = Math.sin(dir);
@@ -420,6 +456,15 @@ export function botControls(view: BotView, mem: BotMem): BotControls {
       coast = w.coast;
     }
   } else mem.wake = null;
+  // A cell close to its lane (Normal): steer to it; it beats the slipstream.
+  if (!easy && view.raceOn && view.cells && !hole.holes) {
+    const cl = cellLane(view, q.s, lane, ramp ? ramp.toLip : -1, track.def.halfWidth - CAR_WIDTH / 2 - 2);
+    if (cl !== null) {
+      lane = cl;
+      coast = false;
+      mem.wake = null;
+    }
+  }
   let aim = q.s + look;
   if (ramp && ramp.toLip < RAMP_STRAIGHTEN) aim = q.s + ramp.toLip + 180;
   const t = pointAt(track, aim);

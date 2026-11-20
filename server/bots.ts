@@ -66,7 +66,8 @@ export const botTiming: { samples: number[] | null } = { samples: null };
 /**
  * The bot's command for this tick, from the start-of-tick poses of every car in the race.
  * racing: inputs apply (the race phase, not paused). mines: the mines on the track (the
- * slipstream lanes avoid them). minePress: drop a mine this tick.
+ * slipstream lanes avoid them). cells, rt: the lightning cells' state and the race tick (M4-CELLS).
+ * minePress: drop a mine this tick.
  */
 export function botStep(
   p: Fighter & { stats: CarStats; bot: BotSeat; carType: CarType },
@@ -74,6 +75,8 @@ export function botStep(
   track: Track,
   racing: boolean,
   mines: readonly BotMine[] = [],
+  cells?: readonly number[],
+  rt = 0,
 ): { cmd: Command; minePress: boolean } {
   const t0 = botTiming.samples ? performance.now() : 0;
   const seat = p.bot;
@@ -83,7 +86,7 @@ export function botStep(
   if (car && (seat.mem.weapons || seat.mem.useWake) && car.air === 0 && car.fall === 0 && car.wreck === 0) {
     for (const q of racers) if (q !== p && q.car) others.push({ x: q.car.x, y: q.car.y, solid: solid(q), id: q.id, vx: q.car.vx, vy: q.car.vy });
   }
-  const ctl = botControls({ car, track, stats: p.stats, raceOn: racing, raceSteps: seat.steps, others, carType: p.carType, mines }, seat.mem);
+  const ctl = botControls({ car, track, stats: p.stats, raceOn: racing, raceSteps: seat.steps, others, carType: p.carType, mines, cells, rt }, seat.mem);
   const out = { cmd: { throttle: ctl.throttle, steer: ctl.steer, buttons: ctl.fire ? BTN_RIVET : 0 }, minePress: ctl.mine };
   if (botTiming.samples) botTiming.samples.push(performance.now() - t0);
   return out;
