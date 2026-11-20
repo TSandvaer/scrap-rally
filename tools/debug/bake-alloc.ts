@@ -147,10 +147,12 @@ async function measure(root: string, label: string): Promise<void> {
       // A race's frame: the pack one behind the other, the last two turned against their way
       // (they slide: tyre marks), rivets flying, mines lying, a mine going off every 30 frames.
       const r = new Renderer(fakeCanvas(), track);
-      // What main.ts tells the actors of the own car before each frame (a build that is told): car 0, driving straight.
-      const ownSlide = ((await load("client/gfx/actors.ts")) as { ownSlide?: (car: unknown) => void }).ownSlide ?? null;
-      const own = { vx: 0, vy: 0, h: 0 };
+      // What main.ts tells the actors before each frame (a build that is told): car 0 as the own car, driving
+      // straight, nothing to correct, touching nobody; the others where they are drawn.
+      const driving = ((await load("client/gfx/actors.ts")) as { driving?: (car: unknown, smooth: unknown, contact: unknown, others: unknown) => void }).driving ?? null;
+      const own = { vx: 0, vy: 0, h: 0 }, smooth = { x: 0, y: 0 }, contact = { lastContact: -Infinity };
       const cars = COLORS.map((color, i) => ({ id: `c${i}`, x: 0, y: 0, h: 0, color, name: `car ${i}`, me: i === 0, wreck: false, ghost: false, hp: i === 3 ? 0.3 : 1 }));
+      const others = cars.slice(1).map((c) => ({ id: c.id, x: 0, y: 0, h: 0 }));
       const fx = {
         shots: [0, 1, 2, 3].map(() => ({ x: 0, y: 0, vx: 300, vy: 40 })),
         mines: [0, 1, 2].map((i) => ({ x: 0, y: 0, armed: i > 0 })),
@@ -192,11 +194,16 @@ async function measure(root: string, label: string): Promise<void> {
           times[0] = 10000 + frameNo * DT;
           if (PIN) pinned = times[0];
           r.follow(xs[k], ys[k], DT, false, "c0");
-          if (ownSlide) {
+          if (driving) {
             own.h = hs[k];
             own.vx = Math.cos(own.h) * SPEED;
             own.vy = Math.sin(own.h) * SPEED;
-            ownSlide(own);
+            for (let c = 1; c < cars.length; c++) {
+              others[c - 1].x = cars[c].x;
+              others[c - 1].y = cars[c].y;
+              others[c - 1].h = cars[c].h;
+            }
+            driving(own, smooth, contact, others);
           }
           r.frame(cars, fx, null, times[0]);
           pinned = -1;

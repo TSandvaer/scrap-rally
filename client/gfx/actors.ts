@@ -70,16 +70,29 @@ const RANDOM = 65536;
 // wheels were at the stamp before. (shared/physics.ts, full lock on tarmac: from top speed a
 // car slides at up to 156 and is past 105 after a tenth of a second; from 255 units/s it
 // peaks at 110; from 230 and below it never gets there.)
-// How fast a car slides is read off its steps on screen, but for the own car in a race: its
-// steps on screen have the corrections in them. When a snapshot puts the predicted car
-// elsewhere (a mine spun it round a moment ago, as the server knows and the prediction did
-// not), the car is not put there at once but drawn sliding there over a few frames
-// (client/game.ts, smooth). That is no slide of the car's, and on a slow link it is a long
-// one. So main.ts tells how the predicted car itself slides (ownSlide); the marks still lie
-// where its wheels are drawn. (tools/debug/skid-lag.ts counts the stamps on a slow link.)
+// How fast a car slides is read off its steps on screen, sideways to its heading. In a race
+// the steps on screen are not all a car's driving, the less so the slower the link, and
+// main.ts tells what it knows besides (driving), before each frame:
+// - Another player's car near the own one is drawn part of the way toward where the
+//   prediction has it bumped (client/contact.ts, blend), and jostles sideways there. Its
+//   slide is read off its steps where the server's snapshots have it; the marks still lie
+//   where its wheels are drawn.
+// - The own car is the predicted one. When a snapshot puts it elsewhere (a mine spun it round
+//   a moment ago, as the server knows and the prediction did not), it is not put there at once
+//   but drawn sliding there over a few frames (client/game.ts, smooth). And touching another
+//   car it is pushed about by a prediction of that car. So a frame marks nothing for the own
+//   car while more than CORRECTING units of a correction are left to work off, nor unless the
+//   predicted car itself slides at SLIDES or more (its velocity across its heading), nor within
+//   TOUCHING ms of its last predicted touch. Three vetoes on its steps on screen: it is never
+//   marked where it would not have been without them.
+// A frame that is told nothing (the preview, a benchmark) reads every car off the screen.
+// (tools/debug/skid-lag.ts counts the stamps on a slow link.)
 const SKID = 105;
 const SKID_EVERY = 2;
 const SKID_GAP = 4; // frames without a slide after which the next mark starts afresh
+const CORRECTING = 1.2; // world units of a correction left: a step works off 38 % of it, here 27 units/s
+const SLIDES = 0.6 * SKID;
+const TOUCHING = 100; // ms
 const AXLE = 9; // the rear wheels: this far behind the car's middle (world units) ...
 const WHEEL = 6; // ... and to either side of it
 const BLASTS = 32; // mine blasts remembered as having left their scorch
@@ -92,7 +105,7 @@ const QUIET = 300;
 
 // Numbers that are not whole go from one function here to the next through this array, not as
 // arguments or results: handed over in a call they are boxed (16 bytes each, in Node).
-const F = new Float64Array(12);
+const F = new Float64Array(14);
 const DT = 0; // this frame's step, seconds
 const NOW = 1; // this frame's time, ms
 const QX = 2; // nearTrack: the point ...
@@ -104,17 +117,24 @@ const LVX = 7; // ... and how far it came since the frame before
 const LVY = 8;
 const PG = 9; // place(): a car's step over the ground on the axis, view pixels ...
 const PD = 10; // ... and its true place from the followed car's
-const OWN = 11; // the own car's speed sideways as told for this frame (ownSlide), units/s; NaN = not told
+const OWN = 11; // the predicted own car's speed sideways as told for this frame (driving), units/s; NaN = not told ...
+const LEFT = 12; // ... how much of a correction is left to work off on screen, world units ...
+const TOUCH = 13; // ... and when the predicted car last touched another car (ms, the frames' clock)
 F[OWN] = NaN;
+let snaps: readonly DrawPose[] | null = null; // the other cars where the snapshots have them, as told for this frame
 
 /**
- * The own car's slide, for its tyre marks: main.ts hands over the predicted car (client/game.ts)
- * before each frame, and how fast that slides sideways is its velocity across its heading. A
- * frame that was told nothing (null, or no call: the preview, a benchmark) reads the own
- * car's slide off its steps on screen, like any other car's.
+ * What main.ts knows of the cars' driving besides their poses on screen, told before each
+ * frame of a race, for the tyre marks: the predicted own car, the correction still to be
+ * worked off on screen and the contact prediction (client/game.ts: car, smooth, contact), and
+ * the other cars where the server's snapshots have them (game.otherPoses()). A frame that is
+ * told nothing reads every car's slide off its steps on screen.
  */
-export function ownSlide(car: { vx: number; vy: number; h: number } | null): void {
-  F[OWN] = car ? car.vy * Math.cos(car.h) - car.vx * Math.sin(car.h) : NaN;
+export function driving(own: { vx: number; vy: number; h: number } | null, smooth: { x: number; y: number }, contact: { lastContact: number }, others: readonly DrawPose[]): void {
+  F[OWN] = own ? own.vy * Math.cos(own.h) - own.vx * Math.sin(own.h) : NaN;
+  F[LEFT] = Math.sqrt(smooth.x * smooth.x + smooth.y * smooth.y);
+  F[TOUCH] = contact.lastContact;
+  snaps = others;
 }
 
 // ---- Whole pixels ---------------------------------------------------------------------
@@ -183,6 +203,9 @@ export class Actors {
   private readonly owed = new Float32Array(SLOTS); // distance driven off the tarmac since its last speck
   private readonly skidAt = new Int32Array(SLOTS); // the frame its rear wheels were last noted in a slide (0 = not) ...
   private readonly wheels = new Float64Array(SLOTS * 4); // ... and where they were: left x, y, right x, y
+  private readonly snapX = new Float64Array(SLOTS); // where the snapshots had it (driving) ...
+  private readonly snapY = new Float64Array(SLOTS);
+  private readonly snapAt = new Int32Array(SLOTS); // ... in this frame (0 = never told)
   // The mine blasts that have left their scorch, by their place (a blast keeps it for life).
   private readonly blastX = new Float64Array(BLASTS).fill(NaN);
   private readonly blastY = new Float64Array(BLASTS).fill(NaN);
@@ -334,6 +357,7 @@ export class Actors {
     ctx.globalAlpha = 1;
     for (let j = 0; j < flying; j++) this.car(cars[order[j]], order[j]);
     F[OWN] = NaN; // told for this frame only
+    snaps = null;
   }
 
   /** A mine blast, in view or not: the first time it is seen it leaves its scorch on the track. */
@@ -371,6 +395,7 @@ export class Actors {
     this.seg[s] = -1;
     this.owed[s] = 0;
     this.skidAt[s] = 0;
+    this.snapAt[s] = 0;
     this.rides[s * 2] = this.rides[s * 2 + 1] = 0;
     return s;
   }
@@ -425,6 +450,21 @@ export class Actors {
     this.cell[i] = cell;
     if (kind !== FALLING) this.lastCell[s] = cell;
 
+    // Another player's car where the snapshots have it, if told (driving): its step sideways
+    // there since the frame before (NaN = not told; none on the first frame it is told of).
+    let driven = NaN;
+    if (!c.me && snaps) {
+      for (let k = 0; k < snaps.length; k++) {
+        const t = snaps[k];
+        if (t.id !== c.id) continue;
+        driven = this.snapAt[s] === this.frameNo - 1 ? (t.y - this.snapY[s]) * Math.cos(t.h) - (t.x - this.snapX[s]) * Math.sin(t.h) : 0;
+        this.snapX[s] = t.x;
+        this.snapY[s] = t.y;
+        this.snapAt[s] = this.frameNo;
+        break;
+      }
+    }
+
     // Dust. Only for a car that was drawn in the frame before: its speed is the way it came.
     this.seen[s] = this.frameNo;
     if (known && dt > 0 && kind === GROUND && !c.wreck) {
@@ -435,10 +475,12 @@ export class Actors {
         // Tyre marks. It cannot slide sideways faster than it moves: most frames stop at the first test.
         if (moved > SKID * dt) {
           const cos = Math.cos(c.h), sin = Math.sin(c.h);
-          // This frame's step sideways: on screen, or for the own car what it was told to be (ownSlide).
+          // This frame's step sideways: on screen, or where the snapshots have the car.
+          const side = driven === driven ? driven : my * cos - mx * sin;
+          // The own car as told: not in a correction, not touching, and only if the predicted car slides.
           const own = F[OWN];
-          const side = c.me && own === own ? own * dt : my * cos - mx * sin;
-          if (side > SKID * dt || side < -SKID * dt) {
+          const mine = !c.me || own !== own || (F[LEFT] <= CORRECTING && (own >= SLIDES || own <= -SLIDES) && F[NOW] - F[TOUCH] > TOUCHING);
+          if (mine && (side > SKID * dt || side < -SKID * dt)) {
             const w = this.wheels, j = s * 4;
             const lx = c.x - cos * AXLE + sin * WHEEL, ly = c.y - sin * AXLE - cos * WHEEL;
             const rx = c.x - cos * AXLE - sin * WHEEL, ry = c.y - sin * AXLE + cos * WHEEL;

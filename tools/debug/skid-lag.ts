@@ -16,8 +16,8 @@
 // process, on a port of its own), the real client netcode (client/game.ts over client/net.ts
 // with its lag simulation) and the real Renderer on a canvas that draws nothing. The frame
 // loop is client/main.ts's: fixed steps at 60 Hz, then a draw with the own car's pose between
-// the last two steps, and before it what main.ts tells the actors of the own car (ownSlide,
-// in a build that has it).
+// the last two steps, and before it what main.ts tells the actors of the cars' driving
+// (driving, in a build that has it).
 //
 // The drive is the same every time, and it reads the predicted car as a player reads the
 // screen: flat out, steering at a point ahead on the centreline; every `flicks` units a flick
@@ -38,7 +38,7 @@
 // - stamps, the onlooker's view: those the watching view made for the same car;
 // - own, with no slide: own stamps made in a frame in which the predicted car's speed sideways
 //   (shared/physics.ts: its velocity across its heading) was under 60 % of the threshold. A
-//   mark with no slide under it. (A build that marks by that speed has none by its making.)
+//   mark with no slide under it. (A build that asks for that speed has none by its making.)
 // - the frames in which the own car moved sideways on screen faster than the threshold, and
 //   those in which the predicted car slid that fast;
 // - corrections: acknowledged inputs at which the server's car was not where the prediction
@@ -133,8 +133,9 @@ async function runOne(job: Job): Promise<Result> {
   const { angleDiff } = await load(job.root, "shared/physics.ts");
   const { spinOut } = await load(HERE, "shared/weapons.ts");
   const markStats = world.markStats as { skids: number };
-  // What main.ts tells the actors of the own car before each frame, in a build that is told.
-  const ownSlide = (actors as { ownSlide?: (car: unknown) => void }).ownSlide ?? null;
+  // What main.ts tells the actors before each frame, in a build that is told (fb0996c: of the own car alone).
+  type Told = { driving?: (car: unknown, smooth: unknown, contact: unknown, others: unknown) => void; ownSlide?: (car: unknown) => void };
+  const { driving = null, ownSlide = null } = actors as Told;
 
   const server = await startServer({ port: 0, vite: false, laps: 99, host: "127.0.0.1" });
   const tokens = new Map<string, string>();
@@ -153,6 +154,7 @@ async function runOne(job: Job): Promise<Result> {
     connectWs: (await load(job.watchRoot, "client/net.ts")).connectWs,
     Renderer: (await load(job.watchRoot, "client/render.ts")).Renderer,
     world: await load(job.watchRoot, "client/gfx/world.ts"),
+    driving: ((await load(job.watchRoot, "client/gfx/actors.ts")) as Told).driving ?? null,
   };
   const watch = new theirs.Game(() => theirs.connectWs(`ws://127.0.0.1:${server.port}/ws`), { get: () => null, set: () => {} });
   watch.on.error = (msg: string) => errors.push(`onlooker: ${msg}`);
@@ -214,7 +216,8 @@ async function runOne(job: Job): Promise<Result> {
     } else hadTarget = false;
     const before = markStats.skids;
     const now = performance.now();
-    if (ownSlide) ownSlide(car);
+    if (driving) driving(car, game.smooth, game.contact, game.otherPoses());
+    else if (ownSlide) ownSlide(car);
     renderer.frame(cars, fx, null, now);
     const made = markStats.skids - before;
     if (!own || !car) {
@@ -268,6 +271,7 @@ async function runOne(job: Job): Promise<Result> {
       watchHad = true;
     } else watchHad = false;
     const before = theirs.world.markStats.skids;
+    if (theirs.driving) theirs.driving(watch.car, watch.smooth, watch.contact, others);
     watchRenderer.frame(cars, fx, null, now); // the frame's own time: the other view's drawing is not on this one's clock
     if (measured) res.seen += theirs.world.markStats.skids - before;
   };
