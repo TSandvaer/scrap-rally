@@ -327,6 +327,8 @@ PLAN-M4 APPROVED 2026-11-20 (Opus draft, Fable advisor 'sound with changes', 13 
 WAVE 1 in flight: M4-BOTS 123jpnbffd8 ctx_2c145cced1d2 (Opus, ~/orca/workspaces/scrap-rally/m4-bots, TSandvaer/m4-bots, :3006) and M4-LOOKS
 123jpnbffd9 ctx_52d5f91b4d80 (Fable, ~/orca/workspaces/scrap-rally/m4-looks, TSandvaer/m4-looks, :3008; contact sheet via `ask` -> show the user).
 M4-BOTS asked for client/menu.ts (disable Make host on bot rows, bot Remove wording): granted (no other owner).
+M4-LOOKS contact sheet: user GO (popup) on Sport/Racer/Truck looks. Worker's design: state painted into each car's sheet (worst case
+11,173,888 B) accepted on condition the mid-race repaint causes no hitch (measure; spread/pre-build if > ~2 ms).
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
