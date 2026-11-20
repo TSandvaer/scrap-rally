@@ -316,8 +316,14 @@ export function pointAt(track: Track, s: number): { x: number; y: number; h: num
   const L = track.length;
   s = ((s % L) + L) % L;
   const { pts, cum } = track;
-  let i = 0;
-  while (i < pts.length - 1 && cum[i + 1] <= s) i++;
+  // The last sample i (at most n - 1) with cum[i] <= s: a binary search over cum (non-decreasing,
+  // cum[0] = 0), the same sample a scan from 0 finds (M4-BOTS: bots call this every tick).
+  let i = 0, hi = pts.length - 1;
+  while (i < hi) {
+    const mid = (i + hi + 1) >> 1;
+    if (cum[mid] <= s) i = mid;
+    else hi = mid - 1;
+  }
   const a = pts[i], b = pts[(i + 1) % pts.length];
   const t = (s - cum[i]) / (cum[i + 1] - cum[i] || 1);
   return { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t, h: Math.atan2(b.y - a.y, b.x - a.x), seg: i };
