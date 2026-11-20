@@ -84,3 +84,4 @@
 - 2026-11-19 — GFX-2a (user, popups): car sprite design approved from the contact sheets (128 headings, all six colours, battered + burnt looks); a mine blast shakes the screen only when it hits your own car (4 px), never for other cars' blasts.
 - 2026-11-19 — GFX-2a+2b taste gate (user, laptop only): HUD, minimap, cars and effects look good; the own car jitters ~1 px against the road while driving -> fix before merge. Phone not tested yet.
 - 2026-11-19 — GFX-2a re-test (user, popup): own car steady after the jitter fix (ffb4323); cars, effects and HUD (new 0 and V) approved.
+- 2026-11-20 — GFX-4 taste gate (user, popup): mine scorches and tyre marks approved.
