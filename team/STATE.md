@@ -313,6 +313,10 @@ MINES-1 done: cfc7cb0 (sim 532/532, bots 100/100; blink 0 B/frame; 40 mines +0.0
 Taste copy mines1-taste (detached cfc7cb0) on :3009, node pid 28890 (gfx4-taste removed, old pid 12549 killed).
 MINES-1 MERGED 2026-11-20: review APPROVE (Opus) + user taste APPROVE; main 797d290 (check clean, sim 532/532, bots 100/100, build ok);
 ticket ready for qa test; workers released, mines1 workspace + branch removed. Not pushed (next deploy). QA6 live still running.
+QA6 LIVE PASS 2026-11-20 (tmp/qa6-graphics-live-report.md): all 6 tickets PASS, no console errors; not checked live: wrecked/
+burnt looks, 128 headings, smoke/dust, scorch clearing at a new race. Tickets 123jpnbfayd, GFX-1/2a/2b/3/4 commented + complete;
+QA worker released. Graphics round DONE and LIVE (4819a45). Local main a8182b8 = live + MINES-1 (797d290), not pushed.
+NOTHING IN FLIGHT. Taste copy mines1-taste still on :3009.
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
