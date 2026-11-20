@@ -47,7 +47,7 @@ export class BotDriver {
     else if (raceOn) this.raceSteps++;
     const grounded = !!car && car.air === 0 && car.fall === 0 && car.wreck === 0;
     const out = botControls(
-      { car, track: g.track, stats: g.stats, raceOn, raceSteps: this.raceSteps, others: grounded && this.mem.weapons ? this.others() : [] },
+      { car, track: g.track, stats: g.stats, raceOn, raceSteps: this.raceSteps, others: grounded && this.mem.weapons ? this.others() : [], carType: g.carType },
       this.mem,
     );
     return car ? out : NO_CONTROLS;

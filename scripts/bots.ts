@@ -405,7 +405,7 @@ async function runGame(ctx: Ctx, bots: Bot[]): Promise<void> {
   // Track sanity: every shipped track passes the layout check and the run-up check, with no
   // upgrades and with max upgrades (faster take-offs, longer jumps). minSelfClearance no
   // longer applies: Overpass Knot crosses itself by design.
-  const maxUp = statsFor({ engine: 3, tyres: 3, welder: 3 });
+  const maxUp = statsFor("sport", { engine: 3, tyres: 3, welder: 3 });
   const shipped = trackList().filter((e) => e.id !== TEST_TRACK_ID && e.id !== JUMPS_TRACK_ID);
   const trackErrs = shipped.flatMap((e) => {
     const t = trackById(e.id);

@@ -589,7 +589,7 @@ function garage(): void {
   check("garage closed during a race", sim.room.buy(a, "mines") === "The garage is closed during a race");
   check(
     "upgrades change the stats the car steps with: engine raises accel, not top speed",
-    a.stats.accel === statsFor(a.levels).accel && a.stats.accel > BASE_STATS.accel * 1.069 && a.stats.topSpeed === BASE_STATS.topSpeed,
+    a.stats.accel === statsFor("sport", a.levels).accel && a.stats.accel > BASE_STATS.accel * 1.069 && a.stats.topSpeed === BASE_STATS.topSpeed,
     `accel=${a.stats.accel.toFixed(1)} topSpeed=${a.stats.topSpeed}`,
   );
 
@@ -1070,11 +1070,11 @@ function armDelay(): void {
 // full throttle from standstill, same terminal speed at every level, L3 gets there sooner.
 function engine(): void {
   const ok = [0, 1, 2, 3].every((e) => {
-    const s = statsFor({ engine: e, tyres: 0, welder: 0 });
+    const s = statsFor("sport", { engine: e, tyres: 0, welder: 0 });
     return s.topSpeed === BASE_STATS.topSpeed && Math.abs(s.accel - BASE_STATS.accel * (1 + 0.07 * e)) < 1e-9;
   });
   check("engine L0-L3: accel +7% per level, top speed always the base value", ok);
-  const t2 = statsFor({ engine: 3, tyres: 2, welder: 1 });
+  const t2 = statsFor("sport", { engine: 3, tyres: 2, welder: 1 });
   check("tyres still scale grip and turn", Math.abs(t2.grip - BASE_STATS.grip * 1.2) < 1e-9 && Math.abs(t2.turn - BASE_STATS.turn * 1.08) < 1e-9);
 
   // A long closed loop whose bottom edge is a 12 000 u straight (collinear control points keep
@@ -1089,7 +1089,7 @@ function engine(): void {
   const flat = buildTrack(straight);
   const SECONDS = 8;
   const drive = (level: number) => {
-    const stats = statsFor({ engine: level, tyres: 0, welder: 0 });
+    const stats = statsFor("sport", { engine: level, tyres: 0, welder: 0 });
     const c: CarState = { x: 1500, y: 0, h: 0, vx: 0, vy: 0, seg: 0, wreck: 0, air: 0, fall: 0 };
     let t300 = -1;
     for (let i = 1; i <= SECONDS * TICK_HZ; i++) {
@@ -2131,7 +2131,7 @@ import { gapAt as gapAtT4, START_ZONE, startStraightEnd } from "../shared/track"
 import { CAR_WIDTH } from "../shared/physics";
 import type { Pose } from "../client/game";
 
-const MAX_UPGRADES = statsFor({ engine: 3, tyres: 3, welder: 3 });
+const MAX_UPGRADES = statsFor("sport", { engine: 3, tyres: 3, welder: 3 });
 /** The new tracks: the shipped ones with features. */
 const T4_TRACKS = ["crusher-run", "overpass-knot"];
 

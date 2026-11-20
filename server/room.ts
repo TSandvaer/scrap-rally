@@ -46,7 +46,8 @@ import { gridSlot, type Track } from "../shared/track";
 import { DEFAULT_TRACK_ID, isTrackId, trackById } from "../shared/tracks";
 import { BTN_RIVET, CAR_HP, DEFAULT_MINE_MODE, GHOST_TICKS, isMineMode, mineCount, NO_COMMAND, stepRaceCar, WEAPONS_ARM_MS, type Command, type MineMode } from "../shared/weapons";
 import { isBotLevel, type BotLevel } from "../shared/botdrive";
-import { BOT_SLOTS, botName, botStep, maxBotsFromEnv, newBotSeat, resetBotSeat, shopBot, type BotSeat } from "./bots";
+import { DEFAULT_CAR, isCarType, type CarType } from "../shared/cars";
+import { BOT_SLOTS, botCar, botName, botStep, maxBotsFromEnv, newBotSeat, resetBotSeat, shopBot, type BotSeat } from "./bots";
 import { Combat, solid, type Fighter } from "./combat";
 import { advance, compareStanding, newProgress, raceDistance, type Progress } from "./race";
 
@@ -94,6 +95,10 @@ export interface Player extends Fighter {
   // wreck bonus, the garage open. Reset by clearRace and beginRace.
   retired: boolean;
   progress: Progress | null;
+  // The car type picked in the lobby (M4-CARS, shared/cars.ts): kept across races and reconnects,
+  // changed only in the lobby (setCar), so a race runs from start to end with the one it began
+  // with; beginRace sets `stats` from it and the levels.
+  carType: CarType;
   stats: CarStats;
   wallet: Wallet; // scrap, upgrade levels, ammo: kept across races and reconnects
   queue: QueuedInput[];
@@ -318,6 +323,7 @@ export class Room {
     while (taken.has(slot) && slot < BOT_SLOTS - 1) slot++;
     const b = this.newPlayer(botName(slot), now);
     b.bot = newBotSeat(level as BotLevel, slot, ++this.botsAdded);
+    b.carType = botCar(slot); // round-robin by seat; the host can change it (setCar)
     b.ready = true;
     shopBot(b.wallet, b.bot.level);
     this.players.set(b.id, b);
@@ -349,6 +355,7 @@ export class Room {
       wallet,
       ammo: wallet.ammo,
       levels: wallet.levels,
+      carType: DEFAULT_CAR,
       stats: { ...BASE_STATS },
       queue: [],
       lastQueuedSeq: -1,
@@ -518,7 +525,7 @@ export class Room {
       q.hp = q.maxHp = this.hp;
       q.ghost = 0;
       q.cooldown = 0;
-      q.stats = statsFor(q.wallet.levels);
+      q.stats = statsFor(q.carType, q.wallet.levels); // the car is locked from here to the lobby
       clampAmmo(q.wallet); // e.g. an old wallet over the mine cap: nobody races with more
       this.startAmmo.set(q.id, { ...q.wallet.ammo });
       resetQueue(q);
@@ -874,6 +881,29 @@ export class Room {
     return null;
   }
 
+  /**
+   * Lobby only (M4-CARS): pick the car type to race with, free and any number of times; with
+   * `botId` the host picks that bot's car. The race locks it: beginRace sets the stats from it
+   * and nothing changes it again until the lobby. The player gets a garage message (their own
+   * prediction's stats) and everyone the room message (what to draw). The same car: nothing.
+   */
+  setCar(p: Player, car: unknown, botId?: unknown): string | null {
+    if (this.phase !== "lobby") return "The car can only be changed in the lobby";
+    if (!isCarType(car)) return "Unknown car";
+    let q = p;
+    if (botId !== undefined) {
+      if (p.id !== this.hostId) return "Only the host can pick a bot's car";
+      const b = typeof botId === "string" ? this.players.get(botId) : undefined;
+      if (!b?.bot) return "That is not a bot in this room";
+      q = b;
+    }
+    if (q.carType === car) return null;
+    q.carType = car;
+    this.sendGarage(q);
+    this.broadcastRoom();
+    return null;
+  }
+
   /** Lobby ready toggle. Ignored from the host, outside the lobby and for non-booleans. */
   setReady(p: Player, ready: unknown): void {
     if (this.phase !== "lobby" || p.id === this.hostId || typeof ready !== "boolean" || p.ready === ready) return;
@@ -1067,7 +1097,7 @@ export class Room {
   }
 
   private sendGarage(p: Player): void {
-    p.session?.conn.send({ t: "garage", scrap: p.wallet.scrap, levels: { ...p.wallet.levels } });
+    p.session?.conn.send({ t: "garage", scrap: p.wallet.scrap, levels: { ...p.wallet.levels }, car: p.carType });
   }
 
   private sendSnapshots(tick: number, now: number): void {
@@ -1121,6 +1151,7 @@ export class Room {
         connected: !!p.session || !!p.bot,
         ready: p.ready && p.id !== this.hostId, // a new host's old flag is not shown
         retired: p.retired,
+        car: p.carType,
       };
       if (p.bot) info.bot = p.bot.level;
       return info;
@@ -1291,6 +1322,12 @@ export class Rooms {
       case "mines": {
         if (!session.room || !session.player) return;
         const e = session.room.setMines(session.player, msg.mode, now);
+        if (e) err(e);
+        return;
+      }
+      case "car": {
+        if (!session.room || !session.player) return;
+        const e = session.room.setCar(session.player, msg.id, msg.bot);
         if (e) err(e);
         return;
       }

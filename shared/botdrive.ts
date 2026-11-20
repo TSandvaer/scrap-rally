@@ -10,6 +10,7 @@
 // approach (PLAN-M4 advisor change 3: 0.85 alone tops out near 365 u/s, below what the
 // Overpass Knot crossing needs), takes bends at EASY_CORNER of Normal's speed and never shoots.
 
+import { CARS, DEFAULT_CAR, type CarType } from "./cars";
 import { angleDiff, CAR_WIDTH, clamp, DT, speedOf, type CarState, type CarStats } from "./physics";
 import { LIP_ZONE, pointAt, queryTrackNear, type Ramp, type Track } from "./track";
 import { airTicksFor, MIN_TAKEOFF_SPEED } from "./weapons";
@@ -24,6 +25,21 @@ export function isBotLevel(v: unknown): v is BotLevel {
 /** Easy: throttle cap away from ramps, and the share of Normal's corner speeds. */
 export const EASY_THROTTLE = 0.85;
 export const EASY_CORNER = 0.9;
+
+/**
+ * Corner speeds by car type (M4-CARS): the Sport's bend targets times (grip / Sport grip)^(1/4),
+ * from the type's base grip, not the tyre upgrades (the Sport's bot drives exactly as before
+ * M4-CARS at every level). The shipped tracks never hold any type back in a bend (every type
+ * laps them flat out without touching the dirt), so this is the bot's caution, not a limit: a
+ * looser car is driven more carefully. The square root (PLAN-M4's starting point) put the bot's
+ * Racer ~5 % behind and its Truck ~4 % ahead of the Sport on Rust Bowl; the fourth root keeps
+ * every type within about 3 % on every shipped track (sim-test "cars balance").
+ */
+export const CORNER_SCALE: Record<CarType, number> = {
+  sport: 1,
+  racer: (CARS.racer.base.grip / CARS.sport.base.grip) ** 0.25,
+  truck: (CARS.truck.base.grip / CARS.sport.base.grip) ** 0.25,
+};
 
 /** From this far before a ramp's lip: full throttle, no braking for bends. */
 const RAMP_APPROACH = 650;
@@ -63,6 +79,7 @@ export interface BotView {
   raceOn: boolean; // inputs apply (racing, not paused)
   raceSteps: number; // steps since the race started (counted while raceOn), for the mine timing
   others: readonly BotOther[]; // the other cars (read only for the rivet gun)
+  carType?: CarType; // the car type it drives (M4-CARS); absent = the Sport
 }
 
 /** A bot's settings (by seat) and the state it keeps between steps. */
@@ -254,6 +271,8 @@ export function botControls(view: BotView, mem: BotMem): BotControls {
   const far = pointAt(track, q.s + 20 + Math.max(120, v * 0.9)).h;
   const bend = Math.abs(angleDiff(near, far));
   let target = bend > 1.4 ? 200 : bend > 0.9 ? 260 : bend > 0.5 ? 330 : 1000;
+  const scale = CORNER_SCALE[view.carType ?? DEFAULT_CAR];
+  if (scale !== 1) target *= scale;
   if (easy) target *= EASY_CORNER;
   if (hole.holes) target = Math.min(target, HOLE_SPEED);
   let throttle = v > target + 25 ? -1 : v > target ? 0 : 1;

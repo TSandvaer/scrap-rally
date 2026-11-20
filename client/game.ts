@@ -21,6 +21,7 @@ import {
   type ShotSnap,
 } from "../shared/protocol";
 import type { BotLevel } from "../shared/botdrive";
+import { DEFAULT_CAR, isCarType, type CarType } from "../shared/cars";
 import { statsFor, type Levels } from "../shared/shop";
 import { BUILTIN_SOUND, DEFAULT_SONG_ID, isSongChoice, type RoomSound } from "../shared/sound";
 import { queryTrackNear, type Track } from "../shared/track";
@@ -254,6 +255,8 @@ export class Game {
   // Garage (server-confirmed only: never updated optimistically)
   scrap = 0;
   levels: Levels = { engine: 0, tyres: 0, welder: 0 };
+  /** Our car type (garage message, M4-CARS): the prediction's stats are statsFor(carType, levels). */
+  carType: CarType = DEFAULT_CAR;
   stats: CarStats = { ...BASE_STATS };
   serverAmmo: [number, number] = [0, 0]; // [rivets, mines] as of the last snapshot
 
@@ -390,6 +393,22 @@ export class Game {
   /** Host only, in the lobby (M4-BOTS): add a server-driven bot; a bot leaves through kick. */
   addBot(level: BotLevel): void {
     this.send({ t: "addBot", level });
+  }
+
+  /** In the lobby (M4-CARS): race with this car type from the next race on (free). */
+  pickCar(id: CarType): void {
+    this.send({ t: "car", id });
+  }
+
+  /** Host only, in the lobby: the car type a bot races with. */
+  pickBotCar(botId: string, id: CarType): void {
+    this.send({ t: "car", id, bot: botId });
+  }
+
+  /** A player's car type, as the room message says (the Sport when it says none). */
+  carOf(id: string): CarType {
+    const c = this.player(id)?.car;
+    return isCarType(c) ? c : DEFAULT_CAR;
   }
 
   /** A host-added bot (driven by the server): never the host, always ready. */
@@ -639,7 +658,8 @@ export class Game {
       case "garage":
         this.scrap = msg.scrap;
         this.levels = msg.levels;
-        this.stats = statsFor(msg.levels);
+        this.carType = isCarType(msg.car) ? msg.car : DEFAULT_CAR;
+        this.stats = statsFor(this.carType, msg.levels);
         this.on.garage?.();
         return;
       case "err":

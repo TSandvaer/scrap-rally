@@ -7,6 +7,7 @@
 //  - events (`ev`, `room`, `welcome`, ...): things that must arrive exactly once.
 
 import type { BotLevel } from "./botdrive";
+import type { CarType } from "./cars";
 import type { Levels } from "./shop";
 import type { RoomSound } from "./sound";
 import type { MineMode } from "./weapons";
@@ -73,6 +74,9 @@ export interface PlayerInfo {
   // A bot the host added (M4-BOTS): driven by the server, always ready, never the host. Absent
   // for a human driver.
   bot?: BotLevel;
+  // The car type the player drives (M4-CARS, shared/cars.ts): picked in the lobby, raced with
+  // from the start of a race to its end. Absent from an older server: the Sport.
+  car?: CarType;
 }
 
 /** [seq, throttle, steer, buttons]; buttons as in shared/weapons.ts */
@@ -115,7 +119,11 @@ export type ClientMsg =
   // Host only, lobby only (M4-BOTS): add a server-driven bot ("easy" or "normal"), also while
   // the room is locked. Refused with an err when the room is full or the server runs MAX_BOTS
   // bots already ("Server busy"). A bot leaves through kick (no block).
-  | { t: "addBot"; level: BotLevel };
+  | { t: "addBot"; level: BotLevel }
+  // Lobby only (M4-CARS): pick the car type to race with (shared/cars.ts CarType); free, any
+  // number of times. With `bot` (a bot's player id): the host picks that bot's car. An unknown
+  // type, a race under way, a guest naming a bot or an id that is not a bot is refused with an err.
+  | { t: "car"; id: CarType; bot?: string };
 
 /**
  * One line of room chat. say = a player's message (from = their id); join / leave = a player
@@ -241,7 +249,9 @@ export type ServerMsg =
     }
   | { t: "ev"; tick: number; ev: GameEvent }
   | { t: "results"; rows: ResultRow[] }
-  | { t: "garage"; scrap: number; levels: Levels } // to one player
+  // To one player: their scrap, upgrades and car type (M4-CARS: their own prediction's stats are
+  // statsFor(car, levels), exactly the server's). car absent from an older server: the Sport.
+  | { t: "garage"; scrap: number; levels: Levels; car?: CarType }
   | { t: "chat"; line: ChatLine } // live, to everyone in the room
   | { t: "chatlog"; lines: ChatLine[] } // the room's history, to one player right after every welcome
   | { t: "pong"; c: number; s: number };
