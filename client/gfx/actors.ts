@@ -70,6 +70,13 @@ const RANDOM = 65536;
 // wheels were at the stamp before. (shared/physics.ts, full lock on tarmac: from top speed a
 // car slides at up to 156 and is past 105 after a tenth of a second; from 255 units/s it
 // peaks at 110; from 230 and below it never gets there.)
+// How fast a car slides is read off its steps on screen, but for the own car in a race: its
+// steps on screen have the corrections in them. When a snapshot puts the predicted car
+// elsewhere (a mine spun it round a moment ago, as the server knows and the prediction did
+// not), the car is not put there at once but drawn sliding there over a few frames
+// (client/game.ts, smooth). That is no slide of the car's, and on a slow link it is a long
+// one. So main.ts tells how the predicted car itself slides (ownSlide); the marks still lie
+// where its wheels are drawn. (tools/debug/skid-lag.ts counts the stamps on a slow link.)
 const SKID = 105;
 const SKID_EVERY = 2;
 const SKID_GAP = 4; // frames without a slide after which the next mark starts afresh
@@ -85,7 +92,7 @@ const QUIET = 300;
 
 // Numbers that are not whole go from one function here to the next through this array, not as
 // arguments or results: handed over in a call they are boxed (16 bytes each, in Node).
-const F = new Float64Array(11);
+const F = new Float64Array(12);
 const DT = 0; // this frame's step, seconds
 const NOW = 1; // this frame's time, ms
 const QX = 2; // nearTrack: the point ...
@@ -97,6 +104,18 @@ const LVX = 7; // ... and how far it came since the frame before
 const LVY = 8;
 const PG = 9; // place(): a car's step over the ground on the axis, view pixels ...
 const PD = 10; // ... and its true place from the followed car's
+const OWN = 11; // the own car's speed sideways as told for this frame (ownSlide), units/s; NaN = not told
+F[OWN] = NaN;
+
+/**
+ * The own car's slide, for its tyre marks: main.ts hands over the predicted car (client/game.ts)
+ * before each frame, and how fast that slides sideways is its velocity across its heading. A
+ * frame that was told nothing (null, or no call: the preview, a benchmark) reads the own
+ * car's slide off its steps on screen, like any other car's.
+ */
+export function ownSlide(car: { vx: number; vy: number; h: number } | null): void {
+  F[OWN] = car ? car.vy * Math.cos(car.h) - car.vx * Math.sin(car.h) : NaN;
+}
 
 // ---- Whole pixels ---------------------------------------------------------------------
 //
@@ -314,6 +333,7 @@ export class Actors {
     }
     ctx.globalAlpha = 1;
     for (let j = 0; j < flying; j++) this.car(cars[order[j]], order[j]);
+    F[OWN] = NaN; // told for this frame only
   }
 
   /** A mine blast, in view or not: the first time it is seen it leaves its scorch on the track. */
@@ -415,7 +435,9 @@ export class Actors {
         // Tyre marks. It cannot slide sideways faster than it moves: most frames stop at the first test.
         if (moved > SKID * dt) {
           const cos = Math.cos(c.h), sin = Math.sin(c.h);
-          const side = my * cos - mx * sin; // this frame's step sideways
+          // This frame's step sideways: on screen, or for the own car what it was told to be (ownSlide).
+          const own = F[OWN];
+          const side = c.me && own === own ? own * dt : my * cos - mx * sin;
           if (side > SKID * dt || side < -SKID * dt) {
             const w = this.wheels, j = s * 4;
             const lx = c.x - cos * AXLE + sin * WHEEL, ly = c.y - sin * AXLE - cos * WHEEL;

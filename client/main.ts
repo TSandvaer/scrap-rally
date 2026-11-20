@@ -9,7 +9,7 @@ import { BotDriver } from "../scripts/bot-ai";
 import { AudioEngine, SoundControls } from "./audio";
 import { ChatPanel, fitViewport } from "./chat";
 import { Game, lostMessage, NO_CONTROLS, type Controls, type TokenStore } from "./game";
-import { Effects } from "./gfx/actors";
+import { Effects, ownSlide } from "./gfx/actors";
 import { clearMarks } from "./gfx/world";
 import { Keyboard } from "./input";
 import { JerkMeter } from "./jerk";
@@ -790,6 +790,7 @@ function draw(alpha: number, elapsed: number): void {
     sounds.bump(im.speed, im.x, im.y, renderer.cam);
   }
   const fx = effects.frame(now, game.otherShots(), game.localShots, game.visibleMines(), game.you, own, others);
+  ownSlide(game.car); // the own car's tyre marks: by how the predicted car slides, not by a correction's slide on screen
   renderer.frame(cars, fx, hudView());
 }
 
