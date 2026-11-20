@@ -451,12 +451,12 @@ function catchUp(track: Track, rust: Track): Scene[] {
     ];
   };
   const bendCells = (t: number): CellView[] => [
-    cell(rust, 1130, -kerb, false, 0),
+    cell(rust, 1080, -kerb, false, 0),
     cell(rust, 1230, kerb, false, 0),
     cell(rust, 1310, -kerb, false, 1), // taken
     cell(rust, 1370, kerb, false, 0.05), // about to be back
     cell(rust, 1450, -kerb, false, 0),
-    cell(rust, 1345, 8, true, t % 3 < 2 ? 0 : 1 - ((t % 3) - 2)), // floats over the road
+    cell(rust, 1400, 10, true, t % 3 < 2 ? 0 : 1 - ((t % 3) - 2)), // floats over the road
   ];
 
   return [
