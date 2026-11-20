@@ -7647,7 +7647,524 @@ function botsClient(): void {
   check("bots client: Game.kick removes a bot (the lobby's Remove)", A.game.players.filter((p) => p.bot).map((p) => p.name).join() === "Lugnut (bot)" && room.botCount === 1);
 }
 
-for (const t of [rivets, gating, mines, wrecks, finishing, garage, armDelay, engine, readyCheck, collisions, trackFeatures, roomTrack, jumpsWired, shippedTracks, botDriver, botLaps, mineCap, chatRoom, chatClient, sound, raceSounds, surfaceSounds, audioUnlock, menuHostOnly, menuStop, menuRestart, menuKick, menuLock, menuHandover, menuClient, menuRestartClient, retireRules, retireField, retireRaceEnd, retireGarage, retireRefund, retireOthers, retireNotices, retireClient, pauseRefused, pauseFreeze, pauseResume, pauseHold, pauseAuto, pauseCooldown, pauseGrace, pauseCountdown, pauseControls, pauseClient, musicSwitch, soundMigration, soundLayers, soundServer, soundRandom, soundRoomDrag, soundSliderGrip, soundClient, songs, songPlayer, ghostRivets, minesSetting, minesStay, minesCap, minesFade, minesAtStart, minesCleared, minesPaused, minesClient, botsPointAt, botsAdd, botsKickHost, botsHandover, botsFullRoom, botsSoloStart, botsRace, botsShop, botsTick, botsCpu, botsClient]) {
+// ---- car types (M4-CARS, PLAN-M4.md 2.1, ClickUp 123jpnbffdz, 2026-11-20) --------------------
+
+// This section's imports (hoisted like the ones at the top).
+import { CAR_TYPES, CARS, DEFAULT_CAR, isCarType, type CarType } from "../shared/cars";
+import { CORNER_SCALE, runUpFor } from "../shared/botdrive";
+import { botCar } from "../server/bots";
+
+/** The shipped tracks (trackList() also holds the test tracks earlier sections registered). */
+const CAR_TRACKS = ["rust-bowl", "crusher-run", "overpass-knot"];
+const ALL_LEVELS: { engine: number; tyres: number; welder: number }[] = [];
+for (let e = 0; e <= 3; e++) for (let ty = 0; ty <= 3; ty++) for (let w = 0; w <= 3; w++) ALL_LEVELS.push({ engine: e, tyres: ty, welder: w });
+
+function carsTypes(): void {
+  const table = CAR_TYPES.map((t) => `${t}:${Object.values(CARS[t].base).join("/")}`).join(" ");
+  check(
+    "cars: three types in lobby order with PLAN-M4 2.1's base stats (accel/top/grip/turn/dirt drag/dirt grip); top speed 430 for all",
+    CAR_TYPES.join() === "sport,racer,truck" && DEFAULT_CAR === "sport" &&
+      table === "sport:520/430/7.5/3.3/2.9/0.37 racer:600/430/6/3.45/3.6/0.3 truck:455/430/9/3.1/1.6/0.6",
+    table,
+  );
+  check(
+    "cars: the Sport is the car of before M4-CARS (BASE_STATS, the old off-road multipliers 2.9 / 0.37)",
+    CARS.sport.base === BASE_STATS && JSON.stringify(BASE_STATS) === JSON.stringify({ accel: 520, topSpeed: 430, grip: 7.5, turn: 3.3, dirtDrag: 2.9, dirtGrip: 0.37 }),
+  );
+  check(
+    "cars: isCarType accepts the three ids only",
+    CAR_TYPES.every(isCarType) && ![undefined, null, "", "Sport", "tank", 1, {}].some(isCarType),
+  );
+  check("cars: every type has a name and a one-line feel for its lobby card", CAR_TYPES.every((t) => CARS[t].name.length > 0 && CARS[t].feel.length > 10 && CARS[t].feel.length <= 60), CAR_TYPES.map((t) => `${CARS[t].name}: ${CARS[t].feel}`).join(" | "));
+}
+
+function carsStats(): void {
+  // statsFor(type, levels): today's percentages on the type's base; the dirt multipliers are the type's own.
+  const bad: string[] = [];
+  for (const t of CAR_TYPES) {
+    const b = CARS[t].base;
+    for (const l of ALL_LEVELS) {
+      const s = statsFor(t, l);
+      const want = { accel: b.accel * (1 + 0.07 * l.engine), topSpeed: b.topSpeed, grip: b.grip * (1 + 0.1 * l.tyres), turn: b.turn * (1 + 0.04 * l.tyres), dirtDrag: b.dirtDrag, dirtGrip: b.dirtGrip };
+      if (JSON.stringify(s) !== JSON.stringify(want)) bad.push(`${t} ${JSON.stringify(l)}`);
+    }
+  }
+  check(`cars: statsFor(type, levels) = the type's base with the upgrade percentages, for 3 types x ${ALL_LEVELS.length} level sets`, bad.length === 0, bad.slice(0, 3).join("; "));
+  // The Sport, every level: exactly the formula of before M4-CARS (BASE_STATS, same operations).
+  const old = (l: { engine: number; tyres: number }) => ({
+    accel: BASE_STATS.accel * (1 + 0.07 * l.engine), topSpeed: BASE_STATS.topSpeed, grip: BASE_STATS.grip * (1 + 0.1 * l.tyres), turn: BASE_STATS.turn * (1 + 0.04 * l.tyres),
+  });
+  check(
+    "cars: statsFor('sport', levels) is bit for bit the stats of before M4-CARS at every level",
+    ALL_LEVELS.every((l) => {
+      const s = statsFor("sport", l), o = old(l);
+      return s.accel === o.accel && s.topSpeed === o.topSpeed && s.grip === o.grip && s.turn === o.turn && s.dirtDrag === 2.9 && s.dirtGrip === 0.37;
+    }),
+  );
+  // Physics per type on a long straight: asphalt top speed 430 for all, dirt top speed topSpeed /
+  // dirtDrag (Sport ~148, Racer ~119, Truck ~269), and the Racer pulls away first, the Truck last.
+  const flat = buildTrack({
+    id: "test-straight-cars",
+    name: "Test Straight",
+    control: [...Array.from({ length: 13 }, (_, i): [number, number] => [i * 1000, 0]), [12000, 3000], [0, 3000]],
+    halfWidth: 64,
+    verge: 44,
+  });
+  const drive = (t: CarType, y: number) => {
+    const stats = statsFor(t, { engine: 0, tyres: 0, welder: 0 });
+    const c: CarState = { x: 1500, y, h: 0, vx: 0, vy: 0, seg: 0, wreck: 0, air: 0, fall: 0 };
+    let t300 = -1;
+    for (let i = 1; i <= 15 * TICK_HZ && c.x < 11000; i++) {
+      stepCar(c, { throttle: 1, steer: 0 }, stats, flat);
+      if (t300 < 0 && speedOf(c) >= 300) t300 = i * DT;
+    }
+    return { v: speedOf(c), t300, y: c.y };
+  };
+  const road = CAR_TYPES.map((t) => drive(t, 0)), dirt = CAR_TYPES.map((t) => drive(t, 85));
+  // stepCar's steady state at full throttle is (top / mult) * (1 - drag * mult * DT), drag = accel / top:
+  // a step's drag below the nominal topSpeed / mult (the Sport's 430 shows as ~421 today).
+  const steady = (t: CarType, mult: number) => {
+    const b = CARS[t].base;
+    return (b.topSpeed / mult) * (1 - (b.accel / b.topSpeed) * mult * DT);
+  };
+  check(
+    "cars physics: on asphalt every type tops out at its top speed 430 (less one step's drag); the Racer reaches 300 u/s first, the Truck last",
+    CAR_TYPES.every((t, i) => Math.abs(road[i].v - steady(t, 1)) < 0.5) && road[1].t300 < road[0].t300 && road[0].t300 < road[2].t300,
+    CAR_TYPES.map((t, i) => `${t} ${road[i].v.toFixed(1)} u/s (steady ${steady(t, 1).toFixed(1)}), 300 at ${road[i].t300.toFixed(3)} s`).join("; "),
+  );
+  check(
+    "cars physics: on the dirt verge each type tops out at topSpeed / dirtDrag (Sport ~148, Racer ~119, Truck ~269, less one step's drag)",
+    CAR_TYPES.every((t, i) => Math.abs(dirt[i].v - steady(t, CARS[t].base.dirtDrag)) < 0.5 && Math.abs(dirt[i].y - 85) < 1e-6) && dirt[2].v > 1.7 * dirt[0].v && dirt[1].v < dirt[0].v,
+    CAR_TYPES.map((t, i) => `${t} ${dirt[i].v.toFixed(1)} (nominal ${(430 / CARS[t].base.dirtDrag).toFixed(1)}, steady ${steady(t, CARS[t].base.dirtDrag).toFixed(1)})`).join("; "),
+  );
+}
+
+/** The last garage message a connection got. */
+const lastGarage = (c: FakeConn) => c.msgs.filter((m): m is Extract<ServerMsg, { t: "garage" }> => m.t === "garage").pop();
+
+function carsPick(): void {
+  const R = menuRooms(["Ann", "Bo"]);
+  const [a, b] = R.p;
+  const [sa, sb] = R.s;
+  check(
+    "cars pick: a new driver has the Sport, in their garage message and in the room message",
+    a.carType === "sport" && b.carType === "sport" && lastGarage(sb.conn)?.car === "sport" && infoOf(lastRoomMsg(sa.conn), b.id)?.car === "sport",
+  );
+  const r0 = sa.conn.msgs.length, g0 = sb.conn.msgs.length;
+  R.send(1, { t: "car", id: "racer" });
+  const garageB = sb.conn.msgs.slice(g0).filter((m) => m.t === "garage");
+  check(
+    "cars pick: Bo picks the Racer in the lobby: his garage message carries it (his own stats), everyone's room message shows it",
+    b.carType === "racer" && garageB.length === 1 && lastGarage(sb.conn)?.car === "racer" && infoOf(lastRoomMsg(sa.conn), b.id)?.car === "racer" &&
+      sa.conn.msgs.slice(r0).filter((m) => m.t === "garage").length === 0,
+  );
+  const r1 = sa.conn.msgs.length;
+  R.send(1, { t: "car", id: "racer" });
+  check("cars pick: picking the car you have changes nothing (no message)", sa.conn.msgs.length === r1 && errMsgs(sb.conn).length === 0);
+  // Refusals: an unknown type, a guest naming a bot, the host naming a human or nobody.
+  R.send(0, { t: "addBot", level: "normal" });
+  const bot = [...R.room.players.values()].find((p) => p.bot)!;
+  const ea = errMsgs(sa.conn).length, eb = errMsgs(sb.conn).length;
+  R.send(1, { t: "car", id: "tank" as CarType });
+  R.send(1, { t: "car", id: "truck", bot: bot.id });
+  R.send(0, { t: "car", id: "truck", bot: b.id });
+  R.send(0, { t: "car", id: "truck", bot: "nobody" });
+  R.send(0, { t: "car", id: "truck", bot: 7 as unknown as string });
+  check(
+    "cars pick: refused with an err: an unknown type, a guest naming a bot, the host naming a human, an unknown id or a non-string; nothing changes",
+    errMsgs(sb.conn).slice(eb).map((m) => m.msg).join("|") === "Unknown car|Only the host can pick a bot's car" &&
+      errMsgs(sa.conn).slice(ea).map((m) => m.msg).join("|") === "That is not a bot in this room|That is not a bot in this room|That is not a bot in this room" &&
+      b.carType === "racer" && bot.carType === "sport" && a.carType === "sport",
+    [...errMsgs(sb.conn).slice(eb), ...errMsgs(sa.conn).slice(ea)].map((m) => m.msg).join("|"),
+  );
+  // Locked per race: the stats are set from the car at the start; no change in the countdown, the race or the results.
+  R.send(0, { t: "car", id: "truck" });
+  R.send(1, { t: "ready", ready: true });
+  R.send(0, { t: "start" });
+  const atStart = { a: { ...a.stats }, b: { ...b.stats }, bot: { ...bot.stats } };
+  check(
+    "cars lock: the start sets each racer's stats from their car and levels (Ann Truck, Bo Racer, the bot Sport)",
+    R.room.phase === "countdown" && JSON.stringify(a.stats) === JSON.stringify(statsFor("truck", a.wallet.levels)) &&
+      JSON.stringify(b.stats) === JSON.stringify(statsFor("racer", b.wallet.levels)) && JSON.stringify(bot.stats) === JSON.stringify(statsFor("sport", bot.wallet.levels)),
+    `${a.stats.accel}/${b.stats.accel}/${bot.stats.accel}`,
+  );
+  const tried: string[] = [];
+  const tryAll = (phase: string) => {
+    const e1 = errMsgs(sb.conn).length, e2 = errMsgs(sa.conn).length;
+    R.send(1, { t: "car", id: "sport" });
+    R.send(0, { t: "car", id: "racer", bot: bot.id });
+    tried.push(`${phase}: ${[...errMsgs(sb.conn).slice(e1), ...errMsgs(sa.conn).slice(e2)].map((m) => m.msg).join("|")}`);
+  };
+  tryAll("countdown");
+  R.step(Math.ceil((COUNTDOWN_MS / 1000) * 60) + 2);
+  tryAll(R.room.phase);
+  // Everyone off the field: Bo retires (his garage opens), the others are moved to the line.
+  R.room.retire(b);
+  tryAll("racing, retired");
+  for (const p of [a, bot]) {
+    const pr = p.progress!;
+    pr.lap = 1;
+    pr.fin = 1;
+    p.finished = true;
+  }
+  R.step(1);
+  tryAll(R.room.phase);
+  const want = "Countdown|racing|racing, retired|results".split("|");
+  check(
+    "cars lock: no change in the countdown, the race (a retired driver's garage too) or the results; the stats stay those of the start",
+    R.room.phase === "results" && tried.length === 4 && tried.every((t, i) => t.toLowerCase().startsWith(want[i].toLowerCase()) && t.endsWith("The car can only be changed in the lobby|The car can only be changed in the lobby")) &&
+      b.carType === "racer" && bot.carType === "sport" && JSON.stringify(a.stats) === JSON.stringify(atStart.a) && JSON.stringify(bot.stats) === JSON.stringify(atStart.bot),
+    tried.join("; "),
+  );
+  // Back in the lobby: switching is free again; a restart keeps the car (and its stats).
+  R.step(Math.ceil((RESULTS_MS / 1000) * 60) + 2);
+  R.send(1, { t: "car", id: "truck" });
+  R.send(0, { t: "car", id: "racer", bot: bot.id });
+  R.send(1, { t: "ready", ready: true });
+  R.send(0, { t: "start" });
+  R.step(Math.ceil((COUNTDOWN_MS / 1000) * 60) + 2);
+  R.send(0, { t: "restart" });
+  check(
+    "cars lock: back in the lobby the switch is free again; a restart races the same cars",
+    R.room.phase === "countdown" && b.carType === "truck" && bot.carType === "racer" &&
+      JSON.stringify(b.stats) === JSON.stringify(statsFor("truck", b.wallet.levels)) && JSON.stringify(bot.stats) === JSON.stringify(statsFor("racer", bot.wallet.levels)),
+    `${b.carType}, bot ${bot.carType}, phase ${R.room.phase}`,
+  );
+}
+
+function carsRejoin(): void {
+  const R = menuRooms(["Ann", "Bo"]);
+  const [, b] = R.p;
+  R.send(1, { t: "car", id: "truck" });
+  const token = b.token;
+  R.rooms.onClose(R.s[1], R.clock.now);
+  R.step(60);
+  const back = R.join("Bo", token);
+  check(
+    "cars rejoin: a dropped driver who rejoins with the seat token keeps the car; the garage message after the welcome carries it",
+    back.player === b && b.carType === "truck" && lastGarage(back.conn)?.car === "truck" && infoOf(lastRoomMsg(R.s[0].conn), b.id)?.car === "truck",
+    `${back.player?.carType}, garage ${lastGarage(back.conn)?.car}`,
+  );
+  // Dropped and back during a race: the car and the race's stats are unchanged.
+  R.rooms.onMessage(back, { t: "ready", ready: true }, R.clock.now);
+  R.send(0, { t: "start" });
+  R.step(Math.ceil((COUNTDOWN_MS / 1000) * 60) + 30);
+  const stats0 = JSON.stringify(b.stats);
+  R.rooms.onClose(back, R.clock.now);
+  R.step(120);
+  const again = R.join("Bo", token);
+  check(
+    "cars rejoin: mid-race too: the same seat, car and race stats (the Truck's), the garage message says Truck",
+    again.player === b && R.room.phase === "racing" && b.carType === "truck" && JSON.stringify(b.stats) === stats0 && stats0 === JSON.stringify(statsFor("truck", b.wallet.levels)) && lastGarage(again.conn)?.car === "truck",
+  );
+}
+
+function carsBots(): void {
+  const R = botRooms();
+  const { room, ann, bo, send } = R;
+  for (let i = 0; i < 4; i++) send(ann, { t: "addBot", level: i % 2 ? "easy" : "normal" });
+  const seat = () => R.bots().map((b) => `${b.name}:${b.carType}`).join(",");
+  check(
+    "cars bots: a bot's car is round-robin by seat: Sport, Racer, Truck, Sport (the room message shows each)",
+    seat() === "Gasket (bot):sport,Lugnut (bot):racer,Piston (bot):truck,Clutch (bot):sport" &&
+      botInfos(lastRoomMsg(bo.conn)).map((p) => p.car).join() === "sport,racer,truck,sport" && [0, 1, 2, 3, 4, 5].map(botCar).join() === "sport,racer,truck,sport,racer,truck",
+    seat(),
+  );
+  // A freed seat is taken again by the next bot, with that seat's car.
+  send(ann, { t: "kick", id: R.bots()[1].id });
+  send(ann, { t: "addBot", level: "normal" });
+  check("cars bots: a bot added into a freed seat gets that seat's car (Lugnut's seat: the Racer)", R.bots().map((b) => `${b.name}:${b.carType}`).sort().join() === "Clutch (bot):sport,Gasket (bot):sport,Lugnut (bot):racer,Piston (bot):truck", seat());
+  // The host changes a bot's car from its row; the race runs with it (stats and the driver's corner speeds).
+  const g = R.bots().find((b) => b.name === "Gasket (bot)")!;
+  send(ann, { t: "car", id: "truck", bot: g.id });
+  check("cars bots: the host changes a bot's car; the room message shows it", g.carType === "truck" && infoOf(lastRoomMsg(bo.conn), g.id)?.car === "truck" && errMsgs(ann.conn).length === 0);
+  room.setReady(bo.player!, true);
+  send(ann, { t: "start" });
+  check(
+    "cars bots: the race sets each bot's stats from its car (Gasket now the Truck)",
+    R.bots().every((b) => JSON.stringify(b.stats) === JSON.stringify(statsFor(b.carType, b.wallet.levels))) && g.stats.accel === 455,
+    R.bots().map((b) => `${b.name} ${b.carType} accel ${b.stats.accel}`).join(", "),
+  );
+  check(
+    "cars bots: the bot driver's corner speeds follow its car (grip^(1/4) of the Sport's): Sport 1, Racer below, Truck above",
+    CORNER_SCALE.sport === 1 && Math.abs(CORNER_SCALE.racer - (6 / 7.5) ** 0.25) < 1e-12 && Math.abs(CORNER_SCALE.truck - (9 / 7.5) ** 0.25) < 1e-12,
+    `racer ${CORNER_SCALE.racer.toFixed(4)}, truck ${CORNER_SCALE.truck.toFixed(4)}`,
+  );
+}
+
+function carsRunUps(): void {
+  // Every jump of every shipped track works from rest for every type, with no upgrades and with
+  // all of them (the Truck is the worst case: ~45 more units of run-up to 350 u/s than the Sport).
+  const rows: string[] = [];
+  let errs = 0;
+  for (const t of CAR_TYPES) {
+    for (const lv of [0, 3]) {
+      const st = statsFor(t, { engine: lv, tyres: lv, welder: lv });
+      for (const id of CAR_TRACKS) {
+        const v = validateRunUps(trackById(id), st);
+        errs += v.length;
+        if (v.length) rows.push(`${t} L${lv} ${id}: ${v.join("; ")}`);
+      }
+    }
+  }
+  const up = (t: CarType) => runUpFor(350, statsFor(t, { engine: 0, tyres: 0, welder: 0 }));
+  check(
+    `cars run-ups: validateRunUps passes for every type at L0 and L3 on every shipped track (${CAR_TRACKS.join(", ")})`,
+    errs === 0 && up("truck") > up("sport") + 30 && up("racer") < up("sport"),
+    rows.join(" | ") || `run-up to 350 u/s at L0: sport ${up("sport").toFixed(0)}, racer ${up("racer").toFixed(0)}, truck ${up("truck").toFixed(0)}`,
+  );
+}
+
+/** One race of a single Normal server bot with car `car` on a track (the host retires at GO): finish tick and falls. */
+function soloBotLap(trackId: string, car: CarType, laps = 1): { ticks: number; falls: number; jumps: number } {
+  const sim = new Sim(laps);
+  const host = sim.add("Host");
+  if (sim.room.trackId !== trackId && sim.room.setTrack(host, trackId)) throw new Error("track");
+  const b = sim.room.addBot(host, "normal", sim.now);
+  if (typeof b === "string") throw new Error(b);
+  if (sim.room.setCar(host, car, b.id)) throw new Error("car");
+  if (sim.room.start(host, sim.now)) throw new Error("start");
+  while (sim.room.phase !== "racing") sim.tick();
+  if (sim.room.retire(host)) throw new Error("retire");
+  let rt = 0, falls = 0, jumps = 0, pf = 0, pa = 0;
+  while (sim.room.phase === "racing" && rt < 60 * 400) {
+    sim.tick();
+    rt++;
+    const c = b.car;
+    if (!c) break;
+    if (c.fall > 0 && pf === 0) falls++;
+    if (c.air > 0 && pa === 0) jumps++;
+    pf = c.fall;
+    pa = c.air;
+    if (b.progress?.fin) return { ticks: rt, falls, jumps };
+  }
+  return { ticks: 0, falls, jumps };
+}
+
+function carsBalance(): void {
+  // The bot's lap time with each type at L0, solo (no bumps, no weapons to hit), one lap from the
+  // grid and three laps: within about 3 % of the Sport's on every shipped track (PLAN-M4: a guide;
+  // the taste gate is the real check). Deterministic: a rerun is identical.
+  const table: string[] = [];
+  const off: string[] = [];
+  let falls = 0, det = true;
+  for (const e of CAR_TRACKS.map((id) => ({ id }))) {
+    for (const laps of [1, 3]) {
+      const r = CAR_TYPES.map((t) => soloBotLap(e.id, t, laps));
+      if (laps === 1) det &&= JSON.stringify(soloBotLap(e.id, "truck")) === JSON.stringify(r[2]) && JSON.stringify(soloBotLap(e.id, "racer")) === JSON.stringify(r[1]);
+      const pct = (i: number) => ((r[i].ticks / r[0].ticks - 1) * 100);
+      falls += r.reduce((x, y) => x + y.falls, 0);
+      table.push(`${e.id} ${laps} lap${laps > 1 ? "s" : ""}: sport ${(r[0].ticks / 60).toFixed(2)} s, racer ${(r[1].ticks / 60).toFixed(2)} s (${pct(1) >= 0 ? "+" : ""}${pct(1).toFixed(2)}%), truck ${(r[2].ticks / 60).toFixed(2)} s (${pct(2) >= 0 ? "+" : ""}${pct(2).toFixed(2)}%)`);
+      for (const i of [1, 2]) if (!(r[i].ticks > 0) || Math.abs(pct(i)) > 3) off.push(`${e.id} ${CAR_TYPES[i]} ${laps}: ${pct(i).toFixed(2)}%`);
+      if (r.some((x) => x.jumps < trackById(e.id).ramps.length * laps)) off.push(`${e.id} ${laps}: a jump not taken`);
+    }
+  }
+  for (const line of table) console.log(`  lap time: ${line}`);
+  check(
+    "cars balance: at L0 the bot's lap with the Racer and with the Truck is within 3% of the Sport's on every shipped track (1 and 3 laps, solo, Normal), every jump taken, no fall",
+    off.length === 0 && falls === 0,
+    off.join("; ") || `${table.length} rows, printed above`,
+  );
+  check("cars balance: the solo laps are deterministic (a rerun is identical)", det);
+}
+
+/** Bends of a track: stretches of s whose heading turns more than 0.35 rad over 120 units, with the turn's side (+1 right). */
+function carBends(t: Track): { s0: number; s1: number; side: number }[] {
+  const out: { s0: number; s1: number; side: number }[] = [];
+  let cur: { s0: number; s1: number; side: number } | null = null;
+  for (let s = 0; s < t.length; s += 10) {
+    const d = angleDiff(pointAt(t, s - 60).h, pointAt(t, s + 60).h);
+    if (Math.abs(d) <= 0.35) continue;
+    const side = Math.sign(d);
+    if (cur && cur.side === side && s - cur.s1 <= 20) cur.s1 = s;
+    else out.push((cur = { s0: s, s1: s, side }));
+  }
+  return out;
+}
+
+/**
+ * A solo bot's flying lap (the second of two, from rest on the start line, no weapons) with car
+ * `car`; while inside `cut` (a bend, from 80 before it to 40 after it) its racing line moves to
+ * `lane` units on the inside of the bend. Ticks for the lap, and ticks spent on the dirt.
+ */
+function cutLap(t: Track, car: CarType, cut: { s0: number; s1: number; side: number } | null, lane: number): { ticks: number; dirt: number; falls: number } {
+  const stats = statsFor(car, { engine: 0, tyres: 0, welder: 0 });
+  const mem = newBotMem(0, "normal");
+  mem.weapons = false;
+  const p = pointAt(t, 0);
+  const c: CarState = { x: p.x, y: p.y, h: p.h, vx: 0, vy: 0, seg: p.seg, wreck: 0, air: 0, fall: 0 };
+  const L = t.length;
+  const inCut = (s: number) => !!cut && [s, s + L].some((x) => x >= cut.s0 - 80 && x <= cut.s1 + 40);
+  let dist = 0, prev = 0, t1 = 0, dirt = 0, falls = 0, i = 0;
+  for (; i < 60 * 200 && dist < 2 * L; i++) {
+    const q = queryTrackNear(t, c.x, c.y, c.seg);
+    mem.lateral = dist >= L && inCut(q.s) ? cut!.side * lane : 0;
+    const ev = stepRaceCar(c, botControls({ car: c, track: t, stats, raceOn: true, raceSteps: i, others: [], carType: car }, mem), stats, t);
+    if (ev === "fall") falls++;
+    const q2 = queryTrackNear(t, c.x, c.y, c.seg);
+    if (dist >= L && c.air === 0 && q2.dist > t.def.halfWidth) dirt++;
+    let ds = q2.s - prev;
+    if (ds < -L / 2) ds += L;
+    if (ds > L / 2) ds -= L;
+    if (c.fall === 0) dist += ds;
+    prev = q2.s;
+    if (dist >= L && !t1) t1 = i;
+  }
+  return { ticks: i - t1, dirt, falls };
+}
+
+function carsCut(): void {
+  // The Truck's dirt top speed is ~269 u/s against the Sport's ~148 (advisor: show that cutting a
+  // corner through the dirt verge is no free win). Per bend of every shipped track, a lap whose
+  // line moves onto the inside for that bend only: on the asphalt (lanes 0, 56, 64) or into the
+  // dirt (72, 84, 96), at the bot's own pace and flat out (no braking at all). The best line
+  // through the dirt is never faster than the best line on the asphalt (1 tick = rounding).
+  const ASPHALT = [0, 56, 64], DIRT = [72, 84, 96];
+  const saved = CORNER_SCALE.truck;
+  const worst: string[] = [];
+  let bends = 0, cuts = 0, maxGain = -Infinity;
+  try {
+    for (const pace of ["bot", "flat"] as const) {
+      CORNER_SCALE.truck = pace === "flat" ? 3 : saved;
+      for (const e of CAR_TRACKS.map((id) => ({ id }))) {
+        const t = trackById(e.id);
+        const base = cutLap(t, "truck", null, 0);
+        const lines: string[] = [];
+        for (const b of carBends(t)) {
+          bends++;
+          const asphalt = Math.min(...ASPHALT.map((ln) => (ln === 0 ? base : cutLap(t, "truck", b, ln)).ticks));
+          const dirty = DIRT.map((ln) => cutLap(t, "truck", b, ln)).filter((r) => r.dirt > 0 && r.falls === 0);
+          if (!dirty.length) continue;
+          cuts++;
+          const best = Math.min(...dirty.map((r) => r.ticks));
+          maxGain = Math.max(maxGain, asphalt - best);
+          lines.push(`${b.s0}-${b.s1}${b.side > 0 ? "R" : "L"} ${best - base.ticks >= 0 ? "+" : ""}${best - base.ticks}/${asphalt - base.ticks >= 0 ? "+" : ""}${asphalt - base.ticks}`);
+          if (best < asphalt - 1) worst.push(`${pace} ${e.id} bend ${b.s0}-${b.s1}: dirt ${best} vs asphalt ${asphalt} ticks`);
+        }
+        console.log(`  truck cut (${pace}) ${e.id}: lap ${(base.ticks / 60).toFixed(2)} s; per bend, best dirt / best asphalt line, ticks vs the bot's line: ${lines.join(", ")}`);
+      }
+    }
+  } finally {
+    CORNER_SCALE.truck = saved;
+  }
+  check(
+    "cars cut: on every shipped track the Truck never gains by cutting a bend through the dirt verge (best dirt line vs best asphalt line, bot pace and flat out)",
+    worst.length === 0 && cuts > 10,
+    worst.join("; ") || `${cuts} cuts that reach the dirt over ${bends} bends; best dirt line at most ${maxGain} tick(s) ahead of the best asphalt line`,
+  );
+}
+
+/**
+ * Three client bots (lanes -24, 0, 24), one per car type, race a lap of a track through the real
+ * client Game against a Rooms server on the sim clock (no sockets, no lag), weapons off: each
+ * one's prediction stats are the server's, and its prediction matches the server.
+ */
+function carsClientLap(id: string): { ticks: number[]; stateErrs: number; samples: number; large: number; maxErr: number; same: boolean } {
+  const realNow = performance.now.bind(performance);
+  const clock = { now: 1_000_000 };
+  performance.now = () => clock.now;
+  try {
+    const rooms = new Rooms(1);
+    const lanes = [-24, 0, 24];
+    const ws = lanes.map(() => wiredGame(rooms, clock));
+    ws[0].game.create("Car0");
+    ws[0].open();
+    ws[0].flush();
+    ws[0].game.pickTrack(id);
+    ws[0].flush();
+    const room = [...rooms.rooms.values()][0];
+    ws.slice(1).forEach((w, i) => {
+      w.game.join(room.code, `Car${i + 1}`);
+      w.open();
+    });
+    for (const w of ws) w.flush();
+    ws.forEach((w, i) => w.game.pickCar(CAR_TYPES[i]));
+    for (const w of ws.slice(1)) w.game.setReady(true);
+    for (const w of ws) w.flush();
+    ws[0].game.start();
+    ws[0].flush();
+    const drivers = ws.map((w, i) => {
+      const d = new BotDriver(w.game, lanes[i]);
+      d.weapons = false;
+      return d;
+    });
+    const ticks = ws.map(() => 0);
+    let raceTicks = 0, same = true;
+    for (let i = 0; i < 60 * 120 && ticks.some((x) => x === 0); i++) {
+      clock.now += 1000 / 60;
+      rooms.step(clock.now);
+      for (const w of ws) w.flush();
+      ws.forEach((w, k) => w.game.step(drivers[k].controls(), 1000 / 60));
+      if (room.phase === "racing") raceTicks++;
+      ws.forEach((w, k) => {
+        const p = room.players.get(w.game.you)!;
+        if (raceTicks === 1) same &&= w.game.carType === CAR_TYPES[k] && p.carType === CAR_TYPES[k] && JSON.stringify(p.stats) === JSON.stringify(w.game.stats);
+        if (!ticks[k] && p.progress?.fin) ticks[k] = raceTicks; // the last one on the tick the race ends
+      });
+    }
+    const errs = ws.flatMap((w) => w.game.recErrors);
+    return {
+      ticks,
+      stateErrs: ws.reduce((a, w) => a + w.game.recStateErrors, 0),
+      samples: errs.length,
+      large: errs.filter((x) => x > LARGE_ERR).length,
+      maxErr: errs.length ? Math.max(...errs) : NaN,
+      same,
+    };
+  } finally {
+    performance.now = realNow;
+  }
+}
+
+function carsClient(): void {
+  // Over the wire: Game.pickCar and the garage message; the host's Game.pickBotCar; carOf.
+  const rooms = new Rooms(1);
+  const clock = { now: 1000 };
+  const A = wiredGame(rooms, clock), B = wiredGame(rooms, clock);
+  A.game.create("Ann");
+  A.open();
+  A.flush();
+  B.game.join(A.game.code, "Bo");
+  B.open();
+  B.flush();
+  A.flush();
+  const fresh = B.game.carType === "sport" && JSON.stringify(B.game.stats) === JSON.stringify(statsFor("sport", B.game.levels));
+  B.game.pickCar("truck");
+  A.game.addBot("normal");
+  A.flush();
+  B.flush();
+  const bot = A.game.players.find((p) => p.bot)!;
+  A.game.pickBotCar(bot.id, "racer");
+  A.flush();
+  B.flush();
+  check(
+    "cars client: Game.pickCar reaches the server; the garage message sets carType and the stats (statsFor(car, levels)); everyone's carOf shows each car, the host's pickBotCar too",
+    fresh && B.game.carType === "truck" && JSON.stringify(B.game.stats) === JSON.stringify(statsFor("truck", B.game.levels)) &&
+      A.game.carOf(B.game.you) === "truck" && B.game.carOf(bot.id) === "racer" && A.game.carOf(A.game.you) === "sport" && A.game.carType === "sport",
+    `B ${B.game.carType}; A sees B ${A.game.carOf(B.game.you)}, B sees the bot ${B.game.carOf(bot.id)}`,
+  );
+  // An older server's messages (no car): the Sport.
+  const g = new Game(() => ({ send() {}, close() {}, onOpen() {}, onMessage() {}, onClose() {} }), { get: () => null, set() {} });
+  g.carType = "truck" as CarType; // as if left from an earlier room
+  (g as unknown as { handle(m: ServerMsg): void }).handle({ t: "garage", scrap: 0, levels: { engine: 1, tyres: 0, welder: 0 } });
+  check(
+    "cars client: an older server's garage message (no car) means the Sport, and so does a player the room message names no car for",
+    g.carType === "sport" && JSON.stringify(g.stats) === JSON.stringify(statsFor("sport", { engine: 1, tyres: 0, welder: 0 })) && g.carOf("x") === "sport",
+  );
+
+  // Prediction per type: one client bot of each type laps every shipped track (deterministic,
+  // no lag): the stats are the server's and the prediction has no state mismatch and no large error.
+  for (const e of CAR_TRACKS.map((id) => ({ id }))) {
+    const a = carsClientLap(e.id), b = carsClientLap(e.id);
+    check(
+      `cars client: on ${e.id} a Sport, a Racer and a Truck (client Game) finish with the server's stats; prediction matches (no state mismatch, no error > ${LARGE_ERR}); a rerun is identical`,
+      a.same && a.ticks.every((x) => x > 0) && a.samples > 1000 && a.stateErrs === 0 && a.large === 0 && JSON.stringify(a) === JSON.stringify(b),
+      `finish ${a.ticks.map((x) => (x / 60).toFixed(2)).join("/")} s (sport/racer/truck); ${a.stateErrs} state mismatches, ${a.large} errors > ${LARGE_ERR} of ${a.samples}, max ${a.maxErr.toFixed(3)}`,
+    );
+  }
+}
+
+for (const t of [rivets, gating, mines, wrecks, finishing, garage, armDelay, engine, readyCheck, collisions, trackFeatures, roomTrack, jumpsWired, shippedTracks, botDriver, botLaps, mineCap, chatRoom, chatClient, sound, raceSounds, surfaceSounds, audioUnlock, menuHostOnly, menuStop, menuRestart, menuKick, menuLock, menuHandover, menuClient, menuRestartClient, retireRules, retireField, retireRaceEnd, retireGarage, retireRefund, retireOthers, retireNotices, retireClient, pauseRefused, pauseFreeze, pauseResume, pauseHold, pauseAuto, pauseCooldown, pauseGrace, pauseCountdown, pauseControls, pauseClient, musicSwitch, soundMigration, soundLayers, soundServer, soundRandom, soundRoomDrag, soundSliderGrip, soundClient, songs, songPlayer, ghostRivets, minesSetting, minesStay, minesCap, minesFade, minesAtStart, minesCleared, minesPaused, minesClient, botsPointAt, botsAdd, botsKickHost, botsHandover, botsFullRoom, botsSoloStart, botsRace, botsShop, botsTick, botsCpu, botsClient, carsTypes, carsStats, carsPick, carsRejoin, carsBots, carsRunUps, carsBalance, carsCut, carsClient]) {
   console.log(`\n# ${t.name}`);
   try {
     t();

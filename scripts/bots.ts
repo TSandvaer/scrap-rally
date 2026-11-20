@@ -387,6 +387,7 @@ async function run(ctx: Ctx, bots: Bot[]): Promise<void> {
   await runPause(ctx, bots);
   await runSound(ctx, bots);
   await runMines(ctx, bots);
+  await runCars(ctx, bots);
 }
 
 const lost = new Map<string, (ConnReason | undefined)[]>();
@@ -1578,5 +1579,71 @@ async function runMines(ctx: Ctx, bots: Bot[]): Promise<void> {
     check("mines over sockets: no errors on the way", H.errors.length + G.errors.length === 0, [...H.errors, ...G.errors].join("; ") || "-");
   } finally {
     for (const b of [H, G]) b.game.leave();
+  }
+}
+
+// ---- car types (M4-CARS, PLAN-M4.md 2.1, ClickUp 123jpnbffdz, 2026-11-20) ----------------
+
+// This section's imports (hoisted like the ones at the top).
+import { CAR_TYPES, carName, type CarType } from "../shared/cars";
+
+/**
+ * A socket bot of each car type (Sport host, Racer, Truck), every one lagged (80±10 ms), weapons
+ * off, one lap of Rust Bowl: each picks its car in the lobby, the others see it, the client's
+ * prediction stats are exactly the server's (garage.car), and each keeps a median
+ * reconciliation error below 0.5 (no teleports: max <= 50).
+ */
+async function runCars(ctx: Ctx, bots: Bot[]): Promise<void> {
+  const field = CAR_TYPES.map((t, i) => new Bot(["Zulu", "Victor", "Whiskey"][i], ctx.url, [-24, 0, 24][i], { lag: 80, jitter: 10 }));
+  const typeOf = new Map<Bot, CarType>(field.map((b, i) => [b, CAR_TYPES[i]]));
+  bots.push(...field);
+  for (const b of field) b.weapons = false;
+  const [H] = field;
+  try {
+    H.game.create(H.name);
+    await waitFor("cars: H welcome", () => !!H.game.you, 3000);
+    for (const b of field.slice(1)) b.game.join(H.game.code, b.name);
+    await waitFor("cars: 3 in H's room", () => field.every((b) => b.game.players.length === 3), 3000);
+    for (const b of field) b.game.pickCar(typeOf.get(b)!);
+    const picked = await waitFor(
+      "cars: every pick confirmed",
+      () => field.every((b) => b.game.carType === typeOf.get(b) && field.every((o) => o.game.carOf(b.game.you) === typeOf.get(b))),
+      3000,
+    );
+    check(
+      "cars over sockets: each driver picks a car in the lobby (one per type); their garage and everyone's room message carry it",
+      picked && field.every((b) => b.errors.length === 0),
+      field.map((b) => `${b.name} ${b.game.carType} (seen by host as ${H.game.carOf(b.game.you)})`).join(", "),
+    );
+    const room = ctx.server.rooms.rooms.get(H.game.code)!;
+    const e0 = new Map(field.map((b) => [b, b.game.recErrors.length]));
+    const st0 = new Map(field.map((b) => [b, b.game.recStateErrors]));
+    let statsSame: boolean | null = null;
+    H.afterStep = () => {
+      if (statsSame !== null || H.game.phase !== "racing") return;
+      statsSame = field.every((b) => {
+        const p = room.players.get(b.game.you)!;
+        return p.carType === typeOf.get(b) && JSON.stringify(p.stats) === JSON.stringify(b.game.stats) && JSON.stringify(b.game.stats) === JSON.stringify(statsFor(typeOf.get(b)!, b.game.levels));
+      });
+    };
+    const rows = await runRace("cars", bots, H, field);
+    H.afterStep = null;
+    check("cars over sockets: in the race the server's stats are the client's, statsFor(car, levels), for every type", statsSame === true, String(statsSame));
+    console.log(`      cars: ${rows.map((r) => `${r.name} (${carName(H.game.carOf(r.id))}) ${(r.timeMs / 1000).toFixed(2)}s`).join(", ")}`);
+    for (const b of field) {
+      const s = stats(b.game.recErrors.slice(e0.get(b)!));
+      console.log(
+        `      ${b.name.padEnd(8)} ${typeOf.get(b)!.padEnd(5)} rec err n=${s.n} median=${s.median.toFixed(3)} p95=${s.p95.toFixed(3)} max=${s.max.toFixed(2)}; ` +
+          `state mismatches ${b.game.recStateErrors - st0.get(b)!}; rtt=${b.game.rtt.toFixed(1)}ms`,
+      );
+      check(
+        `cars over sockets: lagged ${carName(typeOf.get(b)!)} bot: median reconciliation error < 0.5, no error > 50`,
+        s.n > 500 && s.median < 0.5 && s.max <= 50,
+        `median ${s.median.toFixed(3)}, max ${s.max.toFixed(2)} over ${s.n}`,
+      );
+    }
+  } finally {
+    H.afterStep = null;
+    for (const b of field) b.game.leave();
   }
 }
