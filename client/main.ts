@@ -834,7 +834,9 @@ function draw(alpha: number, elapsed: number): void {
     const ghost = !!(st.ghost || s?.ghost);
     const { x, y, h } = at;
     const hp = s && s.maxHp > 0 ? s.hp / s.maxHp : 1;
-    return { id, x, y, h, me, color: p?.color ?? "#888", name: p?.name ?? "?", wreck, ghost, height: st.height, falling: st.falling, hp };
+    // The car's look (M4-CARS): the type the room message names; absent or unknown = the Sport.
+    const car = game.carOf(id);
+    return { id, x, y, h, me, color: p?.color ?? "#888", name: p?.name ?? "?", wreck, ghost, height: st.height, falling: st.falling, hp, car };
   };
   // Other cars at the interpolation time; near ones are drawn at their predicted pose,
   // where the own car bumps into them (client/contact.ts). The state stays the pose's, except
