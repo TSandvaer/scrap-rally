@@ -19,8 +19,9 @@
 //   back against the road), or a whole number of pixels from the followed car (it moves with
 //   it: it then stands still beside it while the road runs under both). A shadow is a whole
 //   offset from its car. (tools/debug/jitter-trace.ts counts the steps back.)
-// - Battered (hp under BATTERED) and wrecked cars get one more sheet on top; the shadow is the
-//   car's silhouette in the same cell.
+// - A car's sheet is picked by its colour, its look (sport, racer, truck) and its state: whole,
+//   battered (hp under BATTERED) or wrecked. The shadow is its look's silhouette in the same
+//   cell.
 // - In the air a car grows to 1.35x, in a fall it shrinks to 0.3x: the same cell, blitted
 //   scaled (nearest neighbour, whole pixels). Size steps baked ahead would be a sheet per
 //   step and colour (0.5 MB each); the scaled blit costs no memory and happens for a car or
@@ -30,7 +31,7 @@ import type { Track } from "../../shared/track";
 import { MINE_BLINK_FAST_TICKS } from "../../shared/weapons";
 import type { CarView, DrawPose, WorldFx } from "../render";
 import { P } from "./palette";
-import { BLAST_FRAMES, carSheet, CELL, FX_BLAST, FX_COLS, FX_MINE, FX_PUFF, FX_SPARK, HEADING_STEP, HEADINGS, SHADOW_ALPHA, sharedSheets, SPARK_FRAMES, SPARK_KINDS, spriteFrame, spritesFor, type SharedSheets } from "./sprites";
+import { BLAST_FRAMES, BURNT, carSheet, CELL, DENTED, FX_BLAST, FX_COLS, FX_MINE, FX_PUFF, FX_SPARK, HEADING_STEP, HEADINGS, lookOf, SHADOW_ALPHA, shadeSheet, sharedSheets, SPARK_FRAMES, SPARK_KINDS, spriteFrame, spritesFor, WHOLE, type SharedSheets } from "./sprites";
 import { MARK, marksCleared, scorch, skid, VIEW_H, VIEW_W, ZOOM } from "./world";
 
 /** Airborne cars: drawn up to this much bigger at the top of the arc ... */
@@ -194,6 +195,7 @@ export class Actors {
   // This frame's cars, by their place in the list.
   private readonly cell = new Int16Array(MAX_CARS);
   private readonly kind = new Uint8Array(MAX_CARS);
+  private readonly look = new Uint8Array(MAX_CARS); // sprites.ts lookOf
   private readonly sx = new Int32Array(MAX_CARS); // the middle of its sprite on screen
   private readonly sy = new Int32Array(MAX_CARS);
   private readonly shift = new Int32Array(MAX_CARS * 2); // ... less that on the road's pixels, by its own rounding (x, y)
@@ -445,6 +447,7 @@ export class Actors {
     const up = h !== undefined && h > 0 ? (h < 1 ? h : 1) : 0;
     const kind = fall >= 0 ? FALLING : up > 0 ? AIR : GROUND;
     this.kind[i] = kind;
+    this.look[i] = lookOf(c.car);
     this.up[i] = up;
     this.fall[i] = fall;
     // The cell: a falling car tumbles; the own car follows its heading; another player's
@@ -658,14 +661,14 @@ export class Actors {
     const x = this.sx[i] + Math.round((3 + up * AIR_SHADOW_X) * ZOOM), y = this.sy[i] + Math.round((4 + up * AIR_SHADOW_Y) * ZOOM);
     if (x < -OFF || y < -OFF || x > VIEW_W + OFF || y > VIEW_H + OFF) return;
     const k = this.cell[i];
-    this.ctx.drawImage(this.sheets!.shade, (k & 15) * CELL, (k >> 4) * CELL, CELL, CELL, x - HALF, y - HALF, CELL, CELL);
+    this.ctx.drawImage(shadeSheet(this.look[i]), (k & 15) * CELL, (k >> 4) * CELL, CELL, CELL, x - HALF, y - HALF, CELL, CELL);
   }
 
   private car(c: CarView, i: number): void {
     const x = this.sx[i], y = this.sy[i];
     if (x < -OFF || y < -OFF || x > VIEW_W + OFF || y > VIEW_H + OFF) return;
-    const ctx = this.ctx, sheets = this.sheets!;
-    const k = this.cell[i];
+    const ctx = this.ctx;
+    const k = this.cell[i], look = this.look[i];
     const sx = (k & 15) * CELL, sy = (k >> 4) * CELL;
     const fall = this.fall[i];
     // The ghost and fall blinks: the same on/off frames and alpha as ever.
@@ -683,12 +686,11 @@ export class Actors {
     }
     const dx = x - (size >> 1), dy = y - (size >> 1);
     if (alpha !== 1) ctx.globalAlpha = alpha;
-    ctx.drawImage(carSheet(c.color), sx, sy, CELL, CELL, dx, dy, size, size);
-    if (c.wreck) ctx.drawImage(sheets.burnt, sx, sy, CELL, CELL, dx, dy, size, size);
-    else if (c.hp !== undefined && c.hp < BATTERED) ctx.drawImage(sheets.dents, sx, sy, CELL, CELL, dx, dy, size, size);
+    const state = c.wreck ? BURNT : c.hp !== undefined && c.hp < BATTERED ? DENTED : WHOLE;
+    ctx.drawImage(carSheet(c.color, look, state), sx, sy, CELL, CELL, dx, dy, size, size);
     if (fall >= 0) {
       ctx.globalAlpha = alpha * 0.7 * fall; // into the dark
-      ctx.drawImage(sheets.shade, sx, sy, CELL, CELL, dx, dy, size, size);
+      ctx.drawImage(shadeSheet(look), sx, sy, CELL, CELL, dx, dy, size, size);
       ctx.globalAlpha = 1;
     } else if (alpha !== 1) ctx.globalAlpha = 1;
   }

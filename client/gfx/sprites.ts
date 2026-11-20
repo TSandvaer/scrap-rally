@@ -1,26 +1,36 @@
-// Pre-rendered sprites of the cars and the effects (PLAN-GFX.md, items B1-B7).
+// Pre-rendered sprites of the cars and the effects (PLAN-GFX.md, items B1-B7; the cars' three
+// looks: PLAN-M4.md 2.1).
 //
-// Cars: one sheet of HEADINGS (128) cells of CELL x CELL (32 x 32) view pixels per car colour.
-// A sheet is made from one master, the car facing right at MASTER times the view's resolution,
-// a bitmap of materials (body, roof, glass, lamp ...). Every cell samples that master
-// nearest-neighbour at its own heading, pixel centre by pixel centre, into indexed colour: no
-// blend, no anti-aliasing. The light is then put on in the cell, not in the master, because the
-// sun stands still (top-left, as in the baked world) while the car turns: a lit edge up-left,
-// a shaded one down-right, a dark outline round the body, a glint in the windscreen.
-// The geometry is worked out once for all colours (three index sheets: the car, the damage
-// laid over a battered car, the burnt wreck); a colour's sheet is those indices through its
-// own three tones (gfx/palette.ts carTones: the body tone is the server's colour, untouched)
-// and the shared neutrals.
+// Cars: a sheet is HEADINGS (128) cells of CELL x CELL (32 x 32) view pixels. It is made from
+// one master, the car facing right at MASTER times the view's resolution, a bitmap of
+// materials (body, roof, glass, lamp ...). Every cell samples that master nearest-neighbour at
+// its own heading, pixel centre by pixel centre, into indexed colour: no blend, no
+// anti-aliasing. The light is then put on in the cell, not in the master, because the sun
+// stands still (top-left, as in the baked world) while the car turns: a lit edge up-left, a
+// shaded one down-right, a dark outline round the body, a glint in the windscreen.
 //
-// Shared by every colour, one sheet each: the damage (dents, scratches, a primer panel: drawn
-// on top of the colour sheet), the burnt wreck (drawn on top too; its roof and bonnet stripe
-// are left open, so the wreck still shows whose it was) and the silhouette (the cast shadow,
-// and the dark a falling car sinks into). The effects are one small sheet: the mine blast, the
-// hit sparks, the mines and the smoke puffs, all in the palette's 32 colours.
+// A car has one of three looks (LOOKS), each a master of its own drawn inside the one shape
+// every car is hit by (30 x 16 world units: 24 x 12.8 view pixels, the tyres a little
+// further out, as the sport's always were): the sport, a closed two-seater; the racer, an
+// open-wheel single-seater, its wheels free of the body and a wing at either end; the truck,
+// a four-wheel-drive pickup, square, with a load bed and a spare wheel in it.
+// The geometry of a look is worked out once for all colours (three index sheets: the car, the
+// damage of a battered car, the burnt wreck). The colours are the car colour's own three tones
+// (gfx/palette.ts carTones: the body tone is the server's colour, untouched) and the shared
+// neutrals.
+//
+// A car sheet is one car as it is now: its look, its colour and its state (whole, battered,
+// burnt), the damage and the wreck painted into it. The burnt wreck leaves a part of the car
+// open (the sport's roof and bonnet stripe), so it still shows whose it was. No more than
+// MAX_CAR_SHEETS of them exist, one a car of a full room: a car whose state changes has its
+// own sheet painted again, and with room to spare a state it was in before is still there
+// when it comes back to it. Beside them one silhouette sheet a look (the cast shadow, and the
+// dark a falling car sinks into) and one small sheet of effects: the mine blast, the hit
+// sparks, the mines and the smoke puffs, all in the palette's 32 colours.
 //
 // The sheets are module-level: built on first use, they outlive a Renderer. Canvas memory is
-// capped: MAX_CAR_SHEETS colour sheets (one per player; the least recently drawn colour gives
-// way to a new one), three shared car sheets and the effect sheet (spriteBytes()).
+// capped at what it was with one look (spriteBytes(), SPRITE_BYTES_MAX): MAX_CAR_SHEETS car
+// sheets, a silhouette for each of the three looks, the effect sheet.
 
 import { MAX_PLAYERS } from "../../shared/protocol";
 import { BAYER4, carTones, P, PALETTE, rgbOf, type PaletteName } from "./palette";
@@ -31,56 +41,46 @@ export const HEADING_STEP = (Math.PI * 2) / HEADINGS;
 const COLS = 16;
 export const SHEET_W = COLS * CELL;
 export const SHEET_H = (HEADINGS / COLS) * CELL;
-/** Colour sheets kept at once: every car on screen has one, and a room has MAX_PLAYERS cars. */
+/** Car sheets kept at once: every car on screen has one, and a room has MAX_PLAYERS cars. */
 export const MAX_CAR_SHEETS = MAX_PLAYERS;
+
+/** The looks, by number: what render.ts CarView.car names. */
+export const LOOKS = ["sport", "racer", "truck"] as const;
+export const SPORT = 0, RACER = 1, TRUCK = 2;
+/** A look's number; a car that names none, or one not known here, is the sport. */
+export function lookOf(car: string | undefined): number {
+  return car === "racer" ? RACER : car === "truck" ? TRUCK : SPORT;
+}
+/** A car's states: each is a sheet of its own. */
+export const WHOLE = 0, DENTED = 1, BURNT = 2;
 
 const HALF = CELL / 2;
 const MASTER = 8; // master pixels per view pixel
 const MSIZE = CELL * MASTER;
 
-// ---- the master ---------------------------------------------------------------------
+// ---- the masters ----------------------------------------------------------------------
 
-// Materials of the master.
+// Materials of a master.
 const M_NONE = 0;
 const M_TYRE = 1;
-const M_BODY = 2; // everything from here on is the hull
-const M_ROOF = 3;
-const M_STRIPE = 4;
-const M_WING = 5;
-const M_GLASS = 6;
-const M_SCREEN = 7; // the windscreen: glass that takes the glint
-const M_LAMP = 8;
-const M_TAIL = 9;
+const M_ARM = 2; // a wheel's arm (the racer's): bare steel, not part of the hull
+const M_BODY = 3; // everything from here on is the hull
+const M_ROOF = 4;
+const M_STRIPE = 5;
+const M_WING = 6;
+const M_GLASS = 7;
+const M_SCREEN = 8; // the windscreen: glass that takes the glint
+const M_LAMP = 9;
+const M_TAIL = 10;
+const M_PLATE = 11; // a thin painted plate (the racer's wings): the body's tone and no other, too thin to shade
+const M_PIT = 12; // a dark opening: a cockpit, an intake, a vent
+const M_HELMET = 13; // the racer's driver; takes the shine
+const M_BAR = 14; // a steel tube: the truck's bull bar and roll bar
+const M_BED = 15; // the truck's load bed: a steel floor, sunk between its walls
+const M_SPARE = 16; // the spare wheel lying in it ...
+const M_HUB = 17; // ... and its rim
 
-/** The hull's outline, |v| against u (view pixels, u forward): 24 x 12.8 as the car's physics, the corners cut, the nose drawn in. */
-function inHull(u: number, a: number): boolean {
-  if (u < -12 || u > 12 || a > 6.4) return false;
-  if (u < -10.4 && a > 4.6 + (u + 12) * 1.125) return false;
-  if (u > 5 && u <= 10.6 && a > 6.4 - (u - 5) * (0.8 / 5.6)) return false;
-  if (u > 10.6 && a > 5.6 - (u - 10.6) * (1.8 / 1.4)) return false;
-  return true;
-}
-
-/** What the car is made of at (u, v): u forward, v to its right, view pixels from its centre. */
-function material(u: number, v: number): number {
-  const a = Math.abs(v);
-  if (inHull(u, a)) {
-    if (u >= 10 && a >= 2.6 && a <= 5.2) return M_LAMP;
-    if (u <= -11 && a >= 2.6 && a <= 4.6) return M_TAIL;
-    // The cabin: a windscreen that widens to its foot, the roof, a side window either side of
-    // it between the pillars, a rear window.
-    if (u >= 1.5 && u < 4.7 && a <= 3.6 + (u - 1.5) * 0.3) return M_SCREEN;
-    if (u >= -4.5 && u < 1.5) return a <= 3 ? M_ROOF : a <= 4.4 && u >= -3.5 && u < 0.5 ? M_GLASS : M_BODY;
-    if (u >= -6.5 && u < -4.5 && a <= 3.6) return M_GLASS;
-    if (u >= 5.6 && u < 10.4 && a <= 1) return M_STRIPE;
-    if (u >= -11 && u < -9 && a <= 5.9) return M_WING;
-    return M_BODY;
-  }
-  if (a >= 4.5 && a <= 7.6 && ((u >= -9.6 && u <= -4.4) || (u >= 3.4 && u <= 8.6))) return M_TYRE;
-  return M_NONE;
-}
-
-// Damage laid over a battered car (local coordinates, as material()).
+// Damage laid over a battered car (local coordinates, as the materials).
 const D_NONE = 0;
 const D_DENT = 1; // a dent's dark side
 const D_PRIMER = 2; // a panel replaced and never painted
@@ -89,27 +89,172 @@ const D_RUST = 4;
 const D_DEAD = 5; // a lamp knocked out
 const D_CRACK = 6; // in the windscreen
 
-function damage(u: number, v: number): number {
-  // The right headlamp is gone, the windscreen cracked from its left corner.
-  if (u >= 10 && v >= 2.6 && v <= 5.2) return D_DEAD;
-  if (u >= 1.5 && u < 4.5 && Math.abs(v + 2.6 - (u - 1.5) * 0.9) <= 0.55 && v < 1) return D_CRACK;
-  // A crumpled left front wing: the dent, and rust along its lower edge.
-  const dx = u - 7.2, dy = v + 4.2;
-  if (dx * dx + dy * dy * 1.6 <= 5.2) return dx + dy > 1.1 ? D_RUST : D_DENT;
-  // The boot's right half in primer, a scratch from the right door back to it.
-  if (u >= -8.8 && u < -6.6 && v >= 0.4 && v <= 5.4) return D_PRIMER;
-  if (u >= -5.5 && u < 0.5 && Math.abs(v - 5.3 + (u + 5.5) * 0.12) <= 0.5) return D_SCRATCH;
-  // A dent in the roof and a rust patch on the bonnet's right.
-  if ((u + 2.6) * (u + 2.6) + (v + 0.6) * (v + 0.6) <= 2.0) return u + v > -2.6 ? D_PRIMER : D_DENT;
-  if ((u - 8.4) * (u - 8.4) + (v - 3.6) * (v - 3.6) <= 1.7) return D_RUST;
-  return D_NONE;
+/**
+ * A look: what the car is made of at (u, v) (u forward, v to its right, view pixels from its
+ * centre), the damage of a battered one there, and where the burnt wreck is left open and the
+ * car's own colour shows.
+ */
+interface Look {
+  material(u: number, v: number): number;
+  damage(u: number, v: number): number;
+  open(u: number, v: number): boolean;
 }
 
-/** Where the burnt wreck is left open and the car's own colour shows: the roof and the bonnet stripe. */
-function open(u: number, v: number): boolean {
-  const a = Math.abs(v);
-  return (u >= -4.5 && u < 1.5 && a <= 3) || (u >= 5.6 && u < 10.4 && a <= 1);
+// The sport: a closed two-seater.
+
+/** The sport's outline, |v| against u: 24 x 12.8 as the car's physics, the corners cut, the nose drawn in. */
+function inHull(u: number, a: number): boolean {
+  if (u < -12 || u > 12 || a > 6.4) return false;
+  if (u < -10.4 && a > 4.6 + (u + 12) * 1.125) return false;
+  if (u > 5 && u <= 10.6 && a > 6.4 - (u - 5) * (0.8 / 5.6)) return false;
+  if (u > 10.6 && a > 5.6 - (u - 10.6) * (1.8 / 1.4)) return false;
+  return true;
 }
+
+const sport: Look = {
+  material(u, v) {
+    const a = Math.abs(v);
+    if (inHull(u, a)) {
+      if (u >= 10 && a >= 2.6 && a <= 5.2) return M_LAMP;
+      if (u <= -11 && a >= 2.6 && a <= 4.6) return M_TAIL;
+      // The cabin: a windscreen that widens to its foot, the roof, a side window either side of
+      // it between the pillars, a rear window.
+      if (u >= 1.5 && u < 4.7 && a <= 3.6 + (u - 1.5) * 0.3) return M_SCREEN;
+      if (u >= -4.5 && u < 1.5) return a <= 3 ? M_ROOF : a <= 4.4 && u >= -3.5 && u < 0.5 ? M_GLASS : M_BODY;
+      if (u >= -6.5 && u < -4.5 && a <= 3.6) return M_GLASS;
+      if (u >= 5.6 && u < 10.4 && a <= 1) return M_STRIPE;
+      if (u >= -11 && u < -9 && a <= 5.9) return M_WING;
+      return M_BODY;
+    }
+    if (a >= 4.5 && a <= 7.6 && ((u >= -9.6 && u <= -4.4) || (u >= 3.4 && u <= 8.6))) return M_TYRE;
+    return M_NONE;
+  },
+  damage(u, v) {
+    // The right headlamp is gone, the windscreen cracked from its left corner.
+    if (u >= 10 && v >= 2.6 && v <= 5.2) return D_DEAD;
+    if (u >= 1.5 && u < 4.5 && Math.abs(v + 2.6 - (u - 1.5) * 0.9) <= 0.55 && v < 1) return D_CRACK;
+    // A crumpled left front wing: the dent, and rust along its lower edge.
+    const dx = u - 7.2, dy = v + 4.2;
+    if (dx * dx + dy * dy * 1.6 <= 5.2) return dx + dy > 1.1 ? D_RUST : D_DENT;
+    // The boot's right half in primer, a scratch from the right door back to it.
+    if (u >= -8.8 && u < -6.6 && v >= 0.4 && v <= 5.4) return D_PRIMER;
+    if (u >= -5.5 && u < 0.5 && Math.abs(v - 5.3 + (u + 5.5) * 0.12) <= 0.5) return D_SCRATCH;
+    // A dent in the roof and a rust patch on the bonnet's right.
+    if ((u + 2.6) * (u + 2.6) + (v + 0.6) * (v + 0.6) <= 2.0) return u + v > -2.6 ? D_PRIMER : D_DENT;
+    if ((u - 8.4) * (u - 8.4) + (v - 3.6) * (v - 3.6) <= 1.7) return D_RUST;
+    return D_NONE;
+  },
+  // The roof and the bonnet stripe.
+  open(u, v) {
+    const a = Math.abs(v);
+    return (u >= -4.5 && u < 1.5 && a <= 3) || (u >= 5.6 && u < 10.4 && a <= 1);
+  },
+};
+
+// The racer: an open-wheel single-seater. A slim body from a pointed nose to the tail, the
+// driver's helmet in its cockpit, a side pod either side of him, a wing right across at
+// either end, and four wheels standing free of it all, the rear pair the bigger.
+
+/** Half the width of the racer's body at u: the nose cone, the tub round the driver, the engine cover drawn in to the tail. */
+function fuselage(u: number): number {
+  if (u > 11.2) return 1.2 - (u - 11.2);
+  if (u > 3) return 2.3 - (u - 3) * (1.1 / 8.2);
+  if (u > -2.5) return 2.6;
+  return 2.6 - (-2.5 - u) * (1 / 7.3);
+}
+
+const racer: Look = {
+  material(u, v) {
+    const a = Math.abs(v);
+    if (u < -12 || u > 12) return M_NONE;
+    if (u >= -9.8 && a <= fuselage(u)) {
+      // The helmet in the cockpit's opening; a ridge down the engine cover.
+      if ((u + 0.1) * (u + 0.1) + v * v <= 1.69) return M_HELMET;
+      if (u >= -1.7 && u < 2 && a <= 1.6) return M_PIT;
+      if (u >= -9 && u < -2.7 && a <= 0.7) return M_STRIPE;
+      return M_BODY;
+    }
+    // The wings, the rear one with a red lamp in its middle.
+    if (u < -9.8) return a > 6.3 ? M_NONE : u <= -10.8 && a <= 0.8 ? M_TAIL : M_PLATE;
+    if (u >= 9.7 && u <= 11.8 && a <= 6) return M_PLATE;
+    // The side pods: an intake in the front of each, drawn in toward the rear wheels.
+    if (u >= -5 && u < 1.6 && a <= (u < -3 ? 5 - (-3 - u) * 0.9 : 5)) return u >= 0.4 && a >= 3 && a <= 4.6 ? M_PIT : M_BODY;
+    // The wheels, each on its arm.
+    if ((u >= 4.8 && u <= 9 && a >= 4.2 && a <= 7.2) || (u >= -9.8 && u <= -4.8 && a >= 3.9 && a <= 7.4)) return M_TYRE;
+    if ((u >= 6.3 && u <= 7.5 && a < 4.2) || (u >= -7.9 && u <= -6.7 && a < 3.9)) return M_ARM;
+    return M_NONE;
+  },
+  damage(u, v) {
+    // The front wing's right half bare, its tip scraped; the rear wing's left end in primer.
+    if (u >= 9.7 && v >= 2 && Math.abs(v) > fuselage(u)) return v > 4.4 ? D_SCRATCH : D_PRIMER;
+    if (u < -9.8 && v <= -3) return D_PRIMER;
+    // A dent in the nose, a rusted hole in the left side pod, a scratch down the engine cover.
+    if ((u - 6.2) * (u - 6.2) + (v + 0.5) * (v + 0.5) <= 1.5) return D_DENT;
+    const dx = u + 1.8, dy = v + 3.9;
+    if (dx * dx + dy * dy * 1.5 <= 3.6) return dx + dy > 0.6 ? D_RUST : D_DENT;
+    if (u >= -8.6 && u < -3 && Math.abs(v - 1.3 + (u + 8.6) * 0.06) <= 0.5) return D_SCRATCH;
+    if ((u + 3.2) * (u + 3.2) + (v - 3.6) * (v - 3.6) <= 1.3) return D_RUST;
+    return D_NONE;
+  },
+  // The nose and the engine cover.
+  open(u, v) {
+    return (u >= 3.4 || (u >= -9.8 && u < -2.7)) && Math.abs(v) <= fuselage(u);
+  },
+};
+
+// The truck: a four-wheel-drive pickup. Square where the sport is drawn in: a flat nose with
+// a bull bar between the lamps, a short cab, a roll bar behind it, a load bed sunk between
+// its walls with the spare wheel lying in it. The body is cut away at the four wheel arches,
+// and the big tyres stand in them.
+
+/** Is u at one of the truck's axles: where its body is cut away and a tyre stands? */
+function arch(u: number): boolean {
+  return (u >= 4.4 && u <= 9.8) || (u >= -9.8 && u <= -4.4);
+}
+
+const truck: Look = {
+  material(u, v) {
+    const a = Math.abs(v), e = Math.abs(u);
+    if (e > 12 || a > 7.6) return M_NONE;
+    if (a <= (arch(u) ? 4.8 : 6.4) && !(e > 11.2 && a > 6.4 - (e - 11.2))) {
+      if (u >= 10.7) return a >= 3.4 && a <= 5.8 ? M_LAMP : a <= 2.6 ? M_BAR : M_BODY;
+      if (u <= -11) return a >= 3.6 && a <= 5.8 ? M_TAIL : M_BODY;
+      if (u >= 3.2 && u < 5.4 && a <= 4.6) return M_SCREEN;
+      if (u >= -1.8 && u < 3.2) return a <= 4.6 ? M_ROOF : a <= 5.5 && u >= -1 && u < 2.6 ? M_GLASS : M_BODY;
+      if (u >= -3.2 && u < -1.8 && a <= 5.8) return M_BAR;
+      if (u >= -10.4 && u < -3.2 && a <= 3.8) {
+        const d = (u + 6.8) * (u + 6.8) + v * v;
+        return d <= 1.1 ? M_HUB : d <= 7.3 ? M_SPARE : M_BED;
+      }
+      return M_BODY;
+    }
+    return arch(u) && a > 4.8 ? M_TYRE : M_NONE;
+  },
+  damage(u, v) {
+    // The left headlamp is gone, the windscreen cracked from its right corner.
+    if (u >= 10.7 && v <= -3.4 && v >= -5.8) return D_DEAD;
+    if (u >= 3.2 && u < 5.4 && Math.abs(v - 3 + (u - 3.2) * 1.1) <= 0.55 && v > -1) return D_CRACK;
+    // The bonnet's right half crumpled, rust along its edge; a rust patch on its left.
+    const dx = u - 8.2, dy = v - 3;
+    if (dx * dx + dy * dy * 1.4 <= 4.6) return dx - dy < -0.7 ? D_RUST : D_DENT;
+    if ((u - 9) * (u - 9) + (v + 2.8) * (v + 2.8) <= 1.6) return D_RUST;
+    // The left door in primer, a scratch along the right one, a dent in the roof.
+    if (u >= -1.4 && u < 3 && v <= -5.5) return D_PRIMER;
+    if (u >= -3.6 && u < 3 && Math.abs(v - 5.9) <= 0.5) return D_SCRATCH;
+    if ((u - 0.6) * (u - 0.6) + (v + 1.4) * (v + 1.4) <= 2.2) return u + v > -0.8 ? D_PRIMER : D_DENT;
+    // The bed's right wall dented in, rust on the tailgate.
+    if (u >= -9 && u < -5 && v >= 3.8) return u < -7 ? D_RUST : D_DENT;
+    if ((u + 11.3) * (u + 11.3) + (v + 1.4) * (v + 1.4) <= 1.8) return D_RUST;
+    return D_NONE;
+  },
+  // The cab's roof and the tailgate.
+  open(u, v) {
+    const a = Math.abs(v);
+    return (u >= -1.8 && u < 3.2 && a <= 4.6) || (u < -10.4 && a <= 3.4);
+  },
+};
+
+const LOOK: readonly Look[] = [sport, racer, truck];
 
 /** Rust on the wreck where the paint burnt off: patches, seeded. */
 function scorched(u: number, v: number): boolean {
@@ -133,13 +278,16 @@ const T_GLASS = 7;
 const T_GLINT = 8;
 const T_LAMP = 9;
 const T_TAIL = 10;
+const T_STEEL = 11; // bare steel in the shade: a wheel's arm, the bed's floor
+const T_BRIGHT = 12; // ... and in the sun: a tube's lit side, the helmet
+const T_SHINE = 13; // the shine on the helmet
 const TONES = 16;
 
 // The burnt wreck's own tones (index + 1 into BURNT).
-const BURNT: readonly PaletteName[] = ["soot0", "soot1", "soot2", "soot3", "dirt0", "rust0", "rust1"];
+const BURNT_TONES: readonly PaletteName[] = ["soot0", "soot1", "soot2", "soot3", "dirt0", "rust0", "rust1"];
 const B_PIT = 1, B_DARK = 2, B_CHAR = 3, B_EDGE = 4, B_ASH = 5, B_RUST = 6, B_EMBER = 7;
 // The damage's tones (index = D_*).
-const DAMAGE: readonly PaletteName[] = ["soot0", "soot3", "steel1", "steel2", "rust1", "soot2", "bone0"];
+const DAMAGE_TONES: readonly PaletteName[] = ["soot0", "soot3", "steel1", "steel2", "rust1", "soot2", "bone0"];
 
 interface CarIndex {
   car: Uint8Array; // T_*
@@ -147,22 +295,25 @@ interface CarIndex {
   burnt: Uint8Array; // B_*, 0 = open (outside the car, or the colour showing through)
 }
 
-let carIndex: CarIndex | null = null;
+const carIndex: (CarIndex | null)[] = LOOK.map(() => null);
 
-/** The three index sheets every colour shares, built on first use. */
-export function carIndexSheets(): CarIndex {
-  if (carIndex) return carIndex;
+/** The three index sheets of a look, which every colour shares, built on first use. */
+export function carIndexSheets(look = SPORT): CarIndex {
+  return carIndex[look] ?? (carIndex[look] = buildIndex(LOOK[look]));
+}
+
+function buildIndex(look: Look): CarIndex {
   // The masters: materials, damage and the open part, MASTER samples a view pixel. Only the
   // box the car lies in is worked out (13 x 9 view pixels either way); the rest stays empty.
   const mat = new Uint8Array(MSIZE * MSIZE), dmg = new Uint8Array(MSIZE * MSIZE), flags = new Uint8Array(MSIZE * MSIZE);
   for (let j = (HALF - 9) * MASTER; j < (HALF + 9) * MASTER; j++) {
     for (let i = (HALF - 13) * MASTER; i < (HALF + 13) * MASTER; i++) {
       const u = (i + 0.5) / MASTER - HALF, v = (j + 0.5) / MASTER - HALF;
-      const m = material(u, v);
+      const m = look.material(u, v);
       mat[j * MSIZE + i] = m;
       if (m >= M_BODY) {
-        dmg[j * MSIZE + i] = damage(u, v);
-        flags[j * MSIZE + i] = (open(u, v) ? 1 : 0) | (scorched(u, v) ? 2 : 0);
+        dmg[j * MSIZE + i] = look.damage(u, v);
+        flags[j * MSIZE + i] = (look.open(u, v) ? 1 : 0) | (scorched(u, v) ? 2 : 0);
       }
     }
   }
@@ -184,7 +335,7 @@ export function carIndexSheets(): CarIndex {
       }
     }
     const ox = (k % COLS) * CELL, oy = Math.floor(k / COLS) * CELL;
-    let glint = -1, glintAt = 1e9;
+    let glint = -1, glintAt = 1e9, shine = -1, shineAt = 1e9;
     for (let y = 0; y < CELL; y++) {
       for (let x = 0; x < CELL; x++) {
         const p = y * CELL + x, q = (y + 2) * PADDED + x + 2, o = (oy + y) * SHEET_W + ox + x;
@@ -201,6 +352,9 @@ export function carIndexSheets(): CarIndex {
         } else if (m === M_TYRE) {
           t = cell[q - 1] === M_NONE || cell[q - PADDED] === M_NONE ? T_TREAD : T_TYRE;
           b = B_PIT;
+        } else if (m === M_ARM) {
+          t = T_STEEL;
+          b = B_DARK;
         } else {
           const lit = !left || !above;
           const shade = !right || !below;
@@ -211,7 +365,19 @@ export function carIndexSheets(): CarIndex {
           else if (m === M_WING) t = lit ? T_BODY : T_SHADE;
           else if (m === M_LAMP) t = T_LAMP;
           else if (m === M_TAIL) t = T_TAIL;
-          else {
+          else if (m === M_PLATE) t = T_BODY;
+          else if (m === M_BAR) t = lit || cell[q - 1] !== M_BAR || cell[q - PADDED] !== M_BAR ? T_BRIGHT : T_GLINT;
+          else if (m === M_HUB) t = T_GLINT;
+          // The bed lies lower than its walls, which shade it along its top and left; the spare's tread catches the light there.
+          else if (m === M_BED) t = cell[q - 1] < M_BED || cell[q - PADDED] < M_BED ? T_GLASS : T_STEEL;
+          else if (m === M_SPARE) t = cell[q - 1] === M_BED || cell[q - PADDED] === M_BED ? T_TREAD : T_TYRE;
+          else if (m === M_HELMET) {
+            t = T_BRIGHT;
+            if (x + y < shineAt) {
+              shineAt = x + y;
+              shine = o;
+            }
+          } else {
             t = T_GLASS;
             if (m === M_SCREEN && x + y < glintAt) {
               glintAt = x + y;
@@ -220,8 +386,8 @@ export function carIndexSheets(): CarIndex {
           }
           // The wreck: charred, the edges still catching the light, rust where the paint burnt off.
           if (f & 1) b = 0;
-          else if (m === M_GLASS || m === M_SCREEN) b = B_PIT;
-          else if (m === M_LAMP || m === M_TAIL) b = B_DARK;
+          else if (m === M_GLASS || m === M_SCREEN || m === M_PIT || m === M_SPARE) b = B_PIT;
+          else if (m === M_LAMP || m === M_TAIL || m === M_HUB) b = B_DARK;
           else if (lit) b = B_ASH;
           else if (shade) b = B_DARK;
           else if (f & 2) b = (x + y) & 1 ? B_RUST : B_EMBER;
@@ -234,9 +400,9 @@ export function carIndexSheets(): CarIndex {
       }
     }
     if (glint >= 0) car[glint] = T_GLINT;
+    if (shine >= 0) car[shine] = T_SHINE;
   }
-  carIndex = { car, dents, burnt };
-  return carIndex;
+  return { car, dents, burnt };
 }
 
 // ---- colours --------------------------------------------------------------------------
@@ -253,10 +419,20 @@ function wordsOf(names: readonly PaletteName[]): Uint32Array {
   return out;
 }
 
-/** The tones of a car colour as pixel words: three of its own (the body is the colour itself) and the shared neutrals. */
+/** Index sheet to pixels. */
+function pixels(idx: Uint8Array, pal: Uint32Array, out: Uint32Array): Uint32Array {
+  for (let i = 0; i < idx.length; i++) out[i] = pal[idx[i]];
+  return out;
+}
+
+const palettes = new Map<string, Uint32Array>();
+
+/** The tones of a car colour as pixel words: three of its own (the body is the colour itself) and the shared neutrals. Kept per colour. */
 export function carPalette(color: string): Uint32Array {
+  let pal = palettes.get(color);
+  if (pal) return pal;
   const t = carTones(color);
-  const pal = new Uint32Array(TONES);
+  pal = new Uint32Array(TONES);
   pal[T_OUTLINE] = word(P.soot1);
   pal[T_TYRE] = word(P.soot2);
   pal[T_TREAD] = word(P.tar3);
@@ -267,34 +443,37 @@ export function carPalette(color: string): Uint32Array {
   pal[T_GLINT] = word(P.steel2);
   pal[T_LAMP] = word(P.haz2);
   pal[T_TAIL] = word(P.red);
+  pal[T_STEEL] = word(P.steel1);
+  pal[T_BRIGHT] = word(P.steel3);
+  pal[T_SHINE] = word(P.bone2);
+  palettes.set(color, pal);
   return pal;
 }
 
-/** Index sheet to pixels. */
-function pixels(idx: Uint8Array, pal: Uint32Array, out: Uint32Array): Uint32Array {
-  for (let i = 0; i < idx.length; i++) out[i] = pal[idx[i]];
+let dentWords: Uint32Array | null = null;
+let burntWords: Uint32Array | null = null;
+
+/**
+ * A car's sheet as pixels (0xAABBGGRR), SHEET_W x SHEET_H: cell k is heading k * HEADING_STEP.
+ * `state`: WHOLE, DENTED (the damage of a battered car on it) or BURNT (the wreck, open where
+ * the car's colour shows through).
+ */
+export function carPixels(color: string, out: Uint32Array = new Uint32Array(SHEET_W * SHEET_H), look = SPORT, state = WHOLE): Uint32Array {
+  const idx = carIndexSheets(look), pal = carPalette(color);
+  const car = idx.car;
+  if (state === WHOLE) return pixels(car, pal, out);
+  const over = state === BURNT ? idx.burnt : idx.dents;
+  const tones = state === BURNT ? (burntWords ??= wordsOf(BURNT_TONES)) : (dentWords ??= wordsOf(DAMAGE_TONES.slice(1)));
+  for (let i = 0; i < car.length; i++) {
+    const o = over[i];
+    out[i] = o ? tones[o] : pal[car[i]];
+  }
   return out;
 }
 
-/** A colour's sheet as pixels (0xAABBGGRR), SHEET_W x SHEET_H: cell k is heading k * HEADING_STEP. */
-export function carPixels(color: string, out: Uint32Array = new Uint32Array(SHEET_W * SHEET_H)): Uint32Array {
-  return pixels(carIndexSheets().car, carPalette(color), out);
-}
-
-/** The damage laid over a battered car. */
-export function dentPixels(out: Uint32Array = new Uint32Array(SHEET_W * SHEET_H)): Uint32Array {
-  const pal = wordsOf(DAMAGE.slice(1));
-  return pixels(carIndexSheets().dents, pal, out);
-}
-
-/** The burnt wreck, open where the car's colour shows through. */
-export function burntPixels(out: Uint32Array = new Uint32Array(SHEET_W * SHEET_H)): Uint32Array {
-  return pixels(carIndexSheets().burnt, wordsOf(BURNT), out);
-}
-
-/** The car's silhouette in black: the cast shadow (drawn at SHADOW_ALPHA) and the dark of a fall. */
-export function shadePixels(out: Uint32Array = new Uint32Array(SHEET_W * SHEET_H)): Uint32Array {
-  const car = carIndexSheets().car;
+/** A look's silhouette in black: the cast shadow (drawn at SHADOW_ALPHA) and the dark of a fall. */
+export function shadePixels(out: Uint32Array = new Uint32Array(SHEET_W * SHEET_H), look = SPORT): Uint32Array {
+  const car = carIndexSheets(look).car;
   for (let i = 0; i < car.length; i++) out[i] = car[i] ? 0xff000000 : 0;
   return out;
 }
@@ -470,6 +649,8 @@ interface CarSheet {
   canvas: HTMLCanvasElement;
   ctx: CanvasRenderingContext2D;
   color: string;
+  look: number;
+  state: number;
   used: number; // the last frame it was asked for
 }
 
@@ -495,72 +676,109 @@ function sheetCanvas(w: number, h: number): { canvas: HTMLCanvasElement; ctx: Ca
   return { canvas, ctx: canvas.getContext("2d", { willReadFrequently: soft })! };
 }
 
-function paint(ctx: CanvasRenderingContext2D, w: number, h: number, fill: (out: Uint32Array) => unknown): void {
-  if (typeof ImageData === "undefined") return; // no browser (a Node probe): the canvas stays empty
-  const img = new ImageData(w, h);
-  fill(new Uint32Array(img.data.buffer));
-  ctx.putImageData(img, 0, 0);
+// The pixels of one car sheet on their way to its canvas. Kept (0.5 MB, not a canvas): a car's
+// sheet is painted again whenever its state changes, in the middle of a race, and a frame
+// allocates nothing.
+let pixelsOut: ImageData | null = null;
+let wordsOut: Uint32Array | null = null;
+
+function sheetWords(): Uint32Array | null {
+  if (typeof ImageData === "undefined") return null; // no browser (a Node probe): the canvas stays empty
+  if (!pixelsOut) {
+    pixelsOut = new ImageData(SHEET_W, SHEET_H);
+    wordsOut = new Uint32Array(pixelsOut.data.buffer);
+  }
+  return wordsOut;
 }
 
-/**
- * A colour's sheet painted on its canvas. Its own function, for carSheet()'s sake, which runs
- * for every car drawn: a function holding a closure over one of its own variables makes a
- * context for them on every call, also on a call that never gets as far as the closure.
- */
-function paintCar(ctx: CanvasRenderingContext2D, color: string): void {
-  paint(ctx, SHEET_W, SHEET_H, (out) => carPixels(color, out));
-}
-
-const carSheets = new Map<string, CarSheet>();
+const carSheets: CarSheet[] = [];
 let clock = 0;
 
-/** A new frame: sheets asked for from now on are in use and are not given to another colour. */
+/** A new frame: sheets asked for from now on are in use and are not given to another car. */
 export function spriteFrame(): void {
   clock++;
 }
 
-/** The sheet of a car colour: built on first use; with MAX_CAR_SHEETS in use, the one unused for longest is repainted. */
-export function carSheet(color: string): HTMLCanvasElement {
-  let s = carSheets.get(color);
-  if (!s) {
-    if (carSheets.size < MAX_CAR_SHEETS) s = { ...sheetCanvas(SHEET_W, SHEET_H), color, used: 0 };
-    else {
-      for (const o of carSheets.values()) if (!s || o.used < s.used) s = o;
-      s = s!;
-      carSheets.delete(s.color);
-      s.ctx.clearRect(0, 0, SHEET_W, SHEET_H);
-      s.color = color;
+/**
+ * The sheet of a car: its colour, its look (lookOf) and its state (WHOLE, DENTED, BURNT).
+ * Built on first use. With MAX_CAR_SHEETS in use another sheet is painted again as this one:
+ * the car's own from before its state changed (a room gives every car a colour of its own),
+ * if no car drew from it this frame, else the one unused for longest.
+ */
+export function carSheet(color: string, look = SPORT, state = WHOLE): HTMLCanvasElement {
+  for (let i = 0; i < carSheets.length; i++) {
+    const s = carSheets[i];
+    if (s.state === state && s.look === look && s.color === color) {
+      s.used = clock;
+      return s.canvas;
     }
-    carSheets.set(color, s);
-    paintCar(s.ctx, color);
   }
-  s.used = clock;
+  return newCarSheet(color, look, state);
+}
+
+function newCarSheet(color: string, look: number, state: number): HTMLCanvasElement {
+  let s: CarSheet;
+  if (carSheets.length < MAX_CAR_SHEETS) {
+    const made = sheetCanvas(SHEET_W, SHEET_H);
+    s = { canvas: made.canvas, ctx: made.ctx, color, look, state, used: clock };
+    carSheets.push(s);
+  } else {
+    let own: CarSheet | null = null;
+    s = carSheets[0];
+    for (let i = 0; i < carSheets.length; i++) {
+      const o = carSheets[i];
+      if (o.used < s.used) s = o;
+      if (o.color === color && o.used < clock && (!own || o.used < own.used)) own = o;
+    }
+    if (own) s = own;
+    s.color = color;
+    s.look = look;
+    s.state = state;
+    s.used = clock;
+  }
+  const out = sheetWords();
+  if (out) {
+    carPixels(color, out, look, state);
+    s.ctx.putImageData(pixelsOut!, 0, 0);
+  }
   return s.canvas;
 }
 
+const shades: (HTMLCanvasElement | null)[] = LOOKS.map(() => null);
+
+/** A look's silhouette sheet, built on first use and kept: three at most. */
+export function shadeSheet(look = SPORT): HTMLCanvasElement {
+  return shades[look] ?? newShade(look);
+}
+
+function newShade(look: number): HTMLCanvasElement {
+  const s = sheetCanvas(SHEET_W, SHEET_H);
+  const out = sheetWords();
+  if (out) {
+    shadePixels(out, look);
+    s.ctx.putImageData(pixelsOut!, 0, 0);
+  }
+  return (shades[look] = s.canvas);
+}
+
 export interface SharedSheets {
-  dents: HTMLCanvasElement;
-  burnt: HTMLCanvasElement;
+  /** The sport's silhouette, as shadeSheet(SPORT) hands it out. */
   shade: HTMLCanvasElement;
   fx: HTMLCanvasElement;
 }
 
 let shared: SharedSheets | null = null;
 
-/** The sheets every car shares and the effect sheet, built on first use. */
+/** The effect sheet, and the silhouette of the look every room has, built on first use. */
 export function sharedSheets(): SharedSheets {
   if (!shared) {
-    const make = (w: number, h: number, fill: (out: Uint32Array) => unknown) => {
-      const s = sheetCanvas(w, h);
-      paint(s.ctx, w, h, fill);
-      return s.canvas;
-    };
-    shared = {
-      dents: make(SHEET_W, SHEET_H, dentPixels),
-      burnt: make(SHEET_W, SHEET_H, burntPixels),
-      shade: make(SHEET_W, SHEET_H, shadePixels),
-      fx: make(FX_W, FX_H, fxPixels),
-    };
+    const fx = sheetCanvas(FX_W, FX_H);
+    if (typeof ImageData !== "undefined") {
+      const img = new ImageData(FX_W, FX_H);
+      fxPixels(new Uint32Array(img.data.buffer));
+      fx.ctx.putImageData(img, 0, 0);
+    }
+    shared = { shade: shadeSheet(SPORT), fx: fx.canvas };
   }
   return shared;
 }
@@ -570,5 +788,5 @@ export function spriteBytes(): number {
   return bytes;
 }
 
-/** The most the sprite sheets can ever hold: every colour sheet, the three shared ones, the effects. */
-export const SPRITE_BYTES_MAX = (MAX_CAR_SHEETS + 3) * SHEET_W * SHEET_H * 4 + FX_W * FX_H * 4;
+/** The most the sprite sheets can ever hold: every car sheet, a silhouette a look, the effects. As it was with one look. */
+export const SPRITE_BYTES_MAX = (MAX_CAR_SHEETS + LOOKS.length) * SHEET_W * SHEET_H * 4 + FX_W * FX_H * 4;
