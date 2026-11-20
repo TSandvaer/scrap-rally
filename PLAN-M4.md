@@ -315,3 +315,16 @@ Ownership rule:
 Adopted suggestions: a `pointAt` equivalence test (binary vs linear) on every track; a truck corner-cutting test (its dirt top speed
 ~269 u/s vs the sport's 148); the ±3% lap target is a guide, the taste gate is the real check; tune the draft with weapons on; air cells
 off-centre (or the lane-0 bot always takes them). Wave 1 (M4-BOTS + M4-LOOKS) confirmed as the right first slice.
+
+## User decisions (2026-11-20, popups; plan approved)
+
+- **Approved** with the advisor changes, and these defaults: the car choice can change between races (locked per race); the ramp
+  truck is parked, not moving; bot names like "Gasket (bot)" (an original name list, assigned by add order); race payouts unchanged
+  for now (measure the snowball after catch-up lands).
+- **Different paths = split lanes** (road widens around an island into two lanes with different trade-offs). True branching roads:
+  a later milestone.
+- **Bots:** Normal bots buy ammo + upgrades and use rivets/mines; Easy bots buy upgrades only and never shoot. A human joining a
+  FULL room replaces the last-added bot (lobby only; in a race the join is refused as today).
+- **Catch-up always on**, no host toggle (add one later only if the taste gate asks). Boost duration weighted by the gap to the
+  leader, shown on the HUD.
+- Wave 1 starts now: M4-BOTS (Opus) and M4-LOOKS (Fable).
