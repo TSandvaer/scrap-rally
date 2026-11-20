@@ -7,7 +7,8 @@
 // fixture scenes after them (fx, wreck, damage, mine, spectator, pause, countdown: the states
 // no feature scene shows; no test reads the renderer's output, so these frames are the
 // regression net of the graphics work), then the scenes added since (blast: a mine's blast,
-// a landing's puff and dust from the verge). URL: &scene=<name> to start on one, &freeze=1 to hold
+// a landing's puff and dust from the verge; looks: the three car looks driving a bend).
+// URL: &scene=<name> to start on one, &freeze=1 to hold
 // the scene's key moment, &t=<seconds> to hold any moment, &hud=0 to hide the caption.
 // A held moment pins performance.now() too while it draws (smoke and the mine blink read it),
 // so the same URL gives the same pixels on every load.
@@ -344,6 +345,29 @@ function fixtures(track: Track, rust: Track): Scene[] {
       }),
       lead: 0.6,
       key: 0.6,
+    },
+    {
+      name: "looks",
+      title: "Looks: sport, racer and truck through a bend; two battered, a wreck",
+      rust: true,
+      cam: at(rust, 7470),
+      // Round the bend again and again: the racers on the outside, the sports in the middle, a
+      // truck cutting the corner over the verge; the other truck a wreck beside the road.
+      cars: (t) => {
+        const lap = (i: number, v: number, lat: number, from: number, more: Partial<CarView>) => car(rust, i, 7180 + ((t * v + from) % 480), lat, more);
+        const wreck = car(rust, 5, 7450, -92, { car: "truck", name: "Truck", wreck: true });
+        wreck.h += 0.9;
+        return [
+          lap(0, 320, 2, 120, { car: "sport" }),
+          lap(1, 360, -38, 0, { car: "racer", name: "Racer" }),
+          lap(2, 250, rust.def.halfWidth + 20, 60, { car: "truck", name: "Truck" }),
+          lap(3, 320, 2, 360, { car: "sport", name: "Sport 30%", hp: 0.3 }),
+          lap(4, 360, -38, 240, { car: "racer", name: "Racer 30%", hp: 0.3 }),
+          wreck,
+        ];
+      },
+      lead: 0.6,
+      key: 1,
     },
   ];
 }

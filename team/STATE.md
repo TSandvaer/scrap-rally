@@ -333,6 +333,13 @@ M4-BOTS done: f19fdcd (sim 587/587, bots 100/100; 3 Normal + 3 Easy finish every
 tick 5 bots 5.25 us). Opus reviewer ctx_8860bc601f07 (tmp/review-m4-bots.md). Report + shots in tmp/m4-bots/.
 Taste copy m4-bots-taste (detached f19fdcd) on :3009, node pid 38107 (mines1-taste removed, old pid 28890 killed).
 M4-BOTS taste gate: user APPROVED (popup). Merge on the Opus reviewer's APPROVE.
+M4-BOTS MERGED 2026-11-20: review APPROVE (no findings); main 9a71e5d (check clean, sim 587/587, bots 100/100, build ok); ticket
+ready for qa test; workers released, m4-bots workspace removed (taste copy m4-bots-taste still on :3009).
+WAVE 2: M4-CARS 123jpnbffdz + M4-ENV 123jpnbffe0 in ONE Opus worker ctx_99a9c55e67a2 (~/orca/workspaces/scrap-rally/m4-cars, TSandvaer/m4-cars, :3006;
+spec tmp/spec-m4-cars-env.md; it waits for my word that M4-LOOKS merged before wiring CarView.car). M4-LOOKS still in flight.
+M4-LOOKS done: 1a2f1e4 (gate PASS, noise 0.005, 30 A ratios 0.021-0.700; memory 11,173,888 B unchanged; repaint ~0.2 ms; 0 px diff
+in 17 scenes). User APPROVED the looks in motion (popup). Fable reviewer ctx_21d8f4e7a383 (tmp/review-m4-looks.md). Evidence copied to
+tmp/m4-looks/. On merge: tell M4-CARS (ctx_99a9c55e67a2) to merge main and wire CarView.car.
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
@@ -389,7 +396,7 @@ Manual Deploy only on the user's go-ahead. The user's own dev server runs on :30
 
 | Ticket | Dispatch | Workspace | Branch | Port | Started |
 | --- | --- | --- | --- | --- | --- |
-| 123jpnbffd8 M4-BOTS | ctx_2c145cced1d2 | ~/orca/workspaces/scrap-rally/m4-bots | TSandvaer/m4-bots | 3006 | 2026-11-20 |
+| 123jpnbffdz+123jpnbffe0 M4-CARS+ENV | ctx_99a9c55e67a2 | ~/orca/workspaces/scrap-rally/m4-cars | TSandvaer/m4-cars | 3006 | 2026-11-20 |
 | 123jpnbffd9 M4-LOOKS | ctx_52d5f91b4d80 | ~/orca/workspaces/scrap-rally/m4-looks | TSandvaer/m4-looks | 3008 | 2026-11-20 |
 | 123jpnbfb23 GFX-0 | ctx_27a7a271607b | ~/orca/workspaces/scrap-rally/gfx0 | TSandvaer/gfx0 | 3006 | 2026-11-18 |
 
