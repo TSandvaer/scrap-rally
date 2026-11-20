@@ -301,6 +301,9 @@ prediction on screen; live lagged pack race 83/98 -> 0/8 stamps; lag 0 slightly 
 Re-check: REQUEST_CHANGES (first on GFX-4): marksOn()'s first-mark clearMarks() counts as a clearing -> blasts in that 300 ms
 window leave no scorch (world.ts:1973/2040, actors.ts:322-330). Fix (b) passes; no new taste check needed. Fix 2 worker
 ctx_d61d57754174 (tmp/gfx4-fix2.md). A second REQUEST_CHANGES on GFX-4 goes to the user.
+Fix 2 done: 68a8e65 (dropMarks() uncounted for a first mark; marks-check 36/36, 3 FAIL on bb07a73; 0 px diff). Quick re-check APPROVE
+(ctx_d227c7211199). GFX-4 MERGED 2026-11-20: main c6cbd45 (check clean, sim 492/492, bots 95/95, build ok). Graphics round complete.
+Pushing main to origin now (user popup "Push right after GFX-4"); then the user clicks Manual Deploy; then muted live QA; MINES-1 next.
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
@@ -357,7 +360,6 @@ Manual Deploy only on the user's go-ahead. The user's own dev server runs on :30
 
 | Ticket | Dispatch | Workspace | Branch | Port | Started |
 | --- | --- | --- | --- | --- | --- |
-| 123jpnbfb2c GFX-4 | ctx_297e4d30b671 | ~/orca/workspaces/scrap-rally/gfx4 | TSandvaer/gfx4 | 3006 | 2026-11-19 |
 | 123jpnbfb23 GFX-0 | ctx_27a7a271607b | ~/orca/workspaces/scrap-rally/gfx0 | TSandvaer/gfx0 | 3006 | 2026-11-18 |
 
 ## Queued (milestone 3, PLAN-M3.md; start after solid collisions 123jpnbf6cy and easier-start 123jpnbf3xa merge)
