@@ -317,6 +317,8 @@ QA6 LIVE PASS 2026-11-20 (tmp/qa6-graphics-live-report.md): all 6 tickets PASS, 
 burnt looks, 128 headings, smoke/dust, scorch clearing at a new race. Tickets 123jpnbfayd, GFX-1/2a/2b/3/4 commented + complete;
 QA worker released. Graphics round DONE and LIVE (4819a45). Local main a8182b8 = live + MINES-1 (797d290), not pushed.
 NOTHING IN FLIGHT. Taste copy mines1-taste still on :3009.
+PUSHED 2026-11-20 (user popup "Push MINES-1 now"): origin/main 4819a45..2e9ec7f. Waiting for the user's Manual Deploy; new bundle
+index-pWtsH_4Y.js (live now index-SEQmFjen.js); then a short muted live QA of the Mines setting.
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
