@@ -1,5 +1,6 @@
 // Browser entry: menu / lobby / results panels, HUD text, camera and the fixed-step loop.
 
+import { CAR_TYPES, carName, CARS, type CarType } from "../shared/cars";
 import { pointAt } from "../shared/track";
 import { MAX_PLAYERS, PAUSE_MAX_MS, type GameEvent, type ResultRow } from "../shared/protocol";
 import { AMMO, AMMO_IDS, priceOf, UPGRADE_IDS, UPGRADES, type ItemId, type Wallet } from "../shared/shop";
@@ -86,6 +87,8 @@ const ui = {
   resultRows: $("results-rows"),
   resultScrap: $("results-scrap"),
   scrap: $("scrap"),
+  carPick: $("car-pick"),
+  carNote: $("car-note"),
   shop: $("shop"),
   toast: $("toast"),
 };
@@ -397,6 +400,9 @@ function updatePanels(): void {
       if (p.bot) li.append(span("tag-pill bot", p.bot === "easy" ? "easy bot" : "bot"));
       else if (p.ready && p.id !== game.hostId) li.append(span("tag-pill ready", "ready"));
       if (p.retired) li.append(span("tag-pill", "retired"));
+      // The car they race with (M4-CARS); the host picks a bot's in the lobby, on its row.
+      if (p.bot && hostLobby) li.append(botCarSelect(p.id, p.name, game.carOf(p.id)));
+      else li.append(span("tag-pill car", carName(game.carOf(p.id))));
       if (p.bot && hostLobby) li.append(removeBotButton(p.id, p.name));
       return li;
     }),
@@ -420,6 +426,16 @@ function removeBotButton(id: string, name: string): HTMLButtonElement {
   b.setAttribute("aria-label", `Remove ${name}`);
   b.addEventListener("click", () => game.kick(id));
   return b;
+}
+
+/** A bot row's car (host, lobby): Sport, Racer or Truck; the room message confirms it. */
+function botCarSelect(id: string, name: string, car: CarType): HTMLSelectElement {
+  const sel = document.createElement("select");
+  sel.className = "row-car";
+  sel.setAttribute("aria-label", `${name}'s car`);
+  for (const t of CAR_TYPES) sel.append(new Option(carName(t), t, false, t === car));
+  sel.addEventListener("change", () => game.pickBotCar(id, sel.value as CarType));
+  return sel;
 }
 
 /** The host's Add bot row (lobby only): off while the room is full. Room messages only. */
@@ -533,13 +549,14 @@ function wallet(): Wallet {
   return { scrap: game.scrap, levels: { ...game.levels }, ammo: { rivets, mines } };
 }
 
-/** Rebuild the shop list only when something it shows has changed. */
+/** Rebuild the car row and the shop list only when something they show has changed. */
 function renderGarage(force = false): void {
   const w = wallet();
-  const key = JSON.stringify(w);
+  const key = JSON.stringify([w, game.carType, game.phase]);
   if (!force && key === garageKey) return;
   garageKey = key;
   ui.scrap.textContent = String(w.scrap);
+  renderCarPick();
   const row = (item: ItemId, name: string, blurb: string, extra: HTMLElement) => {
     const li = document.createElement("li");
     const title = span("item", name);
@@ -572,6 +589,30 @@ function renderGarage(force = false): void {
       return row(id, `${a.name} ×${a.pack}`, use, span("count", `${w.ammo[id]}/${a.cap}`));
     }),
   );
+}
+
+/**
+ * The Car row (M4-CARS): three cards, name and feel; the one the server confirmed is lit. Free
+ * to switch in the lobby; a retired player's garage during a race shows it but cannot change it.
+ */
+function renderCarPick(): void {
+  const lobby = game.phase === "lobby";
+  ui.carPick.replaceChildren(
+    ...CAR_TYPES.map((t) => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "car-card";
+      b.setAttribute("role", "radio");
+      b.setAttribute("aria-checked", String(t === game.carType));
+      b.disabled = !lobby;
+      b.append(span("car-name", CARS[t].name), span("car-feel", CARS[t].feel));
+      b.addEventListener("click", () => {
+        if (t !== game.carType) game.pickCar(t);
+      });
+      return b;
+    }),
+  );
+  setText(ui.carNote, lobby ? "Switching is free. Your upgrades go with you." : "You can change cars in the lobby.");
 }
 
 function span(cls: string, text: string): HTMLSpanElement {
@@ -793,7 +834,9 @@ function draw(alpha: number, elapsed: number): void {
     const ghost = !!(st.ghost || s?.ghost);
     const { x, y, h } = at;
     const hp = s && s.maxHp > 0 ? s.hp / s.maxHp : 1;
-    return { id, x, y, h, me, color: p?.color ?? "#888", name: p?.name ?? "?", wreck, ghost, height: st.height, falling: st.falling, hp };
+    // The car's look (M4-CARS): the type the room message names; absent or unknown = the Sport.
+    const car = game.carOf(id);
+    return { id, x, y, h, me, color: p?.color ?? "#888", name: p?.name ?? "?", wreck, ghost, height: st.height, falling: st.falling, hp, car };
   };
   // Other cars at the interpolation time; near ones are drawn at their predicted pose,
   // where the own car bumps into them (client/contact.ts). The state stays the pose's, except

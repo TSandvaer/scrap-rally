@@ -12,6 +12,7 @@ import {
   makeButtons,
   MINE_DAMAGE,
   RIVET_DAMAGE,
+  raceEnv,
   shotHits,
   spinOut,
   SPIN_KICK,
@@ -168,7 +169,7 @@ class Sim {
     const pt = pointAt(track, s);
     const x = pt.x - Math.sin(pt.h) * lateral;
     const y = pt.y + Math.cos(pt.h) * lateral;
-    p.car = { x, y, h: pt.h, vx: Math.cos(pt.h) * speed, vy: Math.sin(pt.h) * speed, seg: pt.seg, wreck: 0, air: 0, fall: 0 };
+    p.car = { x, y, h: pt.h, vx: Math.cos(pt.h) * speed, vy: Math.sin(pt.h) * speed, seg: pt.seg, wreck: 0, air: 0, fall: 0, boost: 0 };
     p.progress = { s: queryTrackNear(track, x, y, pt.seg).s, cp: 1, lap: 0, fin: 0 };
   }
 
@@ -300,7 +301,7 @@ function mines(): void {
   if (!m) return;
   // B parks 2 units off the mine, before it arms.
   const pt = pointAt(track, 0);
-  b.car = { x: m.x, y: m.y + 2, h: pt.h, vx: 0, vy: 0, seg: a.car!.seg, wreck: 0, air: 0, fall: 0 };
+  b.car = { x: m.x, y: m.y + 2, h: pt.h, vx: 0, vy: 0, seg: a.car!.seg, wreck: 0, air: 0, fall: 0, boost: 0 };
   const h0 = b.car.h;
   let hitAt = -1;
   for (let i = 0; i < 40 && hitAt < 0; i++) {
@@ -326,7 +327,7 @@ function mines(): void {
   check("an armed mine also hits its owner", a.hp === 85, `a.hp=${a.hp}`);
   check("no wreck credit for hurting yourself", !sim.room.combat.wrecksCaused.has(a.id));
 
-  const c = { x: 0, y: 0, h: 0, vx: 100, vy: 0, seg: 0, wreck: 0, air: 0, fall: 0 };
+  const c = { x: 0, y: 0, h: 0, vx: 100, vy: 0, seg: 0, wreck: 0, air: 0, fall: 0, boost: 0 };
   spinOut(c, 0, 10);
   check("spin-out is deterministic: away from the mine, speed x0.3", c.h === -SPIN_KICK && Math.abs(c.vx - 30) < 1e-9);
 }
@@ -353,7 +354,7 @@ function wrecks(): void {
   const frozenAt = { x: b.car!.x, y: b.car!.y };
   sim.run(WRECK_TICKS - 1, (p) => (p === b ? { throttle: 1 } : {}));
   check("wrecked car stays put with the throttle held", b.car!.x === frozenAt.x && b.car!.y === frozenAt.y && b.car!.wreck === 1);
-  for (let i = 0; i < WRECK_TICKS; i++) stepRaceCar(clone, { throttle: 1, steer: 0 }, b.stats, track);
+  for (let i = 0; i < WRECK_TICKS; i++) stepRaceCar(clone, { throttle: 1, steer: 0 }, b.stats, raceEnv(track));
   sim.run(1, (p) => (p === b ? { throttle: 1 } : {}));
   const q = queryTrackNear(track, b.car!.x, b.car!.y, b.car!.seg);
   check("respawn on the centerline at the same distance", q.dist < 0.5 && Math.abs(q.s - sAtWreck) < 0.5, `dist=${q.dist.toFixed(2)} ds=${(q.s - sAtWreck).toFixed(2)}`);
@@ -589,7 +590,7 @@ function garage(): void {
   check("garage closed during a race", sim.room.buy(a, "mines") === "The garage is closed during a race");
   check(
     "upgrades change the stats the car steps with: engine raises accel, not top speed",
-    a.stats.accel === statsFor(a.levels).accel && a.stats.accel > BASE_STATS.accel * 1.069 && a.stats.topSpeed === BASE_STATS.topSpeed,
+    a.stats.accel === statsFor("sport", a.levels).accel && a.stats.accel > BASE_STATS.accel * 1.069 && a.stats.topSpeed === BASE_STATS.topSpeed,
     `accel=${a.stats.accel.toFixed(1)} topSpeed=${a.stats.topSpeed}`,
   );
 
@@ -616,7 +617,7 @@ function garage(): void {
 
 // ---- solid car collisions -------------------------------------------------------------
 
-const body = (x: number, y: number, h: number, vx = 0, vy = 0): CarState => ({ x, y, h, vx, vy, seg: 0, wreck: 0, air: 0, fall: 0 });
+const body = (x: number, y: number, h: number, vx = 0, vy = 0): CarState => ({ x, y, h, vx, vy, seg: 0, wreck: 0, air: 0, fall: 0, boost: 0 });
 
 /** b relative to a, in a's frame: along a's heading and sideways. */
 function relPos(a: CarState, b: CarState): { along: number; lat: number } {
@@ -647,7 +648,7 @@ function drive(a: CarState, b: CarState, n: number): { overlap: number; touched:
 
 /** Snapshot-shaped car (what the client's prediction sees). */
 function snapCar(id: string, c: CarState, extra: Partial<CarSnap> = {}): CarSnap {
-  return { k: "car", id, x: c.x, y: c.y, h: c.h, vx: c.vx, vy: c.vy, seg: 0, lap: 0, rd: 0, fin: 0, hp: 100, maxHp: 100, wreck: c.wreck, air: c.air, fall: c.fall, ghost: false, ...extra };
+  return { k: "car", id, x: c.x, y: c.y, h: c.h, vx: c.vx, vy: c.vy, seg: 0, lap: 0, rd: 0, fin: 0, hp: 100, maxHp: 100, wreck: c.wreck, air: c.air, fall: c.fall, boost: c.boost, ghost: false, ...extra };
 }
 
 function collisions(): void {
@@ -1070,11 +1071,11 @@ function armDelay(): void {
 // full throttle from standstill, same terminal speed at every level, L3 gets there sooner.
 function engine(): void {
   const ok = [0, 1, 2, 3].every((e) => {
-    const s = statsFor({ engine: e, tyres: 0, welder: 0 });
+    const s = statsFor("sport", { engine: e, tyres: 0, welder: 0 });
     return s.topSpeed === BASE_STATS.topSpeed && Math.abs(s.accel - BASE_STATS.accel * (1 + 0.07 * e)) < 1e-9;
   });
   check("engine L0-L3: accel +7% per level, top speed always the base value", ok);
-  const t2 = statsFor({ engine: 3, tyres: 2, welder: 1 });
+  const t2 = statsFor("sport", { engine: 3, tyres: 2, welder: 1 });
   check("tyres still scale grip and turn", Math.abs(t2.grip - BASE_STATS.grip * 1.2) < 1e-9 && Math.abs(t2.turn - BASE_STATS.turn * 1.08) < 1e-9);
 
   // A long closed loop whose bottom edge is a 12 000 u straight (collinear control points keep
@@ -1089,8 +1090,8 @@ function engine(): void {
   const flat = buildTrack(straight);
   const SECONDS = 8;
   const drive = (level: number) => {
-    const stats = statsFor({ engine: level, tyres: 0, welder: 0 });
-    const c: CarState = { x: 1500, y: 0, h: 0, vx: 0, vy: 0, seg: 0, wreck: 0, air: 0, fall: 0 };
+    const stats = statsFor("sport", { engine: level, tyres: 0, welder: 0 });
+    const c: CarState = { x: 1500, y: 0, h: 0, vx: 0, vy: 0, seg: 0, wreck: 0, air: 0, fall: 0, boost: 0 };
     let t300 = -1;
     for (let i = 1; i <= SECONDS * TICK_HZ; i++) {
       stepCar(c, { throttle: 1, steer: 0 }, stats, flat);
@@ -1146,7 +1147,7 @@ function trackFeatures(): void {
   });
   const jt = buildTrack(jumpsDef());
   const carAt = (t: Track, x: number, y: number, speed: number, h = 0): CarState => ({
-    x, y, h, vx: Math.cos(h) * speed, vy: Math.sin(h) * speed, seg: queryTrack(t, x, y).seg, wreck: 0, air: 0, fall: 0,
+    x, y, h, vx: Math.cos(h) * speed, vy: Math.sin(h) * speed, seg: queryTrack(t, x, y).seg, wreck: 0, air: 0, fall: 0, boost: 0,
   });
   type Ev = { i: number; ev: RaceStepEvent; x: number; y: number; v: number };
   /** Step n ticks; returns the events with the pose after the step and the speed before it. */
@@ -1154,7 +1155,7 @@ function trackFeatures(): void {
     const evs: Ev[] = [];
     for (let i = 0; i < n; i++) {
       const v = speedOf(c);
-      const ev = stepRaceCar(c, input, BASE_STATS, t);
+      const ev = stepRaceCar(c, input, BASE_STATS, raceEnv(t));
       if (ev) {
         const e = { i, ev, x: c.x, y: c.y, v };
         evs.push(e);
@@ -1178,8 +1179,8 @@ function trackFeatures(): void {
     let same = true, frozenOk = true, peak = 0;
     let ticks = 0;
     while (c.air! > 0 && ticks < 200) {
-      stepRaceCar(c, { throttle: 1, steer: 0 }, BASE_STATS, jt);
-      stepRaceCar(twin, { throttle: -1, steer: 1 }, BASE_STATS, jt);
+      stepRaceCar(c, { throttle: 1, steer: 0 }, BASE_STATS, raceEnv(jt));
+      stepRaceCar(twin, { throttle: -1, steer: 1 }, BASE_STATS, raceEnv(jt));
       ticks++;
       peak = Math.max(peak, airHeight(c));
       same &&= c.x === twin.x && c.y === twin.y && c.h === twin.h && c.vx === twin.vx && c.air === twin.air;
@@ -1223,7 +1224,7 @@ function trackFeatures(): void {
     let still = true, ticks = 0, ev: RaceStepEvent | null = null;
     const counts: number[] = [];
     while (!ev && ticks < 200) {
-      ev = stepRaceCar(c, { throttle: 1, steer: 1 }, BASE_STATS, jt);
+      ev = stepRaceCar(c, { throttle: 1, steer: 1 }, BASE_STATS, raceEnv(jt));
       ticks++;
       if (!ev) {
         counts.push(c.fall!);
@@ -1256,7 +1257,7 @@ function trackFeatures(): void {
     // the same car moving backward through it does not.
     const fwd = carAt(jt, 2503, 0, 300);
     const back = carAt(jt, 2503, 0, 300, Math.PI);
-    const ef = stepRaceCar(fwd, NO_COMMAND, BASE_STATS, jt), eb = stepRaceCar(back, NO_COMMAND, BASE_STATS, jt);
+    const ef = stepRaceCar(fwd, NO_COMMAND, BASE_STATS, raceEnv(jt)), eb = stepRaceCar(back, NO_COMMAND, BASE_STATS, raceEnv(jt));
     check("jump: take-off is level-triggered in the lip zone, forward only", ef === "takeoff" && eb === "fall", `forward ${ef}, backward ${eb}`);
   }
 
@@ -1279,7 +1280,7 @@ function trackFeatures(): void {
     const c = carAt(jt, 6000, 0, 0);
     c.y = 2 * jt.wall + 10;
     const q = queryTrackNear(jt, c.x, c.y, c.seg);
-    const ev = stepRaceCar(c, { throttle: 1, steer: 0 }, BASE_STATS, jt);
+    const ev = stepRaceCar(c, { throttle: 1, steer: 0 }, BASE_STATS, raceEnv(jt));
     check("lost: > 2 * wall from its own section falls", ev === "fall" && c.fall === FALL_TICKS && Math.abs(q.dist - (2 * jt.wall + 10)) < 1e-6, `dist ${q.dist.toFixed(1)}`);
     // A sideways jump that lands beyond the walls falls.
     const side = carAt(jt, 2503, 0, 380, 0.5);
@@ -1313,31 +1314,31 @@ function trackFeatures(): void {
     c.wreck = 3;
     c.fall = 50;
     c.air = 10;
-    const ev = stepRaceCar(c, { throttle: 1, steer: 0 }, BASE_STATS, jt);
+    const ev = stepRaceCar(c, { throttle: 1, steer: 0 }, BASE_STATS, raceEnv(jt));
     check("precedence: a wreck beats fall and air (only the wreck counts down)", ev === null && c.wreck === 2 && c.fall === 50 && c.air === 10 && c.x === 3000);
-    stepRaceCar(c, { throttle: 1, steer: 0 }, BASE_STATS, jt);
-    stepRaceCar(c, { throttle: 1, steer: 0 }, BASE_STATS, jt);
+    stepRaceCar(c, { throttle: 1, steer: 0 }, BASE_STATS, raceEnv(jt));
+    stepRaceCar(c, { throttle: 1, steer: 0 }, BASE_STATS, raceEnv(jt));
     check("precedence: the respawn clears fall and air", c.wreck === 0 && c.fall === 0 && c.air === 0 && Math.abs(c.y) < 1e-9);
     const f = carAt(jt, 3000, 0, 200);
     f.fall = 10;
     f.air = 10;
-    const e2 = stepRaceCar(f, { throttle: 1, steer: 0 }, BASE_STATS, jt);
+    const e2 = stepRaceCar(f, { throttle: 1, steer: 0 }, BASE_STATS, raceEnv(jt));
     check("precedence: a fall beats air (frozen, no flight)", e2 === null && f.fall === 9 && f.air === 10 && f.x === 3000 && f.vx === 0);
     // A wreck respawn over a gap goes to the recovery point; on the road it stays put.
     const w = carAt(jt, 2600, 0, 0);
     wreckCar(w);
-    for (let i = 0; i < WRECK_TICKS; i++) stepRaceCar(w, NO_COMMAND, BASE_STATS, jt);
+    for (let i = 0; i < WRECK_TICKS; i++) stepRaceCar(w, NO_COMMAND, BASE_STATS, raceEnv(jt));
     const rec = pointAt(jt, sx(2000));
     const r = carAt(jt, 3000, 20, 0);
     wreckCar(r);
-    for (let i = 0; i < WRECK_TICKS; i++) stepRaceCar(r, NO_COMMAND, BASE_STATS, jt);
+    for (let i = 0; i < WRECK_TICKS; i++) stepRaceCar(r, NO_COMMAND, BASE_STATS, raceEnv(jt));
     check(
       "wreck respawn onto a gap goes to the recovery point",
       w.wreck === 0 && Math.abs(w.x - rec.x) < 1e-9 && Math.abs(r.x - 3000) < 1e-6 && Math.abs(r.y) < 1e-9,
       `gap wreck -> x=${w.x.toFixed(1)}, road wreck -> x=${r.x.toFixed(1)}`,
     );
     const a = carAt(jt, 2503, 0, 300);
-    stepRaceCar(a, NO_COMMAND, BASE_STATS, jt);
+    stepRaceCar(a, NO_COMMAND, BASE_STATS, raceEnv(jt));
     const wasAir = a.air!;
     wreckCar(a);
     check("wreckCar ends a jump or a fall", wasAir > 0 && a.air === 0 && a.fall === 0 && a.wreck === WRECK_TICKS);
@@ -1354,7 +1355,7 @@ function trackFeatures(): void {
       // Drive the jump, then brake back and roll the wrong way into the gap.
       const inp = i < 200 ? { throttle: 1, steer: Math.sin(i / 30) * 0.05 } : { throttle: -1, steer: 0 };
       inputs.push(inp);
-      const ev = stepRaceCar(ref, inp, BASE_STATS, jt);
+      const ev = stepRaceCar(ref, inp, BASE_STATS, raceEnv(jt));
       if (ev) evs.push(ev);
       states.push(cloneCar(ref));
     }
@@ -1364,7 +1365,7 @@ function trackFeatures(): void {
       const c = cloneCar(states[k]);
       starts++;
       for (let i = k; i < inputs.length; i++) {
-        stepRaceCar(c, inputs[i], BASE_STATS, jt);
+        stepRaceCar(c, inputs[i], BASE_STATS, raceEnv(jt));
         if (fields.some((f) => c[f] !== states[i + 1][f])) mismatches++;
       }
     }
@@ -1373,7 +1374,7 @@ function trackFeatures(): void {
       mismatches === 0 && evs.includes("takeoff") && evs.includes("fall") && evs.includes("recover"),
       `${starts} clones, events ${evs.join(",")}, ${mismatches} mismatches`,
     );
-    const src: CarState = { x: 1, y: 2, h: 3, vx: 4, vy: 5, seg: 6, wreck: 0, air: 7, fall: 8 };
+    const src: CarState = { x: 1, y: 2, h: 3, vx: 4, vy: 5, seg: 6, wreck: 0, air: 7, fall: 8, boost: 0 };
     const cl = cloneCar(src);
     check("cloneCar copies air and fall", cl.air === 7 && cl.fall === 8 && cl !== src);
   }
@@ -1416,14 +1417,14 @@ function trackFeatures(): void {
 
     // Jump over the lower road: the car keeps its own section all the way (no snap).
     const rec = pointAt(good, good.recovery[1]);
-    const c: CarState = { x: rec.x, y: rec.y, h: rec.h, vx: 0, vy: 0, seg: rec.seg, wreck: 0, air: 0, fall: 0 };
+    const c: CarState = { x: rec.x, y: rec.y, h: rec.h, vx: 0, vy: 0, seg: rec.seg, wreck: 0, air: 0, fall: 0, boost: 0 };
     const segs: number[] = [];
     const evs: RaceStepEvent[] = [];
     for (let i = 0; i < 300; i++) {
       const q = queryTrackNear(good, c.x, c.y, c.seg);
       const t = pointAt(good, q.s + 60 + speedOf(c) * 0.25);
       const steer = clamp(angleDiff(c.h, Math.atan2(t.y - c.y, t.x - c.x)) * 2.2, -1, 1);
-      const ev = stepRaceCar(c, { throttle: 1, steer }, BASE_STATS, good);
+      const ev = stepRaceCar(c, { throttle: 1, steer }, BASE_STATS, raceEnv(good));
       if (ev) evs.push(ev);
       if (c.air! > 0) segs.push(c.seg);
     }
@@ -1446,13 +1447,13 @@ function trackFeatures(): void {
     );
     // The lower road runs under the gap: a car on it drives straight through.
     const lp = pointAt(good, queryTrackNear(good, 0, 0, lowerSeg).s - 300);
-    const d: CarState = { x: lp.x, y: lp.y, h: lp.h, vx: Math.cos(lp.h) * 250, vy: Math.sin(lp.h) * 250, seg: lp.seg, wreck: 0, air: 0, fall: 0 };
+    const d: CarState = { x: lp.x, y: lp.y, h: lp.h, vx: Math.cos(lp.h) * 250, vy: Math.sin(lp.h) * 250, seg: lp.seg, wreck: 0, air: 0, fall: 0, boost: 0 };
     const devs: RaceStepEvent[] = [];
     const dsegs: number[] = [];
     for (let i = 0; i < 150; i++) {
       const q = queryTrackNear(good, d.x, d.y, d.seg);
       const t = pointAt(good, q.s + 60 + speedOf(d) * 0.25);
-      const ev = stepRaceCar(d, { throttle: 0.6, steer: clamp(angleDiff(d.h, Math.atan2(t.y - d.y, t.x - d.x)) * 2.2, -1, 1) }, BASE_STATS, good);
+      const ev = stepRaceCar(d, { throttle: 0.6, steer: clamp(angleDiff(d.h, Math.atan2(t.y - d.y, t.x - d.x)) * 2.2, -1, 1) }, BASE_STATS, raceEnv(good));
       if (ev) devs.push(ev);
       dsegs.push(d.seg);
     }
@@ -1511,7 +1512,7 @@ function placeOn(t: Track, p: Player, s: number, lateral = 0, speed = 0): void {
   const pt = pointAt(t, s);
   const x = pt.x - Math.sin(pt.h) * lateral;
   const y = pt.y + Math.cos(pt.h) * lateral;
-  p.car = { x, y, h: pt.h, vx: Math.cos(pt.h) * speed, vy: Math.sin(pt.h) * speed, seg: pt.seg, wreck: 0, air: 0, fall: 0 };
+  p.car = { x, y, h: pt.h, vx: Math.cos(pt.h) * speed, vy: Math.sin(pt.h) * speed, seg: pt.seg, wreck: 0, air: 0, fall: 0, boost: 0 };
   p.progress = { s: queryTrackNear(t, x, y, pt.seg).s, cp: 1, lap: 0, fin: 0 };
 }
 
@@ -1955,7 +1956,7 @@ function jumpsWired(): void {
     g.prevCar = cloneCar(car);
     g.phase = "racing";
     g.raceStart = -1e12;
-    g.latest = { time: 0, cars: new Map([["me", snapCar("me", car)]]), shots: new Map(), mines: [] };
+    g.latest = { time: 0, rtBase: 0, rtOpen: true, cars: new Map([["me", snapCar("me", car)]]), shots: new Map(), mines: [] };
     const armedGround = g.armed();
     car.air = 5;
     const armedAir = g.armed();
@@ -2001,7 +2002,7 @@ function jumpsWired(): void {
 
     // Other cars: interpolated height; no slide across a recovery between two snapshots.
     const now = performance.now(); // serverNow() without a clock offset; drawn at now - 100 ms
-    const snapOf = (time: number, s: CarSnap) => ({ time, cars: new Map([["o", s]]), shots: new Map(), mines: [] });
+    const snapOf = (time: number, s: CarSnap) => ({ time, rtBase: 0, rtOpen: true, cars: new Map([["o", s]]), shots: new Map(), mines: [] });
     g.car = null;
     const fly = body(0, 0, 0, 300, 0);
     g.snaps = [snapOf(now - 150, snapCar("o", { ...fly, air: 20 })), snapOf(now - 50, snapCar("o", { ...fly, x: 10, air: 18 }, { ghost: true }))];
@@ -2131,7 +2132,7 @@ import { gapAt as gapAtT4, START_ZONE, startStraightEnd } from "../shared/track"
 import { CAR_WIDTH } from "../shared/physics";
 import type { Pose } from "../client/game";
 
-const MAX_UPGRADES = statsFor({ engine: 3, tyres: 3, welder: 3 });
+const MAX_UPGRADES = statsFor("sport", { engine: 3, tyres: 3, welder: 3 });
 /** The new tracks: the shipped ones with features. */
 const T4_TRACKS = ["crusher-run", "overpass-knot"];
 
@@ -2158,10 +2159,10 @@ function hazardStretches(t: Track): { what: string; s0: number; s1: number }[] {
 function flyFrom(t: Track, lipS: number, v: number, lat: number): { fell: boolean; landS: number; landDist: number } {
   const p = pointAt(t, lipS + 1);
   const x = p.x - Math.sin(p.h) * lat, y = p.y + Math.cos(p.h) * lat;
-  const c: CarState = { x, y, h: p.h, vx: Math.cos(p.h) * v, vy: Math.sin(p.h) * v, seg: p.seg, wreck: 0, air: 0, fall: 0 };
+  const c: CarState = { x, y, h: p.h, vx: Math.cos(p.h) * v, vy: Math.sin(p.h) * v, seg: p.seg, wreck: 0, air: 0, fall: 0, boost: 0 };
   let fell = false;
   for (let i = 0; i < 200; i++) {
-    const ev = stepRaceCar(c, NO_COMMAND, BASE_STATS, t);
+    const ev = stepRaceCar(c, NO_COMMAND, BASE_STATS, raceEnv(t));
     if (ev === "fall") fell = true;
     if (c.air === 0) break;
   }
@@ -2299,7 +2300,7 @@ function botDriver(): void {
   // and then clears the gap. Full throttle from there instead falls short.
   const run = (backUp: boolean) => {
     const p = pointAt(knot, lip - 160);
-    const car: CarState = { x: p.x, y: p.y, h: p.h, vx: Math.cos(p.h) * 120, vy: Math.sin(p.h) * 120, seg: p.seg, wreck: 0, air: 0, fall: 0 };
+    const car: CarState = { x: p.x, y: p.y, h: p.h, vx: Math.cos(p.h) * 120, vy: Math.sin(p.h) * 120, seg: p.seg, wreck: 0, air: 0, fall: 0, boost: 0 };
     const bot = new BotDriver(stubGame(knot, car), 0);
     bot.weapons = false;
     let reversed = false, fell = false, took = 0;
@@ -2307,7 +2308,7 @@ function botDriver(): void {
       const ctl = backUp ? bot.controls() : { throttle: 1, steer: 0 };
       if (ctl.throttle < 0 && speedOf(car) > 5 && car.vx * Math.cos(car.h) + car.vy * Math.sin(car.h) < 0) reversed = true;
       const v0 = speedOf(car);
-      const ev = stepRaceCar(car, ctl, BASE_STATS, knot);
+      const ev = stepRaceCar(car, ctl, BASE_STATS, raceEnv(knot));
       if (ev === "takeoff") took = v0;
       if (ev === "fall") fell = true;
       if (took && car.air === 0) break;
@@ -2339,12 +2340,12 @@ function botDriver(): void {
     const rust = trackById("rust-bowl");
     const hold = [-24, 0, 24].map((lane) => {
       const g = gridSlot(rust, 0);
-      const car: CarState = { x: g.x, y: g.y, h: g.h, vx: 0, vy: 0, seg: g.seg, wreck: 0, air: 0, fall: 0 };
+      const car: CarState = { x: g.x, y: g.y, h: g.h, vx: 0, vy: 0, seg: g.seg, wreck: 0, air: 0, fall: 0, boost: 0 };
       const bot = new BotDriver(stubGame(rust, car), lane);
       bot.weapons = false;
       let off = 0, n = 0, dist = 0, prev = queryTrackNear(rust, car.x, car.y, car.seg).s;
       for (let i = 0; i < 60 * 60 && dist < rust.length; i++) {
-        stepRaceCar(car, bot.controls(), BASE_STATS, rust);
+        stepRaceCar(car, bot.controls(), BASE_STATS, raceEnv(rust));
         const q = queryTrackNear(rust, car.x, car.y, car.seg);
         let ds = q.s - prev;
         if (ds < -rust.length / 2) ds += rust.length;
@@ -2367,7 +2368,7 @@ function botDriver(): void {
 
   // Weapons: never at an airborne or falling car (the server ignores those shots).
   const p = pointAt(knot, 3000);
-  const me: CarState = { x: p.x, y: p.y, h: p.h, vx: 0, vy: 0, seg: p.seg, wreck: 0, air: 0, fall: 0 };
+  const me: CarState = { x: p.x, y: p.y, h: p.h, vx: 0, vy: 0, seg: p.seg, wreck: 0, air: 0, fall: 0, boost: 0 };
   const ahead = { id: "x", x: p.x + Math.cos(p.h) * 200, y: p.y + Math.sin(p.h) * 200, h: p.h };
   const fires = (snap: Partial<CarSnap>) => {
     const b = new BotDriver(stubGame(knot, cloneCar(me), [{ pose: ahead, snap }]), 0);
@@ -2382,7 +2383,7 @@ function botDriver(): void {
   fb.weapons = false;
   for (let i = 0; i < 90; i++) {
     fb.controls();
-    stepRaceCar(fc, NO_COMMAND, BASE_STATS, knot);
+    stepRaceCar(fc, NO_COMMAND, BASE_STATS, raceEnv(knot));
   }
   const after = fb.controls();
   check("bot: no reversing after a fall's 90 frozen ticks", fc.fall === 0 && after.throttle === 1, `throttle ${after.throttle}`);
@@ -3690,18 +3691,18 @@ function surfaceSounds(): void {
   const t1b = trackById(T1B_ID);
   const limit = wallLimit(t1b);
   const into = (vy: number) => {
-    const c: CarState = { x: 3000, y: limit - 1, h: 0.3, vx: 250, vy, seg: pointAt(t1b, 3000).seg, wreck: 0, air: 0, fall: 0 };
+    const c: CarState = { x: 3000, y: limit - 1, h: 0.3, vx: 250, vy, seg: pointAt(t1b, 3000).seg, wreck: 0, air: 0, fall: 0, boost: 0 };
     const before = cloneCar(c);
-    stepRaceCar(c, { throttle: 1, steer: 0 }, BASE_STATS, t1b);
+    stepRaceCar(c, { throttle: 1, steer: 0 }, BASE_STATS, raceEnv(t1b));
     return { speed: wallHitSpeed(before, c, t1b), vyAfter: c.vy, atWall: Math.abs(c.y - limit) < 0.02 };
   };
   const hard = into(180);
   const soft = into(30);
   const away = into(-80);
   const free = { ...into(0) };
-  const mid: CarState = { x: 3000, y: 0, h: 0, vx: 250, vy: 120, seg: pointAt(t1b, 3000).seg, wreck: 0, air: 0, fall: 0 };
+  const mid: CarState = { x: 3000, y: 0, h: 0, vx: 250, vy: 120, seg: pointAt(t1b, 3000).seg, wreck: 0, air: 0, fall: 0, boost: 0 };
   const midBefore = cloneCar(mid);
-  stepRaceCar(mid, { throttle: 1, steer: 0 }, BASE_STATS, t1b);
+  stepRaceCar(mid, { throttle: 1, steer: 0 }, BASE_STATS, raceEnv(t1b));
   check(
     "sfx wall hit: the speed into the wall that collideWalls removes (velocity before the step, wall normal after it); none away from the wall or moving off it; the 50 u/s threshold",
     hard.atWall && Math.abs(hard.speed - 180) < 1 && hard.vyAfter < 0 && hard.speed >= WALL_HIT_MIN && soft.speed < WALL_HIT_MIN &&
@@ -4855,7 +4856,7 @@ function retireClient(): void {
     // Host finishes (put just before the line on the server): results, Guest DNF.
     const hp = room.players.get(H.game.you)!;
     const pt = pointAt(room.track, room.track.length - 40);
-    hp.car = { x: pt.x, y: pt.y, h: pt.h, vx: Math.cos(pt.h) * 300, vy: Math.sin(pt.h) * 300, seg: pt.seg, wreck: 0, air: 0, fall: 0 };
+    hp.car = { x: pt.x, y: pt.y, h: pt.h, vx: Math.cos(pt.h) * 300, vy: Math.sin(pt.h) * 300, seg: pt.seg, wreck: 0, air: 0, fall: 0, boost: 0 };
     hp.progress = { s: queryTrackNear(room.track, pt.x, pt.y, pt.seg).s, cp: 3, lap: 0, fin: 0 };
     for (let i = 0; i < 30 && room.phase === "racing"; i++) drive(1);
     const rows = G.game.results ?? [];
@@ -6591,7 +6592,7 @@ function dropMine(sim: Sim, p: Player): void {
 /** Park p's car on the spot (x, y) and step once; true if a mine hit it. */
 function driveOver(sim: Sim, p: Player, x: number, y: number): boolean {
   const hits = sim.eventsOf("hit").length;
-  p.car = { ...p.car!, x, y, vx: 0, vy: 0, seg: queryTrack(sim.room.track, x, y).seg, wreck: 0, air: 0, fall: 0 };
+  p.car = { ...p.car!, x, y, vx: 0, vy: 0, seg: queryTrack(sim.room.track, x, y).seg, wreck: 0, air: 0, fall: 0, boost: 0 };
   p.ghost = 0;
   sim.run(1);
   return sim.eventsOf("hit").length > hits;
@@ -7595,7 +7596,7 @@ function botsCpu(): void {
   // The driver itself, called straight (no room): same order of cost.
   const t = trackById("crusher-run");
   const p = pointAt(t, 500);
-  const car: CarState = { x: p.x, y: p.y, h: p.h, vx: Math.cos(p.h) * 300, vy: Math.sin(p.h) * 300, seg: p.seg, wreck: 0, air: 0, fall: 0 };
+  const car: CarState = { x: p.x, y: p.y, h: p.h, vx: Math.cos(p.h) * 300, vy: Math.sin(p.h) * 300, seg: p.seg, wreck: 0, air: 0, fall: 0, boost: 0 };
   const mem = newBotMem(0, "normal");
   const t0 = performance.now();
   for (let i = 0; i < 10_000; i++) botControls({ car, track: t, stats: BASE_STATS, raceOn: true, raceSteps: i, others: [] }, mem);
@@ -7647,7 +7648,707 @@ function botsClient(): void {
   check("bots client: Game.kick removes a bot (the lobby's Remove)", A.game.players.filter((p) => p.bot).map((p) => p.name).join() === "Lugnut (bot)" && room.botCount === 1);
 }
 
-for (const t of [rivets, gating, mines, wrecks, finishing, garage, armDelay, engine, readyCheck, collisions, trackFeatures, roomTrack, jumpsWired, shippedTracks, botDriver, botLaps, mineCap, chatRoom, chatClient, sound, raceSounds, surfaceSounds, audioUnlock, menuHostOnly, menuStop, menuRestart, menuKick, menuLock, menuHandover, menuClient, menuRestartClient, retireRules, retireField, retireRaceEnd, retireGarage, retireRefund, retireOthers, retireNotices, retireClient, pauseRefused, pauseFreeze, pauseResume, pauseHold, pauseAuto, pauseCooldown, pauseGrace, pauseCountdown, pauseControls, pauseClient, musicSwitch, soundMigration, soundLayers, soundServer, soundRandom, soundRoomDrag, soundSliderGrip, soundClient, songs, songPlayer, ghostRivets, minesSetting, minesStay, minesCap, minesFade, minesAtStart, minesCleared, minesPaused, minesClient, botsPointAt, botsAdd, botsKickHost, botsHandover, botsFullRoom, botsSoloStart, botsRace, botsShop, botsTick, botsCpu, botsClient]) {
+// ---- car types (M4-CARS, PLAN-M4.md 2.1, ClickUp 123jpnbffdz, 2026-11-20) --------------------
+
+// This section's imports (hoisted like the ones at the top).
+import { CAR_TYPES, CARS, DEFAULT_CAR, isCarType, type CarType } from "../shared/cars";
+import { CORNER_SCALE, runUpFor } from "../shared/botdrive";
+import { botCar } from "../server/bots";
+
+/** The shipped tracks (trackList() also holds the test tracks earlier sections registered). */
+const CAR_TRACKS = ["rust-bowl", "crusher-run", "overpass-knot"];
+const ALL_LEVELS: { engine: number; tyres: number; welder: number }[] = [];
+for (let e = 0; e <= 3; e++) for (let ty = 0; ty <= 3; ty++) for (let w = 0; w <= 3; w++) ALL_LEVELS.push({ engine: e, tyres: ty, welder: w });
+
+function carsTypes(): void {
+  const table = CAR_TYPES.map((t) => `${t}:${Object.values(CARS[t].base).join("/")}`).join(" ");
+  check(
+    "cars: three types in lobby order with PLAN-M4 2.1's base stats (accel/top/grip/turn/dirt drag/dirt grip); top speed 430 for all",
+    CAR_TYPES.join() === "sport,racer,truck" && DEFAULT_CAR === "sport" &&
+      table === "sport:520/430/7.5/3.3/2.9/0.37 racer:600/430/6/3.45/3.6/0.3 truck:455/430/9/3.1/1.6/0.6",
+    table,
+  );
+  check(
+    "cars: the Sport is the car of before M4-CARS (BASE_STATS, the old off-road multipliers 2.9 / 0.37)",
+    CARS.sport.base === BASE_STATS && JSON.stringify(BASE_STATS) === JSON.stringify({ accel: 520, topSpeed: 430, grip: 7.5, turn: 3.3, dirtDrag: 2.9, dirtGrip: 0.37 }),
+  );
+  check(
+    "cars: isCarType accepts the three ids only",
+    CAR_TYPES.every(isCarType) && ![undefined, null, "", "Sport", "tank", 1, {}].some(isCarType),
+  );
+  check("cars: every type has a name and a one-line feel for its lobby card", CAR_TYPES.every((t) => CARS[t].name.length > 0 && CARS[t].feel.length > 10 && CARS[t].feel.length <= 60), CAR_TYPES.map((t) => `${CARS[t].name}: ${CARS[t].feel}`).join(" | "));
+}
+
+function carsStats(): void {
+  // statsFor(type, levels): today's percentages on the type's base; the dirt multipliers are the type's own.
+  const bad: string[] = [];
+  for (const t of CAR_TYPES) {
+    const b = CARS[t].base;
+    for (const l of ALL_LEVELS) {
+      const s = statsFor(t, l);
+      const want = { accel: b.accel * (1 + 0.07 * l.engine), topSpeed: b.topSpeed, grip: b.grip * (1 + 0.1 * l.tyres), turn: b.turn * (1 + 0.04 * l.tyres), dirtDrag: b.dirtDrag, dirtGrip: b.dirtGrip };
+      if (JSON.stringify(s) !== JSON.stringify(want)) bad.push(`${t} ${JSON.stringify(l)}`);
+    }
+  }
+  check(`cars: statsFor(type, levels) = the type's base with the upgrade percentages, for 3 types x ${ALL_LEVELS.length} level sets`, bad.length === 0, bad.slice(0, 3).join("; "));
+  // The Sport, every level: exactly the formula of before M4-CARS (BASE_STATS, same operations).
+  const old = (l: { engine: number; tyres: number }) => ({
+    accel: BASE_STATS.accel * (1 + 0.07 * l.engine), topSpeed: BASE_STATS.topSpeed, grip: BASE_STATS.grip * (1 + 0.1 * l.tyres), turn: BASE_STATS.turn * (1 + 0.04 * l.tyres),
+  });
+  check(
+    "cars: statsFor('sport', levels) is bit for bit the stats of before M4-CARS at every level",
+    ALL_LEVELS.every((l) => {
+      const s = statsFor("sport", l), o = old(l);
+      return s.accel === o.accel && s.topSpeed === o.topSpeed && s.grip === o.grip && s.turn === o.turn && s.dirtDrag === 2.9 && s.dirtGrip === 0.37;
+    }),
+  );
+  // Physics per type on a long straight: asphalt top speed 430 for all, dirt top speed topSpeed /
+  // dirtDrag (Sport ~148, Racer ~119, Truck ~269), and the Racer pulls away first, the Truck last.
+  const flat = buildTrack({
+    id: "test-straight-cars",
+    name: "Test Straight",
+    control: [...Array.from({ length: 13 }, (_, i): [number, number] => [i * 1000, 0]), [12000, 3000], [0, 3000]],
+    halfWidth: 64,
+    verge: 44,
+  });
+  const drive = (t: CarType, y: number) => {
+    const stats = statsFor(t, { engine: 0, tyres: 0, welder: 0 });
+    const c: CarState = { x: 1500, y, h: 0, vx: 0, vy: 0, seg: 0, wreck: 0, air: 0, fall: 0, boost: 0 };
+    let t300 = -1;
+    for (let i = 1; i <= 15 * TICK_HZ && c.x < 11000; i++) {
+      stepCar(c, { throttle: 1, steer: 0 }, stats, flat);
+      if (t300 < 0 && speedOf(c) >= 300) t300 = i * DT;
+    }
+    return { v: speedOf(c), t300, y: c.y };
+  };
+  const road = CAR_TYPES.map((t) => drive(t, 0)), dirt = CAR_TYPES.map((t) => drive(t, 85));
+  // stepCar's steady state at full throttle is (top / mult) * (1 - drag * mult * DT), drag = accel / top:
+  // a step's drag below the nominal topSpeed / mult (the Sport's 430 shows as ~421 today).
+  const steady = (t: CarType, mult: number) => {
+    const b = CARS[t].base;
+    return (b.topSpeed / mult) * (1 - (b.accel / b.topSpeed) * mult * DT);
+  };
+  check(
+    "cars physics: on asphalt every type tops out at its top speed 430 (less one step's drag); the Racer reaches 300 u/s first, the Truck last",
+    CAR_TYPES.every((t, i) => Math.abs(road[i].v - steady(t, 1)) < 0.5) && road[1].t300 < road[0].t300 && road[0].t300 < road[2].t300,
+    CAR_TYPES.map((t, i) => `${t} ${road[i].v.toFixed(1)} u/s (steady ${steady(t, 1).toFixed(1)}), 300 at ${road[i].t300.toFixed(3)} s`).join("; "),
+  );
+  check(
+    "cars physics: on the dirt verge each type tops out at topSpeed / dirtDrag (Sport ~148, Racer ~119, Truck ~269, less one step's drag)",
+    CAR_TYPES.every((t, i) => Math.abs(dirt[i].v - steady(t, CARS[t].base.dirtDrag)) < 0.5 && Math.abs(dirt[i].y - 85) < 1e-6) && dirt[2].v > 1.7 * dirt[0].v && dirt[1].v < dirt[0].v,
+    CAR_TYPES.map((t, i) => `${t} ${dirt[i].v.toFixed(1)} (nominal ${(430 / CARS[t].base.dirtDrag).toFixed(1)}, steady ${steady(t, CARS[t].base.dirtDrag).toFixed(1)})`).join("; "),
+  );
+}
+
+/** The last garage message a connection got. */
+const lastGarage = (c: FakeConn) => c.msgs.filter((m): m is Extract<ServerMsg, { t: "garage" }> => m.t === "garage").pop();
+
+function carsPick(): void {
+  const R = menuRooms(["Ann", "Bo"]);
+  const [a, b] = R.p;
+  const [sa, sb] = R.s;
+  check(
+    "cars pick: a new driver has the Sport, in their garage message and in the room message",
+    a.carType === "sport" && b.carType === "sport" && lastGarage(sb.conn)?.car === "sport" && infoOf(lastRoomMsg(sa.conn), b.id)?.car === "sport",
+  );
+  const r0 = sa.conn.msgs.length, g0 = sb.conn.msgs.length;
+  R.send(1, { t: "car", id: "racer" });
+  const garageB = sb.conn.msgs.slice(g0).filter((m) => m.t === "garage");
+  check(
+    "cars pick: Bo picks the Racer in the lobby: his garage message carries it (his own stats), everyone's room message shows it",
+    b.carType === "racer" && garageB.length === 1 && lastGarage(sb.conn)?.car === "racer" && infoOf(lastRoomMsg(sa.conn), b.id)?.car === "racer" &&
+      sa.conn.msgs.slice(r0).filter((m) => m.t === "garage").length === 0,
+  );
+  const r1 = sa.conn.msgs.length;
+  R.send(1, { t: "car", id: "racer" });
+  check("cars pick: picking the car you have changes nothing (no message)", sa.conn.msgs.length === r1 && errMsgs(sb.conn).length === 0);
+  // Refusals: an unknown type, a guest naming a bot, the host naming a human or nobody.
+  R.send(0, { t: "addBot", level: "normal" });
+  const bot = [...R.room.players.values()].find((p) => p.bot)!;
+  const ea = errMsgs(sa.conn).length, eb = errMsgs(sb.conn).length;
+  R.send(1, { t: "car", id: "tank" as CarType });
+  R.send(1, { t: "car", id: "truck", bot: bot.id });
+  R.send(0, { t: "car", id: "truck", bot: b.id });
+  R.send(0, { t: "car", id: "truck", bot: "nobody" });
+  R.send(0, { t: "car", id: "truck", bot: 7 as unknown as string });
+  check(
+    "cars pick: refused with an err: an unknown type, a guest naming a bot, the host naming a human, an unknown id or a non-string; nothing changes",
+    errMsgs(sb.conn).slice(eb).map((m) => m.msg).join("|") === "Unknown car|Only the host can pick a bot's car" &&
+      errMsgs(sa.conn).slice(ea).map((m) => m.msg).join("|") === "That is not a bot in this room|That is not a bot in this room|That is not a bot in this room" &&
+      b.carType === "racer" && bot.carType === "sport" && a.carType === "sport",
+    [...errMsgs(sb.conn).slice(eb), ...errMsgs(sa.conn).slice(ea)].map((m) => m.msg).join("|"),
+  );
+  // Locked per race: the stats are set from the car at the start; no change in the countdown, the race or the results.
+  R.send(0, { t: "car", id: "truck" });
+  R.send(1, { t: "ready", ready: true });
+  R.send(0, { t: "start" });
+  const atStart = { a: { ...a.stats }, b: { ...b.stats }, bot: { ...bot.stats } };
+  check(
+    "cars lock: the start sets each racer's stats from their car and levels (Ann Truck, Bo Racer, the bot Sport)",
+    R.room.phase === "countdown" && JSON.stringify(a.stats) === JSON.stringify(statsFor("truck", a.wallet.levels)) &&
+      JSON.stringify(b.stats) === JSON.stringify(statsFor("racer", b.wallet.levels)) && JSON.stringify(bot.stats) === JSON.stringify(statsFor("sport", bot.wallet.levels)),
+    `${a.stats.accel}/${b.stats.accel}/${bot.stats.accel}`,
+  );
+  const tried: string[] = [];
+  const tryAll = (phase: string) => {
+    const e1 = errMsgs(sb.conn).length, e2 = errMsgs(sa.conn).length;
+    R.send(1, { t: "car", id: "sport" });
+    R.send(0, { t: "car", id: "racer", bot: bot.id });
+    tried.push(`${phase}: ${[...errMsgs(sb.conn).slice(e1), ...errMsgs(sa.conn).slice(e2)].map((m) => m.msg).join("|")}`);
+  };
+  tryAll("countdown");
+  R.step(Math.ceil((COUNTDOWN_MS / 1000) * 60) + 2);
+  tryAll(R.room.phase);
+  // Everyone off the field: Bo retires (his garage opens), the others are moved to the line.
+  R.room.retire(b);
+  tryAll("racing, retired");
+  for (const p of [a, bot]) {
+    const pr = p.progress!;
+    pr.lap = 1;
+    pr.fin = 1;
+    p.finished = true;
+  }
+  R.step(1);
+  tryAll(R.room.phase);
+  const want = "Countdown|racing|racing, retired|results".split("|");
+  check(
+    "cars lock: no change in the countdown, the race (a retired driver's garage too) or the results; the stats stay those of the start",
+    R.room.phase === "results" && tried.length === 4 && tried.every((t, i) => t.toLowerCase().startsWith(want[i].toLowerCase()) && t.endsWith("The car can only be changed in the lobby|The car can only be changed in the lobby")) &&
+      b.carType === "racer" && bot.carType === "sport" && JSON.stringify(a.stats) === JSON.stringify(atStart.a) && JSON.stringify(bot.stats) === JSON.stringify(atStart.bot),
+    tried.join("; "),
+  );
+  // Back in the lobby: switching is free again; a restart keeps the car (and its stats).
+  R.step(Math.ceil((RESULTS_MS / 1000) * 60) + 2);
+  R.send(1, { t: "car", id: "truck" });
+  R.send(0, { t: "car", id: "racer", bot: bot.id });
+  R.send(1, { t: "ready", ready: true });
+  R.send(0, { t: "start" });
+  R.step(Math.ceil((COUNTDOWN_MS / 1000) * 60) + 2);
+  R.send(0, { t: "restart" });
+  check(
+    "cars lock: back in the lobby the switch is free again; a restart races the same cars",
+    R.room.phase === "countdown" && b.carType === "truck" && bot.carType === "racer" &&
+      JSON.stringify(b.stats) === JSON.stringify(statsFor("truck", b.wallet.levels)) && JSON.stringify(bot.stats) === JSON.stringify(statsFor("racer", bot.wallet.levels)),
+    `${b.carType}, bot ${bot.carType}, phase ${R.room.phase}`,
+  );
+}
+
+function carsRejoin(): void {
+  const R = menuRooms(["Ann", "Bo"]);
+  const [, b] = R.p;
+  R.send(1, { t: "car", id: "truck" });
+  const token = b.token;
+  R.rooms.onClose(R.s[1], R.clock.now);
+  R.step(60);
+  const back = R.join("Bo", token);
+  check(
+    "cars rejoin: a dropped driver who rejoins with the seat token keeps the car; the garage message after the welcome carries it",
+    back.player === b && b.carType === "truck" && lastGarage(back.conn)?.car === "truck" && infoOf(lastRoomMsg(R.s[0].conn), b.id)?.car === "truck",
+    `${back.player?.carType}, garage ${lastGarage(back.conn)?.car}`,
+  );
+  // Dropped and back during a race: the car and the race's stats are unchanged.
+  R.rooms.onMessage(back, { t: "ready", ready: true }, R.clock.now);
+  R.send(0, { t: "start" });
+  R.step(Math.ceil((COUNTDOWN_MS / 1000) * 60) + 30);
+  const stats0 = JSON.stringify(b.stats);
+  R.rooms.onClose(back, R.clock.now);
+  R.step(120);
+  const again = R.join("Bo", token);
+  check(
+    "cars rejoin: mid-race too: the same seat, car and race stats (the Truck's), the garage message says Truck",
+    again.player === b && R.room.phase === "racing" && b.carType === "truck" && JSON.stringify(b.stats) === stats0 && stats0 === JSON.stringify(statsFor("truck", b.wallet.levels)) && lastGarage(again.conn)?.car === "truck",
+  );
+}
+
+function carsBots(): void {
+  const R = botRooms();
+  const { room, ann, bo, send } = R;
+  for (let i = 0; i < 4; i++) send(ann, { t: "addBot", level: i % 2 ? "easy" : "normal" });
+  const seat = () => R.bots().map((b) => `${b.name}:${b.carType}`).join(",");
+  check(
+    "cars bots: a bot's car is round-robin by seat: Sport, Racer, Truck, Sport (the room message shows each)",
+    seat() === "Gasket (bot):sport,Lugnut (bot):racer,Piston (bot):truck,Clutch (bot):sport" &&
+      botInfos(lastRoomMsg(bo.conn)).map((p) => p.car).join() === "sport,racer,truck,sport" && [0, 1, 2, 3, 4, 5].map(botCar).join() === "sport,racer,truck,sport,racer,truck",
+    seat(),
+  );
+  // A freed seat is taken again by the next bot, with that seat's car.
+  send(ann, { t: "kick", id: R.bots()[1].id });
+  send(ann, { t: "addBot", level: "normal" });
+  check("cars bots: a bot added into a freed seat gets that seat's car (Lugnut's seat: the Racer)", R.bots().map((b) => `${b.name}:${b.carType}`).sort().join() === "Clutch (bot):sport,Gasket (bot):sport,Lugnut (bot):racer,Piston (bot):truck", seat());
+  // The host changes a bot's car from its row; the race runs with it (stats and the driver's corner speeds).
+  const g = R.bots().find((b) => b.name === "Gasket (bot)")!;
+  send(ann, { t: "car", id: "truck", bot: g.id });
+  check("cars bots: the host changes a bot's car; the room message shows it", g.carType === "truck" && infoOf(lastRoomMsg(bo.conn), g.id)?.car === "truck" && errMsgs(ann.conn).length === 0);
+  room.setReady(bo.player!, true);
+  send(ann, { t: "start" });
+  check(
+    "cars bots: the race sets each bot's stats from its car (Gasket now the Truck)",
+    R.bots().every((b) => JSON.stringify(b.stats) === JSON.stringify(statsFor(b.carType, b.wallet.levels))) && g.stats.accel === 455,
+    R.bots().map((b) => `${b.name} ${b.carType} accel ${b.stats.accel}`).join(", "),
+  );
+  check(
+    "cars bots: the bot driver's corner speeds follow its car (grip^(1/4) of the Sport's): Sport 1, Racer below, Truck above",
+    CORNER_SCALE.sport === 1 && Math.abs(CORNER_SCALE.racer - (6 / 7.5) ** 0.25) < 1e-12 && Math.abs(CORNER_SCALE.truck - (9 / 7.5) ** 0.25) < 1e-12,
+    `racer ${CORNER_SCALE.racer.toFixed(4)}, truck ${CORNER_SCALE.truck.toFixed(4)}`,
+  );
+}
+
+function carsRunUps(): void {
+  // Every jump of every shipped track works from rest for every type, with no upgrades and with
+  // all of them (the Truck is the worst case: ~45 more units of run-up to 350 u/s than the Sport).
+  const rows: string[] = [];
+  let errs = 0;
+  for (const t of CAR_TYPES) {
+    for (const lv of [0, 3]) {
+      const st = statsFor(t, { engine: lv, tyres: lv, welder: lv });
+      for (const id of CAR_TRACKS) {
+        const v = validateRunUps(trackById(id), st);
+        errs += v.length;
+        if (v.length) rows.push(`${t} L${lv} ${id}: ${v.join("; ")}`);
+      }
+    }
+  }
+  const up = (t: CarType) => runUpFor(350, statsFor(t, { engine: 0, tyres: 0, welder: 0 }));
+  check(
+    `cars run-ups: validateRunUps passes for every type at L0 and L3 on every shipped track (${CAR_TRACKS.join(", ")})`,
+    errs === 0 && up("truck") > up("sport") + 30 && up("racer") < up("sport"),
+    rows.join(" | ") || `run-up to 350 u/s at L0: sport ${up("sport").toFixed(0)}, racer ${up("racer").toFixed(0)}, truck ${up("truck").toFixed(0)}`,
+  );
+}
+
+/** One race of a single Normal server bot with car `car` on a track (the host retires at GO): finish tick and falls. */
+function soloBotLap(trackId: string, car: CarType, laps = 1): { ticks: number; falls: number; jumps: number } {
+  const sim = new Sim(laps);
+  const host = sim.add("Host");
+  if (sim.room.trackId !== trackId && sim.room.setTrack(host, trackId)) throw new Error("track");
+  const b = sim.room.addBot(host, "normal", sim.now);
+  if (typeof b === "string") throw new Error(b);
+  if (sim.room.setCar(host, car, b.id)) throw new Error("car");
+  if (sim.room.start(host, sim.now)) throw new Error("start");
+  while (sim.room.phase !== "racing") sim.tick();
+  if (sim.room.retire(host)) throw new Error("retire");
+  let rt = 0, falls = 0, jumps = 0, pf = 0, pa = 0;
+  while (sim.room.phase === "racing" && rt < 60 * 400) {
+    sim.tick();
+    rt++;
+    const c = b.car;
+    if (!c) break;
+    if (c.fall > 0 && pf === 0) falls++;
+    if (c.air > 0 && pa === 0) jumps++;
+    pf = c.fall;
+    pa = c.air;
+    if (b.progress?.fin) return { ticks: rt, falls, jumps };
+  }
+  return { ticks: 0, falls, jumps };
+}
+
+function carsBalance(): void {
+  // The bot's lap time with each type at L0, solo (no bumps, no weapons to hit), one lap from the
+  // grid and three laps: within about 3 % of the Sport's on every shipped track (PLAN-M4: a guide;
+  // the taste gate is the real check). Deterministic: a rerun is identical.
+  const table: string[] = [];
+  const off: string[] = [];
+  let falls = 0, det = true;
+  for (const e of CAR_TRACKS.map((id) => ({ id }))) {
+    for (const laps of [1, 3]) {
+      const r = CAR_TYPES.map((t) => soloBotLap(e.id, t, laps));
+      if (laps === 1) det &&= JSON.stringify(soloBotLap(e.id, "truck")) === JSON.stringify(r[2]) && JSON.stringify(soloBotLap(e.id, "racer")) === JSON.stringify(r[1]);
+      const pct = (i: number) => ((r[i].ticks / r[0].ticks - 1) * 100);
+      falls += r.reduce((x, y) => x + y.falls, 0);
+      table.push(`${e.id} ${laps} lap${laps > 1 ? "s" : ""}: sport ${(r[0].ticks / 60).toFixed(2)} s, racer ${(r[1].ticks / 60).toFixed(2)} s (${pct(1) >= 0 ? "+" : ""}${pct(1).toFixed(2)}%), truck ${(r[2].ticks / 60).toFixed(2)} s (${pct(2) >= 0 ? "+" : ""}${pct(2).toFixed(2)}%)`);
+      for (const i of [1, 2]) if (!(r[i].ticks > 0) || Math.abs(pct(i)) > 3) off.push(`${e.id} ${CAR_TYPES[i]} ${laps}: ${pct(i).toFixed(2)}%`);
+      if (r.some((x) => x.jumps < trackById(e.id).ramps.length * laps)) off.push(`${e.id} ${laps}: a jump not taken`);
+    }
+  }
+  for (const line of table) console.log(`  lap time: ${line}`);
+  check(
+    "cars balance: at L0 the bot's lap with the Racer and with the Truck is within 3% of the Sport's on every shipped track (1 and 3 laps, solo, Normal), every jump taken, no fall",
+    off.length === 0 && falls === 0,
+    off.join("; ") || `${table.length} rows, printed above`,
+  );
+  check("cars balance: the solo laps are deterministic (a rerun is identical)", det);
+}
+
+/** Bends of a track: stretches of s whose heading turns more than 0.35 rad over 120 units, with the turn's side (+1 right). */
+function carBends(t: Track): { s0: number; s1: number; side: number }[] {
+  const out: { s0: number; s1: number; side: number }[] = [];
+  let cur: { s0: number; s1: number; side: number } | null = null;
+  for (let s = 0; s < t.length; s += 10) {
+    const d = angleDiff(pointAt(t, s - 60).h, pointAt(t, s + 60).h);
+    if (Math.abs(d) <= 0.35) continue;
+    const side = Math.sign(d);
+    if (cur && cur.side === side && s - cur.s1 <= 20) cur.s1 = s;
+    else out.push((cur = { s0: s, s1: s, side }));
+  }
+  return out;
+}
+
+/**
+ * A solo bot's flying lap (the second of two, from rest on the start line, no weapons) with car
+ * `car`; while inside `cut` (a bend, from 80 before it to 40 after it) its racing line moves to
+ * `lane` units on the inside of the bend. Ticks for the lap, and ticks spent on the dirt.
+ */
+function cutLap(t: Track, car: CarType, cut: { s0: number; s1: number; side: number } | null, lane: number): { ticks: number; dirt: number; falls: number } {
+  const stats = statsFor(car, { engine: 0, tyres: 0, welder: 0 });
+  const mem = newBotMem(0, "normal");
+  mem.weapons = false;
+  const p = pointAt(t, 0);
+  const c: CarState = { x: p.x, y: p.y, h: p.h, vx: 0, vy: 0, seg: p.seg, wreck: 0, air: 0, fall: 0, boost: 0 };
+  const L = t.length;
+  const inCut = (s: number) => !!cut && [s, s + L].some((x) => x >= cut.s0 - 80 && x <= cut.s1 + 40);
+  let dist = 0, prev = 0, t1 = 0, dirt = 0, falls = 0, i = 0;
+  for (; i < 60 * 200 && dist < 2 * L; i++) {
+    const q = queryTrackNear(t, c.x, c.y, c.seg);
+    mem.lateral = dist >= L && inCut(q.s) ? cut!.side * lane : 0;
+    const ev = stepRaceCar(c, botControls({ car: c, track: t, stats, raceOn: true, raceSteps: i, others: [], carType: car }, mem), stats, raceEnv(t));
+    if (ev === "fall") falls++;
+    const q2 = queryTrackNear(t, c.x, c.y, c.seg);
+    if (dist >= L && c.air === 0 && q2.dist > t.def.halfWidth) dirt++;
+    let ds = q2.s - prev;
+    if (ds < -L / 2) ds += L;
+    if (ds > L / 2) ds -= L;
+    if (c.fall === 0) dist += ds;
+    prev = q2.s;
+    if (dist >= L && !t1) t1 = i;
+  }
+  return { ticks: i - t1, dirt, falls };
+}
+
+function carsCut(): void {
+  // The Truck's dirt top speed is ~269 u/s against the Sport's ~148 (advisor: show that cutting a
+  // corner through the dirt verge is no free win). Per bend of every shipped track, a lap whose
+  // line moves onto the inside for that bend only: on the asphalt (lanes 0, 56, 64) or into the
+  // dirt (72, 84, 96), at the bot's own pace and flat out (no braking at all). The best line
+  // through the dirt is never faster than the best line on the asphalt (1 tick = rounding).
+  const ASPHALT = [0, 56, 64], DIRT = [72, 84, 96];
+  const saved = CORNER_SCALE.truck;
+  const worst: string[] = [];
+  let bends = 0, cuts = 0, maxGain = -Infinity;
+  try {
+    for (const pace of ["bot", "flat"] as const) {
+      CORNER_SCALE.truck = pace === "flat" ? 3 : saved;
+      for (const e of CAR_TRACKS.map((id) => ({ id }))) {
+        const t = trackById(e.id);
+        const base = cutLap(t, "truck", null, 0);
+        const lines: string[] = [];
+        for (const b of carBends(t)) {
+          bends++;
+          const asphalt = Math.min(...ASPHALT.map((ln) => (ln === 0 ? base : cutLap(t, "truck", b, ln)).ticks));
+          const dirty = DIRT.map((ln) => cutLap(t, "truck", b, ln)).filter((r) => r.dirt > 0 && r.falls === 0);
+          if (!dirty.length) continue;
+          cuts++;
+          const best = Math.min(...dirty.map((r) => r.ticks));
+          maxGain = Math.max(maxGain, asphalt - best);
+          lines.push(`${b.s0}-${b.s1}${b.side > 0 ? "R" : "L"} ${best - base.ticks >= 0 ? "+" : ""}${best - base.ticks}/${asphalt - base.ticks >= 0 ? "+" : ""}${asphalt - base.ticks}`);
+          if (best < asphalt - 1) worst.push(`${pace} ${e.id} bend ${b.s0}-${b.s1}: dirt ${best} vs asphalt ${asphalt} ticks`);
+        }
+        console.log(`  truck cut (${pace}) ${e.id}: lap ${(base.ticks / 60).toFixed(2)} s; per bend, best dirt / best asphalt line, ticks vs the bot's line: ${lines.join(", ")}`);
+      }
+    }
+  } finally {
+    CORNER_SCALE.truck = saved;
+  }
+  check(
+    "cars cut: on every shipped track the Truck never gains by cutting a bend through the dirt verge (best dirt line vs best asphalt line, bot pace and flat out)",
+    worst.length === 0 && cuts > 10,
+    worst.join("; ") || `${cuts} cuts that reach the dirt over ${bends} bends; best dirt line at most ${maxGain} tick(s) ahead of the best asphalt line`,
+  );
+}
+
+/**
+ * Three client bots (lanes -24, 0, 24), one per car type, race a lap of a track through the real
+ * client Game against a Rooms server on the sim clock (no sockets, no lag), weapons off: each
+ * one's prediction stats are the server's, and its prediction matches the server.
+ */
+function carsClientLap(id: string): { ticks: number[]; stateErrs: number; samples: number; large: number; maxErr: number; same: boolean } {
+  const realNow = performance.now.bind(performance);
+  const clock = { now: 1_000_000 };
+  performance.now = () => clock.now;
+  try {
+    const rooms = new Rooms(1);
+    const lanes = [-24, 0, 24];
+    const ws = lanes.map(() => wiredGame(rooms, clock));
+    ws[0].game.create("Car0");
+    ws[0].open();
+    ws[0].flush();
+    ws[0].game.pickTrack(id);
+    ws[0].flush();
+    const room = [...rooms.rooms.values()][0];
+    ws.slice(1).forEach((w, i) => {
+      w.game.join(room.code, `Car${i + 1}`);
+      w.open();
+    });
+    for (const w of ws) w.flush();
+    ws.forEach((w, i) => w.game.pickCar(CAR_TYPES[i]));
+    for (const w of ws.slice(1)) w.game.setReady(true);
+    for (const w of ws) w.flush();
+    ws[0].game.start();
+    ws[0].flush();
+    const drivers = ws.map((w, i) => {
+      const d = new BotDriver(w.game, lanes[i]);
+      d.weapons = false;
+      return d;
+    });
+    const ticks = ws.map(() => 0);
+    let raceTicks = 0, same = true;
+    for (let i = 0; i < 60 * 120 && ticks.some((x) => x === 0); i++) {
+      clock.now += 1000 / 60;
+      rooms.step(clock.now);
+      for (const w of ws) w.flush();
+      ws.forEach((w, k) => w.game.step(drivers[k].controls(), 1000 / 60));
+      if (room.phase === "racing") raceTicks++;
+      ws.forEach((w, k) => {
+        const p = room.players.get(w.game.you)!;
+        if (raceTicks === 1) same &&= w.game.carType === CAR_TYPES[k] && p.carType === CAR_TYPES[k] && JSON.stringify(p.stats) === JSON.stringify(w.game.stats);
+        if (!ticks[k] && p.progress?.fin) ticks[k] = raceTicks; // the last one on the tick the race ends
+      });
+    }
+    const errs = ws.flatMap((w) => w.game.recErrors);
+    return {
+      ticks,
+      stateErrs: ws.reduce((a, w) => a + w.game.recStateErrors, 0),
+      samples: errs.length,
+      large: errs.filter((x) => x > LARGE_ERR).length,
+      maxErr: errs.length ? Math.max(...errs) : NaN,
+      same,
+    };
+  } finally {
+    performance.now = realNow;
+  }
+}
+
+function carsClient(): void {
+  // Over the wire: Game.pickCar and the garage message; the host's Game.pickBotCar; carOf.
+  const rooms = new Rooms(1);
+  const clock = { now: 1000 };
+  const A = wiredGame(rooms, clock), B = wiredGame(rooms, clock);
+  A.game.create("Ann");
+  A.open();
+  A.flush();
+  B.game.join(A.game.code, "Bo");
+  B.open();
+  B.flush();
+  A.flush();
+  const fresh = B.game.carType === "sport" && JSON.stringify(B.game.stats) === JSON.stringify(statsFor("sport", B.game.levels));
+  B.game.pickCar("truck");
+  A.game.addBot("normal");
+  A.flush();
+  B.flush();
+  const bot = A.game.players.find((p) => p.bot)!;
+  A.game.pickBotCar(bot.id, "racer");
+  A.flush();
+  B.flush();
+  check(
+    "cars client: Game.pickCar reaches the server; the garage message sets carType and the stats (statsFor(car, levels)); everyone's carOf shows each car, the host's pickBotCar too",
+    fresh && B.game.carType === "truck" && JSON.stringify(B.game.stats) === JSON.stringify(statsFor("truck", B.game.levels)) &&
+      A.game.carOf(B.game.you) === "truck" && B.game.carOf(bot.id) === "racer" && A.game.carOf(A.game.you) === "sport" && A.game.carType === "sport",
+    `B ${B.game.carType}; A sees B ${A.game.carOf(B.game.you)}, B sees the bot ${B.game.carOf(bot.id)}`,
+  );
+  // An older server's messages (no car): the Sport.
+  const g = new Game(() => ({ send() {}, close() {}, onOpen() {}, onMessage() {}, onClose() {} }), { get: () => null, set() {} });
+  g.carType = "truck" as CarType; // as if left from an earlier room
+  (g as unknown as { handle(m: ServerMsg): void }).handle({ t: "garage", scrap: 0, levels: { engine: 1, tyres: 0, welder: 0 } });
+  check(
+    "cars client: an older server's garage message (no car) means the Sport, and so does a player the room message names no car for",
+    g.carType === "sport" && JSON.stringify(g.stats) === JSON.stringify(statsFor("sport", { engine: 1, tyres: 0, welder: 0 })) && g.carOf("x") === "sport",
+  );
+
+  // Prediction per type: one client bot of each type laps every shipped track (deterministic,
+  // no lag): the stats are the server's and the prediction has no state mismatch and no large error.
+  for (const e of CAR_TRACKS.map((id) => ({ id }))) {
+    const a = carsClientLap(e.id), b = carsClientLap(e.id);
+    check(
+      `cars client: on ${e.id} a Sport, a Racer and a Truck (client Game) finish with the server's stats; prediction matches (no state mismatch, no error > ${LARGE_ERR}); a rerun is identical`,
+      a.same && a.ticks.every((x) => x > 0) && a.samples > 1000 && a.stateErrs === 0 && a.large === 0 && JSON.stringify(a) === JSON.stringify(b),
+      `finish ${a.ticks.map((x) => (x / 60).toFixed(2)).join("/")} s (sport/racer/truck); ${a.stateErrs} state mismatches, ${a.large} errors > ${LARGE_ERR} of ${a.samples}, max ${a.maxErr.toFixed(3)}`,
+    );
+  }
+}
+
+// ---- race tick, step env, boost plumbing (M4-ENV, PLAN-M4.md 3, ClickUp 123jpnbffe0, 2026-11-20) ----
+
+// This section's imports (hoisted like the ones at the top).
+import { rtAt, type Snapshot } from "../client/game";
+
+/** The rt of the last snapshot a connection got. */
+const lastRt = (c: FakeConn) => c.msgs.filter((m): m is SnapMsg => m.t === "snap").pop()?.rt;
+
+function envRt(): void {
+  // The server's race tick: 0 in the lobby and the countdown, +1 per racing tick, frozen while
+  // paused (the resume's hold ticks count: the room simulates them), in every snapshot, back to
+  // 0 for a restart and in the lobby.
+  const sim = new Sim(1);
+  const a = sim.add("Ann"), b = sim.add("Bo");
+  sim.run(2);
+  const lobby = lastRt(sim.conns.get(a.id)!);
+  sim.readyAll(a);
+  sim.room.start(a, sim.now);
+  const inCountdown: number[] = [];
+  while (sim.room.phase === "countdown") {
+    sim.run(1, () => ({ throttle: 1 }));
+    if (sim.room.phase === "countdown") inCountdown.push(sim.room.rt);
+  }
+  const first = sim.room.rt;
+  sim.run(99, () => ({ throttle: 1 }));
+  const snaps = sim.conns.get(b.id)!.msgs.filter((m): m is SnapMsg => m.t === "snap");
+  check(
+    "env rt: 0 in the lobby and the countdown, 1 on the first racing tick, +1 per racing tick; every snapshot carries the room's rt",
+    lobby === 0 && inCountdown.length > 100 && inCountdown.every((x) => x === 0) && first === 1 && sim.room.rt === 100 &&
+      snaps.every((m) => typeof m.rt === "number") && snaps[snaps.length - 1].rt === (sim.tickNo % 2 === 0 ? 100 : 99),
+    `lobby ${lobby}, countdown ${inCountdown.length} ticks at 0, first racing tick ${first}, after 100 racing ticks ${sim.room.rt}, last snapshot ${snaps[snaps.length - 1].rt}`,
+  );
+  sim.room.pause(a, sim.now);
+  sim.run(120, () => ({ throttle: 1 }));
+  const paused = sim.room.rt;
+  sim.room.resume(a, sim.now);
+  let ticks = 0;
+  while (sim.room.paused) {
+    sim.run(1, () => ({ throttle: 1 }));
+    ticks++;
+  }
+  check(
+    "env rt: paused ticks (the pause and its 3-2-1) do not count; it counts on from where it stood",
+    paused === 100 && sim.room.rt === 101 && ticks > 100,
+    `rt ${paused} through ${120 + ticks} paused ticks, ${sim.room.rt} on the first tick after`,
+  );
+  sim.room.restartRace(a, sim.now);
+  const restarted = sim.room.rt;
+  sim.run(1);
+  check("env rt: a restart starts it over at 0 (its countdown)", restarted === 0 && sim.room.rt === 0 && lastRt(sim.conns.get(a.id)!) === 0);
+  sim.room.stopRace(a, sim.now);
+  sim.run(2);
+  check("env rt: back in the lobby it is 0", sim.room.phase === "lobby" && sim.room.rt === 0 && lastRt(sim.conns.get(a.id)!) === 0);
+}
+
+function envStep(): void {
+  // stepRaceCar(c, input, stats, env): nothing reads env.rt or env.draft yet, so any race tick or
+  // slipstream steps a car exactly as rt 0 / draft 0 (no behaviour change), through a jump, a
+  // roll-off fall and the recovery on the T1b straight.
+  const t = buildTrack(T1B_DEF);
+  const p = pointAt(t, 600);
+  const start: CarState = { x: p.x, y: p.y, h: p.h, vx: 0, vy: 0, seg: p.seg, wreck: 0, air: 0, fall: 0, boost: 0 };
+  const run = (rt: (i: number) => number, draft: number) => {
+    const c = cloneCar(start);
+    const evs: string[] = [];
+    const env = raceEnv(t, 0, draft);
+    for (let i = 0; i < 60 * 30; i++) {
+      env.rt = rt(i);
+      const slow = i > 260 && speedOf(c) > 150;
+      const ev = stepRaceCar(c, { throttle: slow ? -1 : 1, steer: 0 }, BASE_STATS, env);
+      if (ev) evs.push(ev);
+    }
+    return JSON.stringify([c, evs]);
+  };
+  const ref = run(() => 0, 0);
+  check(
+    "env step: any race tick and slipstream step a car exactly as rt 0 and no draft (jump, fall and recovery included)",
+    ref.includes("takeoff") && ref.includes("fall") && ref.includes("recover") && run((i) => i + 1, 0) === ref && run((i) => 7 * i + 12345, 0.8) === ref,
+    JSON.parse(ref)[1].join(","),
+  );
+  check(
+    "env step: validateRunUps gives the same verdicts (it steps through stepRaceCar with rt counting from 1)",
+    ["rust-bowl", "crusher-run", "overpass-knot"].every((id) => validateRunUps(trackById(id)).length === 0) && validateRunUps(t).join() === validateRunUps(t, BASE_STATS).join(),
+  );
+  // boost: in CarState, cloneCar, the snapshots (0 for now); the client's sameState compares it.
+  const src: CarState = { ...start, boost: 37 };
+  const cl = cloneCar(src);
+  const sim = new Sim(1);
+  const a = sim.add("Ann");
+  sim.startRace(a);
+  sim.run(10, () => ({ throttle: 1 }));
+  const cars = sim.conns.get(a.id)!.msgs.filter((m): m is SnapMsg => m.t === "snap").flatMap((m) => m.ents.filter((e): e is CarSnap => e.k === "car"));
+  check(
+    "env boost: CarState carries boost; cloneCar copies it; every car in a snapshot has boost 0 (nothing gives one yet)",
+    cl.boost === 37 && cl !== src && cars.length > 3 && cars.every((e) => e.boost === 0) && a.car!.boost === 0,
+    `${cars.length} car snapshots`,
+  );
+}
+
+/**
+ * One client (no lag) races a lap through the real client Game on the sim clock; the server's
+ * rt for every input it applied is noted. stall: [race tick, ticks] the client sends nothing
+ * (an underrun); pauseAt: the host pauses at this race tick and resumes at once.
+ */
+function rtRun(opts: { stall?: [number, number]; pauseAt?: number; ticks?: number } = {}): { skew: number[]; live: number[]; truth: Map<number, number>; log: [number, number, number][]; countdown: number } {
+  const realNow = performance.now.bind(performance);
+  const clock = { now: 1_000_000 };
+  performance.now = () => clock.now;
+  try {
+    const rooms = new Rooms(1);
+    const A = wiredGame(rooms, clock);
+    A.game.create("Ann");
+    A.open();
+    A.flush();
+    const room = [...rooms.rooms.values()][0];
+    A.game.start();
+    A.flush();
+    const d = new BotDriver(A.game, 0);
+    d.weapons = false;
+    const truth = new Map<number, number>();
+    let last = -1, countdown = 0, stalled = 0, paused = false;
+    for (let i = 0; i < (opts.ticks ?? 60 * 20); i++) {
+      clock.now += 1000 / 60;
+      rooms.step(clock.now);
+      const p = room.players.get(A.game.you)!;
+      if (p.ack !== last) {
+        last = p.ack;
+        if (!room.paused) truth.set(p.ack, room.rt); // applied at this race tick (thrown away while paused)
+        if (room.phase === "countdown") countdown++;
+      }
+      if (opts.pauseAt !== undefined && !paused && room.rt >= opts.pauseAt) {
+        paused = true;
+        room.pause(p, clock.now);
+        room.resume(p, clock.now);
+      }
+      A.flush();
+      if (opts.stall && room.rt >= opts.stall[0] && stalled < opts.stall[1]) {
+        stalled++;
+        continue;
+      }
+      A.game.step(d.controls(), 1000 / 60);
+    }
+    const log = A.game.rtLog.filter(([seq]) => truth.has(seq));
+    return { skew: log.map(([seq, , rt]) => rt - truth.get(seq)!), live: log.map(([seq, rt0]) => rt0 - truth.get(seq)!), truth, log, countdown };
+  } finally {
+    performance.now = realNow;
+  }
+}
+
+function envClient(): void {
+  // rtAt: the step i after a snapshot runs at rt + i + 1 while racing; in the countdown at 0
+  // until GO (the clamp), then 1, 2, ...; in the results the race tick stands.
+  const snap = (rtBase: number, rtOpen: boolean): Snapshot => ({ time: 0, rtBase, rtOpen, cars: new Map(), shots: new Map(), mines: [] });
+  check(
+    "env client: rtAt counts on from a racing snapshot, clamps at GO from a countdown one, stands still after the race",
+    [0, 1, 5].map((i) => rtAt(snap(40, true), i)).join() === "41,42,46" && [0, 1, 2, 3, 4].map((i) => rtAt(snap(-2, true), i)).join() === "0,0,1,2,3" &&
+      rtAt(snap(900, false), 7) === 900,
+  );
+  // No lag: every step the server applied was predicted at exactly its race tick, live and after
+  // the last replay, through the countdown (rt 0) and GO. At GO itself one tick either way: the
+  // client works out the GO tick from the snapshot's clock (phaseEnds - time), the server's tick
+  // clock decides it (here a float sum of 1000/60 steps landing a hair before phaseEnds).
+  const r = rtRun();
+  const offs = r.log.map(([seq, rt0, rt]) => ({ seq, rt0, rt, t: r.truth.get(seq)! })).filter((x) => x.rt0 !== x.t || x.rt !== x.t);
+  const zeros = r.log.filter(([seq]) => r.truth.get(seq) === 0).length;
+  check(
+    "env client: no lag: each applied input's predicted race tick (live and replayed) is the server's, countdown inputs at 0 (the clamp at GO), then 1, 2, ...; at GO at most one tick off",
+    offs.every((x) => x.t <= 1 && Math.abs(x.rt0 - x.t) <= 1 && Math.abs(x.rt - x.t) <= 1) && zeros > 100 && r.log.length > 1000 && r.log.some(([seq]) => r.truth.get(seq) === 1),
+    `${r.log.length} steps, ${zeros} in the countdown; off (seq/live/replayed/server): ${offs.map((x) => `${x.seq}/${x.rt0}/${x.rt}/${x.t}`).join(" ") || "none"}`,
+  );
+  // An underrun (the client sends nothing for 20 ticks) and a pause with its resume: the skew is
+  // bounded and corrected by the next snapshots (it is back to 0 after each).
+  const u = rtRun({ stall: [300, 20], pauseAt: 700, ticks: 60 * 30 });
+  const off = u.log.map(([seq, rt0, rt], k) => ({ seq, at: u.truth.get(seq)!, live: u.live[k], fin: u.skew[k], rt0, rt })).filter((x) => x.live !== 0 || x.fin !== 0);
+  const maxLive = Math.max(0, ...u.live.map(Math.abs)), maxFin = Math.max(0, ...u.skew.map(Math.abs));
+  const tail = u.log.filter(([seq]) => u.truth.get(seq)! > 1000).length;
+  check(
+    "env client: an underrun (20 ticks without input) and a pause/resume skew the predicted race tick by a bounded amount (live <= 3, after replays <= 1), exact again after each",
+    maxLive <= 3 && maxFin <= 1 && tail > 50 && off.every((x) => x.at <= 1 || (x.at >= 300 && x.at <= 330) || (x.at >= 700 && x.at <= 710)),
+    `${off.length} of ${u.log.length} steps off; max live ${maxLive}, max after replay ${maxFin}; off at rt ${[...new Set(off.map((x) => x.at))].slice(0, 12).join(",")}`,
+  );
+}
+
+for (const t of [rivets, gating, mines, wrecks, finishing, garage, armDelay, engine, readyCheck, collisions, trackFeatures, roomTrack, jumpsWired, shippedTracks, botDriver, botLaps, mineCap, chatRoom, chatClient, sound, raceSounds, surfaceSounds, audioUnlock, menuHostOnly, menuStop, menuRestart, menuKick, menuLock, menuHandover, menuClient, menuRestartClient, retireRules, retireField, retireRaceEnd, retireGarage, retireRefund, retireOthers, retireNotices, retireClient, pauseRefused, pauseFreeze, pauseResume, pauseHold, pauseAuto, pauseCooldown, pauseGrace, pauseCountdown, pauseControls, pauseClient, musicSwitch, soundMigration, soundLayers, soundServer, soundRandom, soundRoomDrag, soundSliderGrip, soundClient, songs, songPlayer, ghostRivets, minesSetting, minesStay, minesCap, minesFade, minesAtStart, minesCleared, minesPaused, minesClient, botsPointAt, botsAdd, botsKickHost, botsHandover, botsFullRoom, botsSoloStart, botsRace, botsShop, botsTick, botsCpu, botsClient, carsTypes, carsStats, carsPick, carsRejoin, carsBots, carsRunUps, carsBalance, carsCut, carsClient, envRt, envStep, envClient]) {
   console.log(`\n# ${t.name}`);
   try {
     t();

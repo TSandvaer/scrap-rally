@@ -6,6 +6,7 @@
 
 import { botControls, newBotMem, resetBotMem, type BotLevel, type BotMem, type BotOther } from "../shared/botdrive";
 import { botShopping } from "../shared/botshop";
+import { CAR_TYPES, type CarType } from "../shared/cars";
 import type { CarStats } from "../shared/physics";
 import { buy, type ItemId, type Wallet } from "../shared/shop";
 import type { Track } from "../shared/track";
@@ -41,6 +42,11 @@ export function botName(slot: number): string {
   return `${NAMES[slot]} (bot)`;
 }
 
+/** A new bot's car type (M4-CARS): round-robin by seat, Sport, Racer, Truck, Sport, ... */
+export function botCar(slot: number): CarType {
+  return CAR_TYPES[slot % CAR_TYPES.length];
+}
+
 export function newBotSeat(level: BotLevel, slot: number, order: number): BotSeat {
   return { level, slot, order, mem: newBotMem(LANES[slot], level, MINE_OFFSETS[slot]), steps: 0 };
 }
@@ -62,7 +68,7 @@ export const botTiming: { samples: number[] | null } = { samples: null };
  * racing: inputs apply (the race phase, not paused). minePress: drop a mine this tick.
  */
 export function botStep(
-  p: Fighter & { stats: CarStats; bot: BotSeat },
+  p: Fighter & { stats: CarStats; bot: BotSeat; carType: CarType },
   racers: readonly Fighter[],
   track: Track,
   racing: boolean,
@@ -75,7 +81,7 @@ export function botStep(
   if (car && seat.mem.weapons && car.air === 0 && car.fall === 0 && car.wreck === 0) {
     for (const q of racers) if (q !== p && q.car) others.push({ x: q.car.x, y: q.car.y, solid: solid(q) });
   }
-  const ctl = botControls({ car, track, stats: p.stats, raceOn: racing, raceSteps: seat.steps, others }, seat.mem);
+  const ctl = botControls({ car, track, stats: p.stats, raceOn: racing, raceSteps: seat.steps, others, carType: p.carType }, seat.mem);
   const out = { cmd: { throttle: ctl.throttle, steer: ctl.steer, buttons: ctl.fire ? BTN_RIVET : 0 }, minePress: ctl.mine };
   if (botTiming.samples) botTiming.samples.push(performance.now() - t0);
   return out;

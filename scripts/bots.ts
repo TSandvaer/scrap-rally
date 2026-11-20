@@ -387,6 +387,8 @@ async function run(ctx: Ctx, bots: Bot[]): Promise<void> {
   await runPause(ctx, bots);
   await runSound(ctx, bots);
   await runMines(ctx, bots);
+  await runCars(ctx, bots);
+  await runRaceTick(ctx, bots);
 }
 
 const lost = new Map<string, (ConnReason | undefined)[]>();
@@ -405,7 +407,7 @@ async function runGame(ctx: Ctx, bots: Bot[]): Promise<void> {
   // Track sanity: every shipped track passes the layout check and the run-up check, with no
   // upgrades and with max upgrades (faster take-offs, longer jumps). minSelfClearance no
   // longer applies: Overpass Knot crosses itself by design.
-  const maxUp = statsFor({ engine: 3, tyres: 3, welder: 3 });
+  const maxUp = statsFor("sport", { engine: 3, tyres: 3, welder: 3 });
   const shipped = trackList().filter((e) => e.id !== TEST_TRACK_ID && e.id !== JUMPS_TRACK_ID);
   const trackErrs = shipped.flatMap((e) => {
     const t = trackById(e.id);
@@ -1578,5 +1580,157 @@ async function runMines(ctx: Ctx, bots: Bot[]): Promise<void> {
     check("mines over sockets: no errors on the way", H.errors.length + G.errors.length === 0, [...H.errors, ...G.errors].join("; ") || "-");
   } finally {
     for (const b of [H, G]) b.game.leave();
+  }
+}
+
+// ---- car types (M4-CARS, PLAN-M4.md 2.1, ClickUp 123jpnbffdz, 2026-11-20) ----------------
+
+// This section's imports (hoisted like the ones at the top).
+import { CAR_TYPES, carName, type CarType } from "../shared/cars";
+
+/**
+ * A socket bot of each car type (Sport host, Racer, Truck), every one lagged (80±10 ms), weapons
+ * off, one lap of Rust Bowl: each picks its car in the lobby, the others see it, the client's
+ * prediction stats are exactly the server's (garage.car), and each keeps a median
+ * reconciliation error below 0.5 (no teleports: max <= 50).
+ */
+async function runCars(ctx: Ctx, bots: Bot[]): Promise<void> {
+  const field = CAR_TYPES.map((t, i) => new Bot(["Zulu", "Victor", "Whiskey"][i], ctx.url, [-24, 0, 24][i], { lag: 80, jitter: 10 }));
+  const typeOf = new Map<Bot, CarType>(field.map((b, i) => [b, CAR_TYPES[i]]));
+  bots.push(...field);
+  for (const b of field) b.weapons = false;
+  const [H] = field;
+  try {
+    H.game.create(H.name);
+    await waitFor("cars: H welcome", () => !!H.game.you, 3000);
+    for (const b of field.slice(1)) b.game.join(H.game.code, b.name);
+    await waitFor("cars: 3 in H's room", () => field.every((b) => b.game.players.length === 3), 3000);
+    for (const b of field) b.game.pickCar(typeOf.get(b)!);
+    const picked = await waitFor(
+      "cars: every pick confirmed",
+      () => field.every((b) => b.game.carType === typeOf.get(b) && field.every((o) => o.game.carOf(b.game.you) === typeOf.get(b))),
+      3000,
+    );
+    check(
+      "cars over sockets: each driver picks a car in the lobby (one per type); their garage and everyone's room message carry it",
+      picked && field.every((b) => b.errors.length === 0),
+      field.map((b) => `${b.name} ${b.game.carType} (seen by host as ${H.game.carOf(b.game.you)})`).join(", "),
+    );
+    const room = ctx.server.rooms.rooms.get(H.game.code)!;
+    const e0 = new Map(field.map((b) => [b, b.game.recErrors.length]));
+    const st0 = new Map(field.map((b) => [b, b.game.recStateErrors]));
+    let statsSame: boolean | null = null;
+    H.afterStep = () => {
+      if (statsSame !== null || H.game.phase !== "racing") return;
+      statsSame = field.every((b) => {
+        const p = room.players.get(b.game.you)!;
+        return p.carType === typeOf.get(b) && JSON.stringify(p.stats) === JSON.stringify(b.game.stats) && JSON.stringify(b.game.stats) === JSON.stringify(statsFor(typeOf.get(b)!, b.game.levels));
+      });
+    };
+    const rows = await runRace("cars", bots, H, field);
+    H.afterStep = null;
+    check("cars over sockets: in the race the server's stats are the client's, statsFor(car, levels), for every type", statsSame === true, String(statsSame));
+    console.log(`      cars: ${rows.map((r) => `${r.name} (${carName(H.game.carOf(r.id))}) ${(r.timeMs / 1000).toFixed(2)}s`).join(", ")}`);
+    for (const b of field) {
+      const s = stats(b.game.recErrors.slice(e0.get(b)!));
+      console.log(
+        `      ${b.name.padEnd(8)} ${typeOf.get(b)!.padEnd(5)} rec err n=${s.n} median=${s.median.toFixed(3)} p95=${s.p95.toFixed(3)} max=${s.max.toFixed(2)}; ` +
+          `state mismatches ${b.game.recStateErrors - st0.get(b)!}; rtt=${b.game.rtt.toFixed(1)}ms`,
+      );
+      check(
+        `cars over sockets: lagged ${carName(typeOf.get(b)!)} bot: median reconciliation error < 0.5, no error > 50`,
+        s.n > 500 && s.median < 0.5 && s.max <= 50,
+        `median ${s.median.toFixed(3)}, max ${s.max.toFixed(2)} over ${s.n}`,
+      );
+    }
+  } finally {
+    H.afterStep = null;
+    for (const b of field) b.game.leave();
+  }
+}
+
+// ---- race tick (M4-ENV, PLAN-M4.md 3 and advisor change 9, ClickUp 123jpnbffe0, 2026-11-20) ----
+
+/** Sorted |values|: median, p95 and max of the absolute values. */
+function absStats(xs: number[]): { n: number; median: number; p95: number; max: number; exact: number } {
+  const a = xs.map(Math.abs).sort((x, y) => x - y);
+  if (!a.length) return { n: 0, median: NaN, p95: NaN, max: NaN, exact: NaN };
+  return { n: a.length, median: a[Math.floor(a.length / 2)], p95: a[Math.floor(a.length * 0.95)], max: a[a.length - 1], exact: a.filter((x) => x === 0).length / a.length };
+}
+
+/**
+ * The client's race-tick skew over a lagged link (80±10 ms): the server notes the race tick it
+ * applied each of the lagged bot's inputs at (from its own tick; inputs thrown away while paused
+ * are left out), the client logs the race tick it predicted each one at (live, and after its last
+ * replay). Through the countdown and GO (the clamp), a forced underrun (the bot sends nothing for
+ * 30 steps: the server repeats, coasts and rebuffers to QUEUE_START) and a pause with its resume
+ * (the resume hold), the skew stays bounded and the prediction is exact most of the time.
+ * The rule (PLAN-M4 3): step i after a snapshot runs at rt + i + 1. Right after a gap in the
+ * inputs (the underrun, the resume) nothing is pending, so the live prediction runs about one
+ * round trip of ticks early (~5-8 at 80 ms) until the next snapshot's replay corrects it.
+ */
+async function runRaceTick(ctx: Ctx, bots: Bot[]): Promise<void> {
+  const H = new Bot("Hotel", ctx.url, -20);
+  const L = new Bot("Lima", ctx.url, 20, { lag: 80, jitter: 10 });
+  bots.push(H, L);
+  for (const b of [H, L]) b.weapons = false;
+  let stall = 0;
+  const step = L.step.bind(L);
+  L.step = () => {
+    if (stall > 0) stall--; // no game.step: nothing predicted, nothing sent
+    else step();
+  };
+  const truth = new Map<number, number>();
+  let room: ReturnType<typeof ctx.server.rooms.rooms.get> | undefined;
+  let tick: ((t: number, now: number) => void) | null = null;
+  try {
+    H.game.create(H.name);
+    await waitFor("rt: H welcome", () => !!H.game.you, 3000);
+    L.game.join(H.game.code, L.name);
+    await waitFor("rt: L in H's room", () => H.game.players.length === 2 && !!L.game.you, 3000);
+    room = ctx.server.rooms.rooms.get(H.game.code)!;
+    const r = room;
+    tick = r.tick.bind(r);
+    let last = -1;
+    r.tick = (t: number, now: number) => {
+      tick!(t, now);
+      const p = r.players.get(L.game.you);
+      if (p && p.car && p.ack !== last) {
+        last = p.ack;
+        if (!r.paused) truth.set(p.ack, r.rt);
+      }
+    };
+    await readyUp("rt", H, [H, L]);
+    const log0 = L.game.rtLog.length;
+    H.game.start();
+    await waitFor("rt: racing", () => [H, L].every((b) => b.game.phase === "racing" && !!b.game.car), 6000);
+    await sleep(2500);
+    stall = 30;
+    await sleep(2500);
+    H.game.pause();
+    await waitFor("rt: paused", () => L.game.paused, 2000);
+    await sleep(800);
+    H.game.resume();
+    await waitFor("rt: racing again", () => [H, L].every((b) => !b.game.paused), 6000);
+    await sleep(2500);
+    const log = L.game.rtLog.slice(log0).filter(([seq]) => truth.has(seq));
+    const live = absStats(log.map(([seq, rt0]) => rt0 - truth.get(seq)!));
+    const fin = absStats(log.map(([seq, , rt]) => rt - truth.get(seq)!));
+    const countdown = log.filter(([seq]) => truth.get(seq) === 0).length;
+    console.log(
+      `      Lima rt skew (predicted - server, ticks) over ${log.length} applied inputs (${countdown} in the countdown, rt up to ${Math.max(...log.map(([seq]) => truth.get(seq)!))}): ` +
+        `live median ${live.median} p95 ${live.p95} max ${live.max} (exact ${(100 * live.exact).toFixed(1)}%); ` +
+        `after replays median ${fin.median} p95 ${fin.p95} max ${fin.max} (exact ${(100 * fin.exact).toFixed(1)}%); rtt=${L.game.rtt.toFixed(1)}ms`,
+    );
+    check(
+      "race tick over sockets: the lagged bot (80±10 ms) predicts the race tick of its inputs through the countdown, GO, an underrun and a pause/resume: after replays exact for >= 95% (max 3); live exact for >= 90% (max 10, a round trip after a gap)",
+      log.length > 400 && countdown > 20 && fin.exact >= 0.95 && fin.max <= 3 && live.exact >= 0.9 && live.max <= 10 && H.errors.length + L.errors.length === 0,
+      `live median ${live.median} p95 ${live.p95} max ${live.max}; after replays exact ${(100 * fin.exact).toFixed(1)}%, max ${fin.max}`,
+    );
+    H.game.stopRace();
+    await waitFor("rt: stopped", () => [H, L].every((b) => b.game.phase === "lobby"), 3000);
+  } finally {
+    if (room && tick) room.tick = tick;
+    for (const b of [H, L]) b.game.leave();
   }
 }

@@ -1,7 +1,8 @@
 // The garage: upgrade and ammo catalog, prices, payouts. Pure and shared, so the server
 // (authority) and the client (shop UI, prediction stats) always agree.
 
-import { BASE_STATS, TICK_HZ, type CarStats } from "./physics";
+import { CARS, type CarType } from "./cars";
+import { TICK_HZ, type CarStats } from "./physics";
 
 export type UpgradeId = "engine" | "tyres" | "welder";
 export type AmmoId = "rivets" | "mines";
@@ -52,16 +53,20 @@ export function isItem(v: unknown): v is ItemId {
 }
 
 /**
- * Stats a car races with. The engine raises acceleration only (+7 % per level); top speed
- * stays at the base value at every level (playtest 2026-11-16: a faster top speed made the
- * engine overpowered).
+ * Stats a car races with: the car type's base (shared/cars.ts) with the driver's upgrades as
+ * percentages of it. The engine raises acceleration only (+7 % per level); top speed stays at
+ * the base value at every level (playtest 2026-11-16: a faster top speed made the engine
+ * overpowered). Tyres: grip and steering. The dirt multipliers are the type's own.
  */
-export function statsFor(l: Levels): CarStats {
+export function statsFor(car: CarType, l: Levels): CarStats {
+  const b = CARS[car].base;
   return {
-    accel: BASE_STATS.accel * (1 + 0.07 * l.engine),
-    topSpeed: BASE_STATS.topSpeed,
-    grip: BASE_STATS.grip * (1 + 0.1 * l.tyres),
-    turn: BASE_STATS.turn * (1 + 0.04 * l.tyres),
+    accel: b.accel * (1 + 0.07 * l.engine),
+    topSpeed: b.topSpeed,
+    grip: b.grip * (1 + 0.1 * l.tyres),
+    turn: b.turn * (1 + 0.04 * l.tyres),
+    dirtDrag: b.dirtDrag,
+    dirtGrip: b.dirtGrip,
   };
 }
 

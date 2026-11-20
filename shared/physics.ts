@@ -29,17 +29,28 @@ export interface CarState {
   // Jumps and falls (shared/weapons.ts stepRaceCar).
   air: number; // ticks left in the air (committed flight: velocity and heading frozen), 0 = grounded
   fall: number; // ticks left falling (frozen, blinking), then the car is placed at a recovery point
+  // Ticks of speed boost left (M4-ENV plumbing for the lightning cells, PLAN-M4 2.5): always 0
+  // until a ticket gives it a meaning; carried in snapshots and the prediction already.
+  boost: number;
 }
 
-/** Per-car tuning. The upgrade shop will modify these. */
+/**
+ * Per-car tuning: the car type's base (shared/cars.ts) with the driver's upgrades
+ * (shared/shop.ts statsFor).
+ */
 export interface CarStats {
   accel: number;
   topSpeed: number;
   grip: number; // how fast sideways sliding dies out (higher = grippier)
   turn: number; // rad/s at full steering lock
+  // Off the asphalt (the dirt verge, M4-CARS): drag times dirtDrag (so the top speed there is
+  // topSpeed / dirtDrag) and grip times dirtGrip.
+  dirtDrag: number;
+  dirtGrip: number;
 }
 
-export const BASE_STATS: CarStats = { accel: 520, topSpeed: 430, grip: 7.5, turn: 3.3 };
+/** The Sport's stats with no upgrades (shared/cars.ts): the car every driver had before M4-CARS. */
+export const BASE_STATS: CarStats = { accel: 520, topSpeed: 430, grip: 7.5, turn: 3.3, dirtDrag: 2.9, dirtGrip: 0.37 };
 
 export interface Input {
   throttle: number; // -1 (brake/reverse) .. 1 (accelerate)
@@ -51,14 +62,12 @@ export const NO_INPUT: Input = { throttle: 0, steer: 0 };
 const BRAKE = 900;
 const REVERSE_FACTOR = 0.5;
 const ROLL = 60; // coasting deceleration
-const GRASS_DRAG_MULT = 2.9;
-const GRASS_GRIP_MULT = 0.37;
 const FULL_TURN_SPEED = 140; // below this speed steering is scaled down
 const WALL_BOUNCE = 0.35;
 const WALL_SCRAPE = 0.97;
 
 export function cloneCar(c: CarState): CarState {
-  return { x: c.x, y: c.y, h: c.h, vx: c.vx, vy: c.vy, seg: c.seg, wreck: c.wreck, air: c.air, fall: c.fall };
+  return { x: c.x, y: c.y, h: c.h, vx: c.vx, vy: c.vy, seg: c.seg, wreck: c.wreck, air: c.air, fall: c.fall, boost: c.boost };
 }
 
 export function speedOf(c: { vx: number; vy: number }): number {
@@ -78,8 +87,8 @@ export function stepCar(c: CarState, input: Input, stats: CarStats, track: Track
   const q = queryTrackNear(track, c.x, c.y, c.seg);
   c.seg = q.seg;
   const onRoad = q.dist <= track.def.halfWidth;
-  const drag = (stats.accel / stats.topSpeed) * (onRoad ? 1 : GRASS_DRAG_MULT);
-  const grip = stats.grip * (onRoad ? 1 : GRASS_GRIP_MULT);
+  const drag = (stats.accel / stats.topSpeed) * (onRoad ? 1 : stats.dirtDrag);
+  const grip = stats.grip * (onRoad ? 1 : stats.dirtGrip);
 
   if (throttle > 0) {
     vf += (vf < 0 ? BRAKE : stats.accel) * throttle * DT;

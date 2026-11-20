@@ -44,9 +44,10 @@ import { AMMO, buy, clampAmmo, isItem, payouts, startingWallet, statsFor, type A
 import { BUILTIN_SOUND, DEFAULT_SONG_ID, isSongChoice, isSongId, RANDOM_SONG, snapVolume, SONG_IDS, type RoomSound, type SongId } from "../shared/sound";
 import { gridSlot, type Track } from "../shared/track";
 import { DEFAULT_TRACK_ID, isTrackId, trackById } from "../shared/tracks";
-import { BTN_RIVET, CAR_HP, DEFAULT_MINE_MODE, GHOST_TICKS, isMineMode, mineCount, NO_COMMAND, stepRaceCar, WEAPONS_ARM_MS, type Command, type MineMode } from "../shared/weapons";
+import { BTN_RIVET, CAR_HP, DEFAULT_MINE_MODE, GHOST_TICKS, isMineMode, mineCount, NO_COMMAND, raceEnv, stepRaceCar, WEAPONS_ARM_MS, type Command, type MineMode } from "../shared/weapons";
 import { isBotLevel, type BotLevel } from "../shared/botdrive";
-import { BOT_SLOTS, botName, botStep, maxBotsFromEnv, newBotSeat, resetBotSeat, shopBot, type BotSeat } from "./bots";
+import { DEFAULT_CAR, isCarType, type CarType } from "../shared/cars";
+import { BOT_SLOTS, botCar, botName, botStep, maxBotsFromEnv, newBotSeat, resetBotSeat, shopBot, type BotSeat } from "./bots";
 import { Combat, solid, type Fighter } from "./combat";
 import { advance, compareStanding, newProgress, raceDistance, type Progress } from "./race";
 
@@ -94,6 +95,10 @@ export interface Player extends Fighter {
   // wreck bonus, the garage open. Reset by clearRace and beginRace.
   retired: boolean;
   progress: Progress | null;
+  // The car type picked in the lobby (M4-CARS, shared/cars.ts): kept across races and reconnects,
+  // changed only in the lobby (setCar), so a race runs from start to end with the one it began
+  // with; beginRace sets `stats` from it and the levels.
+  carType: CarType;
   stats: CarStats;
   wallet: Wallet; // scrap, upgrade levels, ammo: kept across races and reconnects
   queue: QueuedInput[];
@@ -171,6 +176,9 @@ export class Room {
   raceStart = 0;
   private finishers = 0;
   private tickNo = 0;
+  // The race tick (M4-ENV, shared/weapons.ts RaceEnv): simulate ticks run while racing (paused
+  // ticks are not simulated, so they do not count); 0 before GO, back to 0 for every new race.
+  private raceTick = 0;
   private lastOrder: string[] = []; // last race's standings, for the reverse grid
   private lobbyAt = 0; // server time the lobby last opened (back from results)
   private lastJoinAt = 0; // server time the last new player joined (the creator included)
@@ -217,6 +225,11 @@ export class Room {
     this._track = trackById(trackId);
     this._combat = this.newCombat();
     this.resolveSong();
+  }
+
+  /** The race tick: ticks simulated while racing in this race (0 before GO); in every snapshot. */
+  get rt(): number {
+    return this.raceTick;
   }
 
   /** The host's sound defaults (a copy); changed only through setSound. */
@@ -318,6 +331,7 @@ export class Room {
     while (taken.has(slot) && slot < BOT_SLOTS - 1) slot++;
     const b = this.newPlayer(botName(slot), now);
     b.bot = newBotSeat(level as BotLevel, slot, ++this.botsAdded);
+    b.carType = botCar(slot); // round-robin by seat; the host can change it (setCar)
     b.ready = true;
     shopBot(b.wallet, b.bot.level);
     this.players.set(b.id, b);
@@ -349,6 +363,7 @@ export class Room {
       wallet,
       ammo: wallet.ammo,
       levels: wallet.levels,
+      carType: DEFAULT_CAR,
       stats: { ...BASE_STATS },
       queue: [],
       lastQueuedSeq: -1,
@@ -507,18 +522,19 @@ export class Room {
     }
     this.combat.reset();
     this.combat.mode = this.mineMode; // this race's, whatever the host sets while it runs
+    this.raceTick = 0;
     this.startAmmo.clear();
     this.retiredBuys.clear();
     this.gridOrder().forEach((q, slot) => {
       const g = gridSlot(this.track, slot);
-      q.car = { x: g.x, y: g.y, h: g.h, vx: 0, vy: 0, seg: g.seg, wreck: 0, air: 0, fall: 0 };
+      q.car = { x: g.x, y: g.y, h: g.h, vx: 0, vy: 0, seg: g.seg, wreck: 0, air: 0, fall: 0, boost: 0 };
       q.progress = newProgress(this.track, q.car);
       q.inRace = true;
       q.finished = false;
       q.hp = q.maxHp = this.hp;
       q.ghost = 0;
       q.cooldown = 0;
-      q.stats = statsFor(q.wallet.levels);
+      q.stats = statsFor(q.carType, q.wallet.levels); // the car is locked from here to the lobby
       clampAmmo(q.wallet); // e.g. an old wallet over the mine cap: nobody races with more
       this.startAmmo.set(q.id, { ...q.wallet.ammo });
       resetQueue(q);
@@ -874,6 +890,29 @@ export class Room {
     return null;
   }
 
+  /**
+   * Lobby only (M4-CARS): pick the car type to race with, free and any number of times; with
+   * `botId` the host picks that bot's car. The race locks it: beginRace sets the stats from it
+   * and nothing changes it again until the lobby. The player gets a garage message (their own
+   * prediction's stats) and everyone the room message (what to draw). The same car: nothing.
+   */
+  setCar(p: Player, car: unknown, botId?: unknown): string | null {
+    if (this.phase !== "lobby") return "The car can only be changed in the lobby";
+    if (!isCarType(car)) return "Unknown car";
+    let q = p;
+    if (botId !== undefined) {
+      if (p.id !== this.hostId) return "Only the host can pick a bot's car";
+      const b = typeof botId === "string" ? this.players.get(botId) : undefined;
+      if (!b?.bot) return "That is not a bot in this room";
+      q = b;
+    }
+    if (q.carType === car) return null;
+    q.carType = car;
+    this.sendGarage(q);
+    this.broadcastRoom();
+    return null;
+  }
+
   /** Lobby ready toggle. Ignored from the host, outside the lobby and for non-booleans. */
   setReady(p: Player, ready: unknown): void {
     if (this.phase !== "lobby" || p.id === this.hostId || typeof ready !== "boolean" || p.ready === ready) return;
@@ -942,6 +981,8 @@ export class Room {
     else if (this.phase === "results" && now >= this.phaseEnds) this.toLobby(now);
 
     const racing = this.phase === "racing";
+    if (racing) this.raceTick++; // this tick's race tick: 1 on the first tick after GO
+    const env = raceEnv(this.track, this.raceTick);
     // Weapons stay cold for the first seconds after GO. consumeInput still moves mineBase,
     // so a mine press in that window is discarded rather than dropped later.
     const armed = racing && now >= this.raceStart + WEAPONS_ARM_MS;
@@ -963,7 +1004,7 @@ export class Room {
       const { cmd, minePress } = botCmds.get(p) ?? consumeInput(p);
       // A car put back at a recovery point after a fall is ghosted (as after a wreck), from
       // this tick's car-car pass on.
-      if (stepRaceCar(c, racing ? cmd : NO_INPUT, p.stats, this.track) === "recover") {
+      if (stepRaceCar(c, racing ? cmd : NO_INPUT, p.stats, env) === "recover") {
         p.ghost = GHOST_TICKS;
         recovered.add(p);
       }
@@ -1054,6 +1095,7 @@ export class Room {
     this.combat.reset();
     this.startAmmo.clear();
     this.retiredBuys.clear();
+    this.raceTick = 0;
   }
 
   private setPhase(phase: Phase, ends: number): void {
@@ -1067,7 +1109,7 @@ export class Room {
   }
 
   private sendGarage(p: Player): void {
-    p.session?.conn.send({ t: "garage", scrap: p.wallet.scrap, levels: { ...p.wallet.levels } });
+    p.session?.conn.send({ t: "garage", scrap: p.wallet.scrap, levels: { ...p.wallet.levels }, car: p.carType });
   }
 
   private sendSnapshots(tick: number, now: number): void {
@@ -1092,6 +1134,7 @@ export class Room {
         wreck: c.wreck,
         air: c.air,
         fall: c.fall,
+        boost: c.boost,
         ghost: p.ghost > 0 || p.finished,
       });
     }
@@ -1104,6 +1147,7 @@ export class Room {
         time,
         phase: this.phase,
         phaseEnds: this.phaseEnds,
+        rt: this.raceTick,
         ack: p.ack,
         ammo: [p.wallet.ammo.rivets, p.wallet.ammo.mines],
         ents,
@@ -1121,6 +1165,7 @@ export class Room {
         connected: !!p.session || !!p.bot,
         ready: p.ready && p.id !== this.hostId, // a new host's old flag is not shown
         retired: p.retired,
+        car: p.carType,
       };
       if (p.bot) info.bot = p.bot.level;
       return info;
@@ -1291,6 +1336,12 @@ export class Rooms {
       case "mines": {
         if (!session.room || !session.player) return;
         const e = session.room.setMines(session.player, msg.mode, now);
+        if (e) err(e);
+        return;
+      }
+      case "car": {
+        if (!session.room || !session.player) return;
+        const e = session.room.setCar(session.player, msg.id, msg.bot);
         if (e) err(e);
         return;
       }
