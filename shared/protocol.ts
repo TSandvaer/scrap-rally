@@ -8,6 +8,7 @@
 
 import type { Levels } from "./shop";
 import type { RoomSound } from "./sound";
+import type { MineMode } from "./weapons";
 
 export const LAPS = 3;
 export const MAX_PLAYERS = 6;
@@ -51,6 +52,10 @@ export const PAUSE_COOLDOWN_MS = 5000;
 // SOUND_BURST times at once, then SOUND_PER_SEC times a second (the menu throttles its sends).
 export const SOUND_BURST = 4;
 export const SOUND_PER_SEC = 2;
+// Mines setting (MINES-1, shared/weapons.ts MineMode): the host may change it MINES_BURST
+// times at once, then MINES_PER_SEC times a second.
+export const MINES_BURST = 4;
+export const MINES_PER_SEC = 2;
 
 export type Phase = "lobby" | "countdown" | "racing" | "results";
 
@@ -98,7 +103,11 @@ export type ClientMsg =
   // Host only, any phase (SND-4): change the room's sound defaults; only the keys given change.
   // A wrong type, a volume outside 0..1 or an unknown song id is refused with an err (nothing
   // changes); volumes are snapped to 0.05. song: an id of shared/sound.ts SONG_IDS or "random".
-  | { t: "soundDefaults"; musicOn?: boolean; music?: number; effects?: number; song?: string };
+  | { t: "soundDefaults"; musicOn?: boolean; music?: number; effects?: number; song?: string }
+  // Host only, any phase (MINES-1): the room's mines setting, "stay" or "fade" (shared/weapons.ts
+  // MineMode); anything else is refused with an err. A race under way keeps the mode it began
+  // with: the change applies from the next race (a restart is one).
+  | { t: "mines"; mode: MineMode };
 
 /**
  * One line of room chat. say = a player's message (from = their id); join / leave = a player
@@ -153,6 +162,10 @@ export interface MineSnap {
   x: number;
   y: number;
   armed: boolean;
+  // Only while the mine blinks out (MINES-1): the ticks until it is gone, 1 or more. "fade":
+  // the last MINE_FADE_TICKS of its life (live to the end). "stay": the MINE_OUT_TICKS after
+  // the cap took it off the track (harmless: armed is false).
+  out?: number;
 }
 
 /** Generic entity list: cars, shots, mines; pickups can be added later. */
@@ -203,6 +216,8 @@ export type ServerMsg =
       // id everyone plays (a "random" choice is picked by the server at each race's countdown).
       soundDefaults: RoomSound;
       song: string;
+      // The host's mines setting (MINES-1): what the next race begins with ("stay" in a new room).
+      mines: MineMode;
       players: PlayerInfo[];
     }
   | { t: "err"; msg: string; code?: ErrCode }

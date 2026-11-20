@@ -19,6 +19,8 @@ import {
   FINISH_GRACE_MS,
   FORCE_START_MS,
   MAX_PLAYERS,
+  MINES_BURST,
+  MINES_PER_SEC,
   PAUSE_COOLDOWN_MS,
   PAUSE_MAX_MS,
   PAUSE_RESUME_MS,
@@ -42,7 +44,7 @@ import { AMMO, buy, clampAmmo, isItem, payouts, startingWallet, statsFor, type A
 import { BUILTIN_SOUND, DEFAULT_SONG_ID, isSongChoice, isSongId, RANDOM_SONG, snapVolume, SONG_IDS, type RoomSound, type SongId } from "../shared/sound";
 import { gridSlot, type Track } from "../shared/track";
 import { DEFAULT_TRACK_ID, isTrackId, trackById } from "../shared/tracks";
-import { BTN_RIVET, CAR_HP, GHOST_TICKS, mineCount, NO_COMMAND, stepRaceCar, WEAPONS_ARM_MS, type Command } from "../shared/weapons";
+import { BTN_RIVET, CAR_HP, DEFAULT_MINE_MODE, GHOST_TICKS, isMineMode, mineCount, NO_COMMAND, stepRaceCar, WEAPONS_ARM_MS, type Command, type MineMode } from "../shared/weapons";
 import { Combat, solid, type Fighter } from "./combat";
 import { advance, compareStanding, newProgress, raceDistance, type Progress } from "./race";
 
@@ -194,6 +196,10 @@ export class Room {
   private sound: RoomSound = { ...BUILTIN_SOUND };
   private _song: SongId = DEFAULT_SONG_ID;
   private readonly soundBudget: Bucket = { tokens: SOUND_BURST, at: -Infinity };
+  // The host's mines setting (MINES-1): in the room message, kept on a handover, gone with the
+  // room. A race runs with the one set as it began (beginRace hands it to its Combat).
+  private mineMode: MineMode = DEFAULT_MINE_MODE;
+  private readonly minesBudget: Bucket = { tokens: MINES_BURST, at: -Infinity };
 
   constructor(
     readonly code: string,
@@ -210,6 +216,11 @@ export class Room {
   /** The host's sound defaults (a copy); changed only through setSound. */
   get soundDefaults(): RoomSound {
     return { ...this.sound };
+  }
+
+  /** The host's mines setting: what the next race begins with; changed only through setMines. */
+  get mines(): MineMode {
+    return this.mineMode;
   }
 
   /** The song everyone in the room plays (an id; "random" already picked). */
@@ -434,6 +445,7 @@ export class Room {
       q.retired = false;
     }
     this.combat.reset();
+    this.combat.mode = this.mineMode; // this race's, whatever the host sets while it runs
     this.startAmmo.clear();
     this.retiredBuys.clear();
     this.gridOrder().forEach((q, slot) => {
@@ -586,6 +598,24 @@ export class Room {
     this.soundBudget.tokens--;
     this.sound = next;
     if (next.song !== cur.song) this.resolveSong();
+    this.broadcastRoom();
+    return null;
+  }
+
+  /**
+   * Host only, any phase (MINES-1): the room's mines setting, "stay" or "fade"; anything else is
+   * refused. Nothing changed: no broadcast. A change takes one of the room's MINES_BURST tokens
+   * (MINES_PER_SEC back a second); none left: "Slow down", nothing changes. A race under way
+   * keeps the mode it began with (beginRace).
+   */
+  setMines(p: Player, mode: unknown, now: number): string | null {
+    if (p.id !== this.hostId) return "Only the host can set the mines";
+    if (!isMineMode(mode)) return "Bad mines setting";
+    if (mode === this.mineMode) return null;
+    refill(this.minesBudget, MINES_BURST, MINES_PER_SEC, now);
+    if (this.minesBudget.tokens < 1) return "Slow down";
+    this.minesBudget.tokens--;
+    this.mineMode = mode;
     this.broadcastRoom();
     return null;
   }
@@ -1036,6 +1066,7 @@ export class Room {
       resumeAt: this.resumeAt,
       soundDefaults: { ...this.sound },
       song: this._song,
+      mines: this.mineMode,
       players: this.info(),
     });
   }
@@ -1169,6 +1200,12 @@ export class Rooms {
       case "soundDefaults": {
         if (!session.room || !session.player) return;
         const e = session.room.setSound(session.player, msg as unknown as Record<string, unknown>, now);
+        if (e) err(e);
+        return;
+      }
+      case "mines": {
+        if (!session.room || !session.player) return;
+        const e = session.room.setMines(session.player, msg.mode, now);
         if (e) err(e);
         return;
       }

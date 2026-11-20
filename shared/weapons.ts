@@ -54,9 +54,28 @@ export const RIVET_COOLDOWN = 9;
 export const RIVET_RADIUS = 2;
 
 export const MINE_ARM_TICKS = 24;
-export const MINE_LIFE_TICKS = 25 * 60;
+export const MINE_LIFE_TICKS = 25 * 60; // "fade" only: a mine's life
 export const MINE_DAMAGE = 15;
 export const MINE_RADIUS = 9;
+// The room's mines setting (MINES-1): the host picks it; a race uses the one set as it begins.
+// - "stay" (the default): a mine lies until it is hit or the race is over, stopped or restarted.
+//   At most MINE_CAP lie on the track: one more dropped takes the oldest off it, which is
+//   harmless from then on and shown blinking out for MINE_OUT_TICKS.
+// - "fade": a mine is gone after MINE_LIFE_TICKS; it blinks over its last MINE_FADE_TICKS and
+//   is live to the end.
+export const MINE_MODES = ["stay", "fade"] as const;
+export type MineMode = (typeof MINE_MODES)[number];
+export const DEFAULT_MINE_MODE: MineMode = "stay";
+export const MINE_CAP = 40;
+export const MINE_FADE_TICKS = 2 * 60;
+export const MINE_OUT_TICKS = 60;
+// A mine blinking out blinks faster over its last MINE_BLINK_FAST_TICKS (client/gfx/actors.ts).
+export const MINE_BLINK_FAST_TICKS = 60;
+
+export function isMineMode(v: unknown): v is MineMode {
+  return typeof v === "string" && (MINE_MODES as readonly string[]).includes(v);
+}
+
 export const SPIN_KICK = 1.6; // radians
 export const SPIN_SPEED = 0.3; // speed kept after a spin-out
 
