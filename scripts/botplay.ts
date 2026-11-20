@@ -11,7 +11,7 @@
 
 import { Game, lostMessage, type TokenStore } from "../client/game";
 import { connectWs } from "../client/net";
-import { AMMO, priceOf, UPGRADE_IDS, type ItemId } from "../shared/shop";
+import { botShopping } from "../shared/botshop";
 import { trackName } from "../shared/tracks";
 import { BotDriver } from "./bot-ai";
 
@@ -48,24 +48,11 @@ interface Bot {
   readyDue: boolean; // a room update arrived: check (once) whether to report ready
 }
 
-/** Between races: top up rivets, then buy the cheapest affordable upgrade, a few times. */
+/** Between races: top up rivets and mines, then each affordable upgrade, cheapest first (shared/botshop.ts). */
 function shop(b: Bot): void {
   const g = b.game;
   const wallet = { scrap: g.scrap, levels: { ...g.levels }, ammo: { rivets: g.serverAmmo[0], mines: g.serverAmmo[1] } };
-  const wishes: ItemId[] = [];
-  if (wallet.ammo.rivets < 40) wishes.push("rivets");
-  if (wallet.ammo.mines < 3) wishes.push("mines");
-  const upgrades = [...UPGRADE_IDS].sort((x, y) => (priceOf(x, wallet) ?? 1e9) - (priceOf(y, wallet) ?? 1e9));
-  wishes.push(...upgrades);
-  let budget = wallet.scrap;
-  for (const item of wishes) {
-    const price = priceOf(item, wallet);
-    if (price === null || price > budget) continue;
-    g.buy(item);
-    budget -= price;
-    if (item === "rivets" || item === "mines") wallet.ammo[item] += AMMO[item].pack;
-    else wallet.levels[item]++;
-  }
+  for (const item of botShopping(wallet, "normal")) g.buy(item);
 }
 
 const bots: Bot[] = [];
