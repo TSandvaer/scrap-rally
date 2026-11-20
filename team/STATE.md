@@ -311,6 +311,8 @@ LIVE 2026-11-20 (checked by curl): live serves index-SEQmFjen.js (= the 4819a45 
 (tmp/spec-qa-live-6.md -> tmp/qa6-graphics-live-report.md). On PASS: the 6 tickets -> complete.
 MINES-1 done: cfc7cb0 (sim 532/532, bots 100/100; blink 0 B/frame; 40 mines +0.03 ms). Opus reviewer ctx_84e0d120f6e7 (tmp/review-mines1.md).
 Taste copy mines1-taste (detached cfc7cb0) on :3009, node pid 28890 (gfx4-taste removed, old pid 12549 killed).
+MINES-1 MERGED 2026-11-20: review APPROVE (Opus) + user taste APPROVE; main 797d290 (check clean, sim 532/532, bots 100/100, build ok);
+ticket ready for qa test; workers released, mines1 workspace + branch removed. Not pushed (next deploy). QA6 live still running.
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
@@ -367,7 +369,6 @@ Manual Deploy only on the user's go-ahead. The user's own dev server runs on :30
 
 | Ticket | Dispatch | Workspace | Branch | Port | Started |
 | --- | --- | --- | --- | --- | --- |
-| 123jpnbfdq6 MINES-1 | ctx_7199ccb0ef4c | ~/orca/workspaces/scrap-rally/mines1 | TSandvaer/mines1 | 3006 | 2026-11-20 |
 | 123jpnbfb23 GFX-0 | ctx_27a7a271607b | ~/orca/workspaces/scrap-rally/gfx0 | TSandvaer/gfx0 | 3006 | 2026-11-18 |
 
 ## Queued (milestone 3, PLAN-M3.md; start after solid collisions 123jpnbf6cy and easier-start 123jpnbf3xa merge)
