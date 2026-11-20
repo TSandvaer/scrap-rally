@@ -87,3 +87,4 @@
 - 2026-11-20 — GFX-4 taste gate (user, popup): mine scorches and tyre marks approved.
 - 2026-11-20 — Mines mode (user + popups): the host chooses Mines: Stay (default) / Fade in the lobby, applied from the next race; Fade = today's 25 s with a 2 s blink-out; Stay = mines stay until hit, max 40 on the track (oldest blinks out). Small ticket, no advisor review (like SND-3).
 - 2026-11-20 — Graphics round test drive (user: "approved") on the gfx4-taste copy f7ead2b (track, cars, effects, HUD, menus, track marks).
+- 2026-11-20 — Deploy (user, popup "Push right after GFX-4"): push main to GitHub as soon as GFX-4 is merged and checked; user clicks Manual Deploy; then muted live QA. MINES-1 in a later deploy.
