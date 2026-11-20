@@ -8260,7 +8260,7 @@ function envStep(): void {
   sim.run(10, () => ({ throttle: 1 }));
   const cars = sim.conns.get(a.id)!.msgs.filter((m): m is SnapMsg => m.t === "snap").flatMap((m) => m.ents.filter((e): e is CarSnap => e.k === "car"));
   check(
-    "env boost: CarState carries boost; cloneCar copies it; every car in a snapshot has boost 0 (nothing gives one yet)",
+    "env boost: CarState carries boost; cloneCar copies it; every car in a snapshot has boost 0 off the start (no cell there)",
     cl.boost === 37 && cl !== src && cars.length > 3 && cars.every((e) => e.boost === 0) && a.car!.boost === 0,
     `${cars.length} car snapshots`,
   );
@@ -8694,7 +8694,454 @@ function draftBots(): void {
   );
 }
 
-for (const t of [rivets, gating, mines, wrecks, finishing, garage, armDelay, engine, readyCheck, collisions, trackFeatures, roomTrack, jumpsWired, shippedTracks, botDriver, botLaps, mineCap, chatRoom, chatClient, sound, raceSounds, surfaceSounds, audioUnlock, menuHostOnly, menuStop, menuRestart, menuKick, menuLock, menuHandover, menuClient, menuRestartClient, retireRules, retireField, retireRaceEnd, retireGarage, retireRefund, retireOthers, retireNotices, retireClient, pauseRefused, pauseFreeze, pauseResume, pauseHold, pauseAuto, pauseCooldown, pauseGrace, pauseCountdown, pauseControls, pauseClient, musicSwitch, soundMigration, soundLayers, soundServer, soundRandom, soundRoomDrag, soundSliderGrip, soundClient, songs, songPlayer, ghostRivets, minesSetting, minesStay, minesCap, minesFade, minesAtStart, minesCleared, minesPaused, minesClient, botsPointAt, botsAdd, botsKickHost, botsHandover, botsFullRoom, botsSoloStart, botsRace, botsShop, botsTick, botsCpu, botsClient, carsTypes, carsStats, carsPick, carsRejoin, carsBots, carsRunUps, carsBalance, carsCut, carsClient, envRt, envStep, envClient, draftRule, draftStraight, draftClient, draftJumps, draftBots]) {
+// ---- lightning cells and the boost (M4-CELLS, PLAN-M4.md 2.5, ClickUp 123jpnbfffk, 2026-11-20) ----
+
+// This section's imports (hoisted like the ones at the top).
+import {
+  BOOST_ACCEL,
+  BOOST_LEADER_TICKS,
+  BOOST_TOP,
+  boostOffer,
+  boostTicksFor,
+  boostTopSpeed,
+  CELL_AIR_HEIGHT,
+  CELL_RADIUS,
+  CELL_RESPAWN,
+  CELL_TOUCH,
+  cellOpen,
+  cellTouch,
+} from "../shared/catchup";
+import { airCellReach, cellReach, validateCells } from "../shared/weapons";
+import { CAR_RADIUS } from "../shared/physics";
+import { CELL_KERB } from "../shared/track";
+
+/**
+ * The cells test track: the draft straight (dead straight, heading +x, lat + = +y, from s ~ 1000
+ * to 6000) with a kerb cell at s 2000 (lat 58), a jump (ramp 3000-3080, gap to 3200) with a low air
+ * cell 4 past the lip (no car is ever high enough there) and a high one at 3150 (lat 20), an air
+ * cell over solid ground at 4500 and a cell in the dirt at 5000 (lat 80).
+ */
+const CELLS_ID = "cells-test";
+const CELLS_DEF: TrackDef = {
+  ...DRAFT_STRAIGHT,
+  id: CELLS_ID,
+  name: "Cells Test",
+  features: [
+    { k: "cell", s: 2000, lat: 58 },
+    { k: "ramp", s: 3000, len: 80 },
+    { k: "gap", s0: 3080, s1: 3200 },
+    { k: "cell", s: 3084, lat: 0, air: true },
+    { k: "cell", s: 3150, lat: 20, air: true },
+    { k: "cell", s: 4500, lat: 0, air: true },
+    { k: "cell", s: 5000, lat: 80 },
+  ],
+  recovery: [0, 2600],
+};
+
+function cellsRule(): void {
+  check(
+    "cells rule: a cell is touched when a car's centre comes within its radius plus the car's (14 + 13); cellTouch is the earliest fraction of the tick, -1 for a miss",
+    CELL_TOUCH === CELL_RADIUS + CAR_RADIUS && Math.abs(cellTouch(-50, 0, 0, 0, 0, 0) - (50 - CELL_TOUCH) / 50) < 1e-12 && cellTouch(-100, 0, -60, 0, 0, 0) === -1 &&
+      cellTouch(-5, 0, 5, 0, 0, 0) === 0 && cellTouch(-30, CELL_TOUCH + 0.01, 30, CELL_TOUCH + 0.01, 0, 0) === -1 && cellTouch(-30, CELL_TOUCH - 0.1, 30, CELL_TOUCH - 0.1, 0, 0) > 0,
+  );
+  check(
+    "cells rule: boost by the gap to the leader: leader 36 ticks, up to 400 behind 54, up to 1200 behind 72, further 90",
+    [-5, 0, 1, 400, 401, 1200, 1201, 5000].map(boostTicksFor).join() === "36,36,54,54,72,72,90,90",
+  );
+  const field = [{ rd: 5000, fin: true }, { rd: 3000, fin: false }, { rd: 2500, fin: false }, { rd: 1500, fin: false }];
+  check(
+    "cells rule: the leader is the leading car that has not finished (a finisher far ahead does not count)",
+    boostOffer(3000, field) === BOOST_LEADER_TICKS && boostOffer(2700, field) === 54 && boostOffer(2500, field) === 72 && boostOffer(1500, field) === 90 &&
+      boostOffer(100, [{ rd: 100, fin: false }]) === BOOST_LEADER_TICKS,
+  );
+  check("cells rule: a cell is there at race tick rt when its back tick is 0 or reached", cellOpen(0, 0) && cellOpen(0, 999) && !cellOpen(500, 499) && cellOpen(500, 500));
+  // cellReach: ground cells for cars on the ground, air cells for cars high in a jump; never a car
+  // wrecked or falling (now or at the start of the tick).
+  const t = buildTrack(CELLS_DEF);
+  const [kerb, low, high, overGround] = t.cells;
+  const at = (cell: typeof kerb, o: Partial<CarState>): CarState => ({ x: cell.x, y: cell.y, h: 0, vx: 400, vy: 0, seg: cell.seg, wreck: 0, air: 0, fall: 0, boost: 0, ...o });
+  const flying = (cell: typeof kerb, air: number): CarState => at(cell, { air }); // 400 u/s: 48 air ticks in all
+  check(
+    `cells rule: a ground cell for a car on the ground only, an air cell only at airHeight >= ${CELL_AIR_HEIGHT}; nothing for a car wrecked or falling now or at the start of the tick`,
+    cellReach(kerb, kerb.x - 5, kerb.y, false, at(kerb, {})) >= 0 && cellReach(kerb, kerb.x - 5, kerb.y, false, flying(kerb, 24)) === -1 &&
+      cellReach(overGround, overGround.x - 5, overGround.y, false, at(overGround, {})) === -1 && cellReach(high, high.x - 5, high.y, false, flying(high, 24)) >= 0 &&
+      airHeight(flying(high, 46)) < CELL_AIR_HEIGHT && cellReach(high, high.x - 5, high.y, false, flying(high, 46)) === -1 &&
+      cellReach(kerb, kerb.x - 5, kerb.y, true, at(kerb, {})) === -1 && cellReach(kerb, kerb.x - 5, kerb.y, false, at(kerb, { wreck: 5 })) === -1 &&
+      cellReach(kerb, kerb.x - 5, kerb.y, false, at(kerb, { fall: 5 })) === -1 && !!low,
+  );
+}
+
+function boostPhysics(): void {
+  // Boosted: accel x1.6, top speed x1.25 (the fixed step's terminal speed a (1 - k DT) / k, k the
+  // boosted drag); no slipstream on top; it counts down every driving and flying tick, a wreck, a
+  // fall and a recovery end it; the extra speed dies away over ~0.8 s afterwards.
+  const t = buildTrack(DRAFT_STRAIGHT);
+  const p = pointAt(t, 1200);
+  const fresh = (boost: number): CarState => ({ x: p.x, y: p.y, h: p.h, vx: 0, vy: 0, seg: p.seg, wreck: 0, air: 0, fall: 0, boost });
+  const held = (draft: number) => {
+    const c = fresh(1);
+    for (let i = 0; i < 420; i++) stepCar(c, { throttle: 1, steer: laneSteer(t, c, 0) }, BASE_STATS, t, draft); // stepCar does not count it down
+    return c;
+  };
+  const kb = (BASE_STATS.accel * BOOST_ACCEL) / (BASE_STATS.topSpeed * BOOST_TOP);
+  const term = (BASE_STATS.accel * BOOST_ACCEL * (1 - kb * DT)) / kb;
+  const one = fresh(1), plain = fresh(0);
+  stepCar(one, { throttle: 1, steer: 0 }, BASE_STATS, t);
+  stepCar(plain, { throttle: 1, steer: 0 }, BASE_STATS, t);
+  check(
+    `boost physics: accel x${BOOST_ACCEL}, top speed x${BOOST_TOP} (nominal ${boostTopSpeed(430).toFixed(1)} u/s), no slipstream on top`,
+    Math.abs(speedOf(held(0)) - term) < 0.5 && Math.abs(speedOf(held(0)) / 421.33 - BOOST_TOP) < 0.01 && JSON.stringify(held(1)) === JSON.stringify(held(0)) &&
+      Math.abs(speedOf(one) / speedOf(plain) - BOOST_ACCEL * (1 - kb * DT) / (1 - (BASE_STATS.accel / BASE_STATS.topSpeed) * DT)) < 1e-9,
+    `boosted top ${speedOf(held(0)).toFixed(1)} u/s (unboosted 421.3); first tick ${speedOf(one).toFixed(3)} vs ${speedOf(plain).toFixed(3)}`,
+  );
+  // Countdown and the decay after it.
+  const c = fresh(0);
+  const env = raceEnv(t);
+  const go = () => stepRaceCar(c, { throttle: 1, steer: laneSteer(t, c, 0) }, BASE_STATS, env);
+  for (let i = 0; i < 300; i++) go();
+  c.boost = 90;
+  const v0 = speedOf(c);
+  let ticks = 0;
+  while (c.boost > 0 && ticks < 200) {
+    go();
+    ticks++;
+  }
+  const peak = speedOf(c);
+  for (let i = 0; i < 50; i++) go(); // ~0.83 s
+  const after = speedOf(c);
+  const air = { ...fresh(30), air: 10, vx: 400 };
+  stepRaceCar(air, NO_COMMAND, BASE_STATS, env);
+  const wrecked = fresh(40);
+  wreckCar(wrecked);
+  check(
+    "boost physics: 90 ticks of boost last 90 driving ticks (the car gains ~100 u/s), count down in flight too, end with a wreck; the extra speed then dies away with the car's own drag (about 1/e in 0.83 s)",
+    ticks === 90 && peak > v0 + 80 && after - 421.33 < (peak - 421.33) / Math.E + 3 && after > 421.33 && air.boost === 29 && wrecked.boost === 0,
+    `${v0.toFixed(1)} -> ${peak.toFixed(1)} u/s after the boost, ${after.toFixed(1)} u/s 50 ticks later`,
+  );
+}
+
+/**
+ * A room on the cells test track (racing, weapons cold) with cars placed by hand: cars[i] = [s,
+ * lat, speed, progress s]. Ticks are fed full throttle straight on (heading +x).
+ */
+function cellsSim(cars: [number, number, number, number][]): { sim: Sim; ps: Player[]; t: Track } {
+  const t = trackById(CELLS_ID);
+  const sim = new Sim(1);
+  const ps = cars.map((_, i) => sim.add(`C${i}`));
+  if (sim.room.setTrack(ps[0], CELLS_ID)) throw new Error("track");
+  sim.startRace(ps[0]);
+  cars.forEach(([s0, lat, v, ps0], i) => {
+    const pt = pointAt(t, s0);
+    ps[i].car = { x: pt.x - Math.sin(pt.h) * lat, y: pt.y + Math.cos(pt.h) * lat, h: pt.h, vx: Math.cos(pt.h) * v, vy: Math.sin(pt.h) * v, seg: pt.seg, wreck: 0, air: 0, fall: 0, boost: 0 };
+    ps[i].progress = { s: ps0, cp: 1, lap: 0, fin: 0 };
+  });
+  return { sim, ps, t };
+}
+
+/** Run until some car has a boost (or n ticks); the cars in `go` (default all) fed full throttle straight on, the rest idle. */
+function runToPickup(sim: Sim, ps: Player[], n = 120, go: Player[] = ps): number {
+  for (let i = 0; i < n; i++) {
+    sim.run(1, (p) => ({ throttle: go.includes(p) ? 1 : 0, steer: 0 }));
+    if (ps.some((p) => p.car!.boost > 0)) return i + 1;
+  }
+  return -1;
+}
+
+function cellsServer(): void {
+  registerTestTrack(CELLS_DEF);
+  // Ties: two cars mirrored about the dirt cell's line (lat 80 -+ 10, both in the dirt, clear of
+  // each other), the same distance before it at the same speed, touch it at exactly the same
+  // fraction of the same tick. The one further behind (lower race distance) takes it; with equal
+  // race distances the one that joined first. (Their progress is set each tick: it is the tie-break.)
+  const tie = (rdA: number, rdB: number) => {
+    const { sim, ps } = cellsSim([[4950, 70, 300, rdA], [4950, 90, 300, rdB]]);
+    for (let i = 0; i < 60 && ps.every((p) => p.car!.boost === 0); i++) {
+      ps[0].progress!.s = rdA;
+      ps[1].progress!.s = rdB;
+      sim.run(1, () => ({ throttle: 1, steer: 0 }));
+    }
+    return ps.map((p) => p.car!.boost);
+  };
+  const lowB = tie(4950, 4949), lowA = tie(4949, 4950), same = tie(4950, 4950);
+  check(
+    "cells server: a tie (the same touch fraction) goes to the car further behind (lower race distance), then to the one that joined first; the other gets nothing",
+    lowB[0] === 0 && lowB[1] > 0 && lowA[0] > 0 && lowA[1] === 0 && same[0] > 0 && same[1] === 0,
+    `B behind: ${lowB.join("/")}; A behind: ${lowA.join("/")}; level: ${same.join("/")}`,
+  );
+  // The earliest touch wins, whoever is behind.
+  const e = cellsSim([[1910, 46, 400, 2000], [1890, 70, 400, 1500]]);
+  runToPickup(e.sim, e.ps);
+  check("cells server: the car that touches it earliest in the tick takes it, even ahead in the race", e.ps[0].car!.boost > 0 && e.ps[1].car!.boost === 0, e.ps.map((p) => p.car!.boost).join("/"));
+  // Respawn: back CELL_RESPAWN race ticks after it was taken; a car standing on it takes it at that
+  // tick and not one before. The snapshot carries the tick it comes back.
+  const r = cellsSim([[1900, 58, 400, 1900], [5500, 0, 0, 1000]]);
+  runToPickup(r.sim, r.ps, 120, [r.ps[0]]);
+  const takenAt = r.sim.room.rt;
+  for (let i = 0; i < 30; i++) r.sim.run(1, (p) => ({ throttle: p === r.ps[0] ? 1 : 0, steer: 0 })); // the taker drives on, clear of the cell
+  const shown = lastSnapOf(r.sim.conns.get(r.ps[0].id)!);
+  const cell = trackById(CELLS_ID).cells[0];
+  const [bx, by] = [cell.x, cell.y];
+  r.ps[1].car = { ...r.ps[1].car!, x: bx, y: by, vx: 0, vy: 0, seg: cell.seg }; // parked on the cell
+  let gotAt = -1;
+  for (let i = 0; i < CELL_RESPAWN + 20 && gotAt < 0; i++) {
+    r.sim.run(1, (p) => ({ throttle: p === r.ps[0] ? 1 : 0, steer: 0 }));
+    if (r.ps[1].car!.boost > 0) gotAt = r.sim.room.rt;
+  }
+  check(
+    `cells server: a taken cell is back ${CELL_RESPAWN} race ticks later (the snapshot says when), not a tick sooner`,
+    r.sim.room.cells[0] === gotAt + CELL_RESPAWN && gotAt === takenAt + CELL_RESPAWN && shown?.cells?.[0] === takenAt + CELL_RESPAWN,
+    `taken at rt ${takenAt}, snapshot ${shown?.cells?.join(",")}, taken again at rt ${gotAt}`,
+  );
+  // Air cells: only in flight and high enough. A car driving on the ground through the air cell over
+  // solid ground (s 4500) does not take it; a car jumping at 400 u/s on lane 20 takes the high one
+  // over the gap and never the low one just past the lip (it is too low there).
+  const g = cellsSim([[4400, 0, 400, 4400]]);
+  for (let i = 0; i < 40; i++) g.sim.run(1, () => ({ throttle: 1, steer: 0 }));
+  const j = cellsSim([[2900, 20, 400, 2900], [2900, 0, 400, 2900]]);
+  const jumped: number[][] = [];
+  const peak = [0, 0];
+  for (let i = 0; i < 90; i++) {
+    j.sim.run(1, () => ({ throttle: 1, steer: 0 }));
+    jumped.push(j.ps.map((p) => (p.car!.air > 0 ? 1 : 0)));
+    j.ps.forEach((p, k) => (peak[k] = Math.max(peak[k], p.car!.boost)));
+  }
+  const cellsJ = j.sim.room.cells;
+  check(
+    "cells server: an air cell is taken only in the air and high in the jump: a car driving through one over solid ground does not take it; a jump on its lane takes the high one; nobody takes the low one at the lip",
+    g.ps[0].car!.boost === 0 && g.sim.room.cells[3] === 0 && peak[0] > 0 && peak[1] === 0 && cellsJ[2] > 0 && cellsJ[1] === 0 && jumped.some((x) => x[0] === 1 && x[1] === 1),
+    `ground through ${g.ps[0].car!.boost}; jump on lane 20: boost ${peak[0]}, lane 0: ${peak[1]}; cells ${cellsJ.join(",")}`,
+  );
+  // Ghosted and finished cars take nothing.
+  const gh = cellsSim([[1900, 58, 400, 1900]]);
+  gh.ps[0].ghost = 60;
+  const fin = cellsSim([[1900, 58, 400, 1900]]);
+  fin.ps[0].finished = true;
+  check(
+    "cells server: a ghosted or a finished car takes no cell",
+    runToPickup(gh.sim, gh.ps, 40) === -1 && runToPickup(fin.sim, fin.ps, 40) === -1 && gh.sim.room.cells[0] === 0 && fin.sim.room.cells[0] === 0,
+  );
+  // The boost by the taker's gap to the leading unfinished car (a finished car further ahead does not count).
+  const byGap = (gap: number) => {
+    // The rival stands on the centre line `gap` ahead of the taker's start; a finisher far ahead.
+    const b = cellsSim([[1900, 58, 400, 1900], [1900 + gap, 0, 0, 1900 + gap], [9000, 0, 0, 9000]]);
+    b.ps[2].progress!.fin = 1234;
+    b.ps[2].finished = true;
+    runToPickup(b.sim, b.ps, 120, [b.ps[0]]);
+    return b.ps[0].car!.boost;
+  };
+  const gaps = [-50, 200, 800, 1500].map(byGap);
+  check(
+    "cells server: the boost goes by the taker's gap to the leading car that has not finished: leader 36, ~150 behind 54, ~750 behind 72, ~1450 behind 90",
+    gaps.join() === "36,54,72,90",
+    gaps.join(","),
+  );
+  // A boost runs out and the car slows back down; a wreck ends it at once.
+  const w = cellsSim([[1900, 58, 400, 1900]]);
+  runToPickup(w.sim, w.ps);
+  wreckCar(w.ps[0].car!);
+  check("cells server: a wreck ends the boost", w.ps[0].car!.boost === 0);
+}
+
+/**
+ * The own car's pickups predicted over a lagged in-process link: client A (oneWayMs each way)
+ * drives the cells track on the kerb cell's lane, flat out; client B (no lag) optionally drives the
+ * same lane `ahead` units in front of it, taking the cell first. Returns A's errors, whether A ever
+ * predicted a boost the server did not give, and both server boosts after the cell.
+ */
+function cellsClientRun(oneWayMs: number, rival: boolean): { errs: number[]; stateErrs: number; predictedA: number; serverA: number; serverB: number; endA: number; logged: number } {
+  const realNow = performance.now.bind(performance);
+  const clock = { now: 1_000_000 };
+  performance.now = () => clock.now;
+  try {
+    const rooms = new Rooms(1);
+    const A = laggedGame(rooms, clock, oneWayMs), B = laggedGame(rooms, clock, 0);
+    A.game.create("Ann");
+    A.open();
+    const tick = (stepA: boolean, stepB: boolean) => {
+      clock.now += 1000 / 60;
+      A.up();
+      B.up();
+      rooms.step(clock.now);
+      A.down();
+      B.down();
+      if (stepA) A.game.step(drive(A.game), 1000 / 60);
+      if (stepB) B.game.step(drive(B.game), 1000 / 60);
+    };
+    const t = trackById(CELLS_ID);
+    const drive = (g: Game) => ({ throttle: 1, steer: g.car ? laneSteer(t, g.car, 58) : 0, fire: false, mine: false });
+    for (let i = 0; i < 20; i++) tick(false, false);
+    const room = [...rooms.rooms.values()][0];
+    A.game.pickTrack(CELLS_ID);
+    if (rival) {
+      B.game.join(room.code, "Bo");
+      B.open();
+    }
+    for (let i = 0; i < 20; i++) tick(false, false);
+    if (rival) B.game.setReady(true);
+    for (let i = 0; i < 20; i++) tick(false, false);
+    A.game.start();
+    while (room.phase !== "racing") tick(true, rival);
+    // Put the cars on the straight, A at s 1500 and B 30 in front of it, both on the cell's lane.
+    const place = (p: Player, s0: number) => {
+      const pt = pointAt(t, s0);
+      p.car = { x: pt.x, y: pt.y + 58, h: pt.h, vx: 400, vy: 0, seg: pt.seg, wreck: 0, air: 0, fall: 0, boost: 0 };
+      p.progress = { s: s0, cp: 1, lap: 0, fin: 0 };
+    };
+    place(room.players.get(A.game.you)!, 1500);
+    if (rival) place(room.players.get(B.game.you)!, 1530);
+    const e0 = A.game.recErrors.length;
+    for (let i = 0; i < 30; i++) tick(true, rival); // the client takes on the new pose
+    let predictedA = 0, serverA = 0, serverB = 0, endA = 0;
+    const pa = room.players.get(A.game.you)!, pb = rival ? room.players.get(B.game.you)! : null;
+    for (let i = 0; i < 150; i++) {
+      tick(true, rival);
+      if ((A.game.car?.boost ?? 0) > 0) predictedA++;
+      serverA = Math.max(serverA, pa.car!.boost);
+      serverB = Math.max(serverB, pb?.car?.boost ?? 0);
+      endA = A.game.car?.boost ?? 0;
+    }
+    return { errs: A.game.recErrors.slice(e0 + 4), stateErrs: A.game.recStateErrors, predictedA, serverA, serverB, endA, logged: A.game.recErrors.length - e0 };
+  } finally {
+    performance.now = realNow;
+  }
+}
+
+function cellsClient(): void {
+  for (const ms of [0, 50]) {
+    const r = cellsClientRun(ms, false);
+    const max = Math.max(0, ...r.errs);
+    check(
+      `cells client: lag ${ms} ms each way: the client predicts its own pickup (its boost while the server gives it), with no boost state mismatch and no error > ${LARGE_ERR}`,
+      r.predictedA > 30 && r.serverA > 0 && r.stateErrs === 0 && max <= LARGE_ERR,
+      `predicted boost for ${r.predictedA} steps; state mismatches ${r.stateErrs}; max error ${max.toFixed(3)} over ${r.errs.length}`,
+    );
+  }
+  // A car 30 in front takes it first: the lagged client may predict the pickup, but the replay
+  // takes the boost away again (the snapshot says the cell is gone and its car has none).
+  const c = cellsClientRun(50, true);
+  check(
+    "cells client: a rival takes the cell first: the server gives the lagged client nothing, and its prediction ends without a boost (the replay removed it); errors stay small",
+    c.serverB > 0 && c.serverA === 0 && c.endA === 0 && Math.max(0, ...c.errs) <= 10,
+    `rival boost ${c.serverB}; the client predicted a boost for ${c.predictedA} steps; max error ${Math.max(0, ...c.errs).toFixed(2)}; state mismatches ${c.stateErrs}`,
+  );
+}
+
+function cellsValidate(): void {
+  // B3: the shipped tracks' cells: Rust Bowl's three on the kerbs, an air cell over the Crusher Run
+  // chasm and over the Overpass Knot crossing, all valid; their air cells reachable; and a boosted
+  // jump (up to 537 u/s) still lands everywhere, for every car type at L0 and L3.
+  const top = boostTopSpeed(430);
+  const rows: string[] = [];
+  let ok = true;
+  for (const id of CAR_TRACKS) {
+    const t = trackById(id);
+    const errs = [...validateTrack(t), ...validateCells(t, top)];
+    for (const car of CAR_TYPES) for (const lv of [0, 3]) errs.push(...validateJumpSweep(t, top, statsFor(car, { engine: lv, tyres: lv, welder: lv })));
+    if (errs.length) ok = false;
+    const reach = t.cells.filter((c) => c.air).map((c) => {
+      const r = airCellReach(t, c, top);
+      return r ? `air s ${c.s} lat ${c.lat}: from ${r.min} u/s, ${r.lanes} lanes of 4` : `air s ${c.s}: unreachable`;
+    });
+    rows.push(`${id}: ${t.cells.map((c) => `${c.air ? "air" : "kerb"}@${c.s}/${c.lat}`).join(" ")}${reach.length ? `; ${reach.join("; ")}` : ""}${errs.length ? `; ERRORS ${errs.join(" | ")}` : ""}`);
+  }
+  const rb = trackById("rust-bowl").cells, cr = trackById("crusher-run").cells, ok3 = trackById("overpass-knot").cells;
+  check(
+    "cells validate: the seeds (Rust Bowl kerbs, the Crusher Run chasm and the Overpass Knot crossing in the air) are valid, the air cells reachable, and every jump lands boosted up to 537 u/s for all types at L0 and L3",
+    ok && rb.length === 3 && rb.every((c) => !c.air && Math.abs(c.lat) >= 64 - CELL_KERB) && cr.length === 1 && !!cr[0].air && trackById("crusher-run").gaps.some((g) => cr[0].s > g.s0 && cr[0].s < g.s1) &&
+      ok3.length === 1 && !!ok3[0].air && trackById("overpass-knot").gaps.some((g) => ok3[0].s > g.s0 && ok3[0].s < g.s1) && Math.abs(cr[0].lat) > 30 && Math.abs(ok3[0].lat) > 30,
+    rows.join(" || "),
+  );
+  // Each placement rule rejects a bad cell.
+  const base = (cells: TrackDef["features"]) => buildTrack({ ...CELLS_DEF, id: "cells-bad", features: [...CELLS_DEF.features!.filter((f) => f.k !== "cell"), ...cells!] });
+  const v = (cells: TrackDef["features"]) => validateTrack(base(cells)).join(" | ");
+  const open = v([{ k: "cell", s: 2000, lat: 20 }]);
+  const inGap = v([{ k: "cell", s: 3150, lat: 60 }]);
+  const pit = buildTrack({ ...CELLS_DEF, id: "cells-pit", features: [{ k: "hole", s: 2000, lat: 50, r: 20 }, { k: "cell", s: 2000, lat: 58 }] });
+  const startZone = v([{ k: "cell", s: 100, lat: 60 }]);
+  const wall = v([{ k: "cell", s: 2000, lat: 100 }]);
+  const far = validateCells(base([{ k: "cell", s: 4500, lat: 0, air: true }]), top).join(" | ");
+  const fine = validateTrack(base([{ k: "cell", s: 2000, lat: 58 }, { k: "cell", s: 2100, lat: -80 }, { k: "cell", s: 3150, lat: 20, air: true }])).concat(
+    validateCells(base([{ k: "cell", s: 3150, lat: 20, air: true }]), top),
+  );
+  check(
+    "cells validate: rejected: a ground cell on the open road, in a gap, over a hole, in the start zone, past the wall, and an air cell no jump reaches; accepted: kerb, dirt and an air cell over a jump",
+    open.includes("open road") && inGap.includes("in a gap") && validateTrack(pit).some((x) => x.includes("over a hole")) && startZone.includes("start zone") && wall.includes("past the wall") &&
+      far.includes("not on the arc") && fine.length === 0,
+    [open, inGap, validateTrack(pit).join(" | "), startZone, wall, far].join(" || "),
+  );
+  // The boost sweep catches a jump that only a boosted car overshoots (a pit where a 537 u/s flight comes down).
+  const lip = 2080;
+  const boosted = buildTrack({
+    ...DRAFT_STRAIGHT,
+    id: "boost-pit",
+    features: [{ k: "ramp", s: 2000, len: 80 }, { k: "gap", s0: lip, s1: lip + 120 }, { k: "hole", s: lip + 525, lat: -32, r: 26 }],
+    recovery: [0, 1500],
+  });
+  check(
+    "cells validate: the boost sweep (537 u/s) catches a jump only a boosted car overshoots into a pit; at full draft (473) it lands",
+    validateJumpSweep(boosted, top).some((x) => x.includes("lane -32") && x.includes("falls")) && validateJumpSweep(boosted, draftTopSpeed(430)).length === 0 && validateRunUps(boosted).length === 0,
+    validateJumpSweep(boosted, top).join(" | "),
+  );
+}
+
+/** One server race of bots of `levels` (the host retires at GO): boosts begun per bot (cells taken). */
+function cellBotRace(track: string, levels: BotLevel[], laps: number): { pickups: number[]; ticks: number[] } {
+  const sim = new Sim(laps);
+  const host = sim.add("Host");
+  if (sim.room.trackId !== track && sim.room.setTrack(host, track)) throw new Error("track");
+  const bots = levels.map((l) => sim.room.addBot(host, l, sim.now) as Player);
+  sim.room.start(host, sim.now);
+  while (sim.room.phase !== "racing") sim.tick();
+  sim.room.retire(host);
+  const pickups = bots.map(() => 0), ticks = bots.map(() => 0), last = bots.map(() => 0);
+  let rt = 0;
+  while (sim.room.phase === "racing" && rt < 60 * 60 * 4) {
+    sim.tick();
+    rt++;
+    bots.forEach((b, k) => {
+      const v = b.car?.boost ?? 0;
+      if (v > last[k]) pickups[k]++;
+      last[k] = v;
+      if (!ticks[k] && b.progress?.fin) ticks[k] = rt;
+    });
+  }
+  return { pickups, ticks };
+}
+
+function cellsBots(): void {
+  // B4: Normal bots take cells near their lane (kerb cells when their lane brings them there,
+  // air cells over the jumps they take); Easy bots never do.
+  const rows: string[] = [];
+  let normal = 0;
+  for (const id of CAR_TRACKS) {
+    const n = cellBotRace(id, ["normal", "normal", "normal"], 3), e = cellBotRace(id, ["easy", "easy", "easy"], 1);
+    normal += n.pickups.reduce((a, b) => a + b, 0);
+    rows.push(`${id}: Normal ${n.pickups.join("/")} (finish ${n.ticks.map((x) => (x / 60).toFixed(1)).join("/")} s), Easy ${e.pickups.join("/")}`);
+  }
+  // Easy bots never steer for one (they pick one up only when it lies on their own line); Normal
+  // bots do, within 30 of their lane, and not further.
+  const t = trackById(CELLS_ID);
+  const steerFor = (level: BotLevel, lateral: number) => {
+    const p = pointAt(t, 1850);
+    const car: CarState = { x: p.x, y: p.y + lateral, h: 0, vx: 400, vy: 0, seg: p.seg, wreck: 0, air: 0, fall: 0, boost: 0 };
+    const mem = newBotMem(lateral, level);
+    const view = (cells: number[] | undefined) => ({ car, track: t, stats: BASE_STATS, raceOn: true, raceSteps: 100, others: [], cells, rt: 10 });
+    return [botControls(view(t.cells.map(() => 0)), mem).steer, botControls(view(undefined), newBotMem(lateral, level)).steer];
+  };
+  const n30 = steerFor("normal", 30), n24 = steerFor("normal", 24), e30 = steerFor("easy", 30), taken = (() => {
+    const p = pointAt(t, 1850);
+    const car: CarState = { x: p.x, y: p.y + 30, h: 0, vx: 400, vy: 0, seg: p.seg, wreck: 0, air: 0, fall: 0, boost: 0 };
+    const view = { car, track: t, stats: BASE_STATS, raceOn: true, raceSteps: 100, others: [], cells: t.cells.map((_, i) => (i === 0 ? 400 : 0)), rt: 10 };
+    return botControls(view, newBotMem(30, "normal")).steer === botControls({ ...view, cells: undefined }, newBotMem(30, "normal")).steer;
+  })();
+  check(
+    "cells bots: Normal bots take cells (3-lap races, every shipped track) and steer for one within 30 of their lane (not 34 away, not one that is gone); Easy bots never steer for one",
+    normal > 0 && n30[0] > n30[1] && n24[0] === n24[1] && e30[0] === e30[1] && taken,
+    `${rows.join("; ")} (Easy ones only where a cell lies on their own line); steer to the kerb cell from lane 30: Normal ${n30.map((x) => x.toFixed(2)).join(" vs ")}, from lane 24: ${n24.map((x) => x.toFixed(2)).join(" vs ")}; Easy from 30: ${e30.map((x) => x.toFixed(2)).join(" vs ")}`,
+  );
+}
+
+for (const t of [rivets, gating, mines, wrecks, finishing, garage, armDelay, engine, readyCheck, collisions, trackFeatures, roomTrack, jumpsWired, shippedTracks, botDriver, botLaps, mineCap, chatRoom, chatClient, sound, raceSounds, surfaceSounds, audioUnlock, menuHostOnly, menuStop, menuRestart, menuKick, menuLock, menuHandover, menuClient, menuRestartClient, retireRules, retireField, retireRaceEnd, retireGarage, retireRefund, retireOthers, retireNotices, retireClient, pauseRefused, pauseFreeze, pauseResume, pauseHold, pauseAuto, pauseCooldown, pauseGrace, pauseCountdown, pauseControls, pauseClient, musicSwitch, soundMigration, soundLayers, soundServer, soundRandom, soundRoomDrag, soundSliderGrip, soundClient, songs, songPlayer, ghostRivets, minesSetting, minesStay, minesCap, minesFade, minesAtStart, minesCleared, minesPaused, minesClient, botsPointAt, botsAdd, botsKickHost, botsHandover, botsFullRoom, botsSoloStart, botsRace, botsShop, botsTick, botsCpu, botsClient, carsTypes, carsStats, carsPick, carsRejoin, carsBots, carsRunUps, carsBalance, carsCut, carsClient, envRt, envStep, envClient, draftRule, draftStraight, draftClient, draftJumps, draftBots, cellsRule, boostPhysics, cellsServer, cellsClient, cellsValidate, cellsBots]) {
   console.log(`\n# ${t.name}`);
   try {
     t();
