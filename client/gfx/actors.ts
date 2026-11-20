@@ -30,7 +30,7 @@ import type { Track } from "../../shared/track";
 import type { CarView, DrawPose, WorldFx } from "../render";
 import { P } from "./palette";
 import { BLAST_FRAMES, carSheet, CELL, FX_BLAST, FX_COLS, FX_MINE, FX_PUFF, FX_SPARK, HEADING_STEP, HEADINGS, SHADOW_ALPHA, sharedSheets, SPARK_FRAMES, SPARK_KINDS, spriteFrame, spritesFor, type SharedSheets } from "./sprites";
-import { MARK, scorch, skid, VIEW_H, VIEW_W, ZOOM } from "./world";
+import { MARK, marksCleared, scorch, skid, VIEW_H, VIEW_W, ZOOM } from "./world";
 
 /** Airborne cars: drawn up to this much bigger at the top of the arc ... */
 const AIR_SCALE = 0.35;
@@ -76,6 +76,12 @@ const SKID_GAP = 4; // frames without a slide after which the next mark starts a
 const AXLE = 9; // the rear wheels: this far behind the car's middle (world units) ...
 const WHEEL = 6; // ... and to either side of it
 const BLASTS = 32; // mine blasts remembered as having left their scorch
+// The marks are cleared at a new race and a restart (world.ts clearMarks); the blasts
+// remembered go with them. A blast of the race before may still burn then, or still wait to
+// be shown (main.ts holds a hit on another car back by the interpolation delay, 100 ms, and a
+// blast burns for 133): for QUIET ms after the clearing a blast leaves no scorch and is not
+// remembered. A new race's first blast is seconds away (the countdown).
+const QUIET = 300;
 
 // Numbers that are not whole go from one function here to the next through this array, not as
 // arguments or results: handed over in a call they are boxed (16 bytes each, in Node).
@@ -162,6 +168,8 @@ export class Actors {
   private readonly blastX = new Float64Array(BLASTS).fill(NaN);
   private readonly blastY = new Float64Array(BLASTS).fill(NaN);
   private blastNext = 0;
+  private cleared = -1; // world.ts marksCleared() when last looked (-1 = never)
+  private readonly quiet = new Float64Array(1).fill(-Infinity); // until then (ms) a blast leaves no scorch
   // Per slot and axis (slot * 2 + axis): 1 = placed from the car the view follows, 0 = on the road's pixels ...
   private readonly rides = new Uint8Array(SLOTS * 2);
   private readonly rel = new Int32Array(SLOTS * 2); // ... and its whole-pixel place from that car
@@ -267,6 +275,17 @@ export class Actors {
     for (let i = 0; i < n; i++) if (kind[i] === GROUND) this.car(cars[i], i);
     for (let i = 0; i < n; i++) if (cars[i].wreck) this.smoke(cars[i], ox, oy);
     this.shots(fx, ox, oy);
+    // The marks were cleared since the frame before: the blasts remembered are forgotten, and
+    // those of the race before, still burning or about to be shown, will leave nothing (QUIET).
+    const cleared = marksCleared();
+    if (cleared !== this.cleared) {
+      if (this.cleared >= 0) {
+        this.blastX.fill(NaN);
+        this.blastY.fill(NaN);
+        this.quiet[0] = now + QUIET;
+      }
+      this.cleared = cleared;
+    }
     // Hit sparks and mine blasts: a strip each, the frame picked by the age.
     const sparks = fx.sparks;
     const count = fx.nSparks ?? sparks.length;
@@ -299,6 +318,7 @@ export class Actors {
 
   /** A mine blast, in view or not: the first time it is seen it leaves its scorch on the track. */
   private scorched(s: { x: number; y: number }): void {
+    if (F[NOW] < this.quiet[0]) return; // a blast of the race before
     const bx = this.blastX, by = this.blastY;
     for (let k = 0; k < BLASTS; k++) if (bx[k] === s.x && by[k] === s.y) return;
     const k = this.blastNext;

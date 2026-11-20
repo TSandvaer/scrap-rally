@@ -14,6 +14,11 @@
 // - the ring: of 200 scorches the last 128 come back, the first 72 do not;
 // - clearing: after clearMarks() the tiles in view are the plain bake again within 24 frames,
 //   and a mark made right after the clearing is there;
+// - blasts (gfx/actors.ts, which reports a blast to the track the first time it sees it): a
+//   blast seen for its eight frames leaves one scorch; a blast in the next race at the very
+//   place of one in the race before leaves its scorch too (the blasts remembered go with the
+//   marks); a blast still burning as the marks are cleared, and one of the race before shown
+//   a moment after it, leave nothing on the new race's track;
 // - another track: a World for another track clears the marks.
 
 import { resolve } from "node:path";
@@ -55,6 +60,7 @@ const makeCtx = (canvas: FakeCanvas) => ({
 };
 const load = (file: string) => import(pathToFileURL(resolve(HERE, file)).href);
 const { World, MARK, scorch, skid, clearMarks, markStats, worldStats, bakeTileIndices, bakeTileMarked, poolTileIndices, SCORCHES, ZOOM, VIEW_W, VIEW_H, TILE } = await load("client/gfx/world.ts");
+const { Actors } = await load("client/gfx/actors.ts");
 const { palette32 } = await load("client/gfx/palette.ts");
 const { trackById } = await load("shared/tracks.ts");
 const { pointAt } = await load("shared/track.ts");
@@ -231,6 +237,75 @@ for (const id of ["rust-bowl", "crusher-run", "overpass-knot"]) {
     else back += hit ? 1 : 0;
   }
   check(back === SCORCHES && gone >= 200 - SCORCHES - 3, `the ring: of 200 scorches the last ${SCORCHES} are kept (${back} found), the first ${200 - SCORCHES} are not (${gone} gone; one under a later scorch still shows as marked)`);
+
+  // Blasts, as the actors report them: frame by frame, a frame's effects holding the blasts
+  // burning in it (render.ts WorldFx), the marks cleared as main.ts clears them at a new race.
+  clearMarks();
+  for (let i = 0; i < 30; i++) frame(i === 0);
+  const actors = new Actors({ fillStyle: "", globalAlpha: 1, drawImage() {}, fillRect() {}, getContextAttributes: () => ({ willReadFrequently: true }) }, track);
+  const fx = { shots: [], mines: [], sparks: [{ x: 0, y: 0, age: 0, blast: true }], nShots: 0, nSparks: 0 };
+  let clock = 60000;
+  /** One frame: the world, then the actors with the blast (if any) at `age` of its life. */
+  const act = (blast: { x: number; y: number } | null = null, age = 0): void => {
+    frame();
+    clock += 1000 / 60;
+    fx.nSparks = blast ? 1 : 0;
+    if (blast) Object.assign(fx.sparks[0], { x: blast.x, y: blast.y, age });
+    actors.draw([], fx, ox, oy, clock);
+  };
+  /** A blast from frame `from` to frame `to` of its eight. */
+  const burn = (blast: { x: number; y: number }, from = 0, to = 7): void => {
+    for (let f = from; f <= to; f++) act(blast, f / 8);
+  };
+  const idle = (frames: number): void => {
+    for (let i = 0; i < frames; i++) act();
+  };
+  const marked = (): number => {
+    let d = 0;
+    for (const [tx, ty] of tiles) d += same(shown(tx, ty) ?? new Uint8Array(TILE * TILE), plain.get(`${tx},${ty}`)!);
+    return d;
+  };
+  const P = at(spot, 0), Q = at(spot + 70, 14), R = at(spot - 70, -14);
+  idle(2);
+  const bare = marked();
+  // Race 1: a blast at P.
+  let s0 = markStats.scorches;
+  burn(P);
+  idle(2);
+  const first = markStats.scorches - s0, firstPixels = marked();
+  // A new race: the marks go; half a second on (the countdown) the view is plain.
+  clearMarks();
+  idle(30);
+  const between = marked();
+  // Race 2: a blast at the very same place.
+  s0 = markStats.scorches;
+  burn(P);
+  idle(2);
+  const second = markStats.scorches - s0, secondPixels = marked();
+  check(bare === 0 && first === 1 && firstPixels > 0 && between === 0 && second === 1 && secondPixels === firstPixels, `a blast at the place of one in the race before: race 1's blast left ${first} scorch (${firstPixels} pixels), ${between} pixels were marked after the clearing, race 2's blast at the same place left ${second} scorch (${secondPixels} pixels)`);
+  // A blast at Q still burning as the marks are cleared: its scorch goes and is not made again.
+  s0 = markStats.scorches;
+  burn(Q, 0, 3);
+  const before = markStats.scorches - s0;
+  clearMarks();
+  s0 = markStats.scorches;
+  burn(Q, 4, 7);
+  idle(30);
+  const after = markStats.scorches - s0, afterPixels = marked();
+  // A blast of the race before first shown five frames after the clearing (held back by the interpolation delay): nothing.
+  burn(Q, 0, 3);
+  clearMarks();
+  idle(5);
+  s0 = markStats.scorches;
+  burn(R);
+  idle(30);
+  const late = markStats.scorches - s0, latePixels = marked();
+  // ... and the new race's own blast at that place, later, leaves its scorch.
+  s0 = markStats.scorches;
+  burn(R);
+  idle(2);
+  const fresh = markStats.scorches - s0, freshPixels = marked();
+  check(before === 1 && after === 0 && afterPixels === 0 && late === 0 && latePixels === 0 && fresh === 1 && freshPixels > 0, `blasts of the race before: a blast burning as the marks were cleared (${before} scorch before) left ${after} scorches on the new race's track (${afterPixels} pixels marked), one first shown five frames after the clearing ${late} (${latePixels} pixels); the new race's own blast at that place then left ${fresh} (${freshPixels} pixels)`);
 
   // Another track: its World clears the marks.
   frame(true);

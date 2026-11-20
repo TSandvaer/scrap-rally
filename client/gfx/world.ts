@@ -1824,6 +1824,7 @@ let scorchCount = 0; // marks made since the last clearing (the ring holds the l
 let skidCount = 0;
 let markArt: Art | null = null; // the track the marks are on
 let marksEpoch = 1; // goes up when the marks are cleared: a tile marked in an older epoch is due a wipe
+let clearings = 0; // clearMarks() calls so far (marksCleared)
 let wiping = false; // some tile may still show marks of an older epoch
 let unsent = false; // some tile has pixels to put on its canvas
 
@@ -2036,10 +2037,19 @@ export function skid(track: Track): void {
 
 /** All marks go (a new race, a restart). The tiles showing some are wiped over the next frames, one a frame. */
 export function clearMarks(): void {
+  clearings++;
   if (!scorchCount && !skidCount) return;
   scorchCount = skidCount = 0;
   marksEpoch++;
   wiping = true;
+}
+
+/**
+ * How often the marks have been cleared. Whoever remembers something about the marks made
+ * (gfx/actors.ts: the blasts that have left their scorch) sees by it that they are gone.
+ */
+export function marksCleared(): number {
+  return clearings;
 }
 
 /** A frame's upkeep of the marks: one tile of an older epoch wiped, and the owed pixels put on their canvases. */
