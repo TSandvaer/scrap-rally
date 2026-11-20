@@ -6549,7 +6549,554 @@ function ghostRivets(): void {
   }
 }
 
-for (const t of [rivets, gating, mines, wrecks, finishing, garage, armDelay, engine, readyCheck, collisions, trackFeatures, roomTrack, jumpsWired, shippedTracks, botDriver, botLaps, mineCap, chatRoom, chatClient, sound, raceSounds, surfaceSounds, audioUnlock, menuHostOnly, menuStop, menuRestart, menuKick, menuLock, menuHandover, menuClient, menuRestartClient, retireRules, retireField, retireRaceEnd, retireGarage, retireRefund, retireOthers, retireNotices, retireClient, pauseRefused, pauseFreeze, pauseResume, pauseHold, pauseAuto, pauseCooldown, pauseGrace, pauseCountdown, pauseControls, pauseClient, musicSwitch, soundMigration, soundLayers, soundServer, soundRandom, soundRoomDrag, soundSliderGrip, soundClient, songs, songPlayer, ghostRivets]) {
+// ---- mines stay or fade (MINES-1, ClickUp 123jpnbfdq6, 2026-11-20) -----------------------
+
+// This section's imports (hoisted like the ones at the top).
+import { MINES_BURST, MINES_PER_SEC, type MineSnap } from "../shared/protocol";
+import { DEFAULT_MINE_MODE, MINE_BLINK_FAST_TICKS, MINE_CAP, MINE_FADE_TICKS, MINE_MODES, MINE_OUT_TICKS, isMineMode, type MineMode } from "../shared/weapons";
+
+const mineSnapsOf = (c: FakeConn) => (lastSnapOf(c)?.ents ?? []).filter((e): e is MineSnap => e.k === "mine");
+
+/**
+ * A two-car race on one lap in the given mines mode (set in the lobby), weapons armed, the cars
+ * parked far apart and far from where the mines will lie. `ammo`: mines handed to each driver
+ * after the start (the garage's cap is 3).
+ */
+function mineRace(mode: MineMode, ammo = 3): { sim: Sim; a: Player; b: Player } {
+  const sim = new Sim(1);
+  const a = sim.add("Ann");
+  const b = sim.add("Bo");
+  if (mode !== sim.room.mines && sim.room.setMines(a, mode, sim.now)) throw new Error("setMines refused");
+  sim.startRace(a);
+  sim.armWeapons();
+  a.ammo.mines = b.ammo.mines = ammo;
+  sim.place(a, 300, 0);
+  sim.place(b, FAR, 0);
+  return { sim, a, b };
+}
+
+const FAR = 5000; // where the second car waits: far from the mines (they lie from 300 on, 30 apart)
+
+/** Step to a tick that sent a snapshot (every other one). */
+function toSnapTick(sim: Sim): void {
+  if (sim.tickNo % 2) sim.run(1);
+}
+
+/** p drops one mine where it stands (two ticks: the press, then one more for the jitter buffer). */
+function dropMine(sim: Sim, p: Player): void {
+  sim.run(1, (q) => (q === p ? { mine: true } : {}));
+  sim.run(1);
+}
+
+/** Park p's car on the spot (x, y) and step once; true if a mine hit it. */
+function driveOver(sim: Sim, p: Player, x: number, y: number): boolean {
+  const hits = sim.eventsOf("hit").length;
+  p.car = { ...p.car!, x, y, vx: 0, vy: 0, seg: queryTrack(sim.room.track, x, y).seg, wreck: 0, air: 0, fall: 0 };
+  p.ghost = 0;
+  sim.run(1);
+  return sim.eventsOf("hit").length > hits;
+}
+
+/** The setting: default, the host's command, what is refused, the rate budget, handover, rejoin, a new room. */
+function minesSetting(): void {
+  const R = menuRooms(["Ann", "Bo", "Cy"]);
+  const [, b] = R.p;
+  const first = [0, 1, 2].map((i) => lastRoomMsg(R.s[i].conn)!);
+  check(
+    "mines: a new room starts with Stay, in everyone's room message and for the race's combat",
+    DEFAULT_MINE_MODE === "stay" && R.room.mines === "stay" && R.room.combat.mode === "stay" && first.every((m) => m.mines === "stay") && MINE_MODES.join() === "stay,fade",
+    first.map((m) => m.mines).join(),
+  );
+  // Host only.
+  const e1 = errsOf(R.s[1].conn).length;
+  const n1 = roomMsgs(R.s[2].conn).length;
+  R.send(1, { t: "mines", mode: "fade" });
+  check(
+    "mines: from anyone but the host it is refused with an err; nothing changes, nothing is sent",
+    errsOf(R.s[1].conn).slice(e1).join() === "Only the host can set the mines" && R.room.mines === "stay" && roomMsgs(R.s[2].conn).length === n1,
+    errsOf(R.s[1].conn).slice(e1).join(),
+  );
+  // The host: one room message for everyone.
+  R.send(0, { t: "mines", mode: "fade" });
+  const got = [0, 1, 2].map((i) => lastRoomMsg(R.s[i].conn)!.mines);
+  check("mines: the host picks Fade: one room message with it reaches everyone", R.room.mines === "fade" && got.join() === "fade,fade,fade" && roomMsgs(R.s[2].conn).length === n1 + 1 && errsOf(R.s[0].conn).length === 0, got.join());
+  // Wrong types and unknown modes: refused, nothing changes, nothing sent.
+  const bad: unknown[] = ["blink", "Stay", "", 1, 0, true, null, undefined, ["fade"], { mode: "stay" }];
+  const e0 = errsOf(R.s[0].conn).length;
+  for (const mode of bad) R.send(0, { t: "mines", mode } as unknown as ClientMsg);
+  R.send(0, { t: "mines" } as unknown as ClientMsg);
+  const errs = errsOf(R.s[0].conn).slice(e0);
+  check(
+    "mines: an unknown mode, a wrong case, a number, a boolean, null, an array, an object and no mode at all are refused (Bad mines setting); nothing changes, nothing is sent",
+    errs.length === bad.length + 1 && errs.every((e) => e === "Bad mines setting") && R.room.mines === "fade" && roomMsgs(R.s[2].conn).length === n1 + 1 && bad.every((v) => !isMineMode(v)) && isMineMode("stay") && isMineMode("fade"),
+    `${errs.length} errs: ${[...new Set(errs)].join("|")}`,
+  );
+  // Unchanged: no broadcast, no err, and no token taken.
+  for (let i = 0; i < 20; i++) R.send(0, { t: "mines", mode: "fade" });
+  check("mines: picking the current mode sends no room message and no err (20 times over)", roomMsgs(R.s[2].conn).length === n1 + 1 && errsOf(R.s[0].conn).length === e0 + errs.length);
+  // The rate budget: one of MINES_BURST is spent (the pick above, at the room's first tick time).
+  R.clock.now += 10000;
+  const e2 = errsOf(R.s[0].conn).length;
+  const flips: MineMode[] = [];
+  const other = (): MineMode => (R.room.mines === "stay" ? "fade" : "stay");
+  for (let i = 0; i < 8; i++) {
+    R.send(0, { t: "mines", mode: other() });
+    flips.push(R.room.mines);
+  }
+  const burst = errsOf(R.s[0].conn).slice(e2);
+  R.clock.now += 1000;
+  const before = R.room.mines;
+  const n2 = roomMsgs(R.s[2].conn).length;
+  for (let i = 0; i < 6; i++) R.send(0, { t: "mines", mode: other() });
+  const later = errsOf(R.s[0].conn).slice(e2 + burst.length);
+  check(
+    `mines: ${MINES_BURST} changes at once, then Slow down (nothing changes); a second later ${MINES_PER_SEC} more`,
+    burst.length === 8 - MINES_BURST && burst.every((e) => e === "Slow down") && flips.join() === "stay,fade,stay,fade,fade,fade,fade,fade" &&
+      later.length === 6 - MINES_PER_SEC && later.every((e) => e === "Slow down") && roomMsgs(R.s[2].conn).length === n2 + MINES_PER_SEC && R.room.mines === before,
+    `burst: ${flips.join()} (${burst.length} errs); later: ${later.length} errs, ${roomMsgs(R.s[2].conn).length - n2} room messages`,
+  );
+  // A handover keeps it; the old host is refused, the new one may change it.
+  R.clock.now += 10000;
+  R.send(0, { t: "mines", mode: "fade" });
+  R.send(0, { t: "host", id: b.id });
+  const after = lastRoomMsg(R.s[2].conn)!;
+  const e3 = errsOf(R.s[0].conn).length;
+  R.send(0, { t: "mines", mode: "stay" });
+  const refused = errsOf(R.s[0].conn).slice(e3).join();
+  const kept = R.room.mines;
+  R.send(1, { t: "mines", mode: "stay" });
+  check(
+    "mines: a host handover keeps the setting; the old host is refused, the new one may change it",
+    after.hostId === b.id && after.mines === "fade" && refused === "Only the host can set the mines" && kept === "fade" && R.room.mines === "stay" && lastRoomMsg(R.s[0].conn)!.mines === "stay",
+    `after the handover ${after.mines}; old host: ${refused}; new host -> ${R.room.mines}`,
+  );
+  // The host leaves for good: the room's next host inherits the setting too.
+  R.clock.now += 10000;
+  R.send(1, { t: "mines", mode: "fade" });
+  R.send(1, { t: "leave" });
+  const inherited = lastRoomMsg(R.s[2].conn)!;
+  check("mines: the host leaves: the setting stays with the room and its next host", inherited.hostId !== b.id && inherited.mines === "fade" && R.room.mines === "fade", `${inherited.mines}, host ${inherited.hostId === R.p[0].id ? "Ann" : "Cy"}`);
+  // Rejoin: it comes with the room message after the welcome.
+  R.rooms.onClose(R.s[2], R.clock.now);
+  const back = R.join("Cy", R.p[2].token);
+  check("mines: a rejoin gets the setting in its room message", lastRoomMsg(back.conn)?.mines === "fade", String(lastRoomMsg(back.conn)?.mines));
+  // Gone with the room.
+  for (const x of [R.s[0], back]) R.rooms.onMessage(x, { t: "leave" }, R.clock.now);
+  R.step(1);
+  const gone = !R.rooms.rooms.has(R.room.code);
+  const R2 = menuRooms(["Dee"]);
+  check("mines: gone with the room; a new room has Stay again", gone && R2.room.mines === "stay" && lastRoomMsg(R2.s[0].conn)?.mines === "stay", `room gone ${gone}; new room ${R2.room.mines}`);
+}
+
+/** Stay: a mine outlives 25 s and still goes off; the snapshot never marks it as on its way out. */
+function minesStay(): void {
+  const { sim, a, b } = mineRace("stay");
+  dropMine(sim, a);
+  const m = sim.room.combat.mines[0];
+  const conn = sim.conns.get(b.id)!;
+  let marked = 0;
+  for (let i = 0; i < MINE_LIFE_TICKS + 600; i++) {
+    sim.run(1);
+    if (mineSnapsOf(conn).some((s) => s.out !== undefined)) marked++;
+  }
+  const still = sim.room.combat.mines[0];
+  const snap = mineSnapsOf(conn);
+  check(
+    "mines stay: a mine is still on the track 10 s after the 25 s it used to live, armed, and never marked as blinking out",
+    !!m && still === m && m.age > MINE_LIFE_TICKS + 590 && sim.room.combat.mode === "stay" && snap.length === 1 && snap[0].id === m.id && snap[0].armed && marked === 0,
+    `age ${m?.age} ticks (life in fade ${MINE_LIFE_TICKS}); ${snap.length} in the snapshot, marked in ${marked} ticks`,
+  );
+  const hp = b.hp;
+  const hit = driveOver(sim, b, m.x, m.y);
+  check("mines stay: that old mine still goes off under a car (15 damage) and is used up", hit && b.hp === hp - MINE_DAMAGE && sim.room.combat.mines.length === 0, `hit ${hit}, hp ${hp} -> ${b.hp}`);
+  // The race over: the results phase keeps the field as before, the lobby clears it.
+  dropMine(sim, a);
+  nearFinish(sim, a);
+  sim.run(15, (p) => (p === a ? { throttle: 1 } : {}));
+  nearFinish(sim, b);
+  sim.run(15, (p) => (p === b ? { throttle: 1 } : {}));
+  const inResults: string = sim.room.phase;
+  while (sim.room.phase !== "lobby") sim.run(1);
+  check("mines stay: the mines go when the race is over (back in the lobby none is left)", inResults === "results" && sim.room.combat.mines.length === 0 && sim.room.combat.gone.length === 0 && mineSnapsOf(conn).length === 0, `phase ${inResults} -> ${sim.room.phase}`);
+}
+
+/** Stay: the 41st mine takes the oldest off the track at once; it blinks out harmlessly. */
+function minesCap(): void {
+  const { sim, a, b } = mineRace("stay", MINE_CAP + 5);
+  const conn = sim.conns.get(b.id)!;
+  // Forty mines in a row along the track, 30 units apart.
+  for (let i = 0; i < MINE_CAP; i++) {
+    sim.place(a, 300 + i * 30, 0);
+    dropMine(sim, a);
+  }
+  toSnapTick(sim);
+  const ids = sim.room.combat.mines.map((m) => m.id);
+  const oldest = sim.room.combat.mines[0];
+  const second = sim.room.combat.mines[1];
+  check(
+    `mines cap: ${MINE_CAP} mines lie on the track at once, oldest first, none blinking out`,
+    ids.length === MINE_CAP && ids.every((id, i) => i === 0 || id > ids[i - 1]) && sim.room.combat.gone.length === 0 && mineSnapsOf(conn).length === MINE_CAP && mineSnapsOf(conn).every((s) => s.out === undefined),
+    `${ids.length} mines, ids ${ids[0]}..${ids[ids.length - 1]}`,
+  );
+  // The 41st: on the tick it is dropped the oldest is off the track.
+  sim.place(a, 300 + MINE_CAP * 30, 0);
+  sim.run(1, (q) => (q === a ? { mine: true } : {}));
+  if (sim.room.combat.mines.length === MINE_CAP && sim.room.combat.gone.length === 0) sim.run(1); // the jitter buffer's tick
+  const now = sim.room.combat.mines.map((m) => m.id);
+  const gone = sim.room.combat.gone;
+  const left0 = gone[0]?.left ?? -1;
+  check(
+    `mines cap: a ${MINE_CAP + 1}st mine takes the oldest off the track at once; ${MINE_CAP} remain, the 2nd oldest now first, the new one last`,
+    now.length === MINE_CAP && !now.includes(oldest.id) && now[0] === second.id && now[now.length - 1] > ids[ids.length - 1] && now.slice(0, -1).join() === ids.slice(1).join() && gone.length === 1 && gone[0].mine === oldest,
+    `on the track ${now.length} (ids ${now[0]}..${now[now.length - 1]}), blinking out: ${gone.map((g) => g.mine.id).join()} with ${left0} ticks left`,
+  );
+  // It is harmless at once, and shown blinking out: not armed, `out` counting down.
+  const hp = b.hp;
+  const hit = driveOver(sim, b, oldest.x, oldest.y);
+  sim.place(b, FAR, 0);
+  toSnapTick(sim);
+  const shown = mineSnapsOf(conn).find((s) => s.id === oldest.id);
+  const others = mineSnapsOf(conn).filter((s) => s.id !== oldest.id);
+  const ageOf = new Map(sim.room.combat.mines.map((m) => [m.id, m.age]));
+  check(
+    "mines cap: the mine taken off is harmless at once (a car on it is not hit) and stays in the snapshots blinking out: not armed, out = the ticks left",
+    !hit && b.hp === hp && !!shown && shown.armed === false && shown.out === sim.room.combat.gone[0]?.left && shown.out! > 0 && shown.out! < MINE_OUT_TICKS && others.length === MINE_CAP && others.every((s) => s.out === undefined && s.armed === ageOf.get(s.id)! >= MINE_ARM_TICKS) && others.filter((s) => s.armed).length > 20,
+    `hit ${hit}; snapshot: armed ${shown?.armed}, out ${shown?.out} of ${MINE_OUT_TICKS}; ${others.length} others`,
+  );
+  // out counts down by one a tick; then the mine is gone from the snapshots.
+  const outs: number[] = [];
+  let lastSeen = -1;
+  const t0 = sim.tickNo;
+  for (let i = 0; i < MINE_OUT_TICKS + 10; i++) {
+    sim.run(1);
+    if (sim.tickNo % 2) continue;
+    const s = mineSnapsOf(conn).find((x) => x.id === oldest.id);
+    if (s) {
+      outs.push(s.out!);
+      lastSeen = sim.tickNo - t0;
+    }
+  }
+  const steps = outs.every((o, i) => i === 0 || o === outs[i - 1] - 2);
+  check(
+    `mines cap: it blinks out for ${MINE_OUT_TICKS} ticks (out counts down a tick at a time to 1 or 2), then it is gone from the snapshots; the ${MINE_CAP} on the track are untouched`,
+    outs.length > 20 && steps && outs[outs.length - 1] <= 2 && outs[outs.length - 1] >= 1 && sim.room.combat.gone.length === 0 && mineSnapsOf(conn).length === MINE_CAP && sim.room.combat.mines.map((m) => m.id).join() === now.join() && lastSeen + (shown ? MINE_OUT_TICKS - shown.out! : 0) <= MINE_OUT_TICKS,
+    `out ${outs[0]}..${outs[outs.length - 1]} in ${outs.length} snapshots, last seen ${lastSeen} ticks on`,
+  );
+  // Two more: the next oldest go, in order (deterministic); and each of the 40 left still goes off.
+  for (let i = 1; i <= 2; i++) {
+    sim.place(a, 300 + (MINE_CAP + i) * 30, 0);
+    dropMine(sim, a);
+  }
+  const then = sim.room.combat.mines.map((m) => m.id);
+  const out2 = sim.room.combat.gone.map((g) => g.mine.id);
+  check(
+    "mines cap: two more mines take the next two oldest, in the order they were dropped",
+    then.length === MINE_CAP && out2.join() === ids.slice(1, 3).join() && then[0] === ids[3],
+    `blinking out ${out2.join()} (dropped 2nd and 3rd: ${ids.slice(1, 3).join()}); first on the track ${then[0]} (4th: ${ids[3]})`,
+  );
+  sim.place(a, FAR + 400, 0);
+  let blasts = 0;
+  for (const m of [...sim.room.combat.mines]) {
+    b.hp = b.maxHp;
+    if (driveOver(sim, b, m.x, m.y)) blasts++;
+  }
+  check(`mines cap: every one of the ${MINE_CAP} left on the track is live`, blasts === MINE_CAP && sim.room.combat.mines.length === 0, `${blasts} went off`);
+
+  // Fade has no cap: its mines go by themselves.
+  const F = mineRace("fade", MINE_CAP + 5);
+  for (let i = 0; i < MINE_CAP + 3; i++) {
+    F.sim.place(F.a, 300 + i * 30, 0);
+    dropMine(F.sim, F.a);
+  }
+  check("mines cap: Fade takes no mine off the track early (today's rule: each lives its 25 s)", F.sim.room.combat.mines.length === MINE_CAP + 3 && F.sim.room.combat.gone.length === 0, `${F.sim.room.combat.mines.length} on the track`);
+}
+
+/** Fade: gone after 25 s as before; the snapshot marks its last 2 s; it is live to the end. */
+function minesFade(): void {
+  const { sim, a, b } = mineRace("fade");
+  const conn = sim.conns.get(b.id)!;
+  dropMine(sim, a);
+  const m = sim.room.combat.mines[0];
+  if (!m) return check("mines fade: a mine was dropped", false);
+  const seen: { age: number; out: number | undefined; armed: boolean }[] = [];
+  let goneAt = -1;
+  for (let i = 0; i < MINE_LIFE_TICKS + 20 && goneAt < 0; i++) {
+    const age = m.age;
+    sim.run(1);
+    if (!sim.room.combat.mines.includes(m)) goneAt = age + 1; // the age the step would have given it
+    else if (sim.tickNo % 2 === 0) {
+      const s = mineSnapsOf(conn).find((x) => x.id === m.id);
+      if (s) seen.push({ age: m.age, out: s.out, armed: s.armed });
+    }
+  }
+  check(
+    "mines fade: a mine lives 25 s as before: on the track at age 1500 ticks, gone on the next tick, and gone from the snapshots",
+    sim.room.combat.mode === "fade" && goneAt === MINE_LIFE_TICKS + 1 && MINE_LIFE_TICKS === 1500 && sim.room.combat.mines.length === 0 && (sim.run(2), mineSnapsOf(conn).length === 0),
+    `gone at age ${goneAt}`,
+  );
+  const plain = seen.filter((s) => s.out === undefined);
+  const marked = seen.filter((s) => s.out !== undefined);
+  const exact = marked.every((s) => s.out === MINE_LIFE_TICKS - s.age + 1);
+  check(
+    "mines fade: the snapshot marks only a mine's last 2 s (out = the ticks until it is gone, 120 down to 1), and the mine stays armed all the way",
+    MINE_FADE_TICKS === 120 && plain.length > 600 && plain.every((s) => s.age <= MINE_LIFE_TICKS - MINE_FADE_TICKS) && marked.length >= 59 && marked.length <= 60 && exact &&
+      marked[0].out! >= MINE_FADE_TICKS - 1 && marked[0].out! <= MINE_FADE_TICKS && marked[marked.length - 1].out! <= 2 && marked.every((s) => s.armed) && MINE_BLINK_FAST_TICKS < MINE_FADE_TICKS,
+    `${plain.length} snapshots without out (ages up to ${plain[plain.length - 1]?.age}), ${marked.length} with out ${marked[0]?.out}..${marked[marked.length - 1]?.out}`,
+  );
+  // Live to the end: a car over it in its last ticks is hit.
+  dropMine(sim, a);
+  const m2 = sim.room.combat.mines[0];
+  while (m2.age < MINE_LIFE_TICKS - 3) sim.run(1);
+  const out = mineSnapsOf(conn).find((x) => x.id === m2.id)?.out;
+  const hp = b.hp;
+  const hit = driveOver(sim, b, m2.x, m2.y);
+  check("mines fade: a blinking mine is live to the end (3 ticks before it goes it still does 15 damage)", hit && b.hp === hp - MINE_DAMAGE && out !== undefined && out <= 5, `out ${out}, hit ${hit}, hp ${hp} -> ${b.hp}`);
+  // Not armed yet is not marked either; arming is as before.
+  sim.place(b, FAR, 0);
+  dropMine(sim, a);
+  toSnapTick(sim);
+  const fresh = mineSnapsOf(conn)[0];
+  check("mines fade: a mine just dropped is not armed and not marked", !!fresh && !fresh.armed && fresh.out === undefined && sim.room.combat.mines[0].age < MINE_ARM_TICKS, JSON.stringify(fresh));
+}
+
+/** A race keeps the mode it began with; a change applies from the next race (a restart is one). */
+function minesAtStart(): void {
+  // Begun in Stay, the host picks Fade during the countdown and again mid-race: still Stay.
+  const sim = new Sim(1);
+  const a = sim.add("Ann");
+  const b = sim.add("Bo");
+  sim.readyAll(a);
+  sim.room.start(a, sim.now);
+  const inCountdown: string = sim.room.phase;
+  const e1 = sim.room.setMines(a, "fade", sim.now);
+  while (sim.room.phase !== "racing") sim.run(1);
+  sim.armWeapons();
+  sim.place(a, 300, 0);
+  sim.place(b, FAR, 0);
+  dropMine(sim, a);
+  const m = sim.room.combat.mines[0];
+  sim.run(MINE_LIFE_TICKS + 60);
+  const conn = sim.conns.get(b.id)!;
+  check(
+    "mines at the start: Fade picked in the countdown of a race begun in Stay: the room message says Fade, this race stays Stay (its mine outlives 25 s, unmarked)",
+    inCountdown === "countdown" && e1 === null && sim.room.mines === "fade" && sim.lastRoom(b)?.mines === "fade" && sim.room.combat.mode === "stay" && sim.room.combat.mines[0] === m && m.age > MINE_LIFE_TICKS && mineSnapsOf(conn)[0]?.out === undefined,
+    `setting ${sim.room.mines}, race ${sim.room.combat.mode}, mine age ${m?.age}`,
+  );
+  // A restart is a new race: it takes the setting, and clears the mines.
+  const e2 = sim.room.restartRace(a, sim.now);
+  const clearedByRestart = sim.room.combat.mines.length === 0 && sim.room.combat.gone.length === 0;
+  while (sim.room.phase !== "racing") sim.run(1);
+  sim.armWeapons();
+  sim.place(a, 300, 0);
+  sim.place(b, FAR, 0);
+  dropMine(sim, a);
+  const m2 = sim.room.combat.mines[0];
+  // Back to Stay mid-race: this race stays Fade.
+  sim.now += 10000;
+  const e3 = sim.room.setMines(a, "stay", sim.now);
+  sim.armWeapons();
+  let goneAt = -1;
+  for (let i = 0; i < MINE_LIFE_TICKS + 20 && goneAt < 0; i++) {
+    const age = m2.age;
+    sim.run(1);
+    if (!sim.room.combat.mines.includes(m2)) goneAt = age + 1;
+  }
+  check(
+    "mines at the start: the restart clears the mines and begins in the mode set by then (Fade); Stay picked mid-race changes the room message, not this race (its mine goes at 25 s)",
+    e2 === null && clearedByRestart && e3 === null && sim.room.mines === "stay" && sim.lastRoom(b)?.mines === "stay" && sim.room.combat.mode === "fade" && goneAt === MINE_LIFE_TICKS + 1,
+    `setting ${sim.room.mines}, race ${sim.room.combat.mode}, mine gone at age ${goneAt}`,
+  );
+  // Stop, then a new race: the setting (Stay) applies.
+  dropMine(sim, a);
+  const before = sim.room.combat.mines.length;
+  const e4 = sim.room.stopRace(a, sim.now);
+  const clearedByStop = sim.room.combat.mines.length === 0;
+  sim.startRace(a);
+  check("mines at the start: after a stop the next race begins in the mode set (Stay)", e4 === null && before === 1 && clearedByStop && sim.room.combat.mode === "stay" && sim.room.phase === "racing", `race ${sim.room.combat.mode}`);
+  // A track change in the lobby (a new Combat) does not lose the setting.
+  const s2 = new Sim(1);
+  const h = s2.add("Ann");
+  s2.add("Bo");
+  s2.room.setMines(h, "fade", s2.now);
+  s2.room.setTrack(h, "crusher-run");
+  s2.startRace(h);
+  check("mines at the start: the setting survives a track change in the lobby", s2.room.trackId === "crusher-run" && s2.room.mines === "fade" && s2.room.combat.mode === "fade", `${s2.room.trackId}: ${s2.room.combat.mode}`);
+}
+
+/** Stop and restart clear the mines in both modes, those blinking out too. */
+function minesCleared(): void {
+  for (const mode of MINE_MODES) {
+    for (const how of ["stop", "restart"] as const) {
+      const { sim, a, b } = mineRace(mode, MINE_CAP + 5);
+      const conn = sim.conns.get(b.id)!;
+      const n = mode === "stay" ? MINE_CAP + 1 : 5;
+      for (let i = 0; i < n; i++) {
+        sim.place(a, 300 + i * 30, 0);
+        dropMine(sim, a);
+      }
+      if (mode === "fade") while (sim.room.combat.mines[0].age <= MINE_LIFE_TICKS - MINE_FADE_TICKS + 10) sim.run(1);
+      toSnapTick(sim);
+      const lying = sim.room.combat.mines.length;
+      const blinking = mineSnapsOf(conn).filter((s) => s.out !== undefined).length;
+      const e = how === "stop" ? sim.room.stopRace(a, sim.now) : sim.room.restartRace(a, sim.now);
+      const none = sim.room.combat.mines.length === 0 && sim.room.combat.gone.length === 0;
+      sim.run(2);
+      const want = how === "stop" ? "lobby" : "countdown";
+      check(
+        `mines cleared: ${mode}, the host's ${how}: every mine is gone, the blinking ones too (${want}, none in the snapshots)`,
+        e === null && lying === (mode === "stay" ? MINE_CAP : 5) && blinking > 0 && none && mineSnapsOf(conn).length === 0 && sim.room.phase === want && sim.room.mines === mode,
+        `${lying} lying, ${blinking} blinking out -> ${sim.room.combat.mines.length + sim.room.combat.gone.length}; ammo back: ${a.ammo.mines}`,
+      );
+    }
+  }
+}
+
+/** A pause freezes a mine's age (Fade) and a capped mine's blink-out (Stay). */
+function minesPaused(): void {
+  // Fade: paused inside the last 2 s.
+  const { sim, a, b } = mineRace("fade");
+  const conn = sim.conns.get(b.id)!;
+  dropMine(sim, a);
+  const m = sim.room.combat.mines[0];
+  while (m.age < MINE_LIFE_TICKS - 50) sim.run(1);
+  toSnapTick(sim);
+  const age0 = m.age;
+  const out0 = mineSnapsOf(conn)[0]?.out;
+  if (sim.room.pause(a, sim.now)) throw new Error("pause refused");
+  const outs = new Set<number | undefined>();
+  for (let i = 0; i < 600; i++) {
+    sim.run(1);
+    outs.add(mineSnapsOf(conn)[0]?.out);
+  }
+  check(
+    "mines paused: fade, 10 s paused 50 ticks before a mine goes: its age stands still, it stays on the track, and every snapshot carries the same out",
+    sim.room.paused && sim.room.combat.mines[0] === m && m.age === age0 && out0 === MINE_LIFE_TICKS - age0 + 1 && outs.size === 1 && outs.has(out0),
+    `age ${age0} -> ${m.age}, out ${out0} -> ${[...outs].join()}`,
+  );
+  sim.room.resume(a, sim.now);
+  runPaused(sim, () => ({}));
+  let stepped = 0;
+  while (sim.room.combat.mines.includes(m) && stepped < 200) {
+    sim.run(1);
+    stepped++;
+  }
+  // runPaused's last tick is the first that steps again (age0 + 1).
+  check("mines paused: after the resume the mine lives out exactly what was left of its 25 s", !sim.room.combat.mines.includes(m) && stepped === MINE_LIFE_TICKS - age0, `${stepped} more ticks (left at the pause: ${MINE_LIFE_TICKS - age0 + 1}, one of them the resume's tick)`);
+
+  // Stay: paused while a capped mine blinks out.
+  const S = mineRace("stay", MINE_CAP + 2);
+  const sconn = S.sim.conns.get(S.b.id)!;
+  for (let i = 0; i < MINE_CAP + 1; i++) {
+    S.sim.place(S.a, 300 + i * 30, 0);
+    dropMine(S.sim, S.a);
+  }
+  S.sim.run(9);
+  toSnapTick(S.sim);
+  const left0 = S.sim.room.combat.gone[0]?.left ?? -1;
+  const ages0 = S.sim.room.combat.mines.map((x) => x.age).join();
+  if (S.sim.room.pause(S.a, S.sim.now)) throw new Error("pause refused");
+  S.sim.run(300);
+  const shown = mineSnapsOf(sconn).filter((s) => s.out !== undefined);
+  check(
+    "mines paused: stay, 5 s paused while a capped mine blinks out: its countdown and the other mines' ages stand still, it stays in the snapshots",
+    left0 > 0 && left0 < MINE_OUT_TICKS && S.sim.room.combat.gone[0]?.left === left0 && S.sim.room.combat.mines.map((x) => x.age).join() === ages0 && shown.length === 1 && shown[0].out === left0,
+    `ticks left ${left0} -> ${S.sim.room.combat.gone[0]?.left}; in the snapshot out ${shown[0]?.out}`,
+  );
+}
+
+/** The client: Game.mines follows the room message, falls back to Stay, and the host's pick is sent. */
+function minesClient(): void {
+  const rooms = new Rooms(1);
+  const clock = { now: 1000 };
+  const A = wiredGame(rooms, clock);
+  const B = wiredGame(rooms, clock);
+  const flushAll = () => {
+    for (const W of [A, B]) W.flush();
+  };
+  const errs: string[] = [];
+  B.game.on.error = (m) => errs.push(m);
+  const fresh = A.game.mines;
+  A.game.create("Ann");
+  A.open();
+  A.flush();
+  B.game.join(A.game.code, "Bo");
+  B.open();
+  flushAll();
+  const room = rooms.rooms.get(A.game.code)!;
+  const joined = [A.game.mines, B.game.mines].join();
+  let roomEvents = 0;
+  B.game.on.room = () => roomEvents++;
+  A.game.setMines("fade");
+  flushAll();
+  check(
+    "mines client: Stay outside a room and in a new one; the host's setMines reaches the server and both clients' Game.mines (one room event)",
+    fresh === "stay" && joined === "stay,stay" && room.mines === "fade" && A.game.mines === "fade" && B.game.mines === "fade" && roomEvents === 1,
+    `before ${joined}; after ${A.game.mines},${B.game.mines}; room ${room.mines}; ${roomEvents} room event(s)`,
+  );
+  B.game.setMines("stay");
+  flushAll();
+  check("mines client: a guest's setMines is refused with an err (the lobby shows the room's pick again); nothing changes", errs.join() === "Only the host can set the mines" && room.mines === "fade" && B.game.mines === "fade", errs.join());
+  // A room message without the field (an older server during a deploy), or with rubbish: Stay.
+  const handle = (g: Game, m: unknown) => (g as unknown as { handle(m: unknown): void }).handle(m);
+  const base: Record<string, unknown> = {
+    t: "room", hostId: A.game.you, phase: "lobby", raceStart: 0, forceStartAt: 0, trackId: room.trackId, locked: false,
+    paused: false, pausedBy: "", pausedAt: 0, resumeAt: 0, soundDefaults: room.soundDefaults, song: room.song, mines: room.mines, players: room.info(),
+  };
+  const without = { ...base };
+  delete without.mines;
+  handle(B.game, without);
+  const older = B.game.mines;
+  handle(B.game, { ...base, mines: "fade" });
+  const again = B.game.mines;
+  handle(B.game, { ...base, mines: "forever" });
+  const rubbish = B.game.mines;
+  check("mines client: a room message without the setting (an older server) or with an unknown one falls back to Stay", older === "stay" && again === "fade" && rubbish === "stay", `${older}, ${again}, ${rubbish}`);
+  // Leaving resets it.
+  handle(B.game, { ...base, mines: "fade" });
+  B.game.leave();
+  check("mines client: leaving the room resets Game.mines to Stay", B.game.mines === "stay" && !B.game.you);
+  // The snapshot's out reaches the mines the renderer draws (Game.visibleMines).
+  const realNow = performance.now.bind(performance);
+  try {
+    let t = realNow();
+    performance.now = () => t;
+    const C = wiredGame(rooms, clock);
+    C.game.join(A.game.code, "Cy");
+    C.open();
+    C.flush();
+    A.flush();
+    const step = (n: number) => {
+      for (let i = 0; i < n; i++) {
+        rooms.step((clock.now += TICK_MS));
+        t += TICK_MS;
+        A.flush();
+        C.flush();
+        A.game.step(NO_CONTROLS, TICK_MS);
+        C.game.step(NO_CONTROLS, TICK_MS);
+      }
+    };
+    C.game.setReady(true);
+    A.game.start();
+    step(1);
+    while (room.phase !== "racing") step(1);
+    const host = room.players.get(A.game.you)!;
+    room.combat.mines.push({ id: 900, owner: host.id, x: host.car!.x + 200, y: host.car!.y, age: MINE_LIFE_TICKS - 40 });
+    room.combat.mines.push({ id: 901, owner: host.id, x: host.car!.x + 260, y: host.car!.y, age: 100 });
+    step(20);
+    const drawn = C.game.visibleMines();
+    const dying = drawn.find((x) => x.id === 900);
+    const plain = drawn.find((x) => x.id === 901);
+    check(
+      "mines client: the mines the renderer draws (Game.visibleMines) carry the snapshot's out for a mine on its way out and none for the others",
+      room.combat.mode === "fade" && !!dying && typeof dying.out === "number" && dying.out > 0 && dying.out <= 40 && !!plain && plain.out === undefined && !("out" in plain),
+      `dying: out ${dying?.out}; plain: ${JSON.stringify(plain)}`,
+    );
+  } finally {
+    performance.now = realNow;
+  }
+}
+
+for (const t of [rivets, gating, mines, wrecks, finishing, garage, armDelay, engine, readyCheck, collisions, trackFeatures, roomTrack, jumpsWired, shippedTracks, botDriver, botLaps, mineCap, chatRoom, chatClient, sound, raceSounds, surfaceSounds, audioUnlock, menuHostOnly, menuStop, menuRestart, menuKick, menuLock, menuHandover, menuClient, menuRestartClient, retireRules, retireField, retireRaceEnd, retireGarage, retireRefund, retireOthers, retireNotices, retireClient, pauseRefused, pauseFreeze, pauseResume, pauseHold, pauseAuto, pauseCooldown, pauseGrace, pauseCountdown, pauseControls, pauseClient, musicSwitch, soundMigration, soundLayers, soundServer, soundRandom, soundRoomDrag, soundSliderGrip, soundClient, songs, songPlayer, ghostRivets, minesSetting, minesStay, minesCap, minesFade, minesAtStart, minesCleared, minesPaused, minesClient]) {
   console.log(`\n# ${t.name}`);
   try {
     t();
