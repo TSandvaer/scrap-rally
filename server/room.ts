@@ -45,6 +45,8 @@ import { BUILTIN_SOUND, DEFAULT_SONG_ID, isSongChoice, isSongId, RANDOM_SONG, sn
 import { gridSlot, type Track } from "../shared/track";
 import { DEFAULT_TRACK_ID, isTrackId, trackById } from "../shared/tracks";
 import { BTN_RIVET, CAR_HP, DEFAULT_MINE_MODE, GHOST_TICKS, isMineMode, mineCount, NO_COMMAND, stepRaceCar, WEAPONS_ARM_MS, type Command, type MineMode } from "../shared/weapons";
+import { isBotLevel, type BotLevel } from "../shared/botdrive";
+import { BOT_SLOTS, botName, botStep, maxBotsFromEnv, newBotSeat, resetBotSeat, shopBot, type BotSeat } from "./bots";
 import { Combat, solid, type Fighter } from "./combat";
 import { advance, compareStanding, newProgress, raceDistance, type Progress } from "./race";
 
@@ -105,6 +107,9 @@ export interface Player extends Fighter {
   // Chat rate bucket: on the player, not the socket, so a reconnect does not refill it.
   chatBucket: Bucket;
   chatErrAt: number; // server time "Slow down" was last sent
+  // A host-added bot (M4-BOTS, server/bots.ts): no session ever, always ready, never the host,
+  // never times out; its Command comes from botStep, not a queue. null for a human driver.
+  bot: BotSeat | null;
 }
 
 /** A token bucket: tokens left, and the server time it was last topped up. */
@@ -200,6 +205,7 @@ export class Room {
   // room. A race runs with the one set as it began (beginRace hands it to its Combat).
   private mineMode: MineMode = DEFAULT_MINE_MODE;
   private readonly minesBudget: Bucket = { tokens: MINES_BURST, at: -Infinity };
+  private botsAdded = 0; // bots added so far (add order)
 
   constructor(
     readonly code: string,
@@ -246,8 +252,17 @@ export class Room {
     return new Combat(this._track, (ev) => this.event(this.tickNo, ev));
   }
 
+  /** No humans left (bots alone do not keep a room): Rooms deletes it, bots and all. */
   get empty(): boolean {
-    return this.players.size === 0;
+    for (const p of this.players.values()) if (!p.bot) return false;
+    return true;
+  }
+
+  /** How many bots the room has (Rooms' server-wide MAX_BOTS). */
+  get botCount(): number {
+    let n = 0;
+    for (const p of this.players.values()) if (p.bot) n++;
+    return n;
   }
 
   /** Server time from which the host may start with players not ready; 0 outside the lobby. */
@@ -255,20 +270,70 @@ export class Room {
     return this.phase === "lobby" ? Math.max(this.lobbyAt, this.lastJoinAt) + FORCE_START_MS : 0;
   }
 
-  /** Players the host's Start waits for: connected, not the host, not ready. */
+  /** Players the host's Start waits for: connected humans, not the host, not ready (never a bot). */
   notReady(): Player[] {
-    return [...this.players.values()].filter((p) => p.session && p.id !== this.hostId && !p.ready);
+    return [...this.players.values()].filter((p) => p.session && !p.bot && p.id !== this.hostId && !p.ready);
   }
 
+  /**
+   * A new human driver. A full room in the lobby makes room by removing its last-added bot (a
+   * "left the room" line for it); during a race a full room refuses, bots or not.
+   */
   addPlayer(name: string, session: Session, now: number): Player | string {
+    if (this.players.size >= MAX_PLAYERS) {
+      const last = this.phase === "lobby" ? this.lastBot() : null;
+      if (!last) return "Room is full";
+      this.remove(last, now);
+    }
+    const p = this.newPlayer(name, now);
+    this.players.set(p.id, p);
+    if (!this.hostId) this.hostId = p.id;
+    this.lastJoinAt = now; // only a new player moves forceStartAt, never a rebind
+    // Before bind: the others get it live, the joiner once, in the chatlog after its welcome.
+    this.comingLine("join", p, now);
+    this.bind(p, session);
+    return p;
+  }
+
+  /** The bot added last, or null. */
+  private lastBot(): Player | null {
+    let last: Player | null = null;
+    for (const p of this.players.values()) if (p.bot && (!last || p.bot.order > last.bot!.order)) last = p;
+    return last;
+  }
+
+  /**
+   * Host only, lobby only (also while locked): add a bot. Named and seated by the lowest slot
+   * free among the room's bots; it shops with its starting scrap at once and is always ready.
+   * serverOk: false when the server already runs MAX_BOTS bots ("Server busy").
+   */
+  addBot(p: Player, level: unknown, now: number, serverOk = true): Player | string {
+    if (p.id !== this.hostId) return "Only the host can add a bot";
+    if (this.phase !== "lobby") return "Bots can only be added in the lobby";
+    if (!isBotLevel(level)) return "Unknown bot level";
     if (this.players.size >= MAX_PLAYERS) return "Room is full";
+    if (!serverOk) return "Server busy";
+    const taken = new Set([...this.players.values()].map((q) => q.bot?.slot));
+    let slot = 0;
+    while (taken.has(slot) && slot < BOT_SLOTS - 1) slot++;
+    const b = this.newPlayer(botName(slot), now);
+    b.bot = newBotSeat(level as BotLevel, slot, ++this.botsAdded);
+    b.ready = true;
+    shopBot(b.wallet, b.bot.level);
+    this.players.set(b.id, b);
+    this.comingLine("join", b, now);
+    this.broadcastRoom();
+    return b;
+  }
+
+  private newPlayer(name: string, now: number): Player {
     const used = new Set([...this.players.values()].map((p) => p.color));
     const wallet = startingWallet();
-    const p: Player = {
+    return {
       id: newId(6),
       name,
       color: COLORS.find((c) => !used.has(c)) ?? COLORS[0],
-      token: newId(18),
+      token: newId(18), // a bot's too: unguessable, and playerByToken never matches a bot
       session: null,
       disconnectedAt: 0,
       ready: false,
@@ -295,19 +360,13 @@ export class Room {
       held: 0,
       chatBucket: { tokens: CHAT_BURST, at: now },
       chatErrAt: -Infinity,
+      bot: null,
     };
-    this.players.set(p.id, p);
-    if (!this.hostId) this.hostId = p.id;
-    this.lastJoinAt = now; // only a new player moves forceStartAt, never a rebind
-    // Before bind: the others get it live, the joiner once, in the chatlog after its welcome.
-    this.comingLine("join", p, now);
-    this.bind(p, session);
-    return p;
   }
 
   playerByToken(token: unknown): Player | null {
     if (typeof token !== "string") return null;
-    for (const p of this.players.values()) if (p.token === token) return p;
+    for (const p of this.players.values()) if (p.token === token && !p.bot) return p;
     return null;
   }
 
@@ -349,7 +408,8 @@ export class Room {
    */
   private remove(p: Player, now: number, line: "leave" | "removed" = "leave"): void {
     this.players.delete(p.id);
-    if (this.hostId === p.id) this.hostId = this.players.keys().next().value ?? "";
+    // The next host: the first human left (never a bot); none: the room is deleted (empty).
+    if (this.hostId === p.id) this.hostId = [...this.players.values()].find((q) => !q.bot)?.id ?? "";
     this.comingLine(line, p, now);
     if (!this.pauserGone(p, now)) this.broadcastRoom();
   }
@@ -409,13 +469,13 @@ export class Room {
 
   /** Grid order: newcomers first (join order), then the last race reversed (leader last). */
   gridOrder(): Player[] {
-    const present = [...this.players.values()].filter((p) => p.session);
+    const present = [...this.players.values()].filter((p) => p.session || p.bot);
     const raced = new Set(this.lastOrder);
     const fresh = present.filter((p) => !raced.has(p.id));
     const reversed = [...this.lastOrder]
       .reverse()
       .map((id) => this.players.get(id))
-      .filter((p): p is Player => !!p && !!p.session);
+      .filter((p): p is Player => !!p && (!!p.session || !!p.bot));
     return [...fresh, ...reversed];
   }
 
@@ -441,8 +501,9 @@ export class Room {
    */
   private beginRace(now: number): void {
     for (const q of this.players.values()) {
-      q.ready = false; // everyone readies again next time
+      q.ready = !!q.bot; // everyone readies again next time; a bot is always ready
       q.retired = false;
+      if (q.bot) resetBotSeat(q.bot);
     }
     this.combat.reset();
     this.combat.mode = this.mineMode; // this race's, whatever the host sets while it runs
@@ -516,6 +577,10 @@ export class Room {
     const q = typeof id === "string" ? this.players.get(id) : undefined;
     if (!q) return "That player is not in the room";
     if (q === p) return "You cannot remove yourself";
+    if (q.bot) {
+      this.remove(q, now, "removed"); // gone; nothing to block
+      return null;
+    }
     const s = q.session;
     if (s) {
       s.room = null;
@@ -553,6 +618,7 @@ export class Room {
     const q = typeof id === "string" ? this.players.get(id) : undefined;
     if (!q) return "That player is not in the room";
     if (q === p) return "You are already the host";
+    if (q.bot) return "A bot cannot be the host";
     if (!q.session) return `${q.name} is offline`;
     q.ready = false;
     p.ready = false;
@@ -738,7 +804,7 @@ export class Room {
    */
   private pausedTick(now: number): void {
     const racers = [...this.players.values()].filter((p) => p.car);
-    for (const p of racers) consumeInput(p);
+    for (const p of racers) if (!p.bot) consumeInput(p);
     if (this.phase !== "racing") return;
     if (racers.length > 0 && racers.every((p) => p.progress!.fin)) this.endRace(now);
     else if (racers.length === 0) this.toLobby(now);
@@ -803,7 +869,7 @@ export class Room {
     this._trackId = id;
     this._track = trackById(id);
     this._combat = this.newCombat(); // no shots or mines exist in the lobby
-    for (const q of this.players.values()) q.ready = false;
+    for (const q of this.players.values()) q.ready = !!q.bot; // a bot is always ready
     this.broadcastRoom();
     return null;
   }
@@ -862,7 +928,7 @@ export class Room {
     else this.simulate(tick, now);
 
     for (const p of [...this.players.values()]) {
-      if (!p.session && now - p.disconnectedAt > RECONNECT_GRACE_MS) this.remove(p, now);
+      if (!p.session && !p.bot && now - p.disconnectedAt > RECONNECT_GRACE_MS) this.remove(p, now);
     }
 
     if (tick % SNAPSHOT_EVERY === 0) this.sendSnapshots(tick, now);
@@ -880,6 +946,9 @@ export class Room {
     // so a mine press in that window is discarded rather than dropped later.
     const armed = racing && now >= this.raceStart + WEAPONS_ARM_MS;
     const racers = [...this.players.values()].filter((p) => p.car); // a retired player has none
+    // Bots decide from the start-of-tick poses, before any car steps (no jitter buffer).
+    const botCmds = new Map<Player, { cmd: Command; minePress: boolean }>();
+    for (const p of racers) if (p.bot) botCmds.set(p, botStep(p as Player & { bot: BotSeat }, racers, this.track, racing));
     const prev = new Map<string, { x: number; y: number }>();
     const recovered = new Set<Player>();
     for (const p of racers) {
@@ -890,8 +959,8 @@ export class Room {
         if (p.queue.length >= QUEUE_START || !p.session) p.held = 0;
         else if (--p.held > 0) continue;
       }
-      // Consumed every tick, wrecked or not, so ack keeps moving.
-      const { cmd, minePress } = consumeInput(p);
+      // Consumed every tick, wrecked or not, so ack keeps moving. A bot's is computed above.
+      const { cmd, minePress } = botCmds.get(p) ?? consumeInput(p);
       // A car put back at a recovery point after a fall is ghosted (as after a wreck), from
       // this tick's car-car pass on.
       if (stepRaceCar(c, racing ? cmd : NO_INPUT, p.stats, this.track) === "recover") {
@@ -951,7 +1020,10 @@ export class Room {
     });
     this.setPhase("results", now + RESULTS_MS);
     this.broadcast({ t: "results", rows: results });
-    for (const r of rows) this.sendGarage(r.p);
+    for (const r of rows) {
+      if (r.p.bot) shopBot(r.p.wallet, r.p.bot.level); // after the payout, the same rule every time
+      this.sendGarage(r.p);
+    }
     // One result line per race, finishers only (endRace always has a winner).
     const [winner, ...rest] = results.filter((r) => r.timeMs > 0);
     if (winner) {
@@ -1040,15 +1112,19 @@ export class Room {
   }
 
   info(): PlayerInfo[] {
-    return [...this.players.values()].map((p) => ({
-      id: p.id,
-      name: p.name,
-      color: p.color,
-      inRace: p.inRace,
-      connected: !!p.session,
-      ready: p.ready && p.id !== this.hostId, // a new host's old flag is not shown
-      retired: p.retired,
-    }));
+    return [...this.players.values()].map((p) => {
+      const info: PlayerInfo = {
+        id: p.id,
+        name: p.name,
+        color: p.color,
+        inRace: p.inRace,
+        connected: !!p.session || !!p.bot,
+        ready: p.ready && p.id !== this.hostId, // a new host's old flag is not shown
+        retired: p.retired,
+      };
+      if (p.bot) info.bot = p.bot.level;
+      return info;
+    });
   }
 
   broadcastRoom(): void {
@@ -1121,7 +1197,16 @@ export class Rooms {
     private readonly laps: number,
     private readonly hp: number = CAR_HP,
     private readonly maxRooms: number = Infinity,
+    /** Bots across all rooms (env MAX_BOTS, default 10): one more is refused with "Server busy". */
+    readonly maxBots: number = maxBotsFromEnv(),
   ) {}
+
+  /** Bots in every room right now. */
+  botCount(): number {
+    let n = 0;
+    for (const room of this.rooms.values()) n += room.botCount;
+    return n;
+  }
 
   private newCode(): string {
     for (;;) {
@@ -1207,6 +1292,12 @@ export class Rooms {
         if (!session.room || !session.player) return;
         const e = session.room.setMines(session.player, msg.mode, now);
         if (e) err(e);
+        return;
+      }
+      case "addBot": {
+        if (!session.room || !session.player) return;
+        const res = session.room.addBot(session.player, msg.level, now, this.botCount() < this.maxBots);
+        if (typeof res === "string") err(res);
         return;
       }
       case "pause":

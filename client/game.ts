@@ -20,6 +20,7 @@ import {
   type ServerMsg,
   type ShotSnap,
 } from "../shared/protocol";
+import type { BotLevel } from "../shared/botdrive";
 import { statsFor, type Levels } from "../shared/shop";
 import { BUILTIN_SOUND, DEFAULT_SONG_ID, isSongChoice, type RoomSound } from "../shared/sound";
 import { queryTrackNear, type Track } from "../shared/track";
@@ -384,6 +385,16 @@ export class Game {
   /** Host only, any phase: the room's mines setting ("stay" or "fade"); it applies from the next race. */
   setMines(mode: MineMode): void {
     this.send({ t: "mines", mode });
+  }
+
+  /** Host only, in the lobby (M4-BOTS): add a server-driven bot; a bot leaves through kick. */
+  addBot(level: BotLevel): void {
+    this.send({ t: "addBot", level });
+  }
+
+  /** A host-added bot (driven by the server): never the host, always ready. */
+  isBot(id: string): boolean {
+    return !!this.player(id)?.bot;
   }
 
   /** Say something in the room chat. The server cleans it; it comes back as a chat line. */

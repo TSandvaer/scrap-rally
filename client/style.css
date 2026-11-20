@@ -571,6 +571,38 @@ h2 {
   box-shadow: inset 3px 0 0 var(--green);
 }
 
+/* Host-added bots (M4-BOTS): a steel BOT tag, and the host's Remove as a small key cap that
+   keeps the row as tall as a driver's. */
+.players .tag-pill.bot {
+  color: var(--text);
+  border-color: var(--steel);
+}
+
+.players .row-x {
+  flex: none;
+  font-size: 14px;
+  line-height: 1;
+  padding: 1px 6px 2px;
+  margin: -2px 0; /* 21 px tall, laid out as 17: inside a driver row's 18 */
+  box-shadow:
+    inset 1px 1px 0 var(--line),
+    inset -1px -1px 0 var(--bg),
+    2px 2px 0 var(--cast);
+}
+
+.players .row-x:active {
+  box-shadow:
+    inset 1px 1px 0 var(--soot0),
+    inset -1px -1px 0 var(--line),
+    1px 1px 0 var(--cast);
+}
+
+/* Add bot: the label, then Easy and Normal sharing the rest of the row. */
+.bot-add .btn {
+  flex: 1;
+  min-width: 0;
+}
+
 /* Lobby track: the host's selector next to Start, the track name for everyone else. */
 .track-pick {
   display: flex;

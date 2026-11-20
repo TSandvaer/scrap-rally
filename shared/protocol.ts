@@ -6,6 +6,7 @@
 //    lost or late snapshot is harmless (safe for an unreliable transport later).
 //  - events (`ev`, `room`, `welcome`, ...): things that must arrive exactly once.
 
+import type { BotLevel } from "./botdrive";
 import type { Levels } from "./shop";
 import type { RoomSound } from "./sound";
 import type { MineMode } from "./weapons";
@@ -69,6 +70,9 @@ export interface PlayerInfo {
   // Left the current race from the Esc menu ("Retire to garage"): DNF, no car, garage open
   // until the race is over; false again from the next lobby, start or restart.
   retired: boolean;
+  // A bot the host added (M4-BOTS): driven by the server, always ready, never the host. Absent
+  // for a human driver.
+  bot?: BotLevel;
 }
 
 /** [seq, throttle, steer, buttons]; buttons as in shared/weapons.ts */
@@ -107,7 +111,11 @@ export type ClientMsg =
   // Host only, any phase (MINES-1): the room's mines setting, "stay" or "fade" (shared/weapons.ts
   // MineMode); anything else is refused with an err. A race under way keeps the mode it began
   // with: the change applies from the next race (a restart is one).
-  | { t: "mines"; mode: MineMode };
+  | { t: "mines"; mode: MineMode }
+  // Host only, lobby only (M4-BOTS): add a server-driven bot ("easy" or "normal"), also while
+  // the room is locked. Refused with an err when the room is full or the server runs MAX_BOTS
+  // bots already ("Server busy"). A bot leaves through kick (no block).
+  | { t: "addBot"; level: BotLevel };
 
 /**
  * One line of room chat. say = a player's message (from = their id); join / leave = a player

@@ -7096,7 +7096,558 @@ function minesClient(): void {
   }
 }
 
-for (const t of [rivets, gating, mines, wrecks, finishing, garage, armDelay, engine, readyCheck, collisions, trackFeatures, roomTrack, jumpsWired, shippedTracks, botDriver, botLaps, mineCap, chatRoom, chatClient, sound, raceSounds, surfaceSounds, audioUnlock, menuHostOnly, menuStop, menuRestart, menuKick, menuLock, menuHandover, menuClient, menuRestartClient, retireRules, retireField, retireRaceEnd, retireGarage, retireRefund, retireOthers, retireNotices, retireClient, pauseRefused, pauseFreeze, pauseResume, pauseHold, pauseAuto, pauseCooldown, pauseGrace, pauseCountdown, pauseControls, pauseClient, musicSwitch, soundMigration, soundLayers, soundServer, soundRandom, soundRoomDrag, soundSliderGrip, soundClient, songs, songPlayer, ghostRivets, minesSetting, minesStay, minesCap, minesFade, minesAtStart, minesCleared, minesPaused, minesClient]) {
+// ---- host-added server bots (M4-BOTS, PLAN-M4.md 2.0, ClickUp 123jpnbffd8, 2026-11-20) ------
+
+// This section's imports (hoisted like the ones at the top).
+import { botControls, newBotMem, type BotLevel } from "../shared/botdrive";
+import { botShopping } from "../shared/botshop";
+import { botTiming, DEFAULT_MAX_BOTS, maxBotsFromEnv } from "../server/bots";
+import { MAX_PLAYERS } from "../shared/protocol";
+import { CAR_HP } from "../shared/weapons";
+
+/** The bot rows of a room message. */
+const botInfos = (m: RoomMsg | undefined) => (m?.players ?? []).filter((p) => p.bot);
+
+/** pointAt as it was before M4-BOTS (a scan from 0): the reference for the binary search. */
+function pointAtLinear(t: Track, s: number): { x: number; y: number; h: number; seg: number } {
+  const L = t.length;
+  s = ((s % L) + L) % L;
+  const { pts, cum } = t;
+  let i = 0;
+  while (i < pts.length - 1 && cum[i + 1] <= s) i++;
+  const a = pts[i], b = pts[(i + 1) % pts.length];
+  const f = (s - cum[i]) / (cum[i + 1] - cum[i] || 1);
+  return { x: a.x + (b.x - a.x) * f, y: a.y + (b.y - a.y) * f, h: Math.atan2(b.y - a.y, b.x - a.x), seg: i };
+}
+
+function botsPointAt(): void {
+  for (const e of trackList()) {
+    const t = trackById(e.id);
+    const L = t.length;
+    const ss: number[] = [0, L, -L, 2 * L, -1e-9, L - 1e-9, L + 1e-9, -0.5, 1e7 + 0.25, -1e7 - 0.25];
+    for (const c of t.cum) ss.push(c, c - 1e-9, c + 1e-9, c - 0.5, c + 0.5);
+    let seed = 12345;
+    for (let i = 0; i < 20_000; i++) {
+      seed = (seed * 1103515245 + 12345) % 2147483648;
+      ss.push((seed / 2147483648) * 3 * L - L);
+    }
+    let bad = 0, first = "";
+    for (const s of ss) {
+      const a = pointAt(t, s), b = pointAtLinear(t, s);
+      if (a.x !== b.x || a.y !== b.y || a.h !== b.h || a.seg !== b.seg) {
+        if (!bad) first = `s=${s}: ${JSON.stringify(a)} vs ${JSON.stringify(b)}`;
+        bad++;
+      }
+    }
+    check(`bots pointAt: the binary search equals the linear scan on ${e.id} (every sample, its edges, wraps)`, bad === 0, first || `${ss.length} values of s, ${t.pts.length} samples`);
+  }
+}
+
+/** A Rooms server (optionally capped at maxBots) with a host Ann and a guest Bo joined over onMessage. */
+function botRooms(maxBots = DEFAULT_MAX_BOTS) {
+  const rooms = new Rooms(1, CAR_HP, Infinity, maxBots);
+  const clock = { now: 1000 };
+  const join = (name: string, code?: string, token?: string): MenuSession => {
+    const x = menuSession();
+    rooms.onMessage(x, code ? (token ? { t: "join", code, name, token } : { t: "join", code, name }) : { t: "create", name }, clock.now);
+    return x;
+  };
+  const ann = join("Ann");
+  const room = ann.room!;
+  const bo = join("Bo", room.code);
+  const send = (s: MenuSession, m: ClientMsg) => rooms.onMessage(s, m, clock.now);
+  const step = (n: number) => {
+    for (let i = 0; i < n; i++) rooms.step((clock.now += 1000 / 60));
+  };
+  const bots = () => [...room.players.values()].filter((p) => p.bot);
+  return { rooms, room, ann, bo, join, send, step, bots, clock };
+}
+
+function botsAdd(): void {
+  const R = botRooms();
+  const { room, ann, bo, send } = R;
+  const from = room.chatLines.length;
+  send(bo, { t: "addBot", level: "easy" });
+  send(ann, { t: "addBot", level: "hard" as BotLevel });
+  check(
+    "bots add: a guest's addBot and an unknown level are refused with an err; no bot",
+    errMsgs(bo.conn).map((m) => m.msg).join() === "Only the host can add a bot" && errMsgs(ann.conn).map((m) => m.msg).join() === "Unknown bot level" && R.bots().length === 0,
+    `${errMsgs(bo.conn).map((m) => m.msg).join()} / ${errMsgs(ann.conn).map((m) => m.msg).join()}`,
+  );
+  send(ann, { t: "addBot", level: "easy" });
+  send(ann, { t: "lock", locked: true });
+  send(ann, { t: "addBot", level: "normal" });
+  const info = botInfos(lastRoomMsg(bo.conn));
+  const lines = linesSince(room, from);
+  check(
+    "bots add: the host adds an Easy and (room locked) a Normal bot: named by add order, BOT level, connected and ready in the room message, one join line each",
+    room.locked && R.bots().length === 2 && info.map((p) => `${p.name}:${p.bot}:${p.connected}:${p.ready}`).join() === "Gasket (bot):easy:true:true,Lugnut (bot):normal:true:true" &&
+      lines.join("|") === "join:Gasket (bot) joined the room|join:Lugnut (bot) joined the room" && errMsgs(ann.conn).length === 1,
+    `${info.map((p) => `${p.name}:${p.bot}`).join(", ")}; ${lines.join(" | ")}`,
+  );
+  check(
+    "bots add: humans are not marked as bots; a bot's seat token never matches a join",
+    lastRoomMsg(bo.conn)!.players.filter((p) => !p.bot).map((p) => p.name).join() === "Ann,Bo" && R.bots().every((b) => room.playerByToken(b.token) === null && b.token.length >= 20 && !b.session),
+  );
+  // A join carrying a bot's token is a new player (here: refused by the lock), never the bot's seat.
+  const t = R.bots()[0].token;
+  send(ann, { t: "lock", locked: false });
+  const cy = R.join("Cy", room.code, t);
+  check("bots add: a join with a bot's token gets a new seat, not the bot", !!cy.player && cy.player !== R.bots()[0] && !cy.player.bot && R.bots().length === 2, cy.player?.name);
+  // Fill up: Ann, Bo, Cy + 3 bots = 6 seats.
+  send(ann, { t: "addBot", level: "normal" });
+  const before = errMsgs(ann.conn).length;
+  send(ann, { t: "addBot", level: "normal" });
+  check(
+    "bots add: bots count toward the 6 seats: one more is refused with Room is full",
+    room.players.size === MAX_PLAYERS && R.bots().length === 3 && errMsgs(ann.conn).slice(before).map((m) => m.msg).join() === "Room is full",
+    `${room.players.size} seats, ${R.bots().length} bots`,
+  );
+  // Not in a race: the countdown refuses.
+  send(ann, { t: "kick", id: R.bots()[2].id });
+  room.setReady(bo.player!, true);
+  room.setReady(cy.player!, true);
+  send(ann, { t: "start" });
+  const n0 = errMsgs(ann.conn).length;
+  send(ann, { t: "addBot", level: "easy" });
+  check("bots add: refused outside the lobby (the countdown)", room.phase === "countdown" && errMsgs(ann.conn).slice(n0).map((m) => m.msg).join() === "Bots can only be added in the lobby" && R.bots().length === 2, room.phase);
+
+  // The server-wide cap (MAX_BOTS): "Server busy", counted over every room; a removed bot frees its place.
+  const S = botRooms(2);
+  const other = S.join("Dee");
+  S.send(S.ann, { t: "addBot", level: "easy" });
+  S.send(other, { t: "addBot", level: "easy" });
+  S.send(S.ann, { t: "addBot", level: "normal" });
+  const busy = errMsgs(S.ann.conn).map((m) => m.msg).join();
+  S.send(other, { t: "kick", id: [...other.room!.players.values()].find((p) => p.bot)!.id });
+  S.send(S.ann, { t: "addBot", level: "normal" });
+  check(
+    "bots add: MAX_BOTS counts every room's bots; one more is refused with Server busy; a removed bot frees its place",
+    busy === "Server busy" && S.rooms.botCount() === 2 && S.room.botCount === 2 && errMsgs(S.ann.conn).length === 1,
+    `${busy}; ${S.rooms.botCount()} bots`,
+  );
+  const env = process.env.MAX_BOTS;
+  process.env.MAX_BOTS = "3";
+  const fromEnv = maxBotsFromEnv();
+  process.env.MAX_BOTS = "x";
+  const junk = maxBotsFromEnv();
+  if (env === undefined) delete process.env.MAX_BOTS;
+  else process.env.MAX_BOTS = env;
+  check("bots add: MAX_BOTS defaults to 10, and the env setting overrides it", DEFAULT_MAX_BOTS === 10 && new Rooms(1).maxBots === maxBotsFromEnv() && fromEnv === 3 && junk === 10, `env 3 -> ${fromEnv}, junk -> ${junk}`);
+}
+
+function botsKickHost(): void {
+  const R = botRooms();
+  const { room, ann, bo, send } = R;
+  send(ann, { t: "addBot", level: "easy" });
+  send(ann, { t: "addBot", level: "normal" });
+  const [g, l] = R.bots();
+  send(ann, { t: "host", id: g.id });
+  send(bo, { t: "kick", id: g.id });
+  check(
+    "bots kick/host: making a bot the host is refused; a guest cannot remove a bot",
+    room.hostId === ann.player!.id && errMsgs(ann.conn).map((m) => m.msg).join() === "A bot cannot be the host" && errMsgs(bo.conn).map((m) => m.msg).join() === "Only the host can remove a player" && R.bots().length === 2,
+  );
+  const from = room.chatLines.length;
+  send(ann, { t: "kick", id: g.id });
+  check(
+    "bots kick/host: the host's kick removes the bot (one removed line, nothing blocked)",
+    !room.players.has(g.id) && R.bots().length === 1 && room.blockedCount === 0 && linesSince(room, from).join() === "removed:Gasket (bot) was removed" && botInfos(lastRoomMsg(bo.conn)).length === 1,
+    linesSince(room, from).join(),
+  );
+  // The freed slot is reused: the next bot is Gasket again (names and lanes go by slot).
+  send(ann, { t: "addBot", level: "normal" });
+  check("bots kick/host: the next bot takes the lowest free slot (Gasket again)", R.bots().map((b) => `${b.name}:${b.bot!.slot}`).join() === "Lugnut (bot):1,Gasket (bot):0", R.bots().map((b) => b.name).join());
+  // Bots never time out: long past the reconnect grace they are still there.
+  R.step(Math.ceil(RECONNECT_GRACE_MS / (1000 / 60)) + 30);
+  check("bots kick/host: bots never time out (no session, no grace)", R.bots().length === 2 && R.rooms.rooms.has(room.code) && l.disconnectedAt === 0);
+}
+
+function botsHandover(): void {
+  // Ann (host), two bots, then Bo: the map order is Ann, bot, bot, Bo.
+  const R = botRooms();
+  const { room, ann, send } = R;
+  room.leave(R.bo.player!, R.clock.now);
+  send(ann, { t: "addBot", level: "easy" });
+  send(ann, { t: "addBot", level: "normal" });
+  const bo = R.join("Bo", room.code);
+  send(ann, { t: "leave" });
+  check(
+    "bots handover: the host leaves; the next host is the first human (Bo), not a bot ahead of him in the room",
+    [...room.players.values()][0].bot !== null && room.hostId === bo.player!.id && lastRoomMsg(bo.conn)?.hostId === bo.player!.id,
+    [...room.players.values()].map((p) => p.name).join(),
+  );
+  // The last human leaves: the room goes, bots and all.
+  send(bo, { t: "leave" });
+  const emptyNow = room.empty;
+  R.step(1);
+  check("bots: humans gone (leave): the room is deleted with its bots", emptyNow && room.players.size === 2 && !R.rooms.rooms.has(room.code) && R.rooms.botCount() === 0);
+  // Humans gone by the reconnect grace: the room waits for them, then goes.
+  const G = botRooms();
+  G.room.leave(G.bo.player!, G.clock.now);
+  G.send(G.ann, { t: "addBot", level: "easy" });
+  G.rooms.onClose(G.ann, G.clock.now);
+  G.step(60);
+  const kept = G.rooms.rooms.has(G.room.code) && !G.room.empty;
+  G.step(Math.ceil(RECONNECT_GRACE_MS / (1000 / 60)) + 2);
+  check("bots: humans gone (grace): the room waits out the host's reconnect grace, then is deleted with its bot", kept && !G.rooms.rooms.has(G.room.code));
+}
+
+function botsFullRoom(): void {
+  const R = botRooms();
+  const { room, ann, send } = R;
+  room.leave(R.bo.player!, R.clock.now);
+  for (let i = 0; i < 5; i++) send(ann, { t: "addBot", level: i % 2 ? "normal" : "easy" });
+  const names0 = R.bots().map((b) => b.name).join();
+  const from = room.chatLines.length;
+  const bo = R.join("Bo", room.code);
+  check(
+    "bots full room: a human joining a full lobby replaces the last-added bot (its leave line, then the join line)",
+    room.players.size === MAX_PLAYERS && !!bo.player && R.bots().map((b) => b.name).join() === "Gasket (bot),Lugnut (bot),Piston (bot),Clutch (bot)" &&
+      linesSince(room, from).join("|") === "leave:Axle (bot) left the room|join:Bo joined the room",
+    `${names0} -> ${R.bots().map((b) => b.name).join()}; ${linesSince(room, from).join(" | ")}`,
+  );
+  // The replaced bot was the last ADDED, not the highest slot: remove Gasket, add one (slot 0
+  // again, added last), then Cy joins: the new Gasket goes.
+  send(ann, { t: "kick", id: R.bots()[0].id });
+  send(ann, { t: "addBot", level: "normal" });
+  const cy = R.join("Cy", room.code);
+  check("bots full room: the bot added last is the one replaced (whatever its slot)", !!cy.player && R.bots().map((b) => b.name).join() === "Lugnut (bot),Piston (bot),Clutch (bot)", R.bots().map((b) => b.name).join());
+  // In a race a full room refuses, bots or not.
+  send(ann, { t: "kick", id: R.bots()[0].id });
+  send(ann, { t: "addBot", level: "normal" });
+  room.setReady(bo.player!, true);
+  room.setReady(cy.player!, true);
+  send(ann, { t: "start" });
+  const dee = R.join("Dee", room.code);
+  check(
+    "bots full room: during the countdown a full room refuses a new human (Room is full); the bots stay",
+    room.phase === "countdown" && !dee.player && errMsgs(dee.conn).map((m) => `${m.msg}:${m.code}`).join() === "Room is full:full" && R.bots().length === 3,
+  );
+}
+
+function botsSoloStart(): void {
+  const R = botRooms();
+  const { room, ann, send } = R;
+  room.leave(R.bo.player!, R.clock.now);
+  send(ann, { t: "addBot", level: "easy" });
+  send(ann, { t: "addBot", level: "normal" });
+  // A track change resets the humans' ready flags, never a bot's (found in the browser: the
+  // host's Start said "Waiting for 2 to get ready").
+  send(ann, { t: "track", id: "crusher-run" });
+  const afterTrack = botInfos(lastRoomMsg(ann.conn));
+  check("bots solo start: a track change keeps every bot ready (room message)", room.trackId === "crusher-run" && afterTrack.length === 2 && afterTrack.every((p) => p.ready), afterTrack.map((p) => `${p.name}:${p.ready}`).join());
+  send(ann, { t: "start" });
+  check(
+    "bots solo start: a host alone with bots starts at once (bots never block the ready check); all three are on the grid",
+    errMsgs(ann.conn).length === 0 && room.phase === "countdown" && room.notReady().length === 0 && [...room.players.values()].every((p) => p.car && p.inRace),
+    errMsgs(ann.conn).map((m) => m.msg).join(),
+  );
+  check("bots solo start: bots stay ready through the race (beginRace clears humans only)", R.bots().every((b) => b.ready) && botInfos(lastRoomMsg(ann.conn)).every((p) => p.ready));
+  send(ann, { t: "stop" });
+  send(ann, { t: "start" });
+  check("bots solo start: after a stop the host starts again at once", room.phase === "countdown" && errMsgs(ann.conn).length === 0);
+}
+
+interface BotRaceOut {
+  ticks: number[];
+  jumps: number[];
+  falls: number[];
+  wrecks: number[];
+  shots: number[];
+  mines: number[];
+  wallets: string[];
+  order: string[];
+  phase: string;
+}
+
+/**
+ * One race of server bots on a track: a host (who retires at GO) and bots of `levels`, laps
+ * long. Per bot, by slot: finish tick, take-offs, falls, wrecks, rivets fired and mines dropped
+ * (ammo used), its wallet after the race (payout and shopping), and the results order by name.
+ */
+function serverBotRace(trackId: string, levels: BotLevel[], laps = 1): BotRaceOut {
+  const sim = new Sim(laps);
+  const host = sim.add("Host");
+  if (sim.room.trackId !== trackId && sim.room.setTrack(host, trackId)) throw new Error("track");
+  const bots = levels.map((l) => {
+    const b = sim.room.addBot(host, l, sim.now);
+    if (typeof b === "string") throw new Error(b);
+    return b;
+  });
+  const e = sim.room.start(host, sim.now);
+  if (e) throw new Error(e);
+  while (sim.room.phase !== "racing") sim.tick();
+  if (sim.room.retire(host)) throw new Error("retire");
+  const n = bots.length;
+  const out: BotRaceOut = { ticks: Array(n).fill(0), jumps: Array(n).fill(0), falls: Array(n).fill(0), wrecks: Array(n).fill(0), shots: Array(n).fill(0), mines: Array(n).fill(0), wallets: [], order: [], phase: "" };
+  const prev = bots.map(() => ({ air: 0, fall: 0, wreck: 0 }));
+  const ammo0 = bots.map((b) => ({ ...b.wallet.ammo }));
+  const seen = new Set<number>();
+  let rt = 0;
+  while (sim.room.phase === "racing" && rt < 60 * 150) {
+    sim.tick();
+    rt++;
+    for (const s of sim.room.combat.shots) {
+      const k = bots.findIndex((b) => b.id === s.owner);
+      if (k >= 0 && !seen.has(s.id)) out.shots[k]++;
+      seen.add(s.id);
+    }
+    for (const m of [...sim.room.combat.mines, ...sim.room.combat.gone.map((g) => g.mine)]) {
+      const k = bots.findIndex((b) => b.id === m.owner);
+      if (k >= 0 && !seen.has(m.id)) out.mines[k]++;
+      seen.add(m.id);
+    }
+    bots.forEach((b, k) => {
+      const c = b.car;
+      if (!c) return;
+      if (c.air > 0 && prev[k].air === 0) out.jumps[k]++;
+      if (c.fall > 0 && prev[k].fall === 0) out.falls[k]++;
+      if (c.wreck > 0 && prev[k].wreck === 0) out.wrecks[k]++;
+      prev[k] = { air: c.air, fall: c.fall, wreck: c.wreck };
+      if (!out.ticks[k] && b.progress?.fin) out.ticks[k] = rt;
+    });
+  }
+  out.wallets = bots.map((b, k) => `${b.wallet.scrap}|${JSON.stringify(b.wallet.levels)}|${b.wallet.ammo.rivets},${b.wallet.ammo.mines}|from ${ammo0[k].rivets},${ammo0[k].mines}`);
+  const res = [...sim.conns.get(host.id)!.msgs].reverse().find((m): m is Extract<ServerMsg, { t: "results" }> => m.t === "results");
+  out.order = res?.rows.map((r) => `${r.name}:${r.earned}`) ?? [];
+  out.phase = sim.room.phase;
+  return out;
+}
+
+// The bounds of the client bot laps (botLaps above): measured 2026-11-17, unchanged.
+const BOT_LIMITS: Record<string, { ticks: number; falls: number }> = {
+  "rust-bowl": { ticks: 40 * 60, falls: 0 },
+  "crusher-run": { ticks: 42 * 60, falls: 1 },
+  "overpass-knot": { ticks: 38 * 60, falls: 1 },
+};
+
+function botsRace(): void {
+  const normal: Record<string, number> = {};
+  for (const e of trackList().filter((x) => x.id in BOT_LIMITS)) {
+    const t = trackById(e.id);
+    const lim = BOT_LIMITS[e.id];
+    for (const level of ["normal", "easy"] as BotLevel[]) {
+      const a = serverBotRace(e.id, [level, level, level]);
+      const b = serverBotRace(e.id, [level, level, level]);
+      const falls = a.falls.reduce((x, y) => x + y, 0);
+      const secs = a.ticks.map((x) => (x / 60).toFixed(2)).join("/");
+      const mean = a.ticks.reduce((x, y) => x + y, 0) / a.ticks.length;
+      if (level === "normal") normal[e.id] = mean;
+      check(
+        `bots race on ${e.id}: 3 ${level} server bots finish within ${lim.ticks / 60} s with <= ${lim.falls} falls, taking every jump`,
+        a.phase === "results" && a.ticks.every((x) => x > 0 && x <= lim.ticks) && falls <= lim.falls && a.jumps.every((j) => j >= t.ramps.length),
+        `finish ${secs} s, falls ${a.falls.join("/")}, take-offs ${a.jumps.join("/")}, wrecks ${a.wrecks.join("/")}`,
+      );
+      check(
+        `bots race on ${e.id}: ${level}, a rerun is identical (finishes, jumps, falls, wrecks, rivets, mines, wallets, results)`,
+        JSON.stringify(a) === JSON.stringify(b),
+        `rivets fired ${a.shots.join("/")}, mines ${a.mines.join("/")}; results ${a.order.join(", ")}`,
+      );
+      if (level === "easy") {
+        check(
+          `bots race on ${e.id}: Easy never shoots (no rivet, no mine, no ammo bought) and is slower than Normal`,
+          a.shots.every((x) => x === 0) && a.mines.every((x) => x === 0) && a.wallets.every((w) => w.includes("|0,0|")) && mean > normal[e.id],
+          `Easy mean ${(mean / 60).toFixed(2)} s vs Normal ${(normal[e.id] / 60).toFixed(2)} s; ${a.wallets.join("; ")}`,
+        );
+      }
+    }
+  }
+  // Normal bots use their weapons: over the shipped tracks they fire rivets and drop mines.
+  const runs = trackList().filter((x) => x.id in BOT_LIMITS).map((e) => serverBotRace(e.id, ["normal", "normal", "normal"], 2));
+  const shots = runs.reduce((a, r) => a + r.shots.reduce((x, y) => x + y, 0), 0);
+  const mines = runs.reduce((a, r) => a + r.mines.reduce((x, y) => x + y, 0), 0);
+  check("bots race: Normal bots fire rivets and drop mines (2-lap races on every shipped track)", shots > 0 && mines > 0 && runs.every((r) => r.phase === "results"), `${shots} rivets, ${mines} mines`);
+}
+
+function botsShop(): void {
+  const w = startingWallet();
+  const normal = botShopping(w, "normal"), easy = botShopping(w, "easy");
+  const rich = { scrap: 1000, levels: { engine: 0, tyres: 0, welder: 0 }, ammo: { rivets: 40, mines: 3 } };
+  check(
+    "bots shop: the rule is deterministic: Normal tops up rivets then mines, then upgrades cheapest first; Easy buys upgrades only",
+    normal.join() === "rivets,mines" && easy.join() === "welder" && botShopping(rich, "normal").join() === "welder,tyres" && botShopping(rich, "easy").join() === "welder,tyres" &&
+      botShopping({ ...rich, scrap: 2000 }, "normal").join() === "welder,tyres,engine" && w.scrap === 400 && botShopping(w, "normal").join() === normal.join(),
+    `start: normal ${normal.join()}, easy ${easy.join()}`,
+  );
+  // In the room: shopped on adding, and after each payout by the same rule.
+  const sim = new Sim(1);
+  const host = sim.add("Host");
+  const n = sim.room.addBot(host, "normal", sim.now) as Player;
+  const ez = sim.room.addBot(host, "easy", sim.now) as Player;
+  const added = `${n.wallet.scrap}|${n.ammo.rivets},${n.ammo.mines}|${JSON.stringify(n.levels)}; ${ez.wallet.scrap}|${ez.ammo.rivets},${ez.ammo.mines}|${JSON.stringify(ez.levels)}`;
+  check(
+    "bots shop: a bot shops with its starting scrap when added (Normal: 20 rivets and 3 mines; Easy: the welding rig)",
+    added === `50|20,3|{"engine":0,"tyres":0,"welder":0}; 100|0,0|{"engine":0,"tyres":0,"welder":1}` && n.ammo === n.wallet.ammo,
+    added,
+  );
+  // After the payout: both start the race with 500 scrap and no ammo (so nothing is used), and
+  // each ends with exactly what the rule buys from 500 + its earnings.
+  for (const b of [n, ez]) {
+    b.wallet.scrap = 500;
+    b.wallet.ammo.rivets = 0;
+    b.wallet.ammo.mines = 0;
+    b.wallet.levels.welder = 0;
+  }
+  sim.room.start(host, sim.now);
+  while (sim.room.phase !== "racing") sim.tick();
+  sim.room.retire(host);
+  for (let i = 0; i < 60 * 60 && sim.room.phase === "racing"; i++) sim.tick();
+  const res = sim.conns.get(host.id)!.msgs.filter((m): m is Extract<ServerMsg, { t: "results" }> => m.t === "results").pop();
+  const want = [n, ez].map((b) => {
+    const w = { scrap: 500 + (res?.rows.find((r) => r.id === b.id)?.earned ?? NaN), levels: { engine: 0, tyres: 0, welder: 0 }, ammo: { rivets: 0, mines: 0 } };
+    for (const item of botShopping(w, b.bot!.level)) shopBuy(w, item);
+    return JSON.stringify(w);
+  });
+  const got = [n, ez].map((b) => JSON.stringify(b.wallet));
+  check(
+    "bots shop: after the payout each bot spends its scrap by the rule, exactly",
+    (sim.room.phase as string) === "results" && res?.rows.length === 3 && got.join() === want.join() && n.wallet.levels.engine + n.wallet.levels.tyres + n.wallet.levels.welder > 0,
+    `${res?.rows.map((r) => `${r.name} +${r.earned}`).join(", ")}; ${got.join(" ")}`,
+  );
+}
+
+function botsTick(): void {
+  // A paused race: bots stand still and take no input; after the resume they drive on at once
+  // (no resume hold: a bot has no inputs to wait for).
+  const sim = new Sim(1);
+  const host = sim.add("Host");
+  const b = sim.room.addBot(host, "normal", sim.now) as Player;
+  const humans = (n: number) => {
+    for (let i = 0; i < n; i++) {
+      if (host.car) sim.feed(host);
+      sim.tick();
+    }
+  };
+  sim.room.start(host, sim.now);
+  while (sim.room.phase !== "racing") humans(1);
+  humans(120);
+  const before = { ...b.car! };
+  sim.room.pause(host, sim.now);
+  humans(120);
+  const frozen = b.car!.x === before.x && b.car!.y === before.y && b.ack === -1 && b.queue.length === 0;
+  sim.room.resume(host, sim.now);
+  let moved = -1, stepped = -1;
+  for (let i = 0; i < 400 && moved < 0; i++) {
+    const x = b.car!.x;
+    humans(1);
+    if (!sim.room.paused && stepped < 0) stepped = i;
+    if (b.car!.x !== x) moved = i;
+  }
+  check(
+    "bots tick: paused, a bot stands still and takes no input; resumed, it drives on the very tick the room steps again (no resume hold)",
+    frozen && stepped > 0 && moved === stepped && b.held === 0 && host.held > 0,
+    `room stepped again on tick ${stepped}, bot moved on ${moved}; host held ${host.held}`,
+  );
+  // No rivet before the weapons arm (WEAPONS_ARM_MS), with a target straight ahead.
+  const s2 = new Sim(1);
+  const h2 = s2.add("Host");
+  const shooter = s2.room.addBot(h2, "normal", s2.now) as Player;
+  s2.room.start(h2, s2.now);
+  while (s2.room.phase !== "racing") s2.run(1);
+  // The host's car parked on the bot's line (slot 0: lane -24) 350 ahead; the clock jumped to
+  // 100 ms before the weapons arm. The bot has a target from the first tick.
+  s2.place(h2, 550, -24);
+  s2.place(shooter, 200, -24);
+  s2.now = s2.room.raceStart + WEAPONS_ARM_MS - 100;
+  let firstShot = 0;
+  for (let i = 0; i < 60 && !firstShot; i++) {
+    s2.tick();
+    if (s2.room.combat.shots.some((x) => x.owner === shooter.id)) firstShot = Math.round(s2.sinceGo());
+  }
+  check("bots tick: a Normal bot fires at a car ahead, never before the weapons arm (then at once)", firstShot >= WEAPONS_ARM_MS && firstShot < WEAPONS_ARM_MS + 20 && shooter.ammo.rivets === 19, `first rivet ${firstShot} ms after GO`);
+}
+
+function botsCpu(): void {
+  // 1 human (retired at GO) + 5 bots, 3 laps of Crusher Run (ramps, gaps and holes): each bot step
+  // timed (server/bots.ts botTiming) and every room tick.
+  const sim = new Sim(3);
+  const host = sim.add("Host");
+  sim.room.setTrack(host, "crusher-run");
+  for (let i = 0; i < 5; i++) sim.room.addBot(host, i % 2 ? "easy" : "normal", sim.now);
+  sim.room.start(host, sim.now);
+  while (sim.room.phase !== "racing") sim.tick();
+  sim.room.retire(host);
+  const tickMs: number[] = [];
+  const steps: number[] = [];
+  botTiming.samples = steps;
+  let ticks = 0;
+  try {
+    while (sim.room.phase === "racing" && ticks < 60 * 300) {
+      sim.tickNo++;
+      sim.now += 1000 / 60;
+      const t0 = performance.now();
+      sim.room.tick(sim.tickNo, sim.now);
+      tickMs.push(performance.now() - t0);
+      ticks++;
+    }
+  } finally {
+    botTiming.samples = null;
+  }
+  const pct = (a: number[], p: number) => [...a].sort((x, y) => x - y)[Math.min(a.length - 1, Math.floor(a.length * p))];
+  const med = pct(steps, 0.5), tickMed = pct(tickMs, 0.5);
+  console.log(`  CPU: bot step median ${(med * 1000).toFixed(2)} us, p99 ${(pct(steps, 0.99) * 1000).toFixed(2)} us over ${steps.length} steps; room tick with 5 bots median ${(tickMed * 1000).toFixed(2)} us, p99 ${(pct(tickMs, 0.99) * 1000).toFixed(2)} us, max ${(Math.max(...tickMs) * 1000).toFixed(1)} us over ${tickMs.length} ticks`);
+  check(
+    "bots CPU: the median bot step stays <= 0.05 ms (the gate fails above 0.2 ms); room tick with 5 bots printed",
+    steps.length > 5 * 3000 && med <= 0.2 && (sim.room.phase as string) === "results",
+    `median bot step ${med.toFixed(5)} ms (${med <= 0.05 ? "within" : "OVER"} the 0.05 ms target); room tick median ${tickMed.toFixed(4)} ms over ${ticks} ticks`,
+  );
+  // The driver itself, called straight (no room): same order of cost.
+  const t = trackById("crusher-run");
+  const p = pointAt(t, 500);
+  const car: CarState = { x: p.x, y: p.y, h: p.h, vx: Math.cos(p.h) * 300, vy: Math.sin(p.h) * 300, seg: p.seg, wreck: 0, air: 0, fall: 0 };
+  const mem = newBotMem(0, "normal");
+  const t0 = performance.now();
+  for (let i = 0; i < 10_000; i++) botControls({ car, track: t, stats: BASE_STATS, raceOn: true, raceSteps: i, others: [] }, mem);
+  const per = (performance.now() - t0) / 10_000;
+  check("bots CPU: botControls alone, 10k calls on Crusher Run, averages under 0.05 ms", per < 0.05, `${(per * 1000).toFixed(2)} us per call`);
+}
+
+function botsClient(): void {
+  // Over the wire (encode/decode): the host's Game adds a bot, sees it tagged, races it, removes it.
+  const rooms = new Rooms(1);
+  const clock = { now: 1000 };
+  const A = wiredGame(rooms, clock);
+  A.game.create("Ann");
+  A.open();
+  A.flush();
+  A.game.addBot("easy");
+  A.game.addBot("normal");
+  A.flush();
+  const room = rooms.rooms.get(A.game.code)!;
+  const bots = A.game.players.filter((p) => p.bot);
+  check(
+    "bots client: Game.addBot reaches the server; the room message tags each bot with its level (Game.isBot), and the host waits for nobody",
+    bots.map((p) => `${p.name}:${p.bot}`).join() === "Gasket (bot):easy,Lugnut (bot):normal" && bots.every((p) => A.game.isBot(p.id)) && !A.game.isBot(A.game.you) && A.game.waitingFor() === 0 && room.botCount === 2,
+    bots.map((p) => `${p.name}:${p.bot}`).join(),
+  );
+  A.game.pickTrack("overpass-knot");
+  A.flush();
+  check("bots client: after the host picks another track the Start still waits for nobody (bots stay ready)", A.game.trackId === "overpass-knot" && A.game.waitingFor() === 0, `waiting for ${A.game.waitingFor()}`);
+  const realNow = performance.now.bind(performance);
+  try {
+    let t = realNow();
+    performance.now = () => t;
+    A.game.start();
+    let seenBots = 0;
+    for (let i = 0; i < 60 * 8; i++) {
+      rooms.step((clock.now += 1000 / 60));
+      t += 1000 / 60;
+      A.flush();
+      A.game.step(NO_CONTROLS, 1000 / 60);
+      seenBots = Math.max(seenBots, A.game.otherPoses().filter((o) => A.game.isBot(o.id)).length);
+    }
+    check("bots client: the bots' cars are in the host's snapshots and drive", room.phase === "racing" && seenBots === 2 && bots.every((p) => (room.players.get(p.id)?.progress?.s ?? 0) > 200), `${seenBots} bot cars seen`);
+  } finally {
+    performance.now = realNow;
+  }
+  A.game.stopRace();
+  A.game.kick(bots[0].id);
+  A.flush();
+  check("bots client: Game.kick removes a bot (the lobby's Remove)", A.game.players.filter((p) => p.bot).map((p) => p.name).join() === "Lugnut (bot)" && room.botCount === 1);
+}
+
+for (const t of [rivets, gating, mines, wrecks, finishing, garage, armDelay, engine, readyCheck, collisions, trackFeatures, roomTrack, jumpsWired, shippedTracks, botDriver, botLaps, mineCap, chatRoom, chatClient, sound, raceSounds, surfaceSounds, audioUnlock, menuHostOnly, menuStop, menuRestart, menuKick, menuLock, menuHandover, menuClient, menuRestartClient, retireRules, retireField, retireRaceEnd, retireGarage, retireRefund, retireOthers, retireNotices, retireClient, pauseRefused, pauseFreeze, pauseResume, pauseHold, pauseAuto, pauseCooldown, pauseGrace, pauseCountdown, pauseControls, pauseClient, musicSwitch, soundMigration, soundLayers, soundServer, soundRandom, soundRoomDrag, soundSliderGrip, soundClient, songs, songPlayer, ghostRivets, minesSetting, minesStay, minesCap, minesFade, minesAtStart, minesCleared, minesPaused, minesClient, botsPointAt, botsAdd, botsKickHost, botsHandover, botsFullRoom, botsSoloStart, botsRace, botsShop, botsTick, botsCpu, botsClient]) {
   console.log(`\n# ${t.name}`);
   try {
     t();

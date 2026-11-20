@@ -309,13 +309,14 @@ export class GameMenu {
         if (p.retired) li.append(el("span", "tag-pill", "retired"));
         const acts = el("span", "gm-acts");
         const make = button("Make host", `host:${p.id}`, () => g.makeHost(p.id), "small");
-        make.disabled = !p.connected;
+        make.disabled = !p.connected || !!p.bot;
         if (!p.connected) make.title = "Offline drivers cannot be the host";
+        if (p.bot) make.title = "Bots cannot be the host";
         const name = p.name;
         const id = p.id;
         const remove = button("Remove", `kick:${p.id}`, () =>
           this.ask({
-            text: `Remove ${name} from the room? They are out at once and cannot come back with this seat.`,
+            text: p.bot ? `Remove ${name}?` : `Remove ${name} from the room? They are out at once and cannot come back with this seat.`,
             label: `Remove ${name}`,
             run: () => g.kick(id),
             applies: () => g.isHost() && !!g.player(id),
