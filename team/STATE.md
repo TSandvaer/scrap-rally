@@ -304,6 +304,9 @@ ctx_d61d57754174 (tmp/gfx4-fix2.md). A second REQUEST_CHANGES on GFX-4 goes to t
 Fix 2 done: 68a8e65 (dropMarks() uncounted for a first mark; marks-check 36/36, 3 FAIL on bb07a73; 0 px diff). Quick re-check APPROVE
 (ctx_d227c7211199). GFX-4 MERGED 2026-11-20: main c6cbd45 (check clean, sim 492/492, bots 95/95, build ok). Graphics round complete.
 Pushing main to origin now (user popup "Push right after GFX-4"); then the user clicks Manual Deploy; then muted live QA; MINES-1 next.
+PUSHED 2026-11-20: origin/main 3270cc8..4819a45. Waiting for the user's Manual Deploy, then muted live QA. GFX-4 ticket ready for qa
+test; GFX-4 workers released, gfx4 workspace + branch removed (taste copy gfx4-taste on :3009 still up).
+MINES-1 in flight (Fable): ctx_7199ccb0ef4c (~/orca/workspaces/scrap-rally/mines1, TSandvaer/mines1, :3006; spec tmp/spec-mines1.md).
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
@@ -360,6 +363,7 @@ Manual Deploy only on the user's go-ahead. The user's own dev server runs on :30
 
 | Ticket | Dispatch | Workspace | Branch | Port | Started |
 | --- | --- | --- | --- | --- | --- |
+| 123jpnbfdq6 MINES-1 | ctx_7199ccb0ef4c | ~/orca/workspaces/scrap-rally/mines1 | TSandvaer/mines1 | 3006 | 2026-11-20 |
 | 123jpnbfb23 GFX-0 | ctx_27a7a271607b | ~/orca/workspaces/scrap-rally/gfx0 | TSandvaer/gfx0 | 3006 | 2026-11-18 |
 
 ## Queued (milestone 3, PLAN-M3.md; start after solid collisions 123jpnbf6cy and easier-start 123jpnbf3xa merge)
