@@ -332,6 +332,7 @@ M4-LOOKS contact sheet: user GO (popup) on Sport/Racer/Truck looks. Worker's des
 M4-BOTS done: f19fdcd (sim 587/587, bots 100/100; 3 Normal + 3 Easy finish every track, identical rerun; bot step 0.42 us, room
 tick 5 bots 5.25 us). Opus reviewer ctx_8860bc601f07 (tmp/review-m4-bots.md). Report + shots in tmp/m4-bots/.
 Taste copy m4-bots-taste (detached f19fdcd) on :3009, node pid 38107 (mines1-taste removed, old pid 28890 killed).
+M4-BOTS taste gate: user APPROVED (popup). Merge on the Opus reviewer's APPROVE.
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
