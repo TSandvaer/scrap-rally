@@ -1,5 +1,7 @@
 // Cars and effects on the world: shadows, cars (grounded, airborne, falling, ghost, battered,
 // wreck), smoke, mines, rivets, hit sparks, mine blasts and dust. PLAN-GFX.md, items B1-B8.
+// What the track keeps of them is told to the world here, where it is known (B9): a mine's
+// blast leaves a scorch, a car sliding sideways its tyre marks (gfx/world.ts, track marks).
 //
 // Everything here is a sprite (gfx/sprites.ts) or a small rectangle, drawn in view space:
 // identity transform, whole view pixels, never under the world's 0.8 zoom. A frame allocates
@@ -28,7 +30,7 @@ import type { Track } from "../../shared/track";
 import type { CarView, DrawPose, WorldFx } from "../render";
 import { P } from "./palette";
 import { BLAST_FRAMES, carSheet, CELL, FX_BLAST, FX_COLS, FX_MINE, FX_PUFF, FX_SPARK, HEADING_STEP, HEADINGS, SHADOW_ALPHA, sharedSheets, SPARK_FRAMES, SPARK_KINDS, spriteFrame, spritesFor, type SharedSheets } from "./sprites";
-import { VIEW_H, VIEW_W, ZOOM } from "./world";
+import { MARK, marksCleared, scorch, skid, VIEW_H, VIEW_W, ZOOM } from "./world";
 
 /** Airborne cars: drawn up to this much bigger at the top of the arc ... */
 const AIR_SCALE = 0.35;
@@ -63,9 +65,47 @@ const PUFF_LIFE = 0.34;
 const JUMP = 40; // a car that moved further than this in a frame was put there, not driven
 const RANDOM = 65536;
 
+// Tyre marks: a car on the ground sliding sideways faster than SKID (units/s) marks the track
+// under its rear wheels, a stamp every SKID_EVERY frames at most, each a line from where the
+// wheels were at the stamp before. (shared/physics.ts, full lock on tarmac: from top speed a
+// car slides at up to 156 and is past 105 after a tenth of a second; from 255 units/s it
+// peaks at 110; from 230 and below it never gets there.)
+// How fast a car slides is read off its steps on screen, sideways to its heading. In a race
+// the steps on screen are not all a car's driving, the less so the slower the link, and
+// main.ts tells what it knows besides (driving), before each frame:
+// - Another player's car near the own one is drawn part of the way toward where the
+//   prediction has it bumped (client/contact.ts, blend), and jostles sideways there. Its
+//   slide is read off its steps where the server's snapshots have it; the marks still lie
+//   where its wheels are drawn.
+// - The own car is the predicted one. When a snapshot puts it elsewhere (a mine spun it round
+//   a moment ago, as the server knows and the prediction did not), it is not put there at once
+//   but drawn sliding there over a few frames (client/game.ts, smooth). And touching another
+//   car it is pushed about by a prediction of that car. So a frame marks nothing for the own
+//   car while more than CORRECTING units of a correction are left to work off, nor unless the
+//   predicted car itself slides at SLIDES or more (its velocity across its heading), nor within
+//   TOUCHING ms of its last predicted touch. Three vetoes on its steps on screen: it is never
+//   marked where it would not have been without them.
+// A frame that is told nothing (the preview, a benchmark) reads every car off the screen.
+// (tools/debug/skid-lag.ts counts the stamps on a slow link.)
+const SKID = 105;
+const SKID_EVERY = 2;
+const SKID_GAP = 4; // frames without a slide after which the next mark starts afresh
+const CORRECTING = 1.2; // world units of a correction left: a step works off 38 % of it, here 27 units/s
+const SLIDES = 0.6 * SKID;
+const TOUCHING = 100; // ms
+const AXLE = 9; // the rear wheels: this far behind the car's middle (world units) ...
+const WHEEL = 6; // ... and to either side of it
+const BLASTS = 32; // mine blasts remembered as having left their scorch
+// The marks are cleared at a new race and a restart (world.ts clearMarks); the blasts
+// remembered go with them. A blast of the race before may still burn then, or still wait to
+// be shown (main.ts holds a hit on another car back by the interpolation delay, 100 ms, and a
+// blast burns for 133): for QUIET ms after the clearing a blast leaves no scorch and is not
+// remembered. A new race's first blast is seconds away (the countdown).
+const QUIET = 300;
+
 // Numbers that are not whole go from one function here to the next through this array, not as
 // arguments or results: handed over in a call they are boxed (16 bytes each, in Node).
-const F = new Float64Array(11);
+const F = new Float64Array(14);
 const DT = 0; // this frame's step, seconds
 const NOW = 1; // this frame's time, ms
 const QX = 2; // nearTrack: the point ...
@@ -77,6 +117,25 @@ const LVX = 7; // ... and how far it came since the frame before
 const LVY = 8;
 const PG = 9; // place(): a car's step over the ground on the axis, view pixels ...
 const PD = 10; // ... and its true place from the followed car's
+const OWN = 11; // the predicted own car's speed sideways as told for this frame (driving), units/s; NaN = not told ...
+const LEFT = 12; // ... how much of a correction is left to work off on screen, world units ...
+const TOUCH = 13; // ... and when the predicted car last touched another car (ms, the frames' clock)
+F[OWN] = NaN;
+let snaps: readonly DrawPose[] | null = null; // the other cars where the snapshots have them, as told for this frame
+
+/**
+ * What main.ts knows of the cars' driving besides their poses on screen, told before each
+ * frame of a race, for the tyre marks: the predicted own car, the correction still to be
+ * worked off on screen and the contact prediction (client/game.ts: car, smooth, contact), and
+ * the other cars where the server's snapshots have them (game.otherPoses()). A frame that is
+ * told nothing reads every car's slide off its steps on screen.
+ */
+export function driving(own: { vx: number; vy: number; h: number } | null, smooth: { x: number; y: number }, contact: { lastContact: number }, others: readonly DrawPose[]): void {
+  F[OWN] = own ? own.vy * Math.cos(own.h) - own.vx * Math.sin(own.h) : NaN;
+  F[LEFT] = Math.sqrt(smooth.x * smooth.x + smooth.y * smooth.y);
+  F[TOUCH] = contact.lastContact;
+  snaps = others;
+}
 
 // ---- Whole pixels ---------------------------------------------------------------------
 //
@@ -142,6 +201,17 @@ export class Actors {
   private readonly lastUp = new Float32Array(SLOTS); // its height then
   private readonly seg = new Int32Array(SLOTS).fill(-1); // where on the track it was (the search hint)
   private readonly owed = new Float32Array(SLOTS); // distance driven off the tarmac since its last speck
+  private readonly skidAt = new Int32Array(SLOTS); // the frame its rear wheels were last noted in a slide (0 = not) ...
+  private readonly wheels = new Float64Array(SLOTS * 4); // ... and where they were: left x, y, right x, y
+  private readonly snapX = new Float64Array(SLOTS); // where the snapshots had it (driving) ...
+  private readonly snapY = new Float64Array(SLOTS);
+  private readonly snapAt = new Int32Array(SLOTS); // ... in this frame (0 = never told)
+  // The mine blasts that have left their scorch, by their place (a blast keeps it for life).
+  private readonly blastX = new Float64Array(BLASTS).fill(NaN);
+  private readonly blastY = new Float64Array(BLASTS).fill(NaN);
+  private blastNext = 0;
+  private cleared = -1; // world.ts marksCleared() when last looked (-1 = never)
+  private readonly quiet = new Float64Array(1).fill(-Infinity); // until then (ms) a blast leaves no scorch
   // Per slot and axis (slot * 2 + axis): 1 = placed from the car the view follows, 0 = on the road's pixels ...
   private readonly rides = new Uint8Array(SLOTS * 2);
   private readonly rel = new Int32Array(SLOTS * 2); // ... and its whole-pixel place from that car
@@ -247,11 +317,23 @@ export class Actors {
     for (let i = 0; i < n; i++) if (kind[i] === GROUND) this.car(cars[i], i);
     for (let i = 0; i < n; i++) if (cars[i].wreck) this.smoke(cars[i], ox, oy);
     this.shots(fx, ox, oy);
+    // The marks were cleared since the frame before: the blasts remembered are forgotten, and
+    // those of the race before, still burning or about to be shown, will leave nothing (QUIET).
+    const cleared = marksCleared();
+    if (cleared !== this.cleared) {
+      if (this.cleared >= 0) {
+        this.blastX.fill(NaN);
+        this.blastY.fill(NaN);
+        this.quiet[0] = now + QUIET;
+      }
+      this.cleared = cleared;
+    }
     // Hit sparks and mine blasts: a strip each, the frame picked by the age.
     const sparks = fx.sparks;
     const count = fx.nSparks ?? sparks.length;
     for (let i = 0; i < count; i++) {
       const s = sparks[i];
+      if (s.blast) this.scorched(s);
       const x = Math.round(s.x * ZOOM) - ox, y = Math.round(s.y * ZOOM) - oy;
       if (x < -HALF || y < -HALF || x > VIEW_W + HALF || y > VIEW_H + HALF) continue;
       const age = s.age < 0 ? 0 : s.age;
@@ -274,6 +356,22 @@ export class Actors {
     }
     ctx.globalAlpha = 1;
     for (let j = 0; j < flying; j++) this.car(cars[order[j]], order[j]);
+    F[OWN] = NaN; // told for this frame only
+    snaps = null;
+  }
+
+  /** A mine blast, in view or not: the first time it is seen it leaves its scorch on the track. */
+  private scorched(s: { x: number; y: number }): void {
+    if (F[NOW] < this.quiet[0]) return; // a blast of the race before
+    const bx = this.blastX, by = this.blastY;
+    for (let k = 0; k < BLASTS; k++) if (bx[k] === s.x && by[k] === s.y) return;
+    const k = this.blastNext;
+    this.blastNext = (k + 1) % BLASTS;
+    bx[k] = s.x;
+    by[k] = s.y;
+    MARK[0] = s.x;
+    MARK[1] = s.y;
+    scorch(this.track);
   }
 
   /**
@@ -296,6 +394,8 @@ export class Actors {
     this.lastCell[s] = -1;
     this.seg[s] = -1;
     this.owed[s] = 0;
+    this.skidAt[s] = 0;
+    this.snapAt[s] = 0;
     this.rides[s * 2] = this.rides[s * 2 + 1] = 0;
     return s;
   }
@@ -350,6 +450,21 @@ export class Actors {
     this.cell[i] = cell;
     if (kind !== FALLING) this.lastCell[s] = cell;
 
+    // Another player's car where the snapshots have it, if told (driving): its step sideways
+    // there since the frame before (NaN = not told; none on the first frame it is told of).
+    let driven = NaN;
+    if (!c.me && snaps) {
+      for (let k = 0; k < snaps.length; k++) {
+        const t = snaps[k];
+        if (t.id !== c.id) continue;
+        driven = this.snapAt[s] === this.frameNo - 1 ? (t.y - this.snapY[s]) * Math.cos(t.h) - (t.x - this.snapX[s]) * Math.sin(t.h) : 0;
+        this.snapX[s] = t.x;
+        this.snapY[s] = t.y;
+        this.snapAt[s] = this.frameNo;
+        break;
+      }
+    }
+
     // Dust. Only for a car that was drawn in the frame before: its speed is the way it came.
     this.seen[s] = this.frameNo;
     if (known && dt > 0 && kind === GROUND && !c.wreck) {
@@ -357,6 +472,40 @@ export class Actors {
       const moved = Math.sqrt(mx * mx + my * my);
       if (moved < JUMP) {
         if (this.lastUp[s] > 0) this.landing(c);
+        // Tyre marks. It cannot slide sideways faster than it moves: most frames stop at the first test.
+        if (moved > SKID * dt) {
+          const cos = Math.cos(c.h), sin = Math.sin(c.h);
+          // This frame's step sideways: on screen, or where the snapshots have the car.
+          const side = driven === driven ? driven : my * cos - mx * sin;
+          // The own car as told: not in a correction, not touching, and only if the predicted car slides.
+          const own = F[OWN];
+          const mine = !c.me || own !== own || (F[LEFT] <= CORRECTING && (own >= SLIDES || own <= -SLIDES) && F[NOW] - F[TOUCH] > TOUCHING);
+          if (mine && (side > SKID * dt || side < -SKID * dt)) {
+            const w = this.wheels, j = s * 4;
+            const lx = c.x - cos * AXLE + sin * WHEEL, ly = c.y - sin * AXLE - cos * WHEEL;
+            const rx = c.x - cos * AXLE - sin * WHEEL, ry = c.y - sin * AXLE + cos * WHEEL;
+            const since = this.skidAt[s] > 0 ? this.frameNo - this.skidAt[s] : SKID_GAP + 1;
+            if (since >= SKID_EVERY || since > SKID_GAP) {
+              if (since <= SKID_GAP) {
+                MARK[0] = w[j];
+                MARK[1] = w[j + 1];
+                MARK[2] = lx;
+                MARK[3] = ly;
+                MARK[4] = w[j + 2];
+                MARK[5] = w[j + 3];
+                MARK[6] = rx;
+                MARK[7] = ry;
+                skid(this.track);
+              }
+              // Else the slide begins here: the next stamp draws from these.
+              w[j] = lx;
+              w[j + 1] = ly;
+              w[j + 2] = rx;
+              w[j + 3] = ry;
+              this.skidAt[s] = this.frameNo;
+            }
+          }
+        }
         if (moved > DUST_MIN_SPEED * dt) {
           const track = this.track;
           F[QX] = c.x;

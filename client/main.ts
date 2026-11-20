@@ -9,7 +9,8 @@ import { BotDriver } from "../scripts/bot-ai";
 import { AudioEngine, SoundControls } from "./audio";
 import { ChatPanel, fitViewport } from "./chat";
 import { Game, lostMessage, NO_CONTROLS, type Controls, type TokenStore } from "./game";
-import { Effects } from "./gfx/actors";
+import { driving, Effects } from "./gfx/actors";
+import { clearMarks } from "./gfx/world";
 import { Keyboard } from "./input";
 import { JerkMeter } from "./jerk";
 import { GameMenu } from "./menu";
@@ -115,6 +116,7 @@ let lastControls: Controls = NO_CONTROLS; // the engine's throttle: what the las
 // Rebuilt whenever the room's track changes (it caches the track's paths and decor).
 let renderer = new Renderer($<HTMLCanvasElement>("view"), game.track);
 let rendererTrack = game.track;
+let marksRace = game.raceId; // the race the track's marks (scorches, tyre marks) are from
 const jerk = new JerkMeter();
 let measuredPhase = "";
 const pilot = autopilot ? new BotDriver(game, Number(params.get("lane")) || 0) : null;
@@ -712,6 +714,11 @@ function syncRenderer(): void {
 
 function draw(alpha: number, elapsed: number): void {
   syncRenderer();
+  // A new race or a restart: the track's marks go (a new track's went with its renderer).
+  if (game.raceId !== marksRace) {
+    marksRace = game.raceId;
+    clearMarks();
+  }
   const cars: CarView[] = [];
   // `at` places the car; `st` carries its airborne / fall / ghost state (game.ts poses).
   const view = (at: DrawPose, st: DrawPose, me: boolean): CarView => {
@@ -783,6 +790,7 @@ function draw(alpha: number, elapsed: number): void {
     sounds.bump(im.speed, im.x, im.y, renderer.cam);
   }
   const fx = effects.frame(now, game.otherShots(), game.localShots, game.visibleMines(), game.you, own, others);
+  driving(game.car, game.smooth, game.contact, others); // tyre marks: by the cars' driving, not by what the prediction does to them on screen
   renderer.frame(cars, fx, hudView());
 }
 

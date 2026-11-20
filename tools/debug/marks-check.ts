@@ -1,0 +1,394 @@
+// Track marks check: do scorches and tyre marks keep their promises (client/gfx/world.ts,
+// "track marks")? No browser: the World draws on canvases that keep their pixels.
+//
+//   npx tsx tools/debug/marks-check.ts            every check on the three tracks; exit code 1 if one fails
+//
+// What is checked, per track:
+// - stamp = put back: the tiles in view after marks were stamped on them one by one show the
+//   same colours as the same tiles baked afresh with the kept marks put on; and so do their
+//   canvases, pixel for pixel (the uploaded rectangles left nothing out);
+// - a mark bakes nothing: no tile is baked for the marks made;
+// - only the palette, only darker: a marked pixel is a palette colour no lighter than before;
+// - keep off: no pixel of a gap's void, a pit's floor or the barrier changes;
+// - given away and baked again: after a lap (every tile evicted) the view shows the kept marks again;
+// - the ring: of 200 scorches the last 128 come back, the first 72 do not;
+// - the first marks of a track, made by the actors (the first of the session on the first
+//   track here, the first since the marks were on another track on the others): the first
+//   two blasts, five frames apart, both leave their scorch, and so does a blast first seen
+//   five frames after the first tyre mark (a track's first mark is no clearing);
+// - clearing: after clearMarks() the tiles in view are the plain bake again within 24 frames,
+//   and a mark made right after the clearing is there;
+// - blasts (gfx/actors.ts, which reports a blast to the track the first time it sees it): a
+//   blast seen for its eight frames leaves one scorch; a blast in the next race at the very
+//   place of one in the race before leaves its scorch too (the blasts remembered go with the
+//   marks); a blast still burning as the marks are cleared, and one of the race before shown
+//   a moment after it, leave nothing on the new race's track;
+// - another track: a World for another track clears the marks.
+
+import { resolve } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
+
+const HERE = resolve(fileURLToPath(new URL("../..", import.meta.url)));
+class FakeImageData {
+  data: Uint8ClampedArray;
+  constructor(public width: number, public height: number) {
+    this.data = new Uint8ClampedArray(width * height * 4);
+  }
+}
+(globalThis as unknown as { ImageData: unknown }).ImageData = FakeImageData;
+interface FakeCanvas { width: number; height: number; px?: Uint32Array; getContext?: () => unknown }
+const canvases: FakeCanvas[] = [];
+const blits: { src: FakeCanvas; x: number; y: number }[] = [];
+const makeCtx = (canvas: FakeCanvas) => ({
+  fillStyle: "",
+  globalAlpha: 1,
+  drawImage(src: FakeCanvas, x: number, y: number) {
+    blits.push({ src, x, y });
+  },
+  fillRect() {},
+  putImageData(img: FakeImageData, dx: number, dy: number, sx = 0, sy = 0, sw = img.width, sh = img.height) {
+    canvas.px ??= new Uint32Array(canvas.width * canvas.height);
+    const src = new Uint32Array(img.data.buffer);
+    for (let y = sy; y < sy + sh; y++) for (let x = sx; x < sx + sw; x++) canvas.px[(dy + y) * canvas.width + dx + x] = src[y * img.width + x];
+  },
+  getContextAttributes: () => ({ willReadFrequently: true }),
+});
+(globalThis as unknown as { document: unknown }).document = {
+  createElement: () => {
+    const c: FakeCanvas = { width: 0, height: 0 };
+    const ctx = makeCtx(c);
+    c.getContext = () => ctx;
+    canvases.push(c);
+    return c;
+  },
+};
+const load = (file: string) => import(pathToFileURL(resolve(HERE, file)).href);
+const { World, MARK, scorch, skid, clearMarks, markStats, worldStats, bakeTileIndices, bakeTileMarked, poolTileIndices, SCORCHES, ZOOM, VIEW_W, VIEW_H, TILE } = await load("client/gfx/world.ts");
+const { Actors } = await load("client/gfx/actors.ts");
+const { palette32 } = await load("client/gfx/palette.ts");
+const { trackById } = await load("shared/tracks.ts");
+const { pointAt } = await load("shared/track.ts");
+const PAL32: Uint32Array = palette32();
+const lum = Array.from(PAL32, (v) => 0.299 * (v & 255) + 0.587 * ((v >> 8) & 255) + 0.114 * ((v >> 16) & 255));
+
+let failed = 0;
+const check = (ok: boolean, what: string): void => {
+  console.log(`${ok ? "ok  " : "FAIL"}  ${what}`);
+  if (!ok) failed++;
+};
+const same = (a: Uint8Array, b: Uint8Array): number => {
+  let d = 0;
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) d++;
+  return d;
+};
+
+let session = true; // no mark has been made in this process yet
+for (const id of ["rust-bowl", "crusher-run", "overpass-knot"]) {
+  console.log(`\n${id}`);
+  const track = trackById(id);
+  const view: FakeCanvas = { width: VIEW_W, height: VIEW_H };
+  let world = new World(makeCtx(view), track);
+  const hw = track.def.halfWidth as number;
+  const at = (s: number, lat: number) => {
+    const p = pointAt(track, s);
+    return { x: p.x - Math.sin(p.h) * lat, y: p.y + Math.cos(p.h) * lat, h: p.h as number };
+  };
+  // Where: a feature if the track has one (a pit, a gap's end), else a bend.
+  const spot: number = track.holes.length ? track.holes[0].s + 40 : track.gaps.length ? track.gaps[0].s0 - 30 : 700;
+  const c = pointAt(track, spot);
+  const ox = Math.round(c.x * ZOOM) - VIEW_W / 2, oy = Math.round(c.y * ZOOM) - VIEW_H / 2;
+  const frame = (snap = false, x = c.x, y = c.y): void => {
+    blits.length = 0;
+    world.aim(x, y, 1000 / 60, snap);
+    world.draw(Math.round(x * ZOOM) - VIEW_W / 2, Math.round(y * ZOOM) - VIEW_H / 2, []);
+  };
+  const tiles: [number, number][] = [];
+  for (let ty = Math.floor(oy / TILE); ty <= Math.floor((oy + VIEW_H - 1) / TILE); ty++) for (let tx = Math.floor(ox / TILE); tx <= Math.floor((ox + VIEW_W - 1) / TILE); tx++) tiles.push([tx, ty]);
+  const scorchAt = (s: number, lat: number): void => {
+    const p = at(s, lat);
+    MARK[0] = p.x;
+    MARK[1] = p.y;
+    scorch(track);
+  };
+  const skidAlong = (s: number, lat: number, n: number): void => {
+    let prev: number[] | null = null;
+    for (let i = 0; i <= n; i++) {
+      const p = at(s + i * 7, lat + i * 1.5), h = p.h + 0.45;
+      const cos = Math.cos(h), sin = Math.sin(h);
+      const cur = [p.x - cos * 9 + sin * 6, p.y - sin * 9 - cos * 6, p.x - cos * 9 - sin * 6, p.y - sin * 9 + cos * 6];
+      if (prev) {
+        MARK.set([prev[0], prev[1], cur[0], cur[1], prev[2], prev[3], cur[2], cur[3]]);
+        skid(track);
+      }
+      prev = cur;
+    }
+  };
+  const marksEverywhere = (): void => {
+    // On the road, the kerb, the verge, against the wall, on a feature if there is one, across tile borders.
+    for (let k = -8; k <= 8; k++) scorchAt(spot + k * 37, ((k * 53) % (2 * track.wall)) - track.wall);
+    for (const h of track.holes) scorchAt(h.s, 0), scorchAt(h.s + h.r, 6);
+    for (const g of track.gaps) scorchAt(g.s0 - 4, 0), scorchAt(g.s0 + 12, hw * 0.5), scorchAt(g.s1 + 3, -hw * 0.4);
+    for (let k = -3; k <= 3; k++) skidAlong(spot + k * 80 - 60, -hw + ((k + 3) * hw) / 3, 14);
+    for (const g of track.gaps) skidAlong(g.s0 - 90, 0, 16);
+  };
+  const shown = (tx: number, ty: number): Uint8Array | null => poolTileIndices(track, tx, ty);
+  const canvasOf = (tx: number, ty: number): FakeCanvas | undefined => blits.find((b) => b.x === tx * TILE - ox && b.y === ty * TILE - oy)?.src;
+  const canvasDiff = (tx: number, ty: number, want: Uint8Array): number => {
+    const px = canvasOf(tx, ty)?.px;
+    if (!px) return want.length;
+    let d = 0;
+    for (let i = 0; i < want.length; i++) if (px[i] !== PAL32[want[i]]) d++;
+    return d;
+  };
+
+  clearMarks();
+  frame(true);
+  const plain = new Map(tiles.map(([tx, ty]) => [`${tx},${ty}`, bakeTileIndices(track, tx, ty)]));
+  frame(true); // bakeTileIndices dropped nothing that was needed, but be sure the view is whole
+
+  // The actors' frames (the first marks here, the blasts further down): frame by frame, a
+  // frame's cars and its effects, which hold the blasts burning in it (render.ts WorldFx).
+  const newActors = () => new Actors({ fillStyle: "", globalAlpha: 1, drawImage() {}, fillRect() {}, getContextAttributes: () => ({ willReadFrequently: true }) }, track);
+  let actors = newActors();
+  const fx = { shots: [], mines: [], sparks: [{ x: 0, y: 0, age: 0, blast: true }, { x: 0, y: 0, age: 0, blast: true }], nShots: 0, nSparks: 0 };
+  const cars: { id: string; x: number; y: number; h: number; color: string; name: string; me: boolean; wreck: boolean; ghost: boolean }[] = [];
+  let clock = 60000;
+  /** One frame: the world, then the actors with the cars and the blasts burning in it, each at `age` of its life. */
+  const act = (...blasts: { x: number; y: number; age: number }[]): void => {
+    frame();
+    clock += 1000 / 60;
+    fx.nSparks = blasts.length;
+    blasts.forEach((b, i) => Object.assign(fx.sparks[i], { x: b.x, y: b.y, age: b.age }));
+    actors.draw(cars, fx, ox, oy, clock);
+  };
+  /** A blast from frame `from` to frame `to` of its eight. */
+  const burn = (blast: { x: number; y: number }, from = 0, to = 7): void => {
+    for (let f = from; f <= to; f++) act({ x: blast.x, y: blast.y, age: f / 8 });
+  };
+  const idle = (frames: number): void => {
+    for (let i = 0; i < frames; i++) act();
+  };
+  const marked = (): number => {
+    let d = 0;
+    for (const [tx, ty] of tiles) d += same(shown(tx, ty) ?? new Uint8Array(TILE * TILE), plain.get(`${tx},${ty}`)!);
+    return d;
+  };
+  const P = at(spot, 0), Q = at(spot + 70, 14), R = at(spot - 70, -14);
+  const other = trackById(id === "rust-bowl" ? "crusher-run" : "rust-bowl");
+
+  // The first marks of a track, made by the actors. No mark has been made on this track yet:
+  // none at all in the session (the first track here), or the last ones were on another track.
+  idle(30);
+  const bare0 = marked();
+  // Two blasts as the first marks: P for its eight frames, Q first seen five frames after P.
+  let n0 = markStats.scorches;
+  for (let f = 0; f < 13; f++) {
+    const burning: { x: number; y: number; age: number }[] = [];
+    if (f < 8) burning.push({ x: P.x, y: P.y, age: f / 8 });
+    if (f >= 5) burning.push({ x: Q.x, y: Q.y, age: (f - 5) / 8 });
+    act(...burning);
+  }
+  idle(30);
+  const both = markStats.scorches - n0, bothPixels = marked();
+  // As after a change of track: the marks are on another track, then this one is drawn again
+  // (a new World and new actors, as main.ts's new Renderer has them).
+  new World(makeCtx({ width: VIEW_W, height: VIEW_H }), other);
+  const elsewhere = pointAt(other, 100);
+  MARK[0] = elsewhere.x;
+  MARK[1] = elsewhere.y;
+  scorch(other);
+  world = new World(makeCtx(view), track);
+  actors = newActors();
+  for (let i = 0; i < 30; i++) frame(i === 0);
+  idle(30);
+  const bare1 = marked();
+  // A tyre mark as the first mark: a car slides across the road for eight frames (3 units a
+  // frame ahead, 2.5 sideways: 150 units/s), on plain road past the place. A blast at P is
+  // first seen five frames after the first mark, when the slide is over.
+  const k0 = markStats.skids;
+  n0 = markStats.scorches;
+  const from = at(spot + 100, -12);
+  const car = { id: "slider", x: from.x, y: from.y, h: from.h, color: "#888", name: "", me: false, wreck: false, ghost: false };
+  cars.push(car);
+  let tyreAt = -1, tyrePixels = 0;
+  for (let f = 0; f < 20; f++) {
+    if (f < 8) {
+      car.x += 3 * Math.cos(car.h) - 2.5 * Math.sin(car.h);
+      car.y += 3 * Math.sin(car.h) + 2.5 * Math.cos(car.h);
+    }
+    const since = tyreAt < 0 ? -1 : f - tyreAt;
+    if (since === 5) tyrePixels = marked();
+    if (since >= 5 && since < 13) act({ x: P.x, y: P.y, age: (since - 5) / 8 });
+    else act();
+    if (tyreAt < 0 && markStats.skids > k0) tyreAt = f;
+  }
+  cars.length = 0;
+  idle(30);
+  const tyres = markStats.skids - k0, afterTyre = markStats.scorches - n0, withBlast = marked();
+  // The marks go again: what follows starts on a plain track, as it did before this check was here.
+  clearMarks();
+  for (let i = 0; i < 30; i++) frame();
+  const left = marked();
+  check(
+    bare0 === 0 && both === 2 && bothPixels > 0 && bare1 === 0 && tyres > 0 && tyrePixels > 0 && afterTyre === 1 && withBlast > tyrePixels && left === 0,
+    `the first marks of a track (${session ? "the first of the session" : "the marks were last on another track"}): two blasts five frames apart left ${both} scorches (${bothPixels} pixels); the marks on ${other.def.id ?? "another track"} and back, the first mark a tyre mark (frame ${tyreAt} of the slide, ${tyres} in all, ${tyrePixels} pixels), a blast first seen five frames after it left ${afterTyre} (${withBlast - tyrePixels} pixels more); ${bare0}, ${bare1} and ${left} pixels were marked before each and after the clearing`,
+  );
+  session = false;
+
+  const baked0 = worldStats.baked, uploads0 = markStats.uploads, pixels0 = markStats.pixels, made0 = markStats.scorches + markStats.skids;
+  marksEverywhere();
+  frame();
+  const made = markStats.scorches + markStats.skids - made0;
+  check(worldStats.baked === baked0, `a mark bakes nothing: ${made} marks made, ${worldStats.baked - baked0} tiles baked for them; ${markStats.uploads - uploads0} rectangles uploaded, ${markStats.pixels - pixels0} pixels in all (a tile is ${TILE * TILE})`);
+
+  // Stamp = put back, and the canvases agree.
+  const live = new Map(tiles.map(([tx, ty]) => [`${tx},${ty}`, shown(tx, ty)]));
+  let diff = 0, canvasWrong = 0, changed = 0, lighter = 0, offChanged = 0, off = 0, missing = 0;
+  for (const [tx, ty] of tiles) {
+    const key = `${tx},${ty}`;
+    const now = live.get(key);
+    if (!now) {
+      missing++;
+      continue;
+    }
+    const again: Uint8Array = bakeTileMarked(track, tx, ty);
+    const keep: Uint8Array = bakeTileMarked(track, tx, ty, true);
+    const before = plain.get(key)!;
+    diff += same(now, again);
+    for (let i = 0; i < now.length; i++) {
+      if (now[i] !== before[i]) {
+        changed++;
+        if (now[i] > 31 || lum[now[i]] > lum[before[i]]) lighter++;
+        if (keep[i] === 255) offChanged++;
+      }
+      if (keep[i] === 255) off++;
+    }
+  }
+  frame(); // bakeTileMarked dropped the job under way, if any; draw again for the canvases
+  for (const [tx, ty] of tiles) canvasWrong += canvasDiff(tx, ty, live.get(`${tx},${ty}`) ?? new Uint8Array(TILE * TILE));
+  check(missing === 0 && diff === 0, `stamp = put back: ${tiles.length} tiles in view, ${diff} pixels differ between the tiles stamped one mark at a time and the same tiles baked afresh with the marks put on (${changed} pixels marked)`);
+  check(canvasWrong === 0, `the canvases show it: ${canvasWrong} canvas pixels differ from the tiles' colours`);
+  check(changed > 0 && lighter === 0, `only the palette, only darker: ${lighter} of ${changed} marked pixels are off the palette or lighter than before`);
+  check(offChanged === 0, `keep off: ${offChanged} of ${off} pixels of void, pit floor and barrier in view changed`);
+
+  // Given away and baked again: a lap, then back.
+  const bakedLap = worldStats.baked, back0 = markStats.putBack;
+  const lap = Math.ceil((track.length / 430) * 60);
+  for (let i = 1; i <= lap; i++) {
+    const p = pointAt(track, spot + (i * 430) / 60);
+    frame(false, p.x, p.y);
+  }
+  frame(true);
+  let lapDiff = 0;
+  for (const [tx, ty] of tiles) lapDiff += same(shown(tx, ty) ?? new Uint8Array(TILE * TILE), live.get(`${tx},${ty}`)!);
+  let lapCanvas = 0;
+  for (const [tx, ty] of tiles) lapCanvas += canvasDiff(tx, ty, live.get(`${tx},${ty}`)!);
+  check(worldStats.baked - bakedLap > 24 && lapDiff === 0 && lapCanvas === 0, `given away and baked again: after a lap (${worldStats.baked - bakedLap} tiles baked, ${markStats.putBack - back0} marks put back on the way) the view differs in ${lapDiff} pixels from before, its canvases in ${lapCanvas}`);
+
+  // Clearing; a mark made right after it stays. Tiles are wiped one a frame: the pool holds 24.
+  clearMarks();
+  scorchAt(spot, 0);
+  const wiped0 = markStats.wiped;
+  let frames = 0;
+  for (; frames < 24; frames++) frame();
+  let clearDiff = 0, clearCanvas = 0, kept = 0;
+  for (const [tx, ty] of tiles) {
+    const want: Uint8Array = bakeTileMarked(track, tx, ty);
+    kept += same(want, plain.get(`${tx},${ty}`)!);
+    clearDiff += same(shown(tx, ty) ?? new Uint8Array(TILE * TILE), want);
+  }
+  frame();
+  for (const [tx, ty] of tiles) clearCanvas += canvasDiff(tx, ty, shown(tx, ty)!);
+  check(clearDiff === 0 && clearCanvas === 0 && kept > 0 && kept < 1100, `clearing: ${frames} frames after clearMarks() the view is the plain bake but for the one scorch made right after it (${kept} pixels): ${clearDiff} pixels differ, ${clearCanvas} on the canvases (${markStats.wiped - wiped0} tiles wiped, one a frame)`);
+
+  // The ring: 200 scorches along the track, a lap, and the last 128 are back.
+  clearMarks();
+  for (let i = 0; i < 12; i++) frame();
+  const places: [number, number][] = [];
+  for (let i = 0; i < 200; i++) {
+    const p = at(spot + 300 + i * 41, ((i * 29) % 60) - 30);
+    places.push([Math.round(p.x * ZOOM), Math.round(p.y * ZOOM)]);
+    MARK[0] = p.x;
+    MARK[1] = p.y;
+    scorch(track);
+  }
+  for (let i = 1; i <= lap; i++) {
+    const p = pointAt(track, spot + (i * 430) / 60);
+    frame(false, p.x, p.y);
+  }
+  let back = 0, gone = 0;
+  for (let i = 0; i < 200; i++) {
+    const [x, y] = places[i];
+    const tx = Math.floor(x / TILE), ty = Math.floor(y / TILE);
+    const marked: Uint8Array = bakeTileMarked(track, tx, ty);
+    const bare: Uint8Array = bakeTileIndices(track, tx, ty);
+    // The scorch's own middle: is it marked? (A pixel or two of a middle may lie on the barrier: look at a few.)
+    let hit = false;
+    for (let d = -2; d <= 2 && !hit; d++) {
+      const px = x - tx * TILE + d, py = y - ty * TILE;
+      if (px >= 0 && px < TILE && marked[py * TILE + px] !== bare[py * TILE + px]) hit = true;
+    }
+    if (i < 200 - SCORCHES) gone += hit ? 0 : 1;
+    else back += hit ? 1 : 0;
+  }
+  check(back === SCORCHES && gone >= 200 - SCORCHES - 3, `the ring: of 200 scorches the last ${SCORCHES} are kept (${back} found), the first ${200 - SCORCHES} are not (${gone} gone; one under a later scorch still shows as marked)`);
+
+  // Blasts, as the actors report them (act, further up), the marks cleared as main.ts clears
+  // them at a new race.
+  clearMarks();
+  for (let i = 0; i < 30; i++) frame(i === 0);
+  actors = newActors();
+  idle(2);
+  const bare = marked();
+  // Race 1: a blast at P.
+  let s0 = markStats.scorches;
+  burn(P);
+  idle(2);
+  const first = markStats.scorches - s0, firstPixels = marked();
+  // A new race: the marks go; half a second on (the countdown) the view is plain.
+  clearMarks();
+  idle(30);
+  const between = marked();
+  // Race 2: a blast at the very same place.
+  s0 = markStats.scorches;
+  burn(P);
+  idle(2);
+  const second = markStats.scorches - s0, secondPixels = marked();
+  check(bare === 0 && first === 1 && firstPixels > 0 && between === 0 && second === 1 && secondPixels === firstPixels, `a blast at the place of one in the race before: race 1's blast left ${first} scorch (${firstPixels} pixels), ${between} pixels were marked after the clearing, race 2's blast at the same place left ${second} scorch (${secondPixels} pixels)`);
+  // A blast at Q still burning as the marks are cleared: its scorch goes and is not made again.
+  s0 = markStats.scorches;
+  burn(Q, 0, 3);
+  const before = markStats.scorches - s0;
+  clearMarks();
+  s0 = markStats.scorches;
+  burn(Q, 4, 7);
+  idle(30);
+  const after = markStats.scorches - s0, afterPixels = marked();
+  // A blast of the race before first shown five frames after the clearing (held back by the interpolation delay): nothing.
+  burn(Q, 0, 3);
+  clearMarks();
+  idle(5);
+  s0 = markStats.scorches;
+  burn(R);
+  idle(30);
+  const late = markStats.scorches - s0, latePixels = marked();
+  // ... and the new race's own blast at that place, later, leaves its scorch.
+  s0 = markStats.scorches;
+  burn(R);
+  idle(2);
+  const fresh = markStats.scorches - s0, freshPixels = marked();
+  check(before === 1 && after === 0 && afterPixels === 0 && late === 0 && latePixels === 0 && fresh === 1 && freshPixels > 0, `blasts of the race before: a blast burning as the marks were cleared (${before} scorch before) left ${after} scorches on the new race's track (${afterPixels} pixels marked), one first shown five frames after the clearing ${late} (${latePixels} pixels); the new race's own blast at that place then left ${fresh} (${freshPixels} pixels)`);
+
+  // Another track: its World clears the marks.
+  frame(true);
+  scorchAt(spot, 10);
+  frame();
+  new World(makeCtx({ width: VIEW_W, height: VIEW_H }), other);
+  world = new World(makeCtx(view), track);
+  for (let i = 0; i < 30; i++) frame(i === 0);
+  let trackDiff = 0;
+  for (const [tx, ty] of tiles) trackDiff += same(shown(tx, ty) ?? new Uint8Array(TILE * TILE), plain.get(`${tx},${ty}`)!);
+  check(trackDiff === 0, `another track: after a World for ${other.def.id ?? "another track"} was made, this track's view is the plain bake again (${trackDiff} pixels differ)`);
+}
+console.log(failed ? `\n${failed} check(s) FAILED` : "\nAll checks passed.");
+process.exitCode = failed ? 1 : 0;

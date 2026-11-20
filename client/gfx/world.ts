@@ -31,6 +31,9 @@
 //   screen at once, so a single frame is always a complete picture.
 // - The pool is module-level and keyed by track: it survives a new Renderer, and two
 //   Renderers on one canvas share it.
+//
+// What a race leaves on it (track marks, further down): a mine's scorch and the tyre marks of
+// a sliding car are put into the tiles' pixels where they lie, once, and cost nothing after.
 
 import { MAX_PLAYERS } from "../../shared/protocol";
 import { gapAt, gridSlot, holeAt, pointAt, queryTrack, type Track, type Vec } from "../../shared/track";
@@ -114,19 +117,32 @@ function mulberry32(seed: number): () => number {
   };
 }
 
-function hash(x: number, y: number, seed: number): number {
-  let h = Math.imul(x, 374761393) ^ Math.imul(y, 668265263) ^ Math.imul(seed, 1442695041);
-  h = Math.imul(h ^ (h >>> 13), 1274126177);
-  return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+// What corners() and stainNoise() work out. They leave it here and hand nothing back: a
+// fraction handed back from a call is boxed (see "The bake allocates nothing" below).
+const CORNERS = new Float64Array(4);
+const NOISE_OUT = new Float64Array(1);
+
+/**
+ * A hash 0..1 of each corner of lattice cell (x, y), whole numbers, into CORNERS:
+ * (x, y), (x + 1, y), (x, y + 1), (x + 1, y + 1).
+ */
+function corners(x: number, y: number, seed: number): void {
+  for (let k = 0; k < 4; k++) {
+    let h = Math.imul(x + (k & 1), 374761393) ^ Math.imul(y + (k >> 1), 668265263) ^ Math.imul(seed, 1442695041);
+    h = Math.imul(h ^ (h >>> 13), 1274126177);
+    CORNERS[k] = ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+  }
 }
 
-/** Smooth value noise 0..1: the ragged edge of a stain. */
-function vnoise(x: number, y: number, seed: number): number {
+/** Smooth value noise 0..1 on a 5 px lattice at view pixel (X, Y), into NOISE_OUT[0]: the ragged edge of a stain. */
+function stainNoise(X: number, Y: number): void {
+  const x = X / 5, y = Y / 5;
   const xi = Math.floor(x), yi = Math.floor(y);
   const fx = x - xi, fy = y - yi;
   const sx = fx * fx * (3 - 2 * fx), sy = fy * fy * (3 - 2 * fy);
-  const a = hash(xi, yi, seed), b = hash(xi + 1, yi, seed), c = hash(xi, yi + 1, seed), d = hash(xi + 1, yi + 1, seed);
-  return a + (b - a) * sx + (c - a) * sy + (a - b - c + d) * sx * sy;
+  corners(xi, yi, 9);
+  const a = CORNERS[0], b = CORNERS[1], c = CORNERS[2], d = CORNERS[3];
+  NOISE_OUT[0] = a + (b - a) * sx + (c - a) * sy + (a - b - c + d) * sx * sy;
 }
 
 /** White noise, 256x256 bytes, read at an offset of its own per tile and per use (so no tile repeats another). */
@@ -487,6 +503,7 @@ interface Buffers {
   gapS: Float32Array; // ... its distance along the track there
   gapLat: Float32Array;
   patch: Uint8Array; // 1 + the index of the repair the pixel is on
+  rows: Uint8Array[]; // idx again, as the tile's TILE rows (without the margin): made once, for copying a finished tile out
   out: ImageData | null; // the finished tile (browser only)
   out32: Uint32Array;
 }
@@ -497,8 +514,10 @@ function buffers(): Buffers {
   if (!buf) {
     const n = S * S;
     const out = typeof ImageData === "undefined" ? null : new ImageData(TILE, TILE);
+    const idx = new Uint8Array(n);
     buf = {
-      idx: new Uint8Array(n), cls: new Uint8Array(n), mask: new Uint8Array(n),
+      idx, cls: new Uint8Array(n), mask: new Uint8Array(n),
+      rows: Array.from({ length: TILE }, (_, y) => idx.subarray((y + PAD) * S + PAD, (y + PAD) * S + PAD + TILE)),
       dist: new Float32Array(n), seg: new Int16Array(n), tt: new Float32Array(n), lat: new Float32Array(n),
       gap: new Int8Array(n), gapS: new Float32Array(n), gapLat: new Float32Array(n), patch: new Uint8Array(n),
       out, out32: out ? new Uint32Array(out.data.buffer) : new Uint32Array(TILE * TILE),
@@ -508,6 +527,15 @@ function buffers(): Buffers {
 }
 
 const PAL32 = palette32();
+// What takes no track marks (the barrier, the void of a gap, a pit's floor) is told apart as a
+// tile is finished, by this bit on its pixels' colours in idx; PAL_OFF reads a colour with or
+// without it. (Bits 5 and 6 are how deeply a pixel is marked, once it is in a tile: see "track marks".)
+const OFF = 0x80;
+const PAL_OFF = (() => {
+  const t = new Uint32Array(256);
+  for (let c = 0; c < PAL32.length; c++) t[c] = t[c | OFF] = PAL32[c];
+  return t;
+})();
 const cand = new Int16Array(1024); // pieces near the tile
 const near = new Int16Array(64); // ... near the block
 const nearD = new Float32Array(64); // ... and how far from its centre
@@ -527,6 +555,7 @@ const job = {
   step: 0,
   sub: 0, // progress inside a step that is cut up further
   track: false, // any piece of the track near this tile?
+  voids: false, // ... and one of a gap among them? (only then can a pixel be void)
   patched: false, // any repair on this tile? (its joint is drawn at the end of the road pass)
   nc: 0, // pieces in `cand`
   o1: 0, // this tile's offsets into the noise
@@ -544,35 +573,63 @@ function bakeStart(art: Art, tx: number, ty: number): void {
   job.step = 0;
   job.sub = 0;
   job.patched = false;
-  const h = Math.floor(hash(tx, ty, 17) * 0x1000000);
+  // A hash of the tile, 24 bits (as corners() hashes a lattice corner, with seed 17).
+  let h = Math.imul(tx, 374761393) ^ Math.imul(ty, 668265263) ^ Math.imul(17, 1442695041);
+  h = Math.imul(h ^ (h >>> 13), 1274126177);
+  h = (h ^ (h >>> 16)) >>> 8;
   job.o1 = h & 0xffff;
   job.o2 = (Math.imul(h, 40503) >>> 4) & 0xffff;
   job.o3 = (Math.imul(h, 9973) >>> 7) & 0xffff;
 }
 
+// The bake allocates nothing once its buffers exist (tools/debug/bake-alloc.ts measures it).
+// What that takes, in this file:
+// - A number that is not whole is boxed (16 bytes) when it is handed to a function or back
+//   from one, unless the compiler happens to inline the call. So such numbers stay inside one
+//   function, or go through a typed array: a step's cost through COST, a noise value through
+//   NOISE_OUT. The bake's helpers take whole numbers, typed arrays and objects.
+// - Math.hypot is a call that boxes its arguments and its result, always: where the bake needs
+//   a distance it is spelled out as the same sum (see HYPOT below), which gives the same bits.
+// - No for...of (an iterator and a result object per step unless optimised away), no closures.
+
+/** The cost in units of the step bakeStep() just ran. */
+const COST = new Float64Array(1);
+
 /**
- * Run the next step of the job. Returns the step's cost in units, or -1 when the tile is
- * finished (its pixels are in out32). The big passes do a slice of the tile per call, so
+ * Run the next step of the job: true with the step's cost in COST[0], or false when the tile
+ * is finished (its pixels are in out32). The big passes do a slice of the tile per call, so
  * that no step takes much longer than a quarter of a millisecond.
  */
-function bakeStep(): number {
+function bakeStep(): boolean {
   switch (job.step) {
     case 0:
-      return classify();
+      classify();
+      return true;
     case 1:
-      return ground();
+      ground();
+      return true;
     case 2:
-      return yard();
+      yard();
+      return true;
     case 3:
-      return road();
+      road();
+      return true;
     case 4:
-      return details();
+      details();
+      return true;
     case 5:
-      return finish();
+      finish();
+      return true;
     default:
-      return -1;
+      return false;
   }
 }
+
+// HYPOT: Math.hypot(a, b) is, in every V8 since 2015, with u = |a|, v = |b|, m = the larger:
+//   m === 0 ? 0 : Math.sqrt((u / m) * (u / m) + (v / m) * (v / m)) * m
+// (its compensated sum has no correction to make with two terms). The bake writes that out
+// where it needs a distance whose bits decide a pixel; tools/debug/bake-alloc.ts --hypot
+// compares the two on twenty million pairs.
 
 /** The job moves on to its next step. */
 function next(step = job.step + 1): void {
@@ -581,7 +638,7 @@ function next(step = job.step + 1): void {
 }
 
 /** Per pixel: the nearest ground of the track and the gap it lies in. A few rows of blocks per call. */
-function classify(): number {
+function classify(): void {
   const art = job.art!, b = buffers();
   const { ax, ay, ex, ey, inv, nx, ny, s0, ds, gap, capA, capB } = art;
   const { bx, by } = job;
@@ -589,20 +646,23 @@ function classify(): number {
   const reach = (wall + REACH) * ZOOM + 1; // view pixels
   if (job.sub === 0) {
     // The pieces that can reach into this tile.
-    let nc = 0;
+    let nc = 0, voids = false;
     for (let i = 0; i < art.n && nc < cand.length; i++) {
       const x0 = ax[i], y0 = ay[i], x1 = x0 + ex[i], y1 = y0 + ey[i];
       if (Math.max(x0, x1) < bx - reach || Math.min(x0, x1) > bx + S + reach) continue;
       if (Math.max(y0, y1) < by - reach || Math.min(y0, y1) > by + S + reach) continue;
       cand[nc++] = i;
+      if (gap[i] >= 0) voids = true;
     }
     job.nc = nc;
     job.track = nc > 0;
+    job.voids = voids;
     b.cls.fill(C_NONE);
     b.dist.fill(BIG);
     if (!nc) {
       next();
-      return 30;
+      COST[0] = 30;
+      return;
     }
     b.gap.fill(-1);
     b.patch.fill(0);
@@ -736,11 +796,11 @@ function classify(): number {
   }
   if (y0 >= S) next();
   else job.sub = y0 / BLOCK;
-  return 10 + (nc + tests) * 0.6;
+  COST[0] = 10 + (nc + tests) * 0.6;
 }
 
 /** The dirt: specks whose density drifts in large patches, pebbles, and gravel thrown over the wall. Half the tile per call. */
-function ground(): number {
+function ground(): void {
   const art = job.art!, b = buffers(), N = noiseTable();
   const { bx, by, o1, o2, o3 } = job;
   const { idx, dist } = b;
@@ -751,6 +811,8 @@ function ground(): number {
   for (let y = from; y < from + rows; y++) {
     const Y = by + y;
     const ly = Math.floor(Y / CELL), fy = Y / CELL - ly, sy = fy * fy * (3 - 2 * fy);
+    // The row's share of its cells' hashes (seed 11): this row of the lattice and the next.
+    const hy0 = Math.imul(ly, 668265263) ^ Math.imul(11, 1442695041), hy1 = Math.imul(ly + 1, 668265263) ^ Math.imul(11, 1442695041);
     let lx = -1e9, a = 0, c = 0, bb = 0, d = 0;
     for (let x = 0; x < S; x++) {
       const p = y * S + x;
@@ -758,11 +820,18 @@ function ground(): number {
       const X = bx + x;
       const cell = Math.floor(X / CELL);
       if (cell !== lx) {
+        // The hashes of the cell's four corners, as corners() works them out, written out
+        // here: this is the dirt's inner loop, and a call per cell showed in the bake's time.
         lx = cell;
-        a = hash(cell, ly, 11);
-        bb = hash(cell + 1, ly, 11);
-        c = hash(cell, ly + 1, 11);
-        d = hash(cell + 1, ly + 1, 11);
+        const hx0 = Math.imul(cell, 374761393), hx1 = Math.imul(cell + 1, 374761393);
+        let h = Math.imul(hx0 ^ hy0 ^ ((hx0 ^ hy0) >>> 13), 1274126177);
+        a = ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+        h = Math.imul(hx1 ^ hy0 ^ ((hx1 ^ hy0) >>> 13), 1274126177);
+        bb = ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+        h = Math.imul(hx0 ^ hy1 ^ ((hx0 ^ hy1) >>> 13), 1274126177);
+        c = ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+        h = Math.imul(hx1 ^ hy1 ^ ((hx1 ^ hy1) >>> 13), 1274126177);
+        d = ((h ^ (h >>> 16)) >>> 0) / 4294967296;
       }
       const fx = X / CELL - cell, sx = fx * fx * (3 - 2 * fx);
       const patch = a + (bb - a) * sx + (c - a) * sy + (a - bb - c + d) * sx * sy;
@@ -781,17 +850,19 @@ function ground(): number {
   }
   if (from + rows >= S) next();
   else job.sub++;
-  return 170;
+  COST[0] = 170;
 }
 
 /** What lies on the dirt: stains, wheel ruts, and the junk heaps with their shadows. */
-function yard(): number {
+function yard(): void {
   const art = job.art!, b = buffers(), N = noiseTable();
   const { bx, by, o2 } = job;
   const { idx, dist } = b;
   const R = art.track.wall + BARRIER;
   let cost = 8;
-  for (const st of art.stains) {
+  const stains = art.stains, ruts = art.ruts, heaps = art.junk;
+  for (let q = 0; q < stains.length; q++) {
+    const st = stains[q];
     const x0 = Math.max(0, Math.floor(st.x - st.r * 1.3 - bx)), x1 = Math.min(S - 1, Math.ceil(st.x + st.r * 1.3 - bx));
     const y0 = Math.max(0, Math.floor(st.y - st.r - by)), y1 = Math.min(S - 1, Math.ceil(st.y + st.r - by));
     if (x0 > x1 || y0 > y1) continue;
@@ -801,13 +872,17 @@ function yard(): number {
         const p = y * S + x;
         if (dist[p] <= R) continue;
         const X = bx + x, Y = by + y;
-        const d = Math.hypot(X + 0.5 - st.x, (Y + 0.5 - st.y) * 1.4) / (st.r * (0.55 + 0.6 * vnoise(X / 5, Y / 5, 9)));
+        // How far out in the stain, 0..1 at its ragged edge: Math.hypot(...) / (...), the distance spelled out (HYPOT).
+        const u = Math.abs(X + 0.5 - st.x), v = Math.abs((Y + 0.5 - st.y) * 1.4), m = u > v ? u : v;
+        stainNoise(X, Y);
+        const d = (m === 0 ? 0 : Math.sqrt((u / m) * (u / m) + (v / m) * (v / m)) * m) / (st.r * (0.55 + 0.6 * NOISE_OUT[0]));
         const n = N[((((Y + (o2 >> 8)) & 255) << 8) | ((X + o2 + 91) & 255))];
         if (d < 0.6 ? n < 215 : d < 1 && n < 105) idx[p] = DIRT1;
       }
     }
   }
-  for (const rut of art.ruts) {
+  for (let q = 0; q < ruts.length; q++) {
+    const rut = ruts[q];
     for (let k = 0; k + 3 < rut.length; k += 2) {
       const xa = rut[k] - bx, ya = rut[k + 1] - by, xb = rut[k + 2] - bx, yb = rut[k + 3] - by;
       if (Math.max(xa, xb) < 0 || Math.min(xa, xb) >= S || Math.max(ya, yb) < 0 || Math.min(ya, yb) >= S) continue;
@@ -823,18 +898,19 @@ function yard(): number {
       cost += 0.4;
     }
   }
-  for (const d of art.junk) {
+  for (let q = 0; q < heaps.length; q++) {
+    const d = heaps[q];
     const reach = d.r * 1.5 + 6;
     if (d.x + reach < bx || d.x - reach > bx + S || d.y + reach < by || d.y - reach > by + S) continue;
     junk(d);
     cost += 4;
   }
   next(job.track ? 3 : 5);
-  return cost;
+  COST[0] = cost;
 }
 
 /** The track itself: the void of a gap, then barrier, verge, kerb and tarmac with what is painted and worn on it. */
-function road(): number {
+function road(): void {
   const art = job.art!, b = buffers(), N = noiseTable();
   const { bx, by, o1 } = job;
   const { idx, cls, dist, seg, tt, lat: latOf, gap: gapOf, gapS, gapLat, patch } = b;
@@ -843,6 +919,7 @@ function road(): number {
   const R = wall + BARRIER, hw5 = hw + KERB, W = wall - 1;
   const { s0, ds, dash0, groove0, groove1 } = art;
   const gaps = track.gaps, ramps = art.ramps, ends = art.ends, patches = art.patches;
+  const nc = job.nc, pieceGap = art.gap;
   const from = job.sub;
   let work = 0, y = from;
   for (; y < S && work < 11000; y++) {
@@ -868,8 +945,23 @@ function road(): number {
         } else if (e >= 30) {
           c = n < 18 ? SOOT0 : n < 28 ? SOOT2 : SOOT1;
         } else {
-          // Which wall is this the foot of, and does it face the sun (down-right walls do)?
-          const i = nearestGapPiece(art, g, s);
+          // Which wall is this the foot of, and does it face the sun (down-right walls do)? By the
+          // piece of the gap the pixel lies on: the first of the tile's pieces that holds its
+          // distance along the track (looked up here, in place: a call per pixel showed in the bake's time).
+          let i = -1;
+          for (let q = 0; q < nc && i < 0; q++) {
+            const o = cand[q];
+            if (pieceGap[o] === g && s >= s0[o] - 1e-6 && s <= s0[o] + ds[o] + 1e-6) i = o;
+          }
+          if (i < 0) {
+            i = 0;
+            for (let o = 0; o < art.n; o++) {
+              if (pieceGap[o] === g) {
+                i = o;
+                break;
+              }
+            }
+          }
           let wx: number, wy: number; // the wall's normal, pointing into the void
           if (side <= head && side <= tail) {
             const k = l > 0 ? -1 : 1;
@@ -970,7 +1062,8 @@ function road(): number {
   const cost = 8 + (y - from) * 0.14 + work * 0.019;
   if (y < S) {
     job.sub = y;
-    return cost;
+    COST[0] = cost;
+    return;
   }
   // The joint round a repair: dark where the patch ends down-right.
   if (job.patched) {
@@ -982,24 +1075,14 @@ function road(): number {
     }
   }
   next();
-  return job.patched ? cost + 90 : cost;
-}
-
-/** The piece of gap `g` that distance s lies on. */
-function nearestGapPiece(art: Art, g: number, s: number): number {
-  for (let k = 0; k < job.nc; k++) {
-    const i = cand[k];
-    if (art.gap[i] === g && s >= art.s0[i] - 1e-6 && s <= art.s0[i] + art.ds[i] + 1e-6) return i;
-  }
-  for (let i = 0; i < art.n; i++) if (art.gap[i] === g) return i;
-  return 0;
+  COST[0] = job.patched ? cost + 90 : cost;
 }
 
 /**
  * What is drawn over the road, a part per call: the start line, the grid marks and oil;
  * pits and a ramp's chevrons; the scrap in a gap, sixteen pieces at a time.
  */
-function details(): number {
+function details(): void {
   const art = job.art!, b = buffers(), N = noiseTable();
   const { bx, by, o2 } = job;
   const { idx, cls, mask } = b;
@@ -1022,8 +1105,9 @@ function details(): number {
       }
     }
     // Grid marks: worn paint, on tarmac only.
-    for (const quad of art.marks) {
-      if (!polyFrom(quad, bx, by)) continue;
+    const marks = art.marks, oil = art.oil;
+    for (let q = 0; q < marks.length; q++) {
+      if (!polyFrom(marks[q], bx, by)) continue;
       cost += 6;
       fillPoly(mask, 1);
       for (let y = my0; y < my1; y++) {
@@ -1035,7 +1119,8 @@ function details(): number {
       maskClear(mask);
     }
     // Oil on the tarmac: a dark blot with a ragged edge.
-    for (const st of art.oil) {
+    for (let q = 0; q < oil.length; q++) {
+      const st = oil[q];
       const xa = Math.max(0, Math.floor(st.x - st.r * 1.3 - bx)), xb = Math.min(S - 1, Math.ceil(st.x + st.r * 1.3 - bx));
       const ya = Math.max(0, Math.floor(st.y - st.r - by)), yb = Math.min(S - 1, Math.ceil(st.y + st.r - by));
       if (xa > xb || ya > yb) continue;
@@ -1045,25 +1130,32 @@ function details(): number {
           const p = y * S + x;
           if (cls[p] !== C_TARMAC || idx[p] === TAR3) continue;
           const X = bx + x, Y = by + y;
-          const d = Math.hypot(X + 0.5 - st.x, (Y + 0.5 - st.y) * 1.5) / (st.r * (0.55 + 0.6 * vnoise(X / 5, Y / 5, 9)));
+          // As a stain in the dirt: Math.hypot(...) / (...), the distance spelled out (HYPOT).
+          const u = Math.abs(X + 0.5 - st.x), v = Math.abs((Y + 0.5 - st.y) * 1.5), m = u > v ? u : v;
+          stainNoise(X, Y);
+          const d = (m === 0 ? 0 : Math.sqrt((u / m) * (u / m) + (v / m) * (v / m)) * m) / (st.r * (0.55 + 0.6 * NOISE_OUT[0]));
           if (d < 0.6 || (d < 1 && N[((((Y + (o2 >> 8)) & 255) << 8) | ((X + o2 + 91) & 255))] < 128)) idx[p] = TAR0;
         }
       }
     }
-    return cost;
+    COST[0] = cost;
+    return;
   }
   if (part === 1) {
-    for (const h of art.holes) {
+    const holes = art.holes, ramps = art.ramps;
+    for (let q = 0; q < holes.length; q++) {
+      const h = holes[q];
       const reach = h.r * 1.9 + 2;
       if (h.x + reach < bx || h.x - reach > bx + S || h.y + reach < by || h.y - reach > by + S) continue;
       pit(h);
       cost += 12 + h.r * h.r * 0.12;
     }
-    for (const rp of art.ramps) {
-      for (const pair of rp.chevrons) {
+    for (let q = 0; q < ramps.length; q++) {
+      const chevrons = ramps[q].chevrons;
+      for (let j = 0; j < chevrons.length; j++) {
         // The dark outline first, the bone-white arrow inside it; both on the plate only.
         for (let k = 0; k < 2; k++) {
-          if (!polyFrom(pair[k], bx, by)) continue;
+          if (!polyFrom(chevrons[j][k], bx, by)) continue;
           cost += 5;
           const colour = k ? BONE1 : SOOT2;
           fillPoly(mask, 1);
@@ -1072,20 +1164,25 @@ function details(): number {
         }
       }
     }
-    return cost;
+    COST[0] = cost;
+    return;
   }
   // The scrap in a gap lies in the gap: where a piece hangs over the road's end it is cut off
   // (the hazard stripes, the edge and a ramp's lip stay whole, as they always were).
   let skip = (part - 2) * 16, done = 0;
   clipClass = C_VOID;
-  for (const pile of art.piles) {
-    for (const d of pile) {
+  const piles = art.piles;
+  for (let q = 0; q < piles.length; q++) {
+    const pile = piles[q];
+    for (let j = 0; j < pile.length; j++) {
+      const d = pile[j];
       const reach = d.r * 1.5 + 6;
       if (d.x + reach < bx || d.x - reach > bx + S || d.y + reach < by || d.y - reach > by + S) continue;
       if (skip-- > 0) continue;
       if (done === 16) {
         clipClass = -1;
-        return cost + done * 8;
+        COST[0] = cost + done * 8;
+        return;
       }
       done++;
       junk(d);
@@ -1093,11 +1190,15 @@ function details(): number {
   }
   clipClass = -1;
   next();
-  return cost + done * 8;
+  COST[0] = cost + done * 8;
 }
 
-/** The barrier's depth (its cast shadow, the rail's sunlit edge, the posts), and the tile's pixels. */
-function finish(): number {
+/**
+ * The barrier's depth (its cast shadow, the rail's sunlit edge, the posts), and the tile's
+ * pixels. Here the pixels that take no track marks get their bit (OFF): from here on a colour
+ * in idx may carry it.
+ */
+function finish(): void {
   const art = job.art!, b = buffers();
   const { idx, cls, out32 } = b;
   const { bx, by } = job;
@@ -1108,11 +1209,11 @@ function finish(): number {
         const p = y * S + x;
         const k = cls[p];
         if (k === C_RAIL) {
-          if (cls[p - 1] !== C_RAIL || cls[p - S] !== C_RAIL) idx[p] = STEEL3;
+          idx[p] = (cls[p - 1] !== C_RAIL || cls[p - S] !== C_RAIL ? STEEL3 : idx[p]) | OFF;
         } else if (k !== C_BARRIER) {
           const q = cls[p - 3 - 4 * S];
           if (q === C_BARRIER || q === C_RAIL) idx[p] = SHADE_I[idx[p]];
-        }
+        } else idx[p] |= OFF;
       }
     }
     const posts = art.posts;
@@ -1124,18 +1225,41 @@ function finish(): number {
         for (let i = 0; i < 3; i++) {
           if (i + j === 0) continue; // under the post itself
           const p = (y + 2 + j) * S + x + 2 + i;
-          idx[p] = SHADE_I[idx[p]];
+          const v = idx[p];
+          idx[p] = SHADE_I[v & 31] | (v & OFF);
         }
       }
-      for (let j = 0; j < 3; j++) for (let i = 0; i < 3; i++) idx[(y + j) * S + x + i] = i === 0 || j === 0 ? STEEL3 : i === 2 || j === 2 ? STEEL0 : STEEL1;
+      for (let j = 0; j < 3; j++) for (let i = 0; i < 3; i++) idx[(y + j) * S + x + i] = (i === 0 || j === 0 ? STEEL3 : i === 2 || j === 2 ? STEEL0 : STEEL1) | OFF;
+    }
+    // The void of a gap: only a tile with a gap's piece near it has any.
+    if (job.voids) {
+      for (let y = PAD; y < PAD + TILE; y++) {
+        for (let p = y * S + PAD, end = p + TILE; p < end; p++) if (cls[p] === C_VOID) idx[p] |= OFF;
+      }
+    }
+    // A pit's floor: its disc, as pit() cuts it.
+    const holes = art.holes;
+    for (let q = 0; q < holes.length; q++) {
+      const h = holes[q];
+      const cx = h.x - bx, cy = h.y - by, r = h.r;
+      const ya = Math.max(PAD, Math.ceil(cy - r - 0.5)), yb = Math.min(PAD + TILE - 1, Math.ceil(cy + r - 0.5) - 1);
+      for (let y = ya; y <= yb; y++) {
+        const dy = y + 0.5 - cy;
+        const half = Math.sqrt(Math.max(0, r * r - dy * dy));
+        const xa = Math.max(PAD, Math.ceil(cx - half - 0.5)), xb = Math.min(PAD + TILE - 1, Math.ceil(cx + half - 0.5) - 1);
+        for (let x = xa; x <= xb; x++) idx[y * S + x] |= OFF;
+      }
     }
   }
+  // The pixels; and the tile keeps its colours (with the bit) for the marks to come.
+  const base = baking ? baking.base : spareBase(), rows = b.rows;
   for (let y = 0; y < TILE; y++) {
     let p = (y + PAD) * S + PAD, o = y * TILE;
-    for (let x = 0; x < TILE; x++) out32[o++] = PAL32[idx[p++]];
+    for (let x = 0; x < TILE; x++) out32[o++] = PAL_OFF[idx[p++]];
+    base.set(rows[y], y * TILE);
   }
   next();
-  return job.track ? 110 : 60;
+  COST[0] = job.track ? 110 : 60;
 }
 
 // ---- shapes -------------------------------------------------------------------------
@@ -1158,8 +1282,16 @@ function polyFrom(pts: Float64Array, bx: number, by: number): boolean {
 
 let polyN = 0;
 
-/** A rectangle w x h centred (ox, oy) from (cx, cy) in a frame turned by a, as the polygon. */
-function rect(cx: number, cy: number, cos: number, sin: number, ox: number, oy: number, w: number, h: number): void {
+// The numbers of the shape being drawn go to the functions below through these two, not as
+// arguments (they are not whole). AT: the frame of a piece of junk, its middle in buffer
+// pixels and the cosine and sine of its turn. Q: the shape, as each function says.
+const AT = new Float64Array(4);
+const Q = new Float64Array(4);
+
+/** A rectangle Q[2] x Q[3] centred (Q[0], Q[1]) in the frame AT, as the polygon. */
+function rect(): void {
+  const cx = AT[0], cy = AT[1], cos = AT[2], sin = AT[3];
+  const ox = Q[0], oy = Q[1], w = Q[2], h = Q[3];
   polyN = 4;
   for (let k = 0; k < 4; k++) {
     const u = ox + (k === 0 || k === 3 ? -w / 2 : w / 2), v = oy + (k < 2 ? -h / 2 : h / 2);
@@ -1204,8 +1336,9 @@ function fillPoly(m: Uint8Array, v: number): void {
   }
 }
 
-/** Fill a disc into mask m (pixel centres). */
-function fillDisc(m: Uint8Array, cx: number, cy: number, r: number, v: number): void {
+/** Fill the disc round (Q[0], Q[1]) of radius Q[2], buffer pixels, into mask m (pixel centres). */
+function fillDisc(m: Uint8Array, v: number): void {
+  const cx = Q[0], cy = Q[1], r = Q[2];
   const ya = Math.max(0, Math.ceil(cy - r - 0.5)), yb = Math.min(S - 1, Math.ceil(cy + r - 0.5) - 1);
   for (let y = ya; y <= yb; y++) {
     const dy = y + 0.5 - cy;
@@ -1297,9 +1430,10 @@ function inlay(c: number): void {
   }
 }
 
-/** Paint a disc in colour c inside the shape that is in the mask. */
-function inlayDisc(cx: number, cy: number, r: number, c: number): void {
+/** Paint the disc round (Q[0], Q[1]) of radius Q[2] in colour c inside the shape that is in the mask. */
+function inlayDisc(c: number): void {
   const { idx, mask } = buffers();
+  const cx = Q[0], cy = Q[1], r = Q[2];
   const ya = Math.max(my0, Math.ceil(cy - r - 0.5)), yb = Math.min(my1 - 1, Math.ceil(cy + r - 0.5) - 1);
   for (let y = ya; y <= yb; y++) {
     const dy = y + 0.5 - cy;
@@ -1312,10 +1446,11 @@ function inlayDisc(cx: number, cy: number, r: number, c: number): void {
 const SLATS = [-0.3, 0, 0.3]; // a pallet's gaps and an engine's bores, as shares of the width
 const STRAPS = [-0.17, 0.2]; // the straps round a crushed cube
 
-/** Corner k of the polygon: (px, py) in the frame at (x, y) turned by the angle whose cosine and sine are given. */
-function corner(k: number, x: number, y: number, cos: number, sin: number, px: number, py: number): void {
-  polyX[k] = x + px * cos - py * sin;
-  polyY[k] = y + px * sin + py * cos;
+/** Corner k of the polygon: (Q[0], Q[1]) in the frame AT. */
+function corner(k: number): void {
+  const px = Q[0], py = Q[1];
+  polyX[k] = AT[0] + px * AT[2] - py * AT[3];
+  polyY[k] = AT[1] + px * AT[3] + py * AT[2];
 }
 
 /** One piece of junk: two tones, a lit edge, a hard shadow. */
@@ -1324,6 +1459,10 @@ function junk(d: Junk): void {
   const x = d.x - job.bx, y = d.y - job.by, r = d.r;
   const cos = Math.cos(d.a), sin = Math.sin(d.a);
   const u = ZOOM; // one world unit, in pixels
+  AT[0] = x;
+  AT[1] = y;
+  AT[2] = cos;
+  AT[3] = sin;
   switch (d.kind) {
     case K_CUBE:
     case K_PALLET: {
@@ -1331,11 +1470,14 @@ function junk(d: Junk): void {
       const pallet = d.kind === K_PALLET;
       const w = pallet ? r * 1.6 : r * 2, h = pallet ? r * 1.6 : r * 1.4;
       const c = pallet ? GRAVEL1 : d.c;
-      rect(x, y, cos, sin, 0, 0, w, h);
+      Q[0] = 0, Q[1] = 0, Q[2] = w, Q[3] = h;
+      rect();
       fillPoly(mask, 1);
       solid(c, 3);
-      for (const k of pallet ? SLATS : STRAPS) {
-        rect(x, y, cos, sin, 0, k * h, w - 3 * u, 2.5 * u);
+      const bands = pallet ? SLATS : STRAPS;
+      for (let k = 0; k < bands.length; k++) {
+        Q[0] = 0, Q[1] = bands[k] * h, Q[2] = w - 3 * u, Q[3] = 2.5 * u;
+        rect();
         inlay(SHADE_I[c]);
       }
       break;
@@ -1343,12 +1485,17 @@ function junk(d: Junk): void {
     case K_DRUM: {
       // A drum on its end: the rim is the bevel, inside it a darker ring.
       const rr = r * 0.66;
-      fillDisc(mask, x, y, rr, 1);
+      Q[0] = x, Q[1] = y, Q[2] = rr;
+      fillDisc(mask, 1);
       solid(d.c, 3);
       const ring = r * 0.36, dark = SHADE_I[d.c];
       for (let j = my0; j < my1; j++) {
         for (let i = mx0; i < mx1; i++) {
-          if (mask[j * S + i] === 1 && Math.abs(Math.hypot(i + 0.5 - x, j + 0.5 - y) - ring) <= 1 * u) idx[j * S + i] = dark;
+          if (mask[j * S + i] !== 1) continue;
+          // The distance from the middle: Math.hypot, spelled out (HYPOT).
+          const ha = Math.abs(i + 0.5 - x), hb = Math.abs(j + 0.5 - y), hm = ha > hb ? ha : hb;
+          const q = hm === 0 ? 0 : Math.sqrt((ha / hm) * (ha / hm) + (hb / hm) * (hb / hm)) * hm;
+          if (Math.abs(q - ring) <= 1 * u) idx[j * S + i] = dark;
         }
       }
       break;
@@ -1356,14 +1503,17 @@ function junk(d: Junk): void {
     case K_COIL: {
       // A coil of cable: rings of the colour and its shade round a dark eye.
       const rr = r * 0.72;
-      fillDisc(mask, x, y, rr, 1);
+      Q[0] = x, Q[1] = y, Q[2] = rr;
+      fillDisc(mask, 1);
       solid(d.c, 3);
       const dark = SHADE_I[d.c];
       for (let j = my0 + 1; j < my1 - 1; j++) {
         for (let i = mx0 + 1; i < mx1 - 1; i++) {
           const p = j * S + i;
           if (mask[p] !== 1 || mask[p - 1] === 0 || mask[p - S] === 0 || mask[p + 1] === 0 || mask[p + S] === 0) continue; // the bevel stays
-          const q = Math.hypot(i + 0.5 - x, j + 0.5 - y);
+          // The distance from the middle: Math.hypot, spelled out (HYPOT).
+          const ha = Math.abs(i + 0.5 - x), hb = Math.abs(j + 0.5 - y), hm = ha > hb ? ha : hb;
+          const q = hm === 0 ? 0 : Math.sqrt((ha / hm) * (ha / hm) + (hb / hm) * (hb / hm)) * hm;
           idx[p] = q < rr * 0.24 ? SOOT2 : Math.floor(q / 1.6) & 1 ? dark : d.c;
         }
       }
@@ -1372,9 +1522,11 @@ function junk(d: Junk): void {
     case K_TYRES: {
       for (let k = 0; k < 3; k++) {
         const tx = x + Math.cos(d.a + k * 2.1) * r * 0.5, ty = y + Math.sin(d.a + k * 2.1) * r * 0.5;
-        fillDisc(mask, tx, ty, 7 * u, 1);
+        Q[0] = tx, Q[1] = ty, Q[2] = 7 * u;
+        fillDisc(mask, 1);
         solid(SOOT2, 3);
-        inlayDisc(tx, ty, 3.4 * u, TAR2);
+        Q[0] = tx, Q[1] = ty, Q[2] = 3.4 * u;
+        inlayDisc(TAR2);
         maskClear(mask);
       }
       return;
@@ -1383,26 +1535,40 @@ function junk(d: Junk): void {
       // A bent plate with its crease catching the sun.
       const w = r * 1.3, h = r * 0.8;
       polyN = 4;
-      corner(0, x, y, cos, sin, -w, -h * 0.6);
-      corner(1, x, y, cos, sin, w * 0.8, -h);
-      corner(2, x, y, cos, sin, w, h * 0.5);
-      corner(3, x, y, cos, sin, -w * 0.7, h);
+      Q[0] = -w, Q[1] = -h * 0.6;
+      corner(0);
+      Q[0] = w * 0.8, Q[1] = -h;
+      corner(1);
+      Q[0] = w, Q[1] = h * 0.5;
+      corner(2);
+      Q[0] = -w * 0.7, Q[1] = h;
+      corner(3);
       fillPoly(mask, 1);
       solid(d.c, 3);
+      // The crease: a thin strip, turned a little against the plate.
       const a = d.a - 0.08;
-      rect(x, y, Math.cos(a), Math.sin(a), 0, -h * 0.1, w * 1.6, 1.8 * u);
+      AT[2] = Math.cos(a);
+      AT[3] = Math.sin(a);
+      Q[0] = 0, Q[1] = -h * 0.1, Q[2] = w * 1.6, Q[3] = 1.8 * u;
+      rect();
       inlay(LIT_I[d.c]);
       break;
     }
     default: {
       // An engine block: steel, a lighter head, three bores.
       const w = r * 1.7, h = r * 1.1;
-      rect(x, y, cos, sin, 0, 0, w, h);
+      Q[0] = 0, Q[1] = 0, Q[2] = w, Q[3] = h;
+      rect();
       fillPoly(mask, 1);
       solid(STEEL1, 3);
-      rect(x, y, cos, sin, 0, -h / 2 + 1.5 * u + h * 0.18, w - 3 * u, h * 0.36);
+      Q[0] = 0, Q[1] = -h / 2 + 1.5 * u + h * 0.18, Q[2] = w - 3 * u, Q[3] = h * 0.36;
+      rect();
       inlay(STEEL2);
-      for (const k of SLATS) inlayDisc(x + k * w * cos - h * 0.18 * sin, y + k * w * sin + h * 0.18 * cos, 2.2 * u, SOOT2);
+      for (let j = 0; j < SLATS.length; j++) {
+        const k = SLATS[j];
+        Q[0] = x + k * w * cos - h * 0.18 * sin, Q[1] = y + k * w * sin + h * 0.18 * cos, Q[2] = 2.2 * u;
+        inlayDisc(SOOT2);
+      }
     }
   }
   maskClear(mask);
@@ -1418,10 +1584,13 @@ function pit(h: Art["holes"][number]): void {
   const { idx, cls, mask } = buffers();
   const { bx, by } = job;
   // Cracks: thin dark lines running out from the rim.
-  for (const line of h.cracks) {
+  for (let c = 0; c < h.cracks.length; c++) {
+    const line = h.cracks[c];
     for (let k = 0; k + 3 < line.length; k += 2) {
       const xa = line[k] - bx, ya = line[k + 1] - by, xb = line[k + 2] - bx, yb = line[k + 3] - by;
-      const len = Math.hypot(xb - xa, yb - ya) || 1;
+      // The piece's length: Math.hypot, spelled out (HYPOT).
+      const ha = Math.abs(xb - xa), hb = Math.abs(yb - ya), hm = ha > hb ? ha : hb;
+      const len = (hm === 0 ? 0 : Math.sqrt((ha / hm) * (ha / hm) + (hb / hm) * (hb / hm)) * hm) || 1;
       const px = (-(yb - ya) / len) * 0.8, py = ((xb - xa) / len) * 0.8;
       polyN = 4;
       polyX[0] = xa + px; polyY[0] = ya + py;
@@ -1456,7 +1625,9 @@ function pit(h: Art["holes"][number]): void {
     for (let x = xa; x <= xb; x++) {
       const p = y * S + x;
       if (!walled(cls[p])) continue;
-      const d = Math.hypot(x + 0.5 - fx, y + 0.5 - fy) / r;
+      // How far from the floor's middle, in radii: Math.hypot(...) / r, spelled out (HYPOT).
+      const ha = Math.abs(x + 0.5 - fx), hb = Math.abs(y + 0.5 - fy), hm = ha > hb ? ha : hb;
+      const d = (hm === 0 ? 0 : Math.sqrt((ha / hm) * (ha / hm) + (hb / hm) * (hb / hm)) * hm) / r;
       const t = (BAYER4[(by + y) & 3][(bx + x) & 3] + 0.5) / 16;
       idx[p] = d > 1 ? DIRT0 : d > 0.8 ? ((d - 0.8) / 0.2 > t ? SOOT3 : SOOT2) : d > 0.45 ? ((d - 0.45) / 0.35 > t ? SOOT2 : SOOT1) : d / 0.45 > t ? SOOT1 : SOOT0;
     }
@@ -1468,10 +1639,20 @@ function pit(h: Art["holes"][number]): void {
 interface Tile {
   canvas: HTMLCanvasElement;
   ctx: CanvasRenderingContext2D;
-  home: Map<number, Tile> | null; // the map it is in (its track's tiles), or null when it holds nothing
+  home: Map<number, Tile> | null; // its track's tiles, or null when it holds nothing
   key: number; // its tileKey there, or -1
   ready: boolean;
   used: number; // the last frame it was drawn or wanted in
+  // Track marks (see "track marks" below). What was baked, a byte a pixel: the colour in bits
+  // 0-4, how deeply it is marked in bits 5-6 (0 = not), bit 7 set on what marks keep off.
+  base: Uint8Array;
+  marked: boolean; // some pixel of it is marked
+  epoch: number; // ... by marks of this epoch (marksEpoch): older ones are gone and it is due a wipe
+  // The part whose pixels are to be put on its canvas again (x1, y1 exclusive; none while x1 <= x0).
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
 }
 
 const pool: Tile[] = [];
@@ -1490,6 +1671,19 @@ function tileKey(tx: number, ty: number): number {
   return x >= 0 && x < 2 * KEY_HALF && y >= 0 && y < 2 * KEY_HALF ? (y << KEY_BITS) | x : -1;
 }
 
+/**
+ * The pool's tile for (tx, ty) of a track, or null. A track's map keeps its entries: taking
+ * one out for every tile given away made the map rebuild itself every few tiles (an
+ * allocation each time). An entry whose tile has since gone to another place is known by
+ * that tile's key and home, which no longer match. The map grows to the number of the
+ * track's tiles ever baked and no further.
+ */
+function tileAt(art: Art, tx: number, ty: number): Tile | null {
+  const key = tileKey(tx, ty);
+  const t = art.tiles.get(key);
+  return t !== undefined && t.key === key && t.home === art.tiles ? t : null;
+}
+
 /** A tile to bake into: a new one while the pool is not full, else the one unused for longest (never one used this frame). */
 function claim(): Tile | null {
   if (pool.length < TILE_POOL) {
@@ -1498,20 +1692,22 @@ function claim(): Tile | null {
     // Opaque. In main memory when the view canvas is (one that is read back, as the benchmark's):
     // a blit then never crosses between main memory and the GPU.
     const ctx = canvas.getContext("2d", { alpha: false, willReadFrequently: softTiles })!;
-    const t: Tile = { canvas, ctx, home: null, key: -1, ready: false, used: -1 };
+    const t: Tile = { canvas, ctx, home: null, key: -1, ready: false, used: -1, base: new Uint8Array(TILE * TILE), marked: false, epoch: 0, x0: 0, y0: 0, x1: 0, y1: 0 };
     pool.push(t);
     return t;
   }
   let best: Tile | null = null;
-  for (const t of pool) {
+  for (let i = 0; i < pool.length; i++) {
+    const t = pool[i];
     if (t === baking || t.used >= frameNo) continue;
     if (!best || t.used < best.used) best = t;
   }
   if (best) {
-    if (best.home) best.home.delete(best.key);
     best.home = null;
     best.key = -1;
     best.ready = false;
+    best.marked = false;
+    best.x1 = best.x0 = 0;
   }
   return best;
 }
@@ -1525,6 +1721,399 @@ let softTiles = true;
 /** Canvas memory the pool holds right now, in bytes. */
 export function tilePoolBytes(): number {
   return pool.length * TILE * TILE * 4;
+}
+
+// ---- track marks ----------------------------------------------------------------------
+//
+// The track remembers the race: a mine's blast leaves a scorch, a sliding car its tyre marks
+// (PLAN-GFX.md, B9). A mark is not drawn each frame. It is put into the tiles it lies on,
+// once, and then costs nothing:
+// - A mark changes nothing but how deeply a pixel is marked (0..3, kept with the tile's
+//   baked colours): 1 = soot or rubber (the colour's cast-shadow tone), 2 = singed, 3 =
+//   charred (warm soot tones, never as dark as a pit's floor, and no rim: a scorch is not a
+//   hole). A pixel shows the deepest mark that reached it, so marks may overlap in any order
+//   and a mark put on twice changes nothing. Only palette colours come of it.
+// - Putting a mark on a tile touches that tile's pixels under the mark, no others, and
+//   uploads that rectangle (one upload per tile and frame, however many marks). No tile is
+//   ever baked again for a mark. The void of a gap, a pit's floor and the barrier take none.
+// - The last SCORCHES scorches and SKIDS skids are kept (typed arrays). A tile that was given
+//   away and is baked again gets those that lie on it put back as it is finished. Older
+//   marks last as long as their tile stays in the pool.
+// - All marks go at a new race, a restart (clearMarks) and when another track is drawn:
+//   the tiles still showing some are wiped one a frame (their pixels, not a bake).
+// Nothing here allocates once the first mark has been made.
+
+/** Scorches and skids kept for tiles that are baked again. */
+export const SCORCHES = 128;
+export const SKIDS = 2048;
+
+/**
+ * The mark handed to scorch() or skid(), in world units (not as arguments: fractions).
+ * scorch: [0], [1] = where the mine went off. skid: [0..3] = the way one rear wheel came,
+ * from (x, y) to (x, y); [4..7] = the other's.
+ */
+export const MARK = new Float64Array(8);
+
+const LEVEL = 0x60; // how deeply a pixel is marked (OFF, further up: one that takes no marks)
+/** The colour a pixel shows: by its base byte less the keep-off bit (level * 32 + colour). */
+const MARKED = (() => {
+  const lum = Float64Array.from(PAL32, (v) => 0.299 * (v & 255) + 0.587 * ((v >> 8) & 255) + 0.114 * ((v >> 16) & 255));
+  const darker = (a: number, b: number): number => (lum[b] < lum[a] ? b : a);
+  const out = new Uint8Array(128);
+  for (let c = 0; c < PAL32.length; c++) {
+    const l = lum[c];
+    const soot = SHADE_I[c];
+    // Burnt: by how light the colour is, so that paint and kerb stripes still show through.
+    const singed = darker(soot, l < 45 ? SOOT2 : l < 85 ? SOOT3 : l < 150 ? DIRT0 : DIRT1);
+    const charred = darker(singed, l < 45 ? SOOT1 : l < 85 ? SOOT2 : l < 150 ? SOOT3 : DIRT0);
+    out[c] = c;
+    out[32 + c] = soot;
+    out[64 + c] = singed;
+    out[96 + c] = charred;
+  }
+  return out;
+})();
+
+// A scorch: one of SCORCH_KINDS shapes, SCORCH x SCORCH view pixels, a level per pixel.
+const SCORCH = 32;
+const SCORCH_KINDS = 8;
+const SKID_REACH = 40; // every pixel of a skid lies this near its first point (view pixels): skid() sees to it
+
+let SCORCH_MASK: Uint8Array | null = null;
+
+function scorchMasks(): Uint8Array {
+  if (!SCORCH_MASK) {
+    const m = (SCORCH_MASK = new Uint8Array(SCORCH_KINDS * SCORCH * SCORCH));
+    const LOBES = 11, R = 10.5;
+    const edge = new Float64Array(LOBES + 1);
+    for (let k = 0; k < SCORCH_KINDS; k++) {
+      const rnd = mulberry32(4201 + 7 * k);
+      // The outline of the burst: a radius every 11th of a turn, a few of them thrown further.
+      for (let q = 0; q < LOBES; q++) edge[q] = R * (rnd() < 0.3 ? 0.95 + 0.25 * rnd() : 0.62 + 0.3 * rnd());
+      edge[LOBES] = edge[0];
+      const turn = rnd() * LOBES;
+      for (let j = 0; j < SCORCH; j++) {
+        for (let i = 0; i < SCORCH; i++) {
+          const dx = i + 0.5 - SCORCH / 2, dy = j + 0.5 - SCORCH / 2;
+          const f = (((Math.atan2(dy, dx) / (2 * Math.PI)) * LOBES + turn) % LOBES + LOBES) % LOBES;
+          const q = Math.floor(f), t = f - q, st = t * t * (3 - 2 * t);
+          const u = Math.sqrt(dx * dx + dy * dy) / (edge[q] + (edge[q + 1] - edge[q]) * st);
+          const n = rnd();
+          let level = 0;
+          if (u < 0.45) level = n < 0.72 ? 3 : 2; // the charred middle
+          else if (u < 0.8) level = n < 0.1 ? 3 : 2; // singed, a charred speck here and there
+          else if (u < 1) level = n < 0.25 + 0.6 * ((1 - u) / 0.2) ? 2 : 1; // breaking up
+          else if (u < 1.4) level = n < 0.6 * ((1.4 - u) / 0.4) ? 1 : 0; // soot thrown further out
+          // Streaks of soot between the lobes, thrown out past the edge.
+          if (level < 2 && u < 1.55 && t > 0.42 && t < 0.58 && (q * 5 + k) % 3 === 0 && n < 0.8) level = u < 1.2 ? 2 : 1;
+          m[(k * SCORCH + j) * SCORCH + i] = level;
+        }
+      }
+    }
+  }
+  return SCORCH_MASK;
+}
+
+// The rings: the last marks, oldest overwritten. A scorch: its middle in view pixels (whole)
+// and its shape. A skid: eight numbers, two ways of a wheel, in view pixels.
+const scorchX = new Int32Array(SCORCHES);
+const scorchY = new Int32Array(SCORCHES);
+const scorchKind = new Uint8Array(SCORCHES);
+const skidPts = new Float32Array(SKIDS * 8);
+let scorchCount = 0; // marks made since the last clearing (the ring holds the last SCORCHES of them)
+let skidCount = 0;
+let markArt: Art | null = null; // the track the marks are on
+let marksEpoch = 1; // goes up when the marks are cleared: a tile marked in an older epoch is due a wipe
+let clearings = 0; // clearMarks() calls so far (marksCleared)
+let wiping = false; // some tile may still show marks of an older epoch
+let unsent = false; // some tile has pixels to put on its canvas
+
+/** Counters since the page loaded, for checks and reports: marks made, rectangles uploaded and their pixels, tiles wiped of old marks, marks put back on tiles baked again. */
+export const markStats = { scorches: 0, skids: 0, uploads: 0, pixels: 0, wiped: 0, putBack: 0 };
+
+/** For checks (tools/debug/marks-stress.ts measures a frame with and without): off = scorch() and skid() do nothing. */
+export const markSwitch = { on: true };
+
+// The rectangle of a tile the stamp just made changed (x1, y1 exclusive).
+let sx0 = TILE, sy0 = TILE, sx1 = 0, sy1 = 0;
+
+let markOut: ImageData | null = null; // a tile's worth of pixels on their way to a canvas (browser only)
+let markOut32: Uint32Array | null = null;
+let spare: Uint8Array | null = null;
+
+/** Somewhere for a bake without a tile (bakeTileIndices) to leave its base bytes. */
+function spareBase(): Uint8Array {
+  return spare ?? (spare = new Uint8Array(TILE * TILE));
+}
+
+/** Put scorch i of the ring into a tile's base bytes; the tile's top-left is view pixel (ox, oy). */
+function stampScorch(base: Uint8Array, ox: number, oy: number, i: number): void {
+  const mask = scorchMasks();
+  const left = scorchX[i] - SCORCH / 2 - ox, top = scorchY[i] - SCORCH / 2 - oy;
+  const at = scorchKind[i] * SCORCH * SCORCH;
+  const ja = top < 0 ? -top : 0, jb = top + SCORCH > TILE ? TILE - top : SCORCH;
+  const ia = left < 0 ? -left : 0, ib = left + SCORCH > TILE ? TILE - left : SCORCH;
+  for (let j = ja; j < jb; j++) {
+    const row = (top + j) * TILE + left;
+    for (let k = ia; k < ib; k++) {
+      const level = mask[at + j * SCORCH + k] << 5;
+      if (!level) continue;
+      const v = base[row + k];
+      if (v & OFF || (v & LEVEL) >= level) continue;
+      base[row + k] = (v & 31) | level;
+      const x = left + k, y = top + j;
+      if (x < sx0) sx0 = x;
+      if (x >= sx1) sx1 = x + 1;
+      if (y < sy0) sy0 = y;
+      if (y >= sy1) sy1 = y + 1;
+    }
+  }
+}
+
+/** Put skid i of the ring into a tile's base bytes: two lines two pixels wide, soot deep. */
+function stampSkid(base: Uint8Array, ox: number, oy: number, i: number): void {
+  for (let w = 0; w < 2; w++) {
+    const at = i * 8 + w * 4;
+    const xa = skidPts[at], ya = skidPts[at + 1];
+    const ex = skidPts[at + 2] - xa, ey = skidPts[at + 3] - ya;
+    const ax = ex < 0 ? -ex : ex, ay = ey < 0 ? -ey : ey;
+    const steps = Math.ceil(ax > ay ? ax : ay) || 1;
+    for (let k = 0; k <= steps; k++) {
+      const x = Math.round(xa + (ex * k) / steps) - 1 - ox, y = Math.round(ya + (ey * k) / steps) - 1 - oy;
+      if (x < -1 || y < -1 || x >= TILE || y >= TILE) continue;
+      for (let q = 0; q < 4; q++) {
+        const px = x + (q & 1), py = y + (q >> 1);
+        if (px < 0 || py < 0 || px >= TILE || py >= TILE) continue;
+        const v = base[py * TILE + px];
+        if (v & (OFF | LEVEL)) continue;
+        base[py * TILE + px] = v | 32;
+        if (px < sx0) sx0 = px;
+        if (px >= sx1) sx1 = px + 1;
+        if (py < sy0) sy0 = py;
+        if (py >= sy1) sy1 = py + 1;
+      }
+    }
+  }
+}
+
+/** Put every mark of the rings that lies on tile (tx, ty) into its base bytes. Returns how many did. */
+function stampAll(base: Uint8Array, tx: number, ty: number): number {
+  const ox = tx * TILE, oy = ty * TILE;
+  let hit = 0;
+  const half = SCORCH / 2;
+  for (let i = scorchCount < SCORCHES ? scorchCount : SCORCHES; i-- > 0; ) {
+    const x = scorchX[i], y = scorchY[i];
+    if (x + half <= ox || x - half >= ox + TILE || y + half <= oy || y - half >= oy + TILE) continue;
+    stampScorch(base, ox, oy, i);
+    hit++;
+  }
+  for (let i = skidCount < SKIDS ? skidCount : SKIDS; i-- > 0; ) {
+    const x = skidPts[i * 8], y = skidPts[i * 8 + 1];
+    if (x + SKID_REACH < ox || x - SKID_REACH > ox + TILE || y + SKID_REACH < oy || y - SKID_REACH > oy + TILE) continue;
+    stampSkid(base, ox, oy, i);
+    hit++;
+  }
+  return hit;
+}
+
+/** The stamp's rectangle is added to what tile t has to put on its canvas. */
+function owe(t: Tile): void {
+  if (sx1 <= sx0) return;
+  if (t.x1 <= t.x0) {
+    t.x0 = sx0;
+    t.y0 = sy0;
+    t.x1 = sx1;
+    t.y1 = sy1;
+  } else {
+    if (sx0 < t.x0) t.x0 = sx0;
+    if (sy0 < t.y0) t.y0 = sy0;
+    if (sx1 > t.x1) t.x1 = sx1;
+    if (sy1 > t.y1) t.y1 = sy1;
+  }
+  t.marked = true;
+  unsent = true;
+  sx0 = sy0 = TILE;
+  sx1 = sy1 = 0;
+}
+
+/** A tile showing marks of an older epoch: they are wiped, today's marks put on, the whole tile owed. */
+function wipe(t: Tile, tx: number, ty: number): void {
+  const base = t.base;
+  for (let o = 0; o < base.length; o++) base[o] &= ~LEVEL;
+  sx0 = sy0 = TILE;
+  sx1 = sy1 = 0;
+  const live = t.home === (markArt ? markArt.tiles : null) && stampAll(base, tx, ty) > 0;
+  sx0 = sy0 = 0;
+  sx1 = sy1 = TILE;
+  owe(t);
+  t.marked = live;
+  t.epoch = marksEpoch;
+  markStats.wiped++;
+}
+
+/** The tile (tx, ty) of the marks' track, if it is in the pool and finished, ready to take a mark of today's. */
+function markable(tx: number, ty: number): Tile | null {
+  const t = tileAt(markArt!, tx, ty);
+  if (!t || !t.ready) return null; // not there: the mark is put on when it is baked
+  if (t.marked && t.epoch !== marksEpoch) {
+    wipe(t, tx, ty); // which puts today's marks on, this one with them
+    return null;
+  }
+  t.epoch = marksEpoch;
+  sx0 = sy0 = TILE;
+  sx1 = sy1 = 0;
+  return t;
+}
+
+/** The marks are on `track` from now on: marks on another track go. False when that track has never been drawn. */
+function marksOn(track: Track): boolean {
+  const art = arts.get(track);
+  if (!art) return false;
+  if (markArt !== art) {
+    dropMarks(); // not a clearing to count (marksCleared): this track's marks begin here, none of them go
+    markArt = art;
+  }
+  return true;
+}
+
+/** A mine went off at (MARK[0], MARK[1]) of `track`: its scorch, on the tiles that are there now and on those baked later. */
+export function scorch(track: Track): void {
+  if (!markSwitch.on || !marksOn(track)) return;
+  const x = Math.round(MARK[0] * ZOOM), y = Math.round(MARK[1] * ZOOM);
+  const i = scorchCount % SCORCHES;
+  scorchCount = scorchCount + 1 < 2 * SCORCHES ? scorchCount + 1 : SCORCHES; // counts on, but never far
+  scorchX[i] = x;
+  scorchY[i] = y;
+  scorchKind[i] = (Math.imul(x, 73856093) ^ Math.imul(y, 19349663)) >>> 29;
+  markStats.scorches++;
+  const half = SCORCH / 2;
+  const tx1 = Math.floor((x + half - 1) / TILE), ty1 = Math.floor((y + half - 1) / TILE);
+  for (let ty = Math.floor((y - half) / TILE); ty <= ty1; ty++) {
+    for (let tx = Math.floor((x - half) / TILE); tx <= tx1; tx++) {
+      const t = markable(tx, ty);
+      if (!t) continue;
+      stampScorch(t.base, tx * TILE, ty * TILE, i);
+      owe(t);
+    }
+  }
+}
+
+/**
+ * A car slid: its two rear wheels came the ways in MARK (see there). Two short dark lines,
+ * on the tiles that are there now and on those baked later. A way longer than a car is long
+ * is no slide (the car was put there): nothing is marked.
+ */
+export function skid(track: Track): void {
+  if (!markSwitch.on) return;
+  const LONGEST = 28; // view pixels
+  for (let w = 0; w < 8; w += 4) {
+    const ex = (MARK[w + 2] - MARK[w]) * ZOOM, ey = (MARK[w + 3] - MARK[w + 1]) * ZOOM;
+    if (!(ex * ex + ey * ey <= LONGEST * LONGEST)) return;
+  }
+  const ax = (MARK[4] - MARK[0]) * ZOOM, ay = (MARK[5] - MARK[1]) * ZOOM;
+  if (!(ax * ax + ay * ay <= 10 * 10)) return; // the two wheels of one car are that near each other
+  if (!marksOn(track)) return;
+  const i = skidCount % SKIDS;
+  skidCount = skidCount + 1 < 2 * SKIDS ? skidCount + 1 : SKIDS;
+  let lox = 1e9, loy = 1e9, hix = -1e9, hiy = -1e9;
+  for (let k = 0; k < 8; k += 2) {
+    const x = (skidPts[i * 8 + k] = MARK[k] * ZOOM), y = (skidPts[i * 8 + k + 1] = MARK[k + 1] * ZOOM);
+    if (x < lox) lox = x;
+    if (x > hix) hix = x;
+    if (y < loy) loy = y;
+    if (y > hiy) hiy = y;
+  }
+  markStats.skids++;
+  const tx1 = Math.floor((hix + 2) / TILE), ty1 = Math.floor((hiy + 2) / TILE);
+  for (let ty = Math.floor((loy - 2) / TILE); ty <= ty1; ty++) {
+    for (let tx = Math.floor((lox - 2) / TILE); tx <= tx1; tx++) {
+      const t = markable(tx, ty);
+      if (!t) continue;
+      stampSkid(t.base, tx * TILE, ty * TILE, i);
+      owe(t);
+    }
+  }
+}
+
+/** The marks made are no more. The tiles showing some are wiped over the next frames, one a frame. */
+function dropMarks(): void {
+  if (!scorchCount && !skidCount) return;
+  scorchCount = skidCount = 0;
+  marksEpoch++;
+  wiping = true;
+}
+
+/** All marks go (a new race, a restart). The tiles showing some are wiped over the next frames, one a frame. */
+export function clearMarks(): void {
+  clearings++;
+  dropMarks();
+}
+
+/**
+ * How often the marks have been cleared (clearMarks). Whoever remembers something about the
+ * marks made (gfx/actors.ts: the blasts that have left their scorch) sees by it that they
+ * are gone. A track's first mark is no clearing (marksOn): the blast that made it, and the
+ * next ones, are that track's own.
+ */
+export function marksCleared(): number {
+  return clearings;
+}
+
+/** A frame's upkeep of the marks: one tile of an older epoch wiped, and the owed pixels put on their canvases. */
+function sendMarks(): void {
+  if (wiping) {
+    let found = false;
+    for (let i = 0; i < pool.length && !found; i++) {
+      const t = pool[i];
+      if (!t.marked || t.epoch === marksEpoch) continue;
+      found = true;
+      if (!t.ready || !t.home) t.marked = false; // it holds nothing, or is being baked: no pixels to wipe
+      else wipe(t, (t.key & (2 * KEY_HALF - 1)) - KEY_HALF, (t.key >> KEY_BITS) - KEY_HALF);
+    }
+    if (!found) wiping = false;
+  }
+  if (!unsent) return;
+  unsent = false;
+  if (!markOut32) {
+    markOut = typeof ImageData === "undefined" ? null : new ImageData(TILE, TILE);
+    markOut32 = markOut ? new Uint32Array(markOut.data.buffer) : new Uint32Array(TILE * TILE);
+  }
+  const out = markOut32;
+  for (let i = 0; i < pool.length; i++) {
+    const t = pool[i];
+    if (t.x1 <= t.x0) continue;
+    const base = t.base;
+    if (t.ready) {
+      for (let y = t.y0; y < t.y1; y++) {
+        for (let o = y * TILE + t.x0, end = y * TILE + t.x1; o < end; o++) out[o] = PAL32[MARKED[base[o] & 127]];
+      }
+      if (markOut) t.ctx.putImageData(markOut, 0, 0, t.x0, t.y0, t.x1 - t.x0, t.y1 - t.y0);
+      markStats.uploads++;
+      markStats.pixels += (t.x1 - t.x0) * (t.y1 - t.y0);
+    }
+    t.x1 = t.x0 = 0;
+  }
+}
+
+/** A tile is finished: the marks that lie on it are put into its pixels (out32) before they go to its canvas. */
+function marksBack(t: Tile, tx: number, ty: number, out32: Uint32Array): void {
+  t.marked = false;
+  t.epoch = marksEpoch;
+  t.x1 = t.x0 = 0;
+  if (!markArt || t.home !== markArt.tiles || !(scorchCount || skidCount)) return;
+  sx0 = sy0 = TILE;
+  sx1 = sy1 = 0;
+  const hit = stampAll(t.base, tx, ty);
+  if (sx1 > sx0) {
+    const base = t.base;
+    for (let y = sy0; y < sy1; y++) {
+      for (let o = y * TILE + sx0, end = y * TILE + sx1; o < end; o++) out32[o] = PAL32[MARKED[base[o] & 127]];
+    }
+    t.marked = true;
+    markStats.putBack += hit;
+  }
+  sx0 = sy0 = TILE;
+  sx1 = sy1 = 0;
 }
 
 // ---- the world ------------------------------------------------------------------------
@@ -1557,6 +2146,7 @@ export class World {
   ) {
     this.art = artOf(track);
     if (!pool.length) softTiles = ctx.getContextAttributes?.().willReadFrequently !== false;
+    if (markArt && markArt !== this.art) clearMarks(); // another track: its marks go
   }
 
   /** Where the camera is heading (world coordinates), once per frame; snap = it jumps there. */
@@ -1596,13 +2186,14 @@ export class World {
     this.first = this.cut = false;
     this.aims = 0;
     this.predict(cars);
+    if (unsent || wiping) sendMarks();
 
     const x0 = Math.floor(ox / TILE), x1 = Math.floor((ox + VIEW_W - 1) / TILE);
     const y0 = Math.floor(oy / TILE), y1 = Math.floor((oy + VIEW_H - 1) / TILE);
     // The tiles on screen are in use, whatever happens to them below.
     for (let ty = y0; ty <= y1; ty++) {
       for (let tx = x0; tx <= x1; tx++) {
-        const t = art.tiles.get(tileKey(tx, ty));
+        const t = tileAt(art, tx, ty);
         if (t) t.used = frameNo;
       }
     }
@@ -1614,7 +2205,7 @@ export class World {
     ctx.fillStyle = P.dirt2;
     for (let ty = y0; ty <= y1; ty++) {
       for (let tx = x0; tx <= x1; tx++) {
-        const t = art.tiles.get(tileKey(tx, ty));
+        const t = tileAt(art, tx, ty);
         if (t && t.ready) ctx.drawImage(t.canvas, tx * TILE - ox, ty * TILE - oy);
         else {
           ctx.fillRect(tx * TILE - ox, ty * TILE - oy, TILE, TILE);
@@ -1626,12 +2217,12 @@ export class World {
 
   /** Bake a tile to the end, now. */
   private bakeNow(tx: number, ty: number): void {
-    const have = this.art.tiles.get(tileKey(tx, ty));
+    const have = tileAt(this.art, tx, ty);
     if (have && have.ready) return;
     if (!(baking && baking === have)) {
       if (!this.begin(tx, ty)) return;
     }
-    while (bakeStep() >= 0) { /* to the end */ }
+    while (bakeStep()) { /* to the end */ }
     this.done();
   }
 
@@ -1655,6 +2246,7 @@ export class World {
   private done(): void {
     const t = baking!;
     const b = buffers();
+    marksBack(t, job.tx, job.ty, b.out32);
     if (b.out) t.ctx.putImageData(b.out, 0, 0);
     t.ready = true;
     baking = null;
@@ -1697,7 +2289,7 @@ export class World {
     // Wanted tiles are not given away this frame. Is one round the aim missing?
     let missing = false, urgent = false;
     for (let k = 0; k < n; k += 2) {
-      const t = art.tiles.get(tileKey(want[k], want[k + 1]));
+      const t = tileAt(art, want[k], want[k + 1]);
       if (t) t.used = frameNo;
       if (!t || !t.ready) {
         missing = true;
@@ -1715,13 +2307,12 @@ export class World {
     let used = 0, k = 0;
     for (;;) {
       if (!baking) {
-        while (k < n && art.tiles.get(tileKey(want[k], want[k + 1]))?.ready) k += 2;
+        while (k < n && tileAt(art, want[k], want[k + 1])?.ready) k += 2;
         if (k >= n || !this.begin(want[k], want[k + 1])) break; // all there, or no tile to spare
       }
       if (used >= units || (used > 0 && clock() - t0 >= ms)) break;
-      const cost = bakeStep();
-      if (cost < 0) this.done();
-      else used += cost;
+      if (bakeStep()) used += COST[0];
+      else this.done();
     }
     worldStats.units += used;
   }
@@ -1822,7 +2413,6 @@ function wantRound(margin: number): void {
 function drop(): void {
   if (!baking) return;
   worldStats.dropped++;
-  if (baking.home) baking.home.delete(baking.key);
   baking.home = null;
   baking.key = -1;
   baking.ready = false;
@@ -1834,17 +2424,39 @@ function drop(): void {
  * (TILE x TILE). `trace` is told each step's number, its cost in units and the time it took.
  */
 export function bakeTileIndices(track: Track, tx: number, ty: number, trace?: (step: number, units: number, ms: number) => void): Uint8Array {
+  drop(); // a job under way for the pool would be baked over
   bakeStart(artOf(track), tx, ty);
   for (;;) {
     const step = job.step, t0 = clock();
-    const units = bakeStep();
-    if (units < 0) break;
-    trace?.(step, units, clock() - t0);
+    if (!bakeStep()) break;
+    trace?.(step, COST[0], clock() - t0);
   }
   const { idx } = buffers();
   const out = new Uint8Array(TILE * TILE);
-  for (let y = 0; y < TILE; y++) out.set(idx.subarray((y + PAD) * S + PAD, (y + PAD) * S + PAD + TILE), y * TILE);
+  for (let y = 0; y < TILE; y++) for (let x = 0; x < TILE; x++) out[y * TILE + x] = idx[(y + PAD) * S + PAD + x] & 31;
   return out;
+}
+
+/**
+ * For tests and checks: as bakeTileIndices, with the track marks that lie on the tile put on
+ * (the colours as drawn). With `keepOff`, the pixels that take no marks come back as 255.
+ */
+export function bakeTileMarked(track: Track, tx: number, ty: number, keepOff = false): Uint8Array {
+  bakeTileIndices(track, tx, ty);
+  const base = spareBase();
+  if (markArt === artOf(track)) stampAll(base, tx, ty);
+  sx0 = sy0 = TILE;
+  sx1 = sy1 = 0;
+  const out = new Uint8Array(TILE * TILE);
+  for (let o = 0; o < out.length; o++) out[o] = keepOff && base[o] & OFF ? 255 : MARKED[base[o] & 127];
+  return out;
+}
+
+/** For tests and checks: the palette indices pool tile (tx, ty) of a track shows right now (its marks on), or null when it is not there. */
+export function poolTileIndices(track: Track, tx: number, ty: number): Uint8Array | null {
+  const t = tileAt(artOf(track), tx, ty);
+  if (!t || !t.ready) return null;
+  return Uint8Array.from(t.base, (v) => MARKED[v & 127]);
 }
 
 /**
