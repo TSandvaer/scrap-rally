@@ -390,6 +390,7 @@ async function run(ctx: Ctx, bots: Bot[]): Promise<void> {
   await runCars(ctx, bots);
   await runRaceTick(ctx, bots);
   await runDraft(ctx, bots);
+  await runCells(ctx, bots);
 }
 
 const lost = new Map<string, (ConnReason | undefined)[]>();
@@ -1801,5 +1802,61 @@ async function runDraft(ctx: Ctx, bots: Bot[]): Promise<void> {
     if (room && tick) room.tick = tick;
     D.script = null;
     D.game.leave();
+  }
+}
+
+// ---- lightning cells (M4-CELLS, PLAN-M4.md 2.5, ClickUp 123jpnbfffk, 2026-11-20) -----------------
+
+/**
+ * Cells over a lagged socket (80±10 ms): a lagged socket bot on lane -36 (within 30 of Rust Bowl's
+ * -58 kerb cells: the Normal driver goes for them) races one lap against an unlagged one on lane
+ * 24. The server notes every boost it gives the lagged bot (a cell taken); the client predicts its
+ * own pickups. The lagged-bot bounds still hold: median reconciliation error < 0.5, no error > 50,
+ * and at most a few boost state mismatches (a pickup predicted a tick off).
+ */
+async function runCells(ctx: Ctx, bots: Bot[]): Promise<void> {
+  const H = new Bot("Hotel2", ctx.url, 24);
+  const K = new Bot("Kilo", ctx.url, -36, { lag: 80, jitter: 10 });
+  bots.push(H, K);
+  for (const b of [H, K]) b.weapons = false;
+  let room: ReturnType<typeof ctx.server.rooms.rooms.get> | undefined;
+  let tick: ((t: number, now: number) => void) | null = null;
+  try {
+    H.game.create(H.name);
+    await waitFor("cells: H welcome", () => !!H.game.you, 3000);
+    K.game.join(H.game.code, K.name);
+    await waitFor("cells: K in H's room", () => H.game.players.length === 2 && !!K.game.you, 3000);
+    room = ctx.server.rooms.rooms.get(H.game.code)!;
+    const r = room;
+    tick = r.tick.bind(r);
+    let taken = 0, last = 0, predicted = 0, lastPred = 0;
+    r.tick = (t: number, now: number) => {
+      tick!(t, now);
+      const b = r.players.get(K.game.you)?.car?.boost ?? 0;
+      if (b > last) taken++;
+      last = b;
+    };
+    K.afterStep = () => {
+      const b = K.game.car?.boost ?? 0;
+      if (b > lastPred) predicted++;
+      lastPred = b;
+    };
+    const e0 = K.game.recErrors.length, st0 = K.game.recStateErrors;
+    const rows = await runRace("cells", bots, H, [H, K]);
+    const s = stats(K.game.recErrors.slice(e0));
+    const st = K.game.recStateErrors - st0;
+    console.log(
+      `      Kilo (80±10 ms, lane -36): cells taken (server) ${taken}, pickups predicted ${predicted}; rec err n=${s.n} median=${s.median.toFixed(3)} p95=${s.p95.toFixed(3)} max=${s.max.toFixed(2)}; ` +
+        `state mismatches ${st}; finish ${rows.map((x) => `${x.name} ${(x.timeMs / 1000).toFixed(2)}s`).join(", ")}`,
+    );
+    check(
+      "cells over sockets: a lagged bot (80±10 ms) takes the kerb cells on its lane, predicts its own pickups, and keeps a median reconciliation error below 0.5, no error > 50, at most 4 state mismatches",
+      taken >= 1 && predicted >= taken && s.n > 500 && s.median < 0.5 && s.max <= 50 && st <= 4 && H.errors.length + K.errors.length === 0,
+      `taken ${taken}, predicted ${predicted}; median ${s.median.toFixed(3)}, max ${s.max.toFixed(2)}; state mismatches ${st}`,
+    );
+  } finally {
+    if (room && tick) room.tick = tick;
+    K.afterStep = null;
+    for (const b of [H, K]) b.game.leave();
   }
 }
