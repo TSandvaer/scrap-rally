@@ -273,3 +273,45 @@ Ownership rule:
 - /Users/thjo/DEV/scrap-rally/server/room.ts
 - /Users/thjo/DEV/scrap-rally/client/game.ts
 - /Users/thjo/DEV/scrap-rally/scripts/bot-ai.ts
+## Advisor changes (binding; Fable 5.2 review 2026-11-20: "sound with changes"; these override the text above)
+
+1. **Presence is not one helper everywhere.** `server/room.ts:704` and `:890` stay session checks (else a bot is held 60 ticks after
+   every resume); `:260` gets a bot exemption (`:444` clears `ready` every race); `:352` picks the first HUMAN as host; `:249` `empty`
+   means "no humans"; `:741` and `:894` skip `consumeInput` for bots; `:308-312` match on token, so bots get unguessable tokens or are
+   excluded.
+2. **Bot behaviour keyed by seat/add order, not by the random id** (`room.ts:122,268`): lane choice, racing-line offset, mine stagger
+   (`bot-ai.ts:250`), names and car round-robin — so "identical on a rerun" holds.
+3. **Easy's throttle cap never applies on a ramp approach** (0.85 gives ~365 u/s terminal, Overpass Knot needs ~367 by
+   `takeoffSpeedFor`, `bot-ai.ts:63-72`, `track.ts:137-138`). Acceptance adds "Easy bots finish every track".
+4. **Water model made consistent:** throttle x0.35 with unchanged drag gives ~150 u/s terminal (`physics.ts:81-92`), not "harmless".
+   Scale drag by the same factor (or drop the throttle factor) so a pool on a straight costs little and a pool in a bend throws you wide.
+5. **Ramp truck:** no "air ticks x1.3" (breaks `airHeight` `weapons.ts:131-137` and `drawnHeight` `contact.ts:275`) unless an air-total
+   field is added to `CarState`/`CarSnap`; the narrow band needs a lateral lip test (`lipAt` is s-only, `track.ts:296`); define the band
+   below 220 u/s (solid) and a landing that overlaps a solid.
+6. **Barrels:** no level-triggered yaw kick (contacts re-apply every overlapping tick, a pinned car spins): drop it or apply once per
+   contact with stored state; define a car squeezed between a barrel and a wall.
+7. **Jumps validated at overspeed:** `validateRunUps` starts from rest only (`weapons.ts:382-424`); add an arrival-speed sweep up to
+   537 u/s (boost) and 473 (draft) for every lip and car type (flights grow from ~372 to ~450/537 units, `MAX_AIR_TICKS` clamp
+   `weapons.ts:47`); replace "no cell within 250 units of a lip" with a simulation (a 90-tick boost covers 700+ units).
+8. **Slipstream continuity:** taper w laterally (no hard edge); no draft predicted when the own car is past `CAP_STEPS`
+   (`contact.ts:173`); state whether ghosts and finished cars give a draft (recommended: no).
+9. **`rt` skew bounded and specified:** underrun rebuffers to `QUEUE_START` (`room.ts:1094-1113`), resume hold up to 60 ticks
+   (`:888-891`), inputs consumed during the countdown while `rt` is 0 (`:894-897`); the client clamps `rt` at GO; the lagged-bot test on a
+   barrel track bounds the skew.
+10. **Boost band from the latest snapshot's `rd`** (rd is server-only, `race.ts:1-3`): the client predicts the duration from it;
+    "leader" = the leading car that has not finished; band-edge mismatches expected and corrected by reconcile.
+11. **Ticket split changes:**
+    - M4-CATCHUP splits into **M4-ENV** (`rt`, the `env` signature, `boost` plumbing, no behaviour change; ~24 `stepRaceCar` calls in
+      sim-test), **M4-DRAFT** and **M4-CELLS**. M4-ENV runs in wave 2 together with M4-CARS's `statsFor` change so sim-test churns once.
+    - An **Opus schema slice (M4-SCHEMA)** comes before M4-WORLD: Feature types, per-sample arrays, preview test tracks; Fable tickets
+      never edit `shared/track.ts`.
+    - M4-SURF splits into **surfaces + mounds** and **widen + islands** (the `track.wall` refactor: `weapons.ts:211,282`,
+      `track.ts:255,284,387-420`, `game.ts:93`).
+    - Fable-added `CarView`/`WorldFx` fields are optional (`render.ts:57-73`) so `npm run check` passes before `main.ts` fills them.
+    - `tools/debug/*` ownership is per file (e.g. `draft-tune.ts` belongs to M4-DRAFT).
+12. **CPU gate:** gate on total room tick time with 5 bots; `MAX_BOTS` default 10 (not 30); measure on the hosted instance.
+13. **Widen validation:** the half-width on the inside of a bend stays below the local radius, or `nearest()` degenerates.
+
+Adopted suggestions: a `pointAt` equivalence test (binary vs linear) on every track; a truck corner-cutting test (its dirt top speed
+~269 u/s vs the sport's 148); the ±3% lap target is a guide, the taste gate is the real check; tune the draft with weapons on; air cells
+off-centre (or the lane-0 bot always takes them). Wave 1 (M4-BOTS + M4-LOOKS) confirmed as the right first slice.
