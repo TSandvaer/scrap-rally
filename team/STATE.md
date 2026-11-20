@@ -340,6 +340,9 @@ spec tmp/spec-m4-cars-env.md; it waits for my word that M4-LOOKS merged before w
 M4-LOOKS done: 1a2f1e4 (gate PASS, noise 0.005, 30 A ratios 0.021-0.700; memory 11,173,888 B unchanged; repaint ~0.2 ms; 0 px diff
 in 17 scenes). User APPROVED the looks in motion (popup). Fable reviewer ctx_21d8f4e7a383 (tmp/review-m4-looks.md). Evidence copied to
 tmp/m4-looks/. On merge: tell M4-CARS (ctx_99a9c55e67a2) to merge main and wire CarView.car.
+M4-LOOKS MERGED 2026-11-20: review APPROVE (no findings); main e1f3bdf (check clean, sim 587/587, bots 100/100, build ok); ticket
+ready for qa test; workers released, m4-looks workspace removed. M4-CARS asked; told to merge main + wire CarView.car (msg_1799f1329a0f);
+its branch head before that: 6dffaea (sim 628/628, bots 109/109).
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
@@ -397,7 +400,6 @@ Manual Deploy only on the user's go-ahead. The user's own dev server runs on :30
 | Ticket | Dispatch | Workspace | Branch | Port | Started |
 | --- | --- | --- | --- | --- | --- |
 | 123jpnbffdz+123jpnbffe0 M4-CARS+ENV | ctx_99a9c55e67a2 | ~/orca/workspaces/scrap-rally/m4-cars | TSandvaer/m4-cars | 3006 | 2026-11-20 |
-| 123jpnbffd9 M4-LOOKS | ctx_52d5f91b4d80 | ~/orca/workspaces/scrap-rally/m4-looks | TSandvaer/m4-looks | 3008 | 2026-11-20 |
 | 123jpnbfb23 GFX-0 | ctx_27a7a271607b | ~/orca/workspaces/scrap-rally/gfx0 | TSandvaer/gfx0 | 3006 | 2026-11-18 |
 
 ## Queued (milestone 3, PLAN-M3.md; start after solid collisions 123jpnbf6cy and easier-start 123jpnbf3xa merge)
