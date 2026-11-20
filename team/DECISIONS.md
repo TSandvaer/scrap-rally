@@ -93,3 +93,4 @@
 - 2026-11-20 — MINES-1 taste gate (user, popup): approved as is, incl. the frozen blink of a mid-blink mine on the results screen.
 - 2026-11-20 — Plan reviews (user, popup "Fable advisor"): new plans keep the Fable advisor review (independent model); workers stay Opus except graphics tickets.
 - 2026-11-20 — Game ideas from the user -> milestone 4 plan (PLAN-M4.md): car types, obstacles, water, catch-up, speed pickups, branching paths, longer tracks.
+- 2026-11-20 — M4 addition (user): "I want to be able to add bots as host (both so i can play single player with bots and make it easier to test)" -> server-side host-added bot seats, planned as an early slice of PLAN-M4.
