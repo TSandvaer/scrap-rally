@@ -2,6 +2,7 @@
 // client runs the same code to predict its own car. Bit-exact agreement is not needed;
 // reconciliation absorbs tiny floating-point differences between JS engines.
 
+import { DRAFT_DRAG_CUT } from "./catchup";
 import { queryTrackNear, type Track } from "./track";
 
 export const TICK_HZ = 60;
@@ -74,8 +75,12 @@ export function speedOf(c: { vx: number; vy: number }): number {
   return Math.hypot(c.vx, c.vy);
 }
 
-/** Advance one fixed step (DT). Mutates the car. */
-export function stepCar(c: CarState, input: Input, stats: CarStats, track: Track): void {
+/**
+ * Advance one fixed step (DT). Mutates the car. draft: slipstream strength 0..1 (shared/catchup.ts
+ * draftsFor): the drag is cut by DRAFT_DRAG_CUT at full strength, so the car runs up to ~10 %
+ * faster behind another; 0 = alone (exactly the step without it).
+ */
+export function stepCar(c: CarState, input: Input, stats: CarStats, track: Track, draft = 0): void {
   const throttle = clamp(input.throttle, -1, 1);
   const steer = clamp(input.steer, -1, 1);
   const cos = Math.cos(c.h), sin = Math.sin(c.h);
@@ -87,7 +92,8 @@ export function stepCar(c: CarState, input: Input, stats: CarStats, track: Track
   const q = queryTrackNear(track, c.x, c.y, c.seg);
   c.seg = q.seg;
   const onRoad = q.dist <= track.def.halfWidth;
-  const drag = (stats.accel / stats.topSpeed) * (onRoad ? 1 : stats.dirtDrag);
+  let drag = (stats.accel / stats.topSpeed) * (onRoad ? 1 : stats.dirtDrag);
+  if (draft > 0) drag *= 1 - DRAFT_DRAG_CUT * draft;
   const grip = stats.grip * (onRoad ? 1 : stats.dirtGrip);
 
   if (throttle > 0) {

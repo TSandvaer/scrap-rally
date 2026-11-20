@@ -2,6 +2,7 @@
 // a socket is reached only through the Conn interface, so index.ts owns `ws`.
 
 import { randomBytes, randomInt } from "node:crypto";
+import { draftsFor } from "../shared/catchup";
 import { BASE_STATS, collideCars, NO_INPUT, type CarStats } from "../shared/physics";
 import {
   BLOCKLIST_MAX,
@@ -179,6 +180,7 @@ export class Room {
   // The race tick (M4-ENV, shared/weapons.ts RaceEnv): simulate ticks run while racing (paused
   // ticks are not simulated, so they do not count); 0 before GO, back to 0 for every new race.
   private raceTick = 0;
+  private readonly drafts: number[] = []; // this tick's slipstream per racer (simulate), reused
   private lastOrder: string[] = []; // last race's standings, for the reverse grid
   private lobbyAt = 0; // server time the lobby last opened (back from results)
   private lastJoinAt = 0; // server time the last new player joined (the creator included)
@@ -990,9 +992,12 @@ export class Room {
     // Bots decide from the start-of-tick poses, before any car steps (no jitter buffer).
     const botCmds = new Map<Player, { cmd: Command; minePress: boolean }>();
     for (const p of racers) if (p.bot) botCmds.set(p, botStep(p as Player & { bot: BotSeat }, racers, this.track, racing));
+    // The slipstream (M4-DRAFT, shared/catchup.ts) from the same start-of-tick poses.
+    const drafts = draftsFor(racers.map((p) => ({ car: p.car!, ghost: p.ghost > 0, finished: p.finished })), this.drafts);
     const prev = new Map<string, { x: number; y: number }>();
     const recovered = new Set<Player>();
-    for (const p of racers) {
+    for (let k = 0; k < racers.length; k++) {
+      const p = racers[k];
       const c = p.car!;
       prev.set(p.id, { x: c.x, y: c.y });
       if (p.held > 0) {
@@ -1004,6 +1009,7 @@ export class Room {
       const { cmd, minePress } = botCmds.get(p) ?? consumeInput(p);
       // A car put back at a recovery point after a fall is ghosted (as after a wreck), from
       // this tick's car-car pass on.
+      env.draft = drafts[k];
       if (stepRaceCar(c, racing ? cmd : NO_INPUT, p.stats, env) === "recover") {
         p.ghost = GHOST_TICKS;
         recovered.add(p);

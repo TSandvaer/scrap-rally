@@ -281,6 +281,8 @@ export class Game {
 
   // Own car (predicted)
   car: CarState | null = null;
+  /** The own car's predicted slipstream 0..1 in the last live step (M4-DRAFT): the HUD's DRAFT cue. */
+  draft = 0;
   prevCar: CarState | null = null; // state before the last step, for render interpolation
   readonly smooth = { x: 0, y: 0, h: 0 }; // visual correction offset, decays to 0
   seq = 0;
@@ -532,6 +534,7 @@ export class Game {
     this.localShots = [];
     this.cooldown = 0;
     this.ghost = 0;
+    this.draft = 0;
     this.contact.reset();
     this.ownSounds = [];
   }
@@ -827,6 +830,7 @@ export class Game {
     this.pending.forEach((p, i) => {
       const wrecked = c.wreck > 0;
       p.rt = env.rt = rtAt(snap, i);
+      env.draft = this.contact.draft(c, i + 1);
       const ev = stepRaceCar(c, p.cmd, this.stats, env);
       ghost = ghostAfter(ghost, ev, wrecked && c.wreck === 0);
       this.contact.collide(c, i + 1);
@@ -951,7 +955,9 @@ export class Game {
     this.prevCar = cloneCar(before);
     if (this.cooldown > 0) this.cooldown--;
     const rt = this.latest ? rtAt(this.latest, this.pending.length) : 0;
-    const ev = stepRaceCar(this.car, cmd, this.stats, raceEnv(this.track, rt));
+    // The slipstream from the start-of-step poses, at the step the server applies this one.
+    this.draft = this.contact.draft(this.car, this.pending.length + 1);
+    const ev = stepRaceCar(this.car, cmd, this.stats, raceEnv(this.track, rt, this.draft));
     const respawned = this.prevCar.wreck > 0 && this.car.wreck === 0;
     if (ev === "recover") this.ghost = GHOST_TICKS; // the server ghosts it before the shot
     this.contact.step(this.car, this.pending.length + 1); // the server applies it then

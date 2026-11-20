@@ -123,7 +123,9 @@ export interface Mine {
  * - rt: the race tick this step runs at: 1 = the first tick after GO, counted while racing and
  *   not paused (server/room.ts); 0 = before GO (the countdown). The client predicts it from the
  *   latest snapshot's rt (game.ts rtAt). Nothing reads it yet.
- * - draft: slipstream strength 0..1 (M4-DRAFT); 0 for now.
+ * - draft: this car's slipstream strength 0..1 this tick (M4-DRAFT, shared/catchup.ts): the server
+ *   works it out from the start-of-tick poses (draftsFor), the client predicts its own from the
+ *   predicted poses (client/contact.ts draft). Applied only to a driving step (stepCar).
  */
 export interface RaceEnv {
   track: Track;
@@ -219,7 +221,7 @@ export function stepRaceCar(c: CarState, input: Input, stats: CarStats, env: Rac
       startFall(c);
       return "fall";
     } else {
-      stepCar(c, input, stats, track);
+      stepCar(c, input, stats, track, env.draft);
       return null;
     }
   }
