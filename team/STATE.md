@@ -298,6 +298,9 @@ user clicks Manual Deploy in Render, then a muted live QA worker. MINES-1 follow
 GFX-4 fix round done: bb07a73 (0790534 blast places cleared with the marks; bb07a73 tyre marks from the cars' driving, not the
 prediction on screen; live lagged pack race 83/98 -> 0/8 stamps; lag 0 slightly fewer marks). Re-check ctx_ce6a706672d8
 (tmp/review-gfx4-r2.md). Taste copy gfx4-taste moved to bb07a73, :3009 node pid 12549 (old 51032 killed).
+Re-check: REQUEST_CHANGES (first on GFX-4): marksOn()'s first-mark clearMarks() counts as a clearing -> blasts in that 300 ms
+window leave no scorch (world.ts:1973/2040, actors.ts:322-330). Fix (b) passes; no new taste check needed. Fix 2 worker
+ctx_d61d57754174 (tmp/gfx4-fix2.md). A second REQUEST_CHANGES on GFX-4 goes to the user.
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
