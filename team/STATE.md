@@ -343,6 +343,9 @@ tmp/m4-looks/. On merge: tell M4-CARS (ctx_99a9c55e67a2) to merge main and wire 
 M4-LOOKS MERGED 2026-11-20: review APPROVE (no findings); main e1f3bdf (check clean, sim 587/587, bots 100/100, build ok); ticket
 ready for qa test; workers released, m4-looks workspace removed. M4-CARS asked; told to merge main + wire CarView.car (msg_1799f1329a0f);
 its branch head before that: 6dffaea (sim 628/628, bots 109/109).
+M4-CARS+ENV done: 6149c7d (sim 628/628, bots 109/109 twice; Sport byte-identical; lap times per type within 3% (bot corner scaling
+(grip/7.5)^(1/4)); lagged recon err 0.005; rt skew live max 7). Opus reviewer ctx_18b31c4f294b (tmp/review-m4-cars.md). Report/shots in
+tmp/m4-cars/. Taste copy m4-cars-taste (detached 6149c7d) on :3009, node pid 45260 (m4-bots-taste removed, old pid 38107 killed).
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
