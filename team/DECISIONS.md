@@ -86,3 +86,4 @@
 - 2026-11-19 — GFX-2a re-test (user, popup): own car steady after the jitter fix (ffb4323); cars, effects and HUD (new 0 and V) approved.
 - 2026-11-20 — GFX-4 taste gate (user, popup): mine scorches and tyre marks approved.
 - 2026-11-20 — Mines mode (user + popups): the host chooses Mines: Stay (default) / Fade in the lobby, applied from the next race; Fade = today's 25 s with a 2 s blink-out; Stay = mines stay until hit, max 40 on the track (oldest blinks out). Small ticket, no advisor review (like SND-3).
+- 2026-11-20 — Graphics round test drive (user: "approved") on the gfx4-taste copy f7ead2b (track, cars, effects, HUD, menus, track marks).
