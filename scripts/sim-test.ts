@@ -2179,6 +2179,7 @@ function stubGame(t: Track, car: CarState, others: { pose: Pose; snap: Partial<C
     stats: { ...BASE_STATS },
     raceOn: () => true,
     otherPoses: () => others.map((o) => o.pose),
+    visibleMines: () => [],
     latest: { time: 0, cars, shots: new Map(), mines: [] },
   } as unknown as Game;
 }
@@ -8241,8 +8242,8 @@ function envStep(): void {
   };
   const ref = run(() => 0, 0);
   check(
-    "env step: any race tick and slipstream step a car exactly as rt 0 and no draft (jump, fall and recovery included)",
-    ref.includes("takeoff") && ref.includes("fall") && ref.includes("recover") && run((i) => i + 1, 0) === ref && run((i) => 7 * i + 12345, 0.8) === ref,
+    "env step: any race tick steps a car exactly as rt 0 (jump, fall and recovery included); a slipstream (M4-DRAFT) does change it",
+    ref.includes("takeoff") && ref.includes("fall") && ref.includes("recover") && run((i) => i + 1, 0) === ref && run((i) => 7 * i + 12345, 0) === ref && run(() => 0, 0.8) !== ref,
     JSON.parse(ref)[1].join(","),
   );
   check(

@@ -991,7 +991,7 @@ export class Room {
     const racers = [...this.players.values()].filter((p) => p.car); // a retired player has none
     // Bots decide from the start-of-tick poses, before any car steps (no jitter buffer).
     const botCmds = new Map<Player, { cmd: Command; minePress: boolean }>();
-    for (const p of racers) if (p.bot) botCmds.set(p, botStep(p as Player & { bot: BotSeat }, racers, this.track, racing));
+    for (const p of racers) if (p.bot) botCmds.set(p, botStep(p as Player & { bot: BotSeat }, racers, this.track, racing, this.combat.mines));
     // The slipstream (M4-DRAFT, shared/catchup.ts) from the same start-of-tick poses.
     const drafts = draftsFor(racers.map((p) => ({ car: p.car!, ghost: p.ghost > 0, finished: p.finished })), this.drafts);
     const prev = new Map<string, { x: number; y: number }>();

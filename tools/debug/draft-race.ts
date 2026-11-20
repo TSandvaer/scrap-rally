@@ -13,9 +13,12 @@ import { newBotMem, botControls, type BotLevel } from "../../shared/botdrive";
 import { DRAFT_SHAPE } from "../../shared/catchup";
 import { isCarType } from "../../shared/cars";
 import { CAR_HP, NO_COMMAND } from "../../shared/weapons";
-import { CAR_LENGTH } from "../../shared/physics";
+import { CAR_LENGTH, capsuleGap, wallLimit } from "../../shared/physics";
+import { queryTrackNear } from "../../shared/track";
 import type { ServerMsg } from "../../shared/protocol";
 import { raceDistance } from "../../server/race";
+import { solid } from "../../server/combat";
+import { IMPACT_MIN_SPEED } from "../../client/contact";
 import { Room, type Conn, type Player, type Session } from "../../server/room";
 
 function arg(name: string, def: string): string {
@@ -34,14 +37,22 @@ export interface DraftRaceOut {
   changes: number[]; // lead changes per lap (hysteresis), by the leader's lap
   rawChanges: number;
   draftTicks: number[]; // ticks each car stepped with a draft > 0
-  gaps: { mean: number; max: number }[]; // race distance behind the autopilot (pilot runs; + = behind)
+  gaps: { mean: number; max: number; end: number }[]; // race distance behind the autopilot (pilot runs; + = behind; end: as it finished)
+  contacts: number; // car-car contacts begun (a pair of solid cars touching)
+  crashes: number; // ... of them with a closing speed >= IMPACT_MIN_SPEED (sparks and shake: a crash, not a rub)
+  walls: number; // wall hits (a car reaching the wall)
+  wrecks: number;
+  falls: number;
+  wake: { tuck: number; pass: number; passes: number; done: number; gaveUp: number }; // bots' slipstream use: ticks, passes begun, completed, given up
 }
 
 /**
  * One race. levels: the bots; cars: their car types (by bot); pilot: the host drives with the
  * autopilot (else it retires at GO). nodraft: the slipstream off. Deterministic.
  */
-export function draftRace(opts: { track: string; levels: BotLevel[]; cars?: string[]; laps: number; pilot?: boolean; nodraft?: boolean; weapons?: boolean; hyst?: number }): DraftRaceOut {
+export function draftRace(opts: {
+  track: string; levels: BotLevel[]; cars?: string[]; laps: number; pilot?: boolean; pilotLevels?: number[]; nodraft?: boolean; nowake?: boolean; weapons?: boolean; hyst?: number;
+}): DraftRaceOut {
   const far = DRAFT_SHAPE.far;
   if (opts.nodraft) DRAFT_SHAPE.far = 0;
   try {
@@ -60,10 +71,13 @@ export function draftRace(opts: { track: string; levels: BotLevel[]; cars?: stri
       return b;
     });
     if (opts.weapons === false) for (const b of bots) b.bot!.mem.weapons = false;
+    if (opts.nowake) for (const b of bots) b.bot!.mem.useWake = false;
+    if (opts.pilotLevels) host.wallet.levels = { engine: opts.pilotLevels[0] ?? 0, tyres: opts.pilotLevels[1] ?? 0, welder: opts.pilotLevels[2] ?? 0 };
     const e = room.start(host, now);
     if (e) throw new Error(e);
     const mem = newBotMem(0, "normal");
     mem.weapons = false;
+    mem.useWake = false; // a human on their own line (the physics drafts it all the same)
     let seq = 0, steps = 0;
     const feedHost = () => {
       if (!opts.pilot || !host.car) return;
@@ -81,7 +95,16 @@ export function draftRace(opts: { track: string; levels: BotLevel[]; cars?: stri
     while (room.phase !== "racing") step();
     if (!opts.pilot && room.retire(host)) throw new Error("retire");
     const field = opts.pilot ? [host, ...bots] : bots;
-    const out: DraftRaceOut = { names: field.map((p) => p.name), finish: field.map(() => 0), changes: Array(opts.laps).fill(0), rawChanges: 0, draftTicks: field.map(() => 0), gaps: bots.map(() => ({ mean: 0, max: -Infinity })) };
+    const out: DraftRaceOut = {
+      names: field.map((p) => p.name), finish: field.map(() => 0), changes: Array(opts.laps).fill(0), rawChanges: 0, draftTicks: field.map(() => 0),
+      gaps: bots.map(() => ({ mean: 0, max: -Infinity, end: 0 })), contacts: 0, crashes: 0, walls: 0, wrecks: 0, falls: 0,
+      wake: { tuck: 0, pass: 0, passes: 0, done: 0, gaveUp: 0 },
+    };
+    const wasPass = new Map<Player, boolean>();
+    const touching = new Set<string>();
+    const atWall = new Set<Player>();
+    const prevState = new Map<Player, { wreck: number; fall: number }>();
+    const before = new Map<Player, { x: number; y: number; vx: number; vy: number }>(); // pose and velocity a tick ago
     const drafts = (room as unknown as { drafts: number[] }).drafts;
     let leader = -1, rawLeader = -1, rt = 0, gapN = 0;
     const hyst = opts.hyst ?? CAR_LENGTH;
@@ -92,6 +115,44 @@ export function draftRace(opts: { track: string; levels: BotLevel[]; cars?: stri
       racers.forEach((p, k) => {
         if (drafts[k] > 0) out.draftTicks[field.indexOf(p)]++;
       });
+      for (let i = 0; i < racers.length; i++) {
+        const a = racers[i], c = a.car!;
+        const was = prevState.get(a) ?? { wreck: 0, fall: 0 };
+        if (c.wreck > 0 && was.wreck === 0) out.wrecks++;
+        if (c.fall > 0 && was.fall === 0) out.falls++;
+        prevState.set(a, { wreck: c.wreck, fall: c.fall });
+        const wall = c.air === 0 && c.fall === 0 && queryTrackNear(room.track, c.x, c.y, c.seg).dist >= wallLimit(room.track) - 0.01;
+        if (wall && !atWall.has(a)) out.walls++;
+        if (wall) atWall.add(a);
+        else atWall.delete(a);
+        for (let j = i + 1; j < racers.length; j++) {
+          const b = racers[j], key = `${a.id}|${b.id}`;
+          const touch = solid(a) && solid(b) && capsuleGap(c, b.car!) < 0.01;
+          if (touch && !touching.has(key)) {
+            out.contacts++;
+            // Closing speed along the centre line, from the tick before (the bump has traded it since).
+            const pa = before.get(a), pb = before.get(b);
+            if (pa && pb) {
+              const dx = pb.x - pa.x, dy = pb.y - pa.y, d = Math.hypot(dx, dy) || 1;
+              if (-((pb.vx - pa.vx) * dx + (pb.vy - pa.vy) * dy) / d >= IMPACT_MIN_SPEED) out.crashes++;
+            }
+          }
+          if (touch) touching.add(key);
+          else touching.delete(key);
+        }
+      }
+      for (const b of bots) {
+        const m = b.bot!.mem, w = m.wake, was = wasPass.get(b) ?? false;
+        if (w && !w.pass) out.wake.tuck++;
+        if (w?.pass) out.wake.pass++;
+        if (w?.pass && !was) out.wake.passes++;
+        if (was && !w?.pass) {
+          if (m.wakeRest > 0) out.wake.gaveUp++;
+          else out.wake.done++;
+        }
+        wasPass.set(b, !!w?.pass);
+      }
+      for (const p of racers) before.set(p, { x: p.car!.x, y: p.car!.y, vx: p.car!.vx, vy: p.car!.vy });
       const rd = field.map((p) => (p.progress ? raceDistance(room.track, p.progress) : -Infinity));
       field.forEach((p, k) => {
         if (!out.finish[k] && p.progress?.fin) out.finish[k] = rt;
@@ -114,6 +175,7 @@ export function draftRace(opts: { track: string; levels: BotLevel[]; cars?: stri
           const g = rd[0] - rd[i + 1];
           out.gaps[i].mean += g;
           out.gaps[i].max = Math.max(out.gaps[i].max, g);
+          out.gaps[i].end = g;
         });
       }
     }
@@ -127,16 +189,27 @@ export function draftRace(opts: { track: string; levels: BotLevel[]; cars?: stri
 function main(): void {
   const levels = arg("bots", "normal,normal").split(",") as BotLevel[];
   const cars = process.argv.includes("--cars") ? arg("cars", "").split(",") : undefined;
-  const opts = { track: arg("track", "rust-bowl"), levels, cars, laps: Number(arg("laps", "3")), pilot: process.argv.includes("--pilot"), weapons: !process.argv.includes("--noweapons") };
-  for (const nodraft of process.argv.includes("--nodraft") ? [true] : [true, false]) {
-    const r = draftRace({ ...opts, nodraft });
-    console.log(`\n${nodraft ? "WITHOUT draft" : "WITH draft"} on ${opts.track}, ${opts.laps} laps${opts.pilot ? ", host = autopilot" : ""}${opts.weapons ? "" : ", bots without weapons"}`);
-    r.names.forEach((n, k) => {
-      const f = r.finish[k] ? `${(r.finish[k] / 60).toFixed(2)} s` : "DNF";
-      console.log(`  ${n.padEnd(14)} finish ${f.padStart(8)}  drafting ${(r.draftTicks[k] / 60).toFixed(1)} s`);
-    });
-    console.log(`  lead changes per lap (a car length clear): ${r.changes.join(", ")}; raw leader switches ${r.rawChanges}`);
-    if (opts.pilot) r.gaps.forEach((g, i) => console.log(`  ${r.names[i + 1].padEnd(14)} behind the autopilot: mean ${g.mean.toFixed(0)}, max ${g.max.toFixed(0)} units`));
+  const pilotLevels = process.argv.includes("--pilot-levels") ? arg("pilot-levels", "0,0,0").split(",").map(Number) : undefined;
+  const base = { levels, cars, laps: Number(arg("laps", "3")), pilot: process.argv.includes("--pilot") || !!pilotLevels, pilotLevels, weapons: !process.argv.includes("--noweapons") };
+  const tracks = process.argv.includes("--all") ? ["rust-bowl", "crusher-run", "overpass-knot"] : [arg("track", "rust-bowl")];
+  for (const track of tracks) {
+    for (const after of [false, true]) {
+      const r = draftRace({ ...base, track, nodraft: !after, nowake: !after });
+      const head = `${after ? "AFTER (draft + wake)" : "BEFORE (no draft, lanes held)"} on ${track}, ${base.laps} laps${base.pilot ? `, host = autopilot${pilotLevels ? ` at levels ${pilotLevels.join("/")}` : ""}` : ""}${base.weapons ? "" : ", bots without weapons"}`;
+      const tally = `contacts ${r.contacts} (crashes ${r.crashes}), wall hits ${r.walls}, wrecks ${r.wrecks}, falls ${r.falls}; wake: tuck ${(r.wake.tuck / 60).toFixed(1)} s, pass ${(r.wake.pass / 60).toFixed(1)} s, passes ${r.wake.passes} (done ${r.wake.done}, given up ${r.wake.gaveUp})`;
+      if (process.argv.includes("--all")) {
+        console.log(`${head}: lead changes ${r.changes.join(",")}; ${tally}; finish ${r.finish.map((f) => (f / 60).toFixed(1)).join("/")} s`);
+        continue;
+      }
+      console.log(`\n${head}`);
+      r.names.forEach((n, k) => {
+        const f = r.finish[k] ? `${(r.finish[k] / 60).toFixed(2)} s` : "DNF";
+        console.log(`  ${n.padEnd(14)} finish ${f.padStart(8)}  drafting ${(r.draftTicks[k] / 60).toFixed(1)} s`);
+      });
+      console.log(`  lead changes per lap (a car length clear): ${r.changes.join(", ")}; raw leader switches ${r.rawChanges}`);
+      console.log(`  ${tally}`);
+      if (base.pilot) r.gaps.forEach((g, i) => console.log(`  ${r.names[i + 1].padEnd(14)} behind the autopilot: mean ${g.mean.toFixed(0)}, max ${g.max.toFixed(0)}, as it finished ${g.end.toFixed(0)} units`));
+    }
   }
 }
 

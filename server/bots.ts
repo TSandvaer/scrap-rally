@@ -4,7 +4,7 @@
 // player goes through. Everything a bot does differently by seat (name, racing line, mine
 // timing) is keyed by its slot, never by the random player id, so a rerun is identical.
 
-import { botControls, newBotMem, resetBotMem, type BotLevel, type BotMem, type BotOther } from "../shared/botdrive";
+import { botControls, newBotMem, resetBotMem, type BotLevel, type BotMem, type BotMine, type BotOther } from "../shared/botdrive";
 import { botShopping } from "../shared/botshop";
 import { CAR_TYPES, type CarType } from "../shared/cars";
 import type { CarStats } from "../shared/physics";
@@ -65,23 +65,25 @@ export const botTiming: { samples: number[] | null } = { samples: null };
 
 /**
  * The bot's command for this tick, from the start-of-tick poses of every car in the race.
- * racing: inputs apply (the race phase, not paused). minePress: drop a mine this tick.
+ * racing: inputs apply (the race phase, not paused). mines: the mines on the track (the
+ * slipstream lanes avoid them). minePress: drop a mine this tick.
  */
 export function botStep(
   p: Fighter & { stats: CarStats; bot: BotSeat; carType: CarType },
   racers: readonly Fighter[],
   track: Track,
   racing: boolean,
+  mines: readonly BotMine[] = [],
 ): { cmd: Command; minePress: boolean } {
   const t0 = botTiming.samples ? performance.now() : 0;
   const seat = p.bot;
   const car = p.car;
   if (racing && car) seat.steps++;
   const others: BotOther[] = [];
-  if (car && seat.mem.weapons && car.air === 0 && car.fall === 0 && car.wreck === 0) {
-    for (const q of racers) if (q !== p && q.car) others.push({ x: q.car.x, y: q.car.y, solid: solid(q) });
+  if (car && (seat.mem.weapons || seat.mem.useWake) && car.air === 0 && car.fall === 0 && car.wreck === 0) {
+    for (const q of racers) if (q !== p && q.car) others.push({ x: q.car.x, y: q.car.y, solid: solid(q), id: q.id, vx: q.car.vx, vy: q.car.vy });
   }
-  const ctl = botControls({ car, track, stats: p.stats, raceOn: racing, raceSteps: seat.steps, others, carType: p.carType }, seat.mem);
+  const ctl = botControls({ car, track, stats: p.stats, raceOn: racing, raceSteps: seat.steps, others, carType: p.carType, mines }, seat.mem);
   const out = { cmd: { throttle: ctl.throttle, steer: ctl.steer, buttons: ctl.fire ? BTN_RIVET : 0 }, minePress: ctl.mine };
   if (botTiming.samples) botTiming.samples.push(performance.now() - t0);
   return out;

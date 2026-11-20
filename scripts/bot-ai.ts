@@ -34,7 +34,7 @@ export class BotDriver {
     const g = this.game;
     return g.otherPoses().map((o) => {
       const s = g.latest?.cars.get(o.id);
-      return { x: o.x, y: o.y, solid: !!s && !s.ghost && !s.wreck && !s.air && !s.fall };
+      return { x: o.x, y: o.y, solid: !!s && !s.ghost && !s.wreck && !s.air && !s.fall, id: o.id, vx: s?.vx ?? 0, vy: s?.vy ?? 0 };
     });
   }
 
@@ -47,7 +47,11 @@ export class BotDriver {
     else if (raceOn) this.raceSteps++;
     const grounded = !!car && car.air === 0 && car.fall === 0 && car.wreck === 0;
     const out = botControls(
-      { car, track: g.track, stats: g.stats, raceOn, raceSteps: this.raceSteps, others: grounded && this.mem.weapons ? this.others() : [], carType: g.carType },
+      {
+        car, track: g.track, stats: g.stats, raceOn, raceSteps: this.raceSteps, carType: g.carType,
+        others: grounded && (this.mem.weapons || this.mem.useWake) ? this.others() : [],
+        mines: grounded && this.mem.useWake ? g.visibleMines() : [],
+      },
       this.mem,
     );
     return car ? out : NO_CONTROLS;
