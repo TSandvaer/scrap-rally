@@ -1,6 +1,8 @@
 // The page of tools/debug/fx-sheet.ts: the contact sheet of the catch-up visuals (M4-FX).
 // Every tile is a piece of a 640 x 360 frame the game's own Renderer drew, enlarged in whole
 // pixels; nothing on it is drawn by this page but the headings. See the runner.
+//
+// ?time=soft|gpu[&reps=7]  no sheet: what the visuals cost a frame (the runner's --time).
 
 import { P } from "../../../client/gfx/palette";
 import { Renderer, VIEW_H, VIEW_W, type CarView, type CellView, type HudView, type WorldFx } from "../../../client/render";
@@ -203,4 +205,65 @@ function main(): void {
   (window as unknown as { fxSheet: unknown }).fxSheet = { done: true, tiles: places.length, width: W, height: y };
 }
 
-main();
+interface Stat { p50: number; p95: number; max: number }
+
+function stat(v: number[]): Stat {
+  const sorted = Float64Array.from(v).sort();
+  const q = (x: number) => sorted[Math.min(sorted.length - 1, Math.floor(x * sorted.length))];
+  return { p50: q(0.5), p95: q(0.95), max: sorted[sorted.length - 1] };
+}
+
+/**
+ * What the catch-up visuals cost a frame: a pack of six through Rust Bowl's first bend with
+ * the race HUD, the catch-up fields filled (three cars in a slipstream, three boosting, six
+ * cells of which one floats, the HUD's two cues) and absent, in turn, on one Renderer.
+ * Renderer.frame() with a 1x1 read-back, so the frame is rastered before the clock is read.
+ */
+function time(kind: string, reps: number): void {
+  const FRAMES = 600, FPS = 60;
+  const canvas = document.createElement("canvas");
+  // The context first: the Renderer then gets this one.
+  const ctx = canvas.getContext("2d", { willReadFrequently: kind === "soft" })!;
+  const r = new Renderer(canvas, rust);
+  const kerb = rust.def.halfWidth - 6;
+  const cam = spot(rust, 1270, 0);
+  const cells: CellView[] = [cellAt(rust, 1080, -kerb, false, 0), cellAt(rust, 1230, kerb, false, 0), cellAt(rust, 1310, -kerb, false, 1), cellAt(rust, 1370, kerb, false, 0.05), cellAt(rust, 1450, -kerb, false, 0), cellAt(rust, 1400, 10, true, 0)];
+  const lanes = [-6, -4, 30, 34, -40, -42], starts = [60, 122, 300, 235, 400, 452];
+  const looks = ["sport", "racer", "truck"] as const;
+  const play = (i: number, on: boolean): void => {
+    const cars = lanes.map((lat, k): CarView => {
+      const c = car(rust, k, 1010 + (((i * 380) / FPS + starts[k]) % 520), lat, { me: k === 0, name: `Car ${k + 1}`, car: looks[k % 3] });
+      if (on) {
+        if (k === 0 || k === 3 || k === 4) c.draft = k === 0 ? 0.75 : k === 3 ? 0.4 : 1;
+        if (k === 0 || k === 1 || k === 5) c.boost = k === 5 ? 5 : 54;
+      }
+      return c;
+    });
+    const fx: WorldFx = on ? { shots: [], mines: [], sparks: [], cells } : { shots: [], mines: [], sparks: [] };
+    const hud: HudView = on ? { ...RACE, draft: 0.75, boost: 54 } : RACE;
+    r.follow(cam.x, cam.y, 1000 / FPS, i === 0);
+    r.frame(cars, fx, hud, 10_000 + (i * 1000) / FPS);
+  };
+  // The frames are built inside the timed loop for both modes alike: what is compared is the two medians.
+  const out: { on: number[]; off: number[] } = { on: [], off: [] };
+  for (let rep = 0; rep <= reps; rep++) {
+    for (const on of rep % 2 ? [true, false] : [false, true]) {
+      const times: number[] = [];
+      for (let i = 0; i < FRAMES; i++) {
+        const t0 = performance.now();
+        play(i, on);
+        ctx.getImageData(0, 0, 1, 1);
+        times.push(performance.now() - t0);
+      }
+      if (rep > 0) (on ? out.on : out.off).push(...times); // the first round warms up
+    }
+  }
+  const on = stat(out.on), off = stat(out.off);
+  const result = { done: true, kind, isolated: crossOriginIsolated, userAgent: navigator.userAgent, frames: out.on.length, on, off, costs: on.p50 - off.p50 };
+  (window as unknown as { fxSheet: unknown }).fxSheet = result;
+  document.body.append(Object.assign(document.createElement("pre"), { textContent: JSON.stringify(result, null, 1) }));
+}
+
+const params = new URLSearchParams(location.search);
+if (params.has("time")) time(params.get("time") === "gpu" ? "gpu" : "soft", Number(params.get("reps")) || 7);
+else main();

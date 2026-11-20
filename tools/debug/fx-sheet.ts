@@ -5,6 +5,7 @@
 //   npx tsx tools/debug/fx-sheet.ts --out file.png  ... somewhere else
 //   npx tsx tools/debug/fx-sheet.ts --sprites       the sprite sheet alone, large -> tmp/m4-fx/sprites.png
 //   npx tsx tools/debug/fx-sheet.ts --check         no picture: the checks below, exit code 1 if one fails
+//   npx tsx tools/debug/fx-sheet.ts --time          no picture: what the visuals cost a frame, in headless Chrome
 //
 // The contact sheet is made of frames the game's own Renderer drew, in headless Chrome (its
 // page is fx-sheet/): the cells on the ground, floating, taken and about to be back; the
@@ -15,6 +16,13 @@
 // --sprites is made in Node from client/gfx/sprites.ts (no browser): the catch-up sheet's
 // cell pictures on tarmac, dirt, gravel and the two kerb colours, and the flame's frames at
 // 16 of its 64 headings behind each look.
+//
+// --time (headless Chrome, the page served cross-origin isolated: a 5 us timer): a pack of six
+// through a bend with the race HUD, the catch-up fields filled (three cars in a slipstream,
+// three boosting, six cells, the HUD's two cues) and absent in turn, 600 frames a round,
+// `--reps 7` rounds each after a warm-up round; Renderer.frame() with a 1x1 read-back, ms; on
+// a "soft" canvas (in main memory: CPU raster, as the benchmark's metric A) and a "gpu" one
+// (`--canvas soft,gpu`).
 //
 // --check (Node):
 // - every pixel of the catch-up sheet is a palette colour, or the cast shadow's black;
@@ -282,7 +290,7 @@ function serve(dir: string): Promise<string> {
     const pathname = decodeURIComponent(new URL(req.url ?? "/", "http://x").pathname);
     let file = path.join(dir, pathname === "/" ? "index.html" : pathname);
     if (!file.startsWith(dir + path.sep) || !existsSync(file) || !statSync(file).isFile()) file = path.join(dir, "index.html");
-    res.writeHead(200, { "content-type": MIME[path.extname(file)] ?? "application/octet-stream", "cache-control": "no-store" });
+    res.writeHead(200, { "content-type": MIME[path.extname(file)] ?? "application/octet-stream", "cache-control": "no-store", "cross-origin-opener-policy": "same-origin", "cross-origin-embedder-policy": "require-corp" });
     createReadStream(file).pipe(res);
   });
   cleanups.push(() => {
@@ -297,22 +305,53 @@ async function ab(more: string[]): Promise<string> {
   return stdout.trim();
 }
 
-async function contact(out: string): Promise<void> {
+/** Build and serve the page, open a browser on it; `query` by `query`, wait until the page is done and hand its result to `each`. */
+async function page(queries: string[], each: (query: string) => Promise<void>): Promise<void> {
   const dist = mkdtempSync(path.join(tmpdir(), "fx-sheet-dist-"));
   cleanups.push(() => rmSync(dist, { recursive: true, force: true }));
   console.error("building the sheet's page ...");
   await run(VITE, ["build", path.join(ROOT, PAGE), "--outDir", dist, "--emptyOutDir", "--logLevel", "warn"], { cwd: ROOT, maxBuffer: 16 << 20 });
   const url = await serve(dist);
   cleanups.push(() => ab(["close"]));
-  await ab(["--args", CHROME_ARGS, "open", `${url}/`]);
-  const deadline = Date.now() + 60_000;
-  while ((await ab(["eval", "window.fxSheet && window.fxSheet.done ? 1 : 0"])) !== "1") {
-    if (Date.now() > deadline) throw new Error("the sheet's page did not finish");
-    await sleep(200);
+  await ab(["--args", CHROME_ARGS, "open", "about:blank"]);
+  for (const query of queries) {
+    await ab(["open", `${url}/${query}`]);
+    const deadline = Date.now() + 120_000;
+    while ((await ab(["eval", "window.fxSheet && window.fxSheet.done ? 1 : 0"])) !== "1") {
+      if (Date.now() > deadline) throw new Error("the sheet's page did not finish");
+      await sleep(200);
+    }
+    await each(query);
   }
-  const png = JSON.parse(await ab(["eval", "document.getElementById('sheet').toDataURL('image/png')"])) as string;
-  console.log(save(out, Buffer.from(png.slice(png.indexOf(",") + 1), "base64")));
-  console.log(await ab(["eval", "JSON.stringify(window.fxSheet)"]));
+}
+
+async function contact(out: string): Promise<void> {
+  await page([""], async () => {
+    const png = JSON.parse(await ab(["eval", "document.getElementById('sheet').toDataURL('image/png')"])) as string;
+    console.log(save(out, Buffer.from(png.slice(png.indexOf(",") + 1), "base64")));
+    console.log(await ab(["eval", "JSON.stringify(window.fxSheet)"]));
+  });
+}
+
+interface Stat { p50: number; p95: number; max: number }
+interface Timed { kind: string; isolated: boolean; userAgent: string; frames: number; on: Stat; off: Stat; costs: number }
+
+async function timing(): Promise<void> {
+  const reps = arg("--reps") ?? "7";
+  const kinds = (arg("--canvas") ?? "soft,gpu").split(",");
+  console.log(`# What the catch-up visuals cost a frame (${new Date().toISOString().slice(0, 16).replace("T", " ")} UTC)\n`);
+  console.log(`A pack of six through Rust Bowl's first bend, the race HUD; the catch-up fields filled (three cars in a slipstream, three boosting, six cells, the HUD's two cues) and absent in turn; ${reps} rounds of 600 frames each after a warm-up round. ms; a frame is Renderer.frame() with a 1x1 read-back. "soft" = a canvas in main memory (CPU raster), "gpu" = the browser's own.\n`);
+  console.log("| Canvas | fields absent: median / p95 / max | fields filled: median / p95 / max | the visuals cost (median) |");
+  console.log("|---|---:|---:|---:|");
+  let agent = "";
+  await page(kinds.map((k) => `?${new URLSearchParams({ time: k, reps })}`), async () => {
+    const o = JSON.parse(JSON.parse(await ab(["eval", "JSON.stringify(window.fxSheet)"])) as string) as Timed;
+    if (!o.isolated) console.error("warning: the page is not cross-origin isolated: a 100 us timer");
+    agent = o.userAgent;
+    const f = (x: number) => x.toFixed(3);
+    console.log(`| ${o.kind} | ${f(o.off.p50)} / ${f(o.off.p95)} / ${f(o.off.max)} | ${f(o.on.p50)} / ${f(o.on.p95)} / ${f(o.on.max)} | ${o.costs >= 0 ? "+" : ""}${f(o.costs)} |`);
+  });
+  console.log(`\n${agent}`);
 }
 
 // ---- main ----------------------------------------------------------------------------------------
@@ -324,7 +363,8 @@ if (args.includes("--check")) {
 } else {
   for (const sig of ["SIGINT", "SIGTERM"] as const) process.on(sig, () => void cleanup().then(() => process.exit(130)));
   try {
-    await contact(arg("--out") ?? path.join(ROOT, "tmp", "m4-fx", "contact-sheet.png"));
+    if (args.includes("--time")) await timing();
+    else await contact(arg("--out") ?? path.join(ROOT, "tmp", "m4-fx", "contact-sheet.png"));
   } finally {
     await cleanup();
   }
