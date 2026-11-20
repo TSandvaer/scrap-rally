@@ -295,6 +295,9 @@ actors.ts). Dispatch AFTER GFX-4 merges (actors.ts/main.ts overlap).
 2026-11-20: user tested the gfx4-taste copy (f7ead2b, the whole graphics round) and said "approved".
 DEPLOY PLAN (user popup 2026-11-20 "Push right after GFX-4"): once GFX-4 is merged and the main gate is green -> push main to origin,
 user clicks Manual Deploy in Render, then a muted live QA worker. MINES-1 follows in a later deploy.
+GFX-4 fix round done: bb07a73 (0790534 blast places cleared with the marks; bb07a73 tyre marks from the cars' driving, not the
+prediction on screen; live lagged pack race 83/98 -> 0/8 stamps; lag 0 slightly fewer marks). Re-check ctx_ce6a706672d8
+(tmp/review-gfx4-r2.md). Taste copy gfx4-taste moved to bb07a73, :3009 node pid 12549 (old 51032 killed).
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
