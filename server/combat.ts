@@ -7,10 +7,14 @@ import { regenPerTick, type Ammo, type Levels } from "../shared/shop";
 import type { Track } from "../shared/track";
 import {
   BTN_RIVET,
+  DEFAULT_MINE_MODE,
   GHOST_TICKS,
   MINE_ARM_TICKS,
+  MINE_CAP,
   MINE_DAMAGE,
+  MINE_FADE_TICKS,
   MINE_LIFE_TICKS,
+  MINE_OUT_TICKS,
   mineHits,
   moveShot,
   RIVET_COOLDOWN,
@@ -22,6 +26,7 @@ import {
   wreckCar,
   type Command,
   type Mine,
+  type MineMode,
   type Shot,
 } from "../shared/weapons";
 
@@ -53,9 +58,23 @@ function overlapsAnother(f: Fighter, fighters: Fighter[]): boolean {
   return !!c && fighters.some((o) => o !== f && !!o.car && capsuleGap(c, o.car) < 0);
 }
 
+/** A mine the cap took off the track: harmless, kept for the clients' blink-out. */
+interface GoneMine {
+  mine: Mine;
+  left: number; // ticks until it is dropped from the snapshots
+}
+
 export class Combat {
   shots: Shot[] = [];
+  /** The mines on the track, oldest first. */
   mines: Mine[] = [];
+  /** Mines the cap took off the track ("stay"), still shown blinking out (MINE_OUT_TICKS). */
+  gone: GoneMine[] = [];
+  /**
+   * This race's mines mode (shared/weapons.ts MineMode): the room sets it as the race begins,
+   * so the host's change during a race applies from the next one.
+   */
+  mode: MineMode = DEFAULT_MINE_MODE;
   readonly wrecksCaused = new Map<string, number>();
   private nextId = 1;
 
@@ -67,6 +86,7 @@ export class Combat {
   reset(): void {
     this.shots = [];
     this.mines = [];
+    this.gone = [];
     this.wrecksCaused.clear();
   }
 
@@ -87,6 +107,9 @@ export class Combat {
     if (minePress && f.ammo.mines > 0) {
       this.mines.push(spawnMine(car, this.nextId++, f.id));
       f.ammo.mines--;
+      // "stay": one more than the cap takes the oldest off the track. It is out of `mines`
+      // at once (it hits nobody any more) and only shown blinking out from here on.
+      if (this.mode === "stay" && this.mines.length > MINE_CAP) this.gone.push({ mine: this.mines.shift()!, left: MINE_OUT_TICKS });
     }
   }
 
@@ -117,10 +140,11 @@ export class Combat {
     }
     this.shots = live;
 
+    const fade = this.mode === "fade";
     const mines: Mine[] = [];
     for (const m of this.mines) {
       m.age++;
-      if (m.age > MINE_LIFE_TICKS) continue;
+      if (fade && m.age > MINE_LIFE_TICKS) continue;
       let alive = true;
       if (m.age >= MINE_ARM_TICKS) {
         for (const f of fighters) {
@@ -134,6 +158,7 @@ export class Combat {
       if (alive) mines.push(m);
     }
     this.mines = mines;
+    if (this.gone.length) this.gone = this.gone.filter((g) => --g.left > 0);
 
     for (const f of fighters) {
       const c = f.car;
@@ -175,14 +200,29 @@ export class Combat {
     }));
   }
 
+  /**
+   * The mines on the track, then those blinking out after the cap took them off it (not armed).
+   * `out` (ticks until it is gone) goes only with a mine that blinks out: a "fade" mine in the
+   * last MINE_FADE_TICKS of its life, and a mine the cap took.
+   */
   mineSnaps(): MineSnap[] {
-    return this.mines.map((m) => ({
-      k: "mine",
-      id: m.id,
-      o: m.owner,
-      x: Math.round(m.x * 10) / 10,
-      y: Math.round(m.y * 10) / 10,
-      armed: m.age >= MINE_ARM_TICKS,
-    }));
+    const fade = this.mode === "fade";
+    const snaps: MineSnap[] = [];
+    for (const m of this.mines) {
+      const s = mineSnap(m, m.age >= MINE_ARM_TICKS);
+      const left = MINE_LIFE_TICKS - m.age + 1; // it is gone on the step that takes its age past its life
+      if (fade && left <= MINE_FADE_TICKS) s.out = left;
+      snaps.push(s);
+    }
+    for (const g of this.gone) {
+      const s = mineSnap(g.mine, false);
+      s.out = g.left;
+      snaps.push(s);
+    }
+    return snaps;
   }
+}
+
+function mineSnap(m: Mine, armed: boolean): MineSnap {
+  return { k: "mine", id: m.id, o: m.owner, x: Math.round(m.x * 10) / 10, y: Math.round(m.y * 10) / 10, armed };
 }

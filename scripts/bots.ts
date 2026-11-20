@@ -21,7 +21,7 @@ import { BUILTIN_SOUND, DEFAULT_SONG_ID, RANDOM_SONG, SONG_IDS } from "../shared
 import { gridSlot, pointAt, queryTrackNear, validateTrack, type Track, type TrackDef } from "../shared/track";
 import { DEFAULT_TRACK_ID, registerTestTrack, trackById, trackList } from "../shared/tracks";
 import { angleDiff, BASE_STATS, capsuleGap, clamp, speedOf, type CarState } from "../shared/physics";
-import { BTN_RIVET, validateRunUps, WEAPONS_ARM_MS } from "../shared/weapons";
+import { BTN_RIVET, MINE_FADE_TICKS, MINE_LIFE_TICKS, validateRunUps, WEAPONS_ARM_MS } from "../shared/weapons";
 import { startServer, type RunningServer } from "../server/index";
 import { BotDriver } from "./bot-ai";
 
@@ -386,6 +386,7 @@ async function run(ctx: Ctx, bots: Bot[]): Promise<void> {
   await runRetire(ctx, bots);
   await runPause(ctx, bots);
   await runSound(ctx, bots);
+  await runMines(ctx, bots);
 }
 
 const lost = new Map<string, (ConnReason | undefined)[]>();
@@ -1503,6 +1504,78 @@ async function runSound(ctx: Ctx, bots: Bot[]): Promise<void> {
     await waitFor("sound: guest refused", () => G.errors.length > e0, 3000);
     check("room sound over sockets: a guest's change is refused with an err; the defaults stay", G.errors.slice(e0).join() === "Only the host can set the room sound" && H.game.soundDefaults.music === 0.35, G.errors.slice(e0).join());
     G.errors.length = e0;
+  } finally {
+    for (const b of [H, G]) b.game.leave();
+  }
+}
+
+/**
+ * The mines setting over sockets (MINES-1): the host's pick reaches the other client (lagged)
+ * in the room message, a guest's is refused; a race keeps the mode it began with while the
+ * host picks another; and a fading mine's `out` comes through the snapshots to both clients.
+ */
+async function runMines(ctx: Ctx, bots: Bot[]): Promise<void> {
+  const H = new Bot("Hotel", ctx.url, -20);
+  const G = new Bot("Golf", ctx.url, 20, { lag: 80, jitter: 10 });
+  bots.push(H, G);
+  for (const b of [H, G]) {
+    b.weapons = false;
+    b.script = () => NO_CONTROLS; // the cars wait on the grid
+  }
+  try {
+    H.game.create(H.name);
+    await waitFor("H welcome", () => !!H.game.you, 3000);
+    G.game.join(H.game.code, G.name);
+    await waitFor("G in H's room", () => H.game.players.length === 2 && !!G.game.you, 3000);
+    const room = ctx.server.rooms.rooms.get(H.game.code)!;
+    const mode = (b: Bot): string => b.game.mines; // read afresh each time
+    const fresh = mode(H) === "stay" && mode(G) === "stay" && room.mines === "stay";
+    H.game.setMines("fade");
+    const got = await waitFor("mines: G sees Fade", () => mode(G) === "fade" && mode(H) === "fade", 3000);
+    check(
+      "mines over sockets: a new room has Stay; the host picks Fade and both clients (one lagged) see it",
+      fresh && got && (room.mines as string) === "fade" && H.errors.length + G.errors.length === 0,
+      `fresh ${fresh}; H ${mode(H)}, G ${mode(G)}, room ${room.mines}; errors ${[...H.errors, ...G.errors].join("; ") || "-"}`,
+    );
+    const e0 = G.errors.length;
+    G.game.setMines("stay");
+    await waitFor("mines: guest refused", () => G.errors.length > e0, 3000);
+    check("mines over sockets: a guest's pick is refused with an err; the setting stays", G.errors.slice(e0).join() === "Only the host can set the mines" && (room.mines as string) === "fade" && mode(H) === "fade", G.errors.slice(e0).join());
+    G.errors.length = e0;
+
+    // A race begun in Fade; the host picks Stay while it runs: the clients see Stay, the race stays Fade.
+    await readyUp("mines", H, [H, G]);
+    H.game.start();
+    await waitFor("mines: racing", () => H.game.phase === "racing" && G.game.phase === "racing" && !!G.game.latest?.cars.size, 6000);
+    H.game.setMines("stay");
+    const back = await waitFor("mines: G sees Stay", () => mode(G) === "stay" && mode(H) === "stay", 3000);
+    check("mines over sockets: Stay picked mid-race reaches the clients; the race under way keeps Fade", back && (room.mines as string) === "stay" && room.combat.mode === "fade" && room.phase === "racing", `clients ${mode(H)},${mode(G)}; room ${room.mines}; race ${room.combat.mode}`);
+    // A mine 1.5 s from the end of its life, far ahead of the grid: its out comes through.
+    const at = pointAt(room.track, 900);
+    const left = 90;
+    room.combat.mines.push({ id: 9001, owner: H.game.you, x: at.x, y: at.y, age: MINE_LIFE_TICKS - left });
+    const outs = new Map<Bot, number[]>([[H, []], [G, []]]);
+    const seen = new Map<Bot, boolean>([[H, false], [G, false]]);
+    for (const b of [H, G]) {
+      b.afterStep = () => {
+        const m = b.game.latest?.mines.find((x) => x.id === 9001);
+        if (!m) return;
+        seen.set(b, true);
+        const list = outs.get(b)!;
+        if (m.out !== undefined && list[list.length - 1] !== m.out) list.push(m.out);
+      };
+    }
+    const gone = await waitFor("mines: the fading mine is gone", () => [H, G].every((b) => seen.get(b) && !b.game.latest?.mines.some((x) => x.id === 9001)), 5000);
+    for (const b of [H, G]) b.afterStep = null;
+    const ok = (list: number[]) => list.length >= 20 && list[0] <= left && list[0] <= MINE_FADE_TICKS && list[list.length - 1] <= 4 && list.every((o, i) => o >= 1 && (i === 0 || o < list[i - 1]));
+    check(
+      "mines over sockets: a fading mine's out (ticks left) comes through the snapshots to both clients, counting down, then the mine is gone",
+      gone && ok(outs.get(H)!) && ok(outs.get(G)!) && room.combat.mines.length === 0,
+      [H, G].map((b) => `${b.name}: ${outs.get(b)!.length} values ${outs.get(b)![0]}..${outs.get(b)![outs.get(b)!.length - 1]}`).join("; "),
+    );
+    H.game.stopRace();
+    await waitFor("mines: back in the lobby", () => H.game.phase === "lobby" && G.game.phase === "lobby", 3000);
+    check("mines over sockets: no errors on the way", H.errors.length + G.errors.length === 0, [...H.errors, ...G.errors].join("; ") || "-");
   } finally {
     for (const b of [H, G]) b.game.leave();
   }

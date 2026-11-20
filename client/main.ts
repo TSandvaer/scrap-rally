@@ -5,6 +5,7 @@ import { PAUSE_MAX_MS, type GameEvent, type ResultRow } from "../shared/protocol
 import { AMMO, AMMO_IDS, priceOf, UPGRADE_IDS, UPGRADES, type ItemId, type Wallet } from "../shared/shop";
 import { DEFAULT_SONG_ID, isSongChoice, RANDOM_SONG } from "../shared/sound";
 import { trackList, trackName } from "../shared/tracks";
+import { isMineMode, MINE_LIFE_TICKS, MINE_MODES, type MineMode } from "../shared/weapons";
 import { BotDriver } from "../scripts/bot-ai";
 import { AudioEngine, SoundControls } from "./audio";
 import { ChatPanel, fitViewport } from "./chat";
@@ -71,6 +72,8 @@ const ui = {
   trackName: $("track-name"),
   songSelect: $<HTMLSelectElement>("song-select"),
   songName: $("song-name"),
+  minesSelect: $<HTMLSelectElement>("mines-select"),
+  minesName: $("mines-name"),
   start: $<HTMLButtonElement>("start"),
   startAnyway: $<HTMLButtonElement>("start-anyway"),
   ready: $<HTMLButtonElement>("ready"),
@@ -201,6 +204,21 @@ ui.songSelect.addEventListener("change", () => {
   if (isSongChoice(id)) game.setSoundDefaults({ song: id });
   ui.songSelect.blur();
 });
+// The room's mines (MINES-1): the host's pick, for the next race; everyone sees it.
+const MINES_TEXT: Record<MineMode, string> = { stay: "Stay until hit", fade: `Fade after ${MINE_LIFE_TICKS / 60} s` };
+ui.minesSelect.replaceChildren(
+  ...MINE_MODES.map((mode) => {
+    const o = document.createElement("option");
+    o.value = mode;
+    o.textContent = MINES_TEXT[mode];
+    return o;
+  }),
+);
+ui.minesSelect.addEventListener("change", () => {
+  const mode = ui.minesSelect.value;
+  if (isMineMode(mode)) game.setMines(mode);
+  ui.minesSelect.blur();
+});
 ui.start.addEventListener("click", () => game.start());
 ui.startAnyway.addEventListener("click", () => game.start(true));
 ui.ready.addEventListener("click", () => game.setReady(!game.me()?.ready));
@@ -288,6 +306,7 @@ game.on.error = (msg) => {
   if (game.you) {
     renderTrackPick(); // a refused pick shows the room's track again
     renderSongPick();
+    renderMinesPick();
   }
 };
 game.on.connection = (state, reason) => {
@@ -375,6 +394,7 @@ function updatePanels(): void {
   );
   renderTrackPick();
   renderSongPick();
+  renderMinesPick();
   renderLobbyButtons();
   if (game.results) renderResults(game.results);
   if (garage) renderGarage(true);
@@ -409,6 +429,18 @@ function renderSongPick(): void {
   show(ui.songName, !host || random);
   ui.songName.classList.toggle("song-now", host);
   setText(ui.songName, host ? `now ${title}` : random ? `${title} (random)` : title);
+}
+
+/**
+ * The room's mines, under the song: the host picks in the lobby whether they stay or fade,
+ * everyone else sees the pick. Room messages only, as the track pick.
+ */
+function renderMinesPick(): void {
+  const host = game.isHost() && game.phase === "lobby";
+  show(ui.minesSelect, host);
+  show(ui.minesName, !host);
+  if (ui.minesSelect.value !== game.mines) ui.minesSelect.value = game.mines;
+  setText(ui.minesName, MINES_TEXT[game.mines]);
 }
 
 /**
