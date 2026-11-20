@@ -288,6 +288,10 @@ pairs copied to tmp/gfx4-pairs/. Taste copy gfx4-taste (detached f7ead2b) on :30
 GFX-4: user APPROVED at the taste gate (popup); review APPROVE (ctx_9938f1887001; notes: remembered blast places not cleared with
 the marks; own-car tyre marks x2.5 under lag 150; ring 2048 accepted). Both are this ticket's own code -> small fix round before merge
 (tmp/gfx4-fix1.md) as a new Fable worker in the gfx4 workspace.
+GFX-4 fix worker: ctx_0b04325d8ada.
+NEW (user 2026-11-20): host chooses Mines: Stay (default) / Fade. User popups: lobby dropdown, applies next race; Fade = 25 s +
+2 s blink; Stay = until hit, cap 40 (oldest blinks out). Ticket MINES-1 123jpnbfdq6; spec tmp/spec-mines1.md (Fable, touches
+actors.ts). Dispatch AFTER GFX-4 merges (actors.ts/main.ts overlap).
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
