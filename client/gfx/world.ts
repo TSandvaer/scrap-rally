@@ -1970,7 +1970,7 @@ function marksOn(track: Track): boolean {
   const art = arts.get(track);
   if (!art) return false;
   if (markArt !== art) {
-    clearMarks();
+    dropMarks(); // not a clearing to count (marksCleared): this track's marks begin here, none of them go
     markArt = art;
   }
   return true;
@@ -2035,18 +2035,25 @@ export function skid(track: Track): void {
   }
 }
 
-/** All marks go (a new race, a restart). The tiles showing some are wiped over the next frames, one a frame. */
-export function clearMarks(): void {
-  clearings++;
+/** The marks made are no more. The tiles showing some are wiped over the next frames, one a frame. */
+function dropMarks(): void {
   if (!scorchCount && !skidCount) return;
   scorchCount = skidCount = 0;
   marksEpoch++;
   wiping = true;
 }
 
+/** All marks go (a new race, a restart). The tiles showing some are wiped over the next frames, one a frame. */
+export function clearMarks(): void {
+  clearings++;
+  dropMarks();
+}
+
 /**
- * How often the marks have been cleared. Whoever remembers something about the marks made
- * (gfx/actors.ts: the blasts that have left their scorch) sees by it that they are gone.
+ * How often the marks have been cleared (clearMarks). Whoever remembers something about the
+ * marks made (gfx/actors.ts: the blasts that have left their scorch) sees by it that they
+ * are gone. A track's first mark is no clearing (marksOn): the blast that made it, and the
+ * next ones, are that track's own.
  */
 export function marksCleared(): number {
   return clearings;
