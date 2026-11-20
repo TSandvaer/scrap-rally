@@ -8165,7 +8165,190 @@ function carsClient(): void {
   }
 }
 
-for (const t of [rivets, gating, mines, wrecks, finishing, garage, armDelay, engine, readyCheck, collisions, trackFeatures, roomTrack, jumpsWired, shippedTracks, botDriver, botLaps, mineCap, chatRoom, chatClient, sound, raceSounds, surfaceSounds, audioUnlock, menuHostOnly, menuStop, menuRestart, menuKick, menuLock, menuHandover, menuClient, menuRestartClient, retireRules, retireField, retireRaceEnd, retireGarage, retireRefund, retireOthers, retireNotices, retireClient, pauseRefused, pauseFreeze, pauseResume, pauseHold, pauseAuto, pauseCooldown, pauseGrace, pauseCountdown, pauseControls, pauseClient, musicSwitch, soundMigration, soundLayers, soundServer, soundRandom, soundRoomDrag, soundSliderGrip, soundClient, songs, songPlayer, ghostRivets, minesSetting, minesStay, minesCap, minesFade, minesAtStart, minesCleared, minesPaused, minesClient, botsPointAt, botsAdd, botsKickHost, botsHandover, botsFullRoom, botsSoloStart, botsRace, botsShop, botsTick, botsCpu, botsClient, carsTypes, carsStats, carsPick, carsRejoin, carsBots, carsRunUps, carsBalance, carsCut, carsClient]) {
+// ---- race tick, step env, boost plumbing (M4-ENV, PLAN-M4.md 3, ClickUp 123jpnbffe0, 2026-11-20) ----
+
+// This section's imports (hoisted like the ones at the top).
+import { rtAt, type Snapshot } from "../client/game";
+
+/** The rt of the last snapshot a connection got. */
+const lastRt = (c: FakeConn) => c.msgs.filter((m): m is SnapMsg => m.t === "snap").pop()?.rt;
+
+function envRt(): void {
+  // The server's race tick: 0 in the lobby and the countdown, +1 per racing tick, frozen while
+  // paused (the resume's hold ticks count: the room simulates them), in every snapshot, back to
+  // 0 for a restart and in the lobby.
+  const sim = new Sim(1);
+  const a = sim.add("Ann"), b = sim.add("Bo");
+  sim.run(2);
+  const lobby = lastRt(sim.conns.get(a.id)!);
+  sim.readyAll(a);
+  sim.room.start(a, sim.now);
+  const inCountdown: number[] = [];
+  while (sim.room.phase === "countdown") {
+    sim.run(1, () => ({ throttle: 1 }));
+    if (sim.room.phase === "countdown") inCountdown.push(sim.room.rt);
+  }
+  const first = sim.room.rt;
+  sim.run(99, () => ({ throttle: 1 }));
+  const snaps = sim.conns.get(b.id)!.msgs.filter((m): m is SnapMsg => m.t === "snap");
+  check(
+    "env rt: 0 in the lobby and the countdown, 1 on the first racing tick, +1 per racing tick; every snapshot carries the room's rt",
+    lobby === 0 && inCountdown.length > 100 && inCountdown.every((x) => x === 0) && first === 1 && sim.room.rt === 100 &&
+      snaps.every((m) => typeof m.rt === "number") && snaps[snaps.length - 1].rt === (sim.tickNo % 2 === 0 ? 100 : 99),
+    `lobby ${lobby}, countdown ${inCountdown.length} ticks at 0, first racing tick ${first}, after 100 racing ticks ${sim.room.rt}, last snapshot ${snaps[snaps.length - 1].rt}`,
+  );
+  sim.room.pause(a, sim.now);
+  sim.run(120, () => ({ throttle: 1 }));
+  const paused = sim.room.rt;
+  sim.room.resume(a, sim.now);
+  let ticks = 0;
+  while (sim.room.paused) {
+    sim.run(1, () => ({ throttle: 1 }));
+    ticks++;
+  }
+  check(
+    "env rt: paused ticks (the pause and its 3-2-1) do not count; it counts on from where it stood",
+    paused === 100 && sim.room.rt === 101 && ticks > 100,
+    `rt ${paused} through ${120 + ticks} paused ticks, ${sim.room.rt} on the first tick after`,
+  );
+  sim.room.restartRace(a, sim.now);
+  const restarted = sim.room.rt;
+  sim.run(1);
+  check("env rt: a restart starts it over at 0 (its countdown)", restarted === 0 && sim.room.rt === 0 && lastRt(sim.conns.get(a.id)!) === 0);
+  sim.room.stopRace(a, sim.now);
+  sim.run(2);
+  check("env rt: back in the lobby it is 0", sim.room.phase === "lobby" && sim.room.rt === 0 && lastRt(sim.conns.get(a.id)!) === 0);
+}
+
+function envStep(): void {
+  // stepRaceCar(c, input, stats, env): nothing reads env.rt or env.draft yet, so any race tick or
+  // slipstream steps a car exactly as rt 0 / draft 0 (no behaviour change), through a jump, a
+  // roll-off fall and the recovery on the T1b straight.
+  const t = buildTrack(T1B_DEF);
+  const p = pointAt(t, 600);
+  const start: CarState = { x: p.x, y: p.y, h: p.h, vx: 0, vy: 0, seg: p.seg, wreck: 0, air: 0, fall: 0, boost: 0 };
+  const run = (rt: (i: number) => number, draft: number) => {
+    const c = cloneCar(start);
+    const evs: string[] = [];
+    const env = raceEnv(t, 0, draft);
+    for (let i = 0; i < 60 * 30; i++) {
+      env.rt = rt(i);
+      const slow = i > 260 && speedOf(c) > 150;
+      const ev = stepRaceCar(c, { throttle: slow ? -1 : 1, steer: 0 }, BASE_STATS, env);
+      if (ev) evs.push(ev);
+    }
+    return JSON.stringify([c, evs]);
+  };
+  const ref = run(() => 0, 0);
+  check(
+    "env step: any race tick and slipstream step a car exactly as rt 0 and no draft (jump, fall and recovery included)",
+    ref.includes("takeoff") && ref.includes("fall") && ref.includes("recover") && run((i) => i + 1, 0) === ref && run((i) => 7 * i + 12345, 0.8) === ref,
+    JSON.parse(ref)[1].join(","),
+  );
+  check(
+    "env step: validateRunUps gives the same verdicts (it steps through stepRaceCar with rt counting from 1)",
+    ["rust-bowl", "crusher-run", "overpass-knot"].every((id) => validateRunUps(trackById(id)).length === 0) && validateRunUps(t).join() === validateRunUps(t, BASE_STATS).join(),
+  );
+  // boost: in CarState, cloneCar, the snapshots (0 for now); the client's sameState compares it.
+  const src: CarState = { ...start, boost: 37 };
+  const cl = cloneCar(src);
+  const sim = new Sim(1);
+  const a = sim.add("Ann");
+  sim.startRace(a);
+  sim.run(10, () => ({ throttle: 1 }));
+  const cars = sim.conns.get(a.id)!.msgs.filter((m): m is SnapMsg => m.t === "snap").flatMap((m) => m.ents.filter((e): e is CarSnap => e.k === "car"));
+  check(
+    "env boost: CarState carries boost; cloneCar copies it; every car in a snapshot has boost 0 (nothing gives one yet)",
+    cl.boost === 37 && cl !== src && cars.length > 3 && cars.every((e) => e.boost === 0) && a.car!.boost === 0,
+    `${cars.length} car snapshots`,
+  );
+}
+
+/**
+ * One client (no lag) races a lap through the real client Game on the sim clock; the server's
+ * rt for every input it applied is noted. stall: [race tick, ticks] the client sends nothing
+ * (an underrun); pauseAt: the host pauses at this race tick and resumes at once.
+ */
+function rtRun(opts: { stall?: [number, number]; pauseAt?: number; ticks?: number } = {}): { skew: number[]; live: number[]; truth: Map<number, number>; log: [number, number, number][]; countdown: number } {
+  const realNow = performance.now.bind(performance);
+  const clock = { now: 1_000_000 };
+  performance.now = () => clock.now;
+  try {
+    const rooms = new Rooms(1);
+    const A = wiredGame(rooms, clock);
+    A.game.create("Ann");
+    A.open();
+    A.flush();
+    const room = [...rooms.rooms.values()][0];
+    A.game.start();
+    A.flush();
+    const d = new BotDriver(A.game, 0);
+    d.weapons = false;
+    const truth = new Map<number, number>();
+    let last = -1, countdown = 0, stalled = 0, paused = false;
+    for (let i = 0; i < (opts.ticks ?? 60 * 20); i++) {
+      clock.now += 1000 / 60;
+      rooms.step(clock.now);
+      const p = room.players.get(A.game.you)!;
+      if (p.ack !== last) {
+        last = p.ack;
+        if (!room.paused) truth.set(p.ack, room.rt); // applied at this race tick (thrown away while paused)
+        if (room.phase === "countdown") countdown++;
+      }
+      if (opts.pauseAt !== undefined && !paused && room.rt >= opts.pauseAt) {
+        paused = true;
+        room.pause(p, clock.now);
+        room.resume(p, clock.now);
+      }
+      A.flush();
+      if (opts.stall && room.rt >= opts.stall[0] && stalled < opts.stall[1]) {
+        stalled++;
+        continue;
+      }
+      A.game.step(d.controls(), 1000 / 60);
+    }
+    const log = A.game.rtLog.filter(([seq]) => truth.has(seq));
+    return { skew: log.map(([seq, , rt]) => rt - truth.get(seq)!), live: log.map(([seq, rt0]) => rt0 - truth.get(seq)!), truth, log, countdown };
+  } finally {
+    performance.now = realNow;
+  }
+}
+
+function envClient(): void {
+  // rtAt: the step i after a snapshot runs at rt + i + 1 while racing; in the countdown at 0
+  // until GO (the clamp), then 1, 2, ...; in the results the race tick stands.
+  const snap = (rtBase: number, rtOpen: boolean): Snapshot => ({ time: 0, rtBase, rtOpen, cars: new Map(), shots: new Map(), mines: [] });
+  check(
+    "env client: rtAt counts on from a racing snapshot, clamps at GO from a countdown one, stands still after the race",
+    [0, 1, 5].map((i) => rtAt(snap(40, true), i)).join() === "41,42,46" && [0, 1, 2, 3, 4].map((i) => rtAt(snap(-2, true), i)).join() === "0,0,1,2,3" &&
+      rtAt(snap(900, false), 7) === 900,
+  );
+  // No lag: every step the server applied was predicted at exactly its race tick, live and after
+  // the last replay, through the countdown (rt 0) and GO. At GO itself one tick either way: the
+  // client works out the GO tick from the snapshot's clock (phaseEnds - time), the server's tick
+  // clock decides it (here a float sum of 1000/60 steps landing a hair before phaseEnds).
+  const r = rtRun();
+  const offs = r.log.map(([seq, rt0, rt]) => ({ seq, rt0, rt, t: r.truth.get(seq)! })).filter((x) => x.rt0 !== x.t || x.rt !== x.t);
+  const zeros = r.log.filter(([seq]) => r.truth.get(seq) === 0).length;
+  check(
+    "env client: no lag: each applied input's predicted race tick (live and replayed) is the server's, countdown inputs at 0 (the clamp at GO), then 1, 2, ...; at GO at most one tick off",
+    offs.every((x) => x.t <= 1 && Math.abs(x.rt0 - x.t) <= 1 && Math.abs(x.rt - x.t) <= 1) && zeros > 100 && r.log.length > 1000 && r.log.some(([seq]) => r.truth.get(seq) === 1),
+    `${r.log.length} steps, ${zeros} in the countdown; off (seq/live/replayed/server): ${offs.map((x) => `${x.seq}/${x.rt0}/${x.rt}/${x.t}`).join(" ") || "none"}`,
+  );
+  // An underrun (the client sends nothing for 20 ticks) and a pause with its resume: the skew is
+  // bounded and corrected by the next snapshots (it is back to 0 after each).
+  const u = rtRun({ stall: [300, 20], pauseAt: 700, ticks: 60 * 30 });
+  const off = u.log.map(([seq, rt0, rt], k) => ({ seq, at: u.truth.get(seq)!, live: u.live[k], fin: u.skew[k], rt0, rt })).filter((x) => x.live !== 0 || x.fin !== 0);
+  const maxLive = Math.max(0, ...u.live.map(Math.abs)), maxFin = Math.max(0, ...u.skew.map(Math.abs));
+  const tail = u.log.filter(([seq]) => u.truth.get(seq)! > 1000).length;
+  check(
+    "env client: an underrun (20 ticks without input) and a pause/resume skew the predicted race tick by a bounded amount (live <= 3, after replays <= 1), exact again after each",
+    maxLive <= 3 && maxFin <= 1 && tail > 50 && off.every((x) => x.at <= 1 || (x.at >= 300 && x.at <= 330) || (x.at >= 700 && x.at <= 710)),
+    `${off.length} of ${u.log.length} steps off; max live ${maxLive}, max after replay ${maxFin}; off at rt ${[...new Set(off.map((x) => x.at))].slice(0, 12).join(",")}`,
+  );
+}
+
+for (const t of [rivets, gating, mines, wrecks, finishing, garage, armDelay, engine, readyCheck, collisions, trackFeatures, roomTrack, jumpsWired, shippedTracks, botDriver, botLaps, mineCap, chatRoom, chatClient, sound, raceSounds, surfaceSounds, audioUnlock, menuHostOnly, menuStop, menuRestart, menuKick, menuLock, menuHandover, menuClient, menuRestartClient, retireRules, retireField, retireRaceEnd, retireGarage, retireRefund, retireOthers, retireNotices, retireClient, pauseRefused, pauseFreeze, pauseResume, pauseHold, pauseAuto, pauseCooldown, pauseGrace, pauseCountdown, pauseControls, pauseClient, musicSwitch, soundMigration, soundLayers, soundServer, soundRandom, soundRoomDrag, soundSliderGrip, soundClient, songs, songPlayer, ghostRivets, minesSetting, minesStay, minesCap, minesFade, minesAtStart, minesCleared, minesPaused, minesClient, botsPointAt, botsAdd, botsKickHost, botsHandover, botsFullRoom, botsSoloStart, botsRace, botsShop, botsTick, botsCpu, botsClient, carsTypes, carsStats, carsPick, carsRejoin, carsBots, carsRunUps, carsBalance, carsCut, carsClient, envRt, envStep, envClient]) {
   console.log(`\n# ${t.name}`);
   try {
     t();

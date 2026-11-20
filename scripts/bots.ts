@@ -388,6 +388,7 @@ async function run(ctx: Ctx, bots: Bot[]): Promise<void> {
   await runSound(ctx, bots);
   await runMines(ctx, bots);
   await runCars(ctx, bots);
+  await runRaceTick(ctx, bots);
 }
 
 const lost = new Map<string, (ConnReason | undefined)[]>();
@@ -1645,5 +1646,91 @@ async function runCars(ctx: Ctx, bots: Bot[]): Promise<void> {
   } finally {
     H.afterStep = null;
     for (const b of field) b.game.leave();
+  }
+}
+
+// ---- race tick (M4-ENV, PLAN-M4.md 3 and advisor change 9, ClickUp 123jpnbffe0, 2026-11-20) ----
+
+/** Sorted |values|: median, p95 and max of the absolute values. */
+function absStats(xs: number[]): { n: number; median: number; p95: number; max: number; exact: number } {
+  const a = xs.map(Math.abs).sort((x, y) => x - y);
+  if (!a.length) return { n: 0, median: NaN, p95: NaN, max: NaN, exact: NaN };
+  return { n: a.length, median: a[Math.floor(a.length / 2)], p95: a[Math.floor(a.length * 0.95)], max: a[a.length - 1], exact: a.filter((x) => x === 0).length / a.length };
+}
+
+/**
+ * The client's race-tick skew over a lagged link (80±10 ms): the server notes the race tick it
+ * applied each of the lagged bot's inputs at (from its own tick; inputs thrown away while paused
+ * are left out), the client logs the race tick it predicted each one at (live, and after its last
+ * replay). Through the countdown and GO (the clamp), a forced underrun (the bot sends nothing for
+ * 30 steps: the server repeats, coasts and rebuffers to QUEUE_START) and a pause with its resume
+ * (the resume hold), the skew stays bounded and the prediction is exact most of the time.
+ * The rule (PLAN-M4 3): step i after a snapshot runs at rt + i + 1. Right after a gap in the
+ * inputs (the underrun, the resume) nothing is pending, so the live prediction runs about one
+ * round trip of ticks early (~5-8 at 80 ms) until the next snapshot's replay corrects it.
+ */
+async function runRaceTick(ctx: Ctx, bots: Bot[]): Promise<void> {
+  const H = new Bot("Hotel", ctx.url, -20);
+  const L = new Bot("Lima", ctx.url, 20, { lag: 80, jitter: 10 });
+  bots.push(H, L);
+  for (const b of [H, L]) b.weapons = false;
+  let stall = 0;
+  const step = L.step.bind(L);
+  L.step = () => {
+    if (stall > 0) stall--; // no game.step: nothing predicted, nothing sent
+    else step();
+  };
+  const truth = new Map<number, number>();
+  let room: ReturnType<typeof ctx.server.rooms.rooms.get> | undefined;
+  let tick: ((t: number, now: number) => void) | null = null;
+  try {
+    H.game.create(H.name);
+    await waitFor("rt: H welcome", () => !!H.game.you, 3000);
+    L.game.join(H.game.code, L.name);
+    await waitFor("rt: L in H's room", () => H.game.players.length === 2 && !!L.game.you, 3000);
+    room = ctx.server.rooms.rooms.get(H.game.code)!;
+    const r = room;
+    tick = r.tick.bind(r);
+    let last = -1;
+    r.tick = (t: number, now: number) => {
+      tick!(t, now);
+      const p = r.players.get(L.game.you);
+      if (p && p.car && p.ack !== last) {
+        last = p.ack;
+        if (!r.paused) truth.set(p.ack, r.rt);
+      }
+    };
+    await readyUp("rt", H, [H, L]);
+    const log0 = L.game.rtLog.length;
+    H.game.start();
+    await waitFor("rt: racing", () => [H, L].every((b) => b.game.phase === "racing" && !!b.game.car), 6000);
+    await sleep(2500);
+    stall = 30;
+    await sleep(2500);
+    H.game.pause();
+    await waitFor("rt: paused", () => L.game.paused, 2000);
+    await sleep(800);
+    H.game.resume();
+    await waitFor("rt: racing again", () => [H, L].every((b) => !b.game.paused), 6000);
+    await sleep(2500);
+    const log = L.game.rtLog.slice(log0).filter(([seq]) => truth.has(seq));
+    const live = absStats(log.map(([seq, rt0]) => rt0 - truth.get(seq)!));
+    const fin = absStats(log.map(([seq, , rt]) => rt - truth.get(seq)!));
+    const countdown = log.filter(([seq]) => truth.get(seq) === 0).length;
+    console.log(
+      `      Lima rt skew (predicted - server, ticks) over ${log.length} applied inputs (${countdown} in the countdown, rt up to ${Math.max(...log.map(([seq]) => truth.get(seq)!))}): ` +
+        `live median ${live.median} p95 ${live.p95} max ${live.max} (exact ${(100 * live.exact).toFixed(1)}%); ` +
+        `after replays median ${fin.median} p95 ${fin.p95} max ${fin.max} (exact ${(100 * fin.exact).toFixed(1)}%); rtt=${L.game.rtt.toFixed(1)}ms`,
+    );
+    check(
+      "race tick over sockets: the lagged bot (80±10 ms) predicts the race tick of its inputs through the countdown, GO, an underrun and a pause/resume: after replays exact for >= 95% (max 3); live exact for >= 90% (max 10, a round trip after a gap)",
+      log.length > 400 && countdown > 20 && fin.exact >= 0.95 && fin.max <= 3 && live.exact >= 0.9 && live.max <= 10 && H.errors.length + L.errors.length === 0,
+      `live median ${live.median} p95 ${live.p95} max ${live.max}; after replays exact ${(100 * fin.exact).toFixed(1)}%, max ${fin.max}`,
+    );
+    H.game.stopRace();
+    await waitFor("rt: stopped", () => [H, L].every((b) => b.game.phase === "lobby"), 3000);
+  } finally {
+    if (room && tick) room.tick = tick;
+    for (const b of [H, L]) b.game.leave();
   }
 }
