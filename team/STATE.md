@@ -350,6 +350,12 @@ M4-CARS+ENV review APPROVE (ctx_18b31c4f294b; no findings). Notes: cars lap with
 no lap-time cost) is the one to watch for 'none dominant'; FOR M4-MOVE: live rt skew up to ~7 ticks for about one round trip after an
 input gap (bots.ts:1672 bounds live <=10, replay <=3): size M4-MOVE's lagged parity bound accordingly. Merge waits for the user's
 car-feel taste gate.
+Car-feel taste (user): "generally its a bit too easy to outrun normal bots, otherwise it looks good". User: hold -> asked if catch-up
+exists (no) -> "keep the merge, start catch-up next". M4-CARS+ENV MERGED: main cf76e01 (check clean, sim 628/628, bots 109/109, build ok);
+tickets ready for qa test; workers released, m4-cars workspace removed (m4-cars-taste still on :3009, pid 45260).
+WAVE 3 in flight: M4-DRAFT 123jpnbfffj + M4-CELLS 123jpnbfffk in ONE Opus worker ctx_fb2f80ebae6b (~/orca/workspaces/scrap-rally/
+m4-catchup, TSandvaer/m4-catchup, :3006; spec tmp/spec-m4-catchup.md) and M4-FX 123jpnbfffm Fable ctx_7656545f063a (~/orca/workspaces/scrap-rally/
+m4-fx, TSandvaer/m4-fx, :3008; spec tmp/spec-m4-fx.md; contact sheet via ask). Bot difficulty: judge again after catch-up.
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
@@ -406,7 +412,8 @@ Manual Deploy only on the user's go-ahead. The user's own dev server runs on :30
 
 | Ticket | Dispatch | Workspace | Branch | Port | Started |
 | --- | --- | --- | --- | --- | --- |
-| 123jpnbffdz+123jpnbffe0 M4-CARS+ENV | ctx_99a9c55e67a2 | ~/orca/workspaces/scrap-rally/m4-cars | TSandvaer/m4-cars | 3006 | 2026-11-20 |
+| 123jpnbfffj+123jpnbfffk M4-DRAFT+CELLS | ctx_fb2f80ebae6b | ~/orca/workspaces/scrap-rally/m4-catchup | TSandvaer/m4-catchup | 3006 | 2026-11-20 |
+| 123jpnbfffm M4-FX | ctx_7656545f063a | ~/orca/workspaces/scrap-rally/m4-fx | TSandvaer/m4-fx | 3008 | 2026-11-20 |
 | 123jpnbfb23 GFX-0 | ctx_27a7a271607b | ~/orca/workspaces/scrap-rally/gfx0 | TSandvaer/gfx0 | 3006 | 2026-11-18 |
 
 ## Queued (milestone 3, PLAN-M3.md; start after solid collisions 123jpnbf6cy and easier-start 123jpnbf3xa merge)

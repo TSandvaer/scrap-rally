@@ -98,3 +98,4 @@
 - 2026-11-20 — M4-LOOKS (user, popup): car looks approved from the contact sheet (Sport = today's, Racer open-wheel single-seater, Truck 4WD pickup; whole/battered/burnt in 6 colours).
 - 2026-11-20 — M4-BOTS taste gate (user, popup): host-added bots (Easy/Normal), solo race approved.
 - 2026-11-20 — M4-LOOKS second taste gate (user, popup): the three looks approved in motion (preview scene + live race with battered/wrecked cars).
+- 2026-11-20 — Car types (user, after driving): "generally its a bit too easy to outrun normal bots, otherwise it looks good" -> M4-CARS merged; bot difficulty judged again after catch-up (user: "keep the merge, start catch-up next").
