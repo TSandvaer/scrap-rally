@@ -80,7 +80,9 @@ const MAP = 108, MAP_X = VIEW_W - 112, MAP_Y = 4, MAP_FIT = 96;
 // meter of CUE_PIPS pips (the slipstream's strength), BOOST with the time left in seconds and
 // tenths. The row that is on is lit, the other one dark, as a lamp that is off; with both off
 // there is no panel. Baked once, on first use (bakeCues): the panel with both rows dark, each
-// row lit, the pips lit, the digits. A frame copies pieces of that: no label is written.
+// row lit, the pips lit, the digits. A frame copies pieces of that: no label is written. The
+// words are printed in the HUD's own text colour and tinted at the bake, so the font keeps no
+// sheet of letters in another colour for them.
 const CUE_ROW = 14, CUE_H = 2 * CUE_ROW + 3, CUE_GAP = 3;
 const CUE_PIPS = 8, PIP_W = 4, PIP_PITCH = 5, PIP_H = 7;
 const CUE_TEXT_X = 14; // a row's word; its sign stands left of it, at CUE_PAD
@@ -89,8 +91,8 @@ const CUE_PIPS_X = TL_W - CUE_PAD - (CUE_PIPS * PIP_PITCH - 1), CUE_PIPS_Y = 4; 
 const CUE_DIGITS = "0123456789.";
 const CUE_TIME_X = TL_W - CUE_PAD - (3 * TALL.cw - 1); // "1.2", right-aligned
 const BOOST_MAX = 99; // tenths of a second shown at most: "9.9"
-// Where the baked pieces lie in the cue canvas (rows of pixels).
-const CUE_DRAFT_Y = CUE_H, CUE_BOOST_Y = CUE_DRAFT_Y + CUE_ROW, CUE_LIT_Y = CUE_BOOST_Y + CUE_ROW, CUE_DIGIT_Y = CUE_LIT_Y + PIP_H, CUE_ART_H = CUE_DIGIT_Y + TALL.ch;
+// Where the baked pieces lie in the cue canvas (rows of pixels): the panel, the two rows lit, the pips lit, the digits, the two rows dark.
+const CUE_DRAFT_Y = CUE_H, CUE_BOOST_Y = CUE_DRAFT_Y + CUE_ROW, CUE_LIT_Y = CUE_BOOST_Y + CUE_ROW, CUE_DIGIT_Y = CUE_LIT_Y + PIP_H, CUE_DARK_Y = CUE_DIGIT_Y + TALL.ch, CUE_ART_H = CUE_DARK_Y + 2 * CUE_ROW;
 // The rows' signs, 5 wide: lines of air, a bolt.
 const SIGN_DRAFT = [".####", ".....", "###..", ".....", ".####", ".....", "###.."];
 const SIGN_BOOST = ["...##", "..##.", "..##.", ".##..", "#####", "..##.", ".##..", ".##..", "##..."];
@@ -382,30 +384,43 @@ function sign(g: CanvasRenderingContext2D, rows: readonly string[], x: number, y
   for (let j = 0; j < rows.length; j++) for (let i = 0; i < rows[j].length; i++) if (rows[j][i] === "#") g.fillRect(x + i, y + j, 1, 1);
 }
 
-/** One row of the cue panel at row `y` of the art: its sign, its word, and for DRAFT the meter's empty wells. */
+/**
+ * One row of the cue panel at row `y` of the art, which is empty there: its sign, its word
+ * (printed in the HUD's text colour, then tinted), for DRAFT the meter's empty wells, and the
+ * panel's face behind it all.
+ */
 function cueRow(g: CanvasRenderingContext2D, soft: boolean, y: number, draft: boolean, color: string, signColor: string): void {
   const top = y + Math.round((CUE_ROW - TALL.cap) / 2); // where the capitals start
+  print(g, soft, draft ? "DRAFT" : "BOOST", CUE_TEXT_X, top - TALL.capTop, TALL, TEXT);
+  if (color !== TEXT) {
+    g.globalCompositeOperation = "source-atop"; // only where the letters are
+    g.fillStyle = color;
+    g.fillRect(CUE_TEXT_X, y, widthOf("DRAFT", TALL), CUE_ROW);
+    g.globalCompositeOperation = "source-over";
+  }
   if (draft) sign(g, SIGN_DRAFT, CUE_PAD, top + 1, signColor);
   else sign(g, SIGN_BOOST, CUE_PAD, top, signColor);
-  print(g, soft, draft ? "DRAFT" : "BOOST", CUE_TEXT_X, top - TALL.capTop, TALL, color);
   if (draft) {
     g.fillStyle = DARK;
     for (let k = 0; k < CUE_PIPS; k++) g.fillRect(CUE_PIPS_X + k * PIP_PITCH, y + CUE_PIPS_Y, PIP_W, PIP_H);
   }
+  g.globalCompositeOperation = "destination-over"; // behind what is there
+  g.fillStyle = FACE;
+  g.fillRect(0, y, TL_W, CUE_ROW);
+  g.globalCompositeOperation = "source-over";
 }
 
 /** The cues' pieces: the panel with both rows dark, the two rows lit, the meter's pips lit, the digits. */
 function bakeCues(soft: boolean): HTMLCanvasElement {
   const g = artCanvas(TL_W, CUE_ART_H, soft);
   const UNLIT = P.soot3;
-  panel(g, 0, 0, TL_W, CUE_H);
-  cueRow(g, soft, 2, true, UNLIT, UNLIT);
-  cueRow(g, soft, 2 + CUE_ROW, false, UNLIT, UNLIT);
-  // Lit: a row is copied over the dark one, the panel's two edge pixels left alone.
-  g.fillStyle = FACE;
-  g.fillRect(0, CUE_DRAFT_Y, TL_W, 2 * CUE_ROW);
   cueRow(g, soft, CUE_DRAFT_Y, true, TEXT, P.steel3);
   cueRow(g, soft, CUE_BOOST_Y, false, P.haz1, P.haz2);
+  cueRow(g, soft, CUE_DARK_Y, true, UNLIT, UNLIT);
+  cueRow(g, soft, CUE_DARK_Y + CUE_ROW, false, UNLIT, UNLIT);
+  // The panel: its frame, the two dark rows in it (the panel's two edge pixels left alone).
+  panel(g, 0, 0, TL_W, CUE_H);
+  g.drawImage(g.canvas, 1, CUE_DARK_Y, TL_W - 2, 2 * CUE_ROW, 1, 2, TL_W - 2, 2 * CUE_ROW);
   // The pips: light on a cool ramp, the strongest ones warm (the draft at its full strength).
   for (let k = 0; k < CUE_PIPS; k++) {
     const x = k * PIP_PITCH;
