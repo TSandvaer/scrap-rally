@@ -323,6 +323,9 @@ NEW (user 2026-11-20, game ideas): car types (sport/racer/truck with traction+ac
 (rolling barrels, ramp truck, tyre mound bounce, water/aquaplaning), catch-up mechanic (research other games), floating speed
 pickups (hard to reach, airborne via ramps), branching paths. Opus Plan agent drafting PLAN-M4.md (background); then Fable advisor
 review (user popup: keep the rule for plan reviews), then user approval. MINES-1 deploy still waiting for the user's Manual Deploy.
+PLAN-M4 APPROVED 2026-11-20 (Opus draft, Fable advisor 'sound with changes', 13 binding changes; user decisions in the plan).
+WAVE 1 in flight: M4-BOTS 123jpnbffd8 ctx_2c145cced1d2 (Opus, ~/orca/workspaces/scrap-rally/m4-bots, TSandvaer/m4-bots, :3006) and M4-LOOKS
+123jpnbffd9 ctx_52d5f91b4d80 (Fable, ~/orca/workspaces/scrap-rally/m4-looks, TSandvaer/m4-looks, :3008; contact sheet via `ask` -> show the user).
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
@@ -379,6 +382,8 @@ Manual Deploy only on the user's go-ahead. The user's own dev server runs on :30
 
 | Ticket | Dispatch | Workspace | Branch | Port | Started |
 | --- | --- | --- | --- | --- | --- |
+| 123jpnbffd8 M4-BOTS | ctx_2c145cced1d2 | ~/orca/workspaces/scrap-rally/m4-bots | TSandvaer/m4-bots | 3006 | 2026-11-20 |
+| 123jpnbffd9 M4-LOOKS | ctx_52d5f91b4d80 | ~/orca/workspaces/scrap-rally/m4-looks | TSandvaer/m4-looks | 3008 | 2026-11-20 |
 | 123jpnbfb23 GFX-0 | ctx_27a7a271607b | ~/orca/workspaces/scrap-rally/gfx0 | TSandvaer/gfx0 | 3006 | 2026-11-18 |
 
 ## Queued (milestone 3, PLAN-M3.md; start after solid collisions 123jpnbf6cy and easier-start 123jpnbf3xa merge)
