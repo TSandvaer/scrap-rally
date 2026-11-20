@@ -597,6 +597,85 @@ h2 {
     1px 1px 0 var(--cast);
 }
 
+/* The car each driver races with (M4-CARS): a quiet tag; on a bot's row the host gets a small
+   well with the three cars instead (a native select: the row stays one line at 390 px). */
+.players .tag-pill.car {
+  color: var(--muted-solid);
+}
+
+.players .row-car {
+  flex: none;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text);
+  background: var(--soot0);
+  border: 1px solid var(--line);
+  padding: 1px 0;
+  margin: -2px 0;
+  max-width: 62px;
+}
+
+.players .row-car option {
+  color: var(--text);
+  background: var(--soot0);
+}
+
+/* The garage's Car row (M4-CARS): three cards side by side, each a row well like the shop's
+   items; the car you race with is lit the way your own results row is (rust tab and edge). */
+.car-pick {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.car-card {
+  font: inherit;
+  color: var(--text);
+  text-align: left;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 8px 8px 8px 11px;
+  background: var(--soot0);
+  border: 2px solid var(--line);
+  box-shadow: inset 3px 0 0 var(--dirt0);
+  cursor: pointer;
+  min-width: 0;
+}
+
+.car-card:hover:not(:disabled) {
+  border-color: var(--steel);
+}
+
+.car-card[aria-checked="true"] {
+  border-color: var(--rust-dark);
+  box-shadow: inset 3px 0 0 var(--rust);
+}
+
+.car-card:disabled {
+  cursor: default;
+}
+
+.car-card:disabled:not([aria-checked="true"]) {
+  opacity: 0.5;
+}
+
+.car-card .car-name {
+  font-weight: 700;
+  font-size: 15px;
+}
+
+.car-card[aria-checked="true"] .car-name {
+  color: var(--rust);
+}
+
+.car-card .car-feel {
+  font-size: 11px;
+  line-height: 1.3;
+  color: var(--muted-solid);
+}
+
 /* Add bot: the label, then Easy and Normal sharing the rest of the row. */
 .bot-add .btn {
   flex: 1;
