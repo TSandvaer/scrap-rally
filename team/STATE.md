@@ -319,6 +319,10 @@ QA worker released. Graphics round DONE and LIVE (4819a45). Local main a8182b8 =
 NOTHING IN FLIGHT. Taste copy mines1-taste still on :3009.
 PUSHED 2026-11-20 (user popup "Push MINES-1 now"): origin/main 4819a45..2e9ec7f. Waiting for the user's Manual Deploy; new bundle
 index-pWtsH_4Y.js (live now index-SEQmFjen.js); then a short muted live QA of the Mines setting.
+NEW (user 2026-11-20, game ideas): car types (sport/racer/truck with traction+acceleration), longer tracks with obstacles
+(rolling barrels, ramp truck, tyre mound bounce, water/aquaplaning), catch-up mechanic (research other games), floating speed
+pickups (hard to reach, airborne via ramps), branching paths. Opus Plan agent drafting PLAN-M4.md (background); then Fable advisor
+review (user popup: keep the rule for plan reviews), then user approval. MINES-1 deploy still waiting for the user's Manual Deploy.
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
