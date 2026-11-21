@@ -477,6 +477,9 @@ belt fix, Rule 1 after the actors.ts change, census. Author idles on purpose (ct
 M4-WORLD re-check APPROVE (ctx_ec7f2fc79661, released; tmp/m4-world/REVIEW-m4-world-round2.md; non-blocking: arrows past a short /
 wall-to-wall belt's END inside a bend -> M4-SURF validation rule, noted in PLAN-M4; dust after a put-back near a split). MERGED main 35f9f15;
 gate running. Leftovers for M4-SURF/MOVE/TRACKS written to PLAN-M4 'Notes from implementation (M4-SCHEMA / M4-WORLD)'.
+M4-WORLD gate on main 35f9f15: check clean, sim 765/765, bots 118/118, build ok; ClickUp 123jpnbffqz COMPLETE; m4-world workspace +
+branch removed (the author's idle 'New messages' dispatch ctx_b0424fd8bd4b closed as lost with it: expected, nothing to restart).
+Running: TOUCH-2 only. Local main ahead of origin (c655bd8) by the obstacle art + team notes; push with TOUCH-2 after the user's go.
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
