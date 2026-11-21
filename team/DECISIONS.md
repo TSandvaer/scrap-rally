@@ -105,3 +105,5 @@
 - 2026-11-21 — M4-HARD (user, popup): "Approve with changes" (PLAN-M4 addendum + the 11 Fable advisor changes). Start M4-SCHEMA in parallel (user popup: "Yes, both in parallel").
 - 2026-11-21 — M4-HARD tuning (user, popups): pace band "40-55% of the gap" (Normal-to-flat-out, per track and car type; measured Normal->flat-out gap 12-15% Rust Bowl, 8-9% Crusher Run, 7-9% Overpass Knot). Accuracy: "Add a little miss" (Hard rivet hit rate ~70-80% of shots fired instead of 97-100%, deterministic, never steers to aim).
 - 2026-11-21 — Canvas memory cap (user, popup, before M4-WORLD): "16 MB, count everything" — the total now includes HUD label/font canvases (~1.1 MB; today ~12.8 MB in all), leaving ~3 MB for obstacle art. Replaces the PLAN-GFX 12 MB "added" cap; the speed gate still applies to every art ticket.
+- 2026-11-21 — M4-HARD taste gate (user, popup, frozen copy 247a80c on :3009): "Approve, merge" -> merge after the quick re-check approves.
+- 2026-11-21 — M4-WORLD contact sheet (user, popups): "Go with changes": water gets one muted dark blue-grey tone (palette addition, water only); the press, barrel and truck choices stand.
