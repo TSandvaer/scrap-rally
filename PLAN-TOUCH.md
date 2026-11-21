@@ -105,3 +105,33 @@ Not `client/gfx/*`, `render.ts`, `preview.ts`, `shared/*`, `server/*`.
   speaker/☰ (about 3 x 56 + 2 x 8 = 184 px square), the weapons at the bottom-left; in portrait both sit in the space below the
   top-aligned view.
 - Push: the merged lobby fix (3c2c9e6) goes live together with touch controls, in one push the user approves.
+
+## Addendum 2026-11-21 (after the phone test): TOUCH-2, a floating thumbstick replaces the 8-way pad — PROPOSED
+
+**Why.** User, after driving TOUCH-1 on a real phone (live c655bd8): "the controls on the phone is bad ... how can you hold down
+speed and turn at the same time. Intuitively it should be like the knob on a controller push up and to the sides or down and to
+the sides. the arrows on the right is not a good solution". User choices (popups): the stick **floats under the thumb**;
+**any push up = full gas**.
+
+**Design.**
+1. **Right half of the screen = stick zone.** A touch that lands there sets the stick's centre at that point for the life of the
+   touch; the knob follows the thumb, clamped to radius R. Lifting the thumb hides the stick (centre fades, no output).
+2. **Output** (same `Controls`, no protocol change: `server/room.ts:955-961` already accepts and clamps fractional
+   throttle/steer to -1..1, and `shared/physics.ts:57-60` documents both as -1..1):
+   - steer = proportional to the sideways offset (dead zone, then linear or a mild curve up to 1 at a set share of R);
+   - throttle = +1 when the knob is above the centre beyond a dead zone, -1 when below, 0 inside it (user: "any push up = full
+     gas"); diagonals give gas or brake plus proportional steer.
+   - Values quantized (e.g. steps of 1/64) so prediction and the server see identical numbers and messages stay short.
+3. **Left side unchanged:** FIRE (hold) and MINE (tap) with ammo; the Chat-button move and all TOUCH-1 show/clear rules stay.
+4. **Tuning panel (the sponsor's knob, so a third round is not guessed):** on touch devices with `?debug=1`, a small panel
+   (opened from the Esc menu or a debug corner) with sliders for R, the steer dead zone, the steer curve/full-lock share, the
+   throttle dead zone, and the stick zone's split line; live effect while driving; values kept in localStorage and shown as text
+   to copy back; defaults ship from the user's chosen values.
+5. Keyboard players unchanged; bots unchanged.
+
+**Ticket TOUCH-2 (Opus)** owns `client/input.ts`, `client/main.ts`, `index.html`, `client/style.css`, `client/menu.ts` (only if
+the tuning panel opens from it), an appended sim-test section (stick reducer: centre on touch-down, clamp, dead zones, steer
+curve, throttle sign, quantization, release, merge with keys) and `tools/debug/touch-drive.ts` (update). Accept: the reducer
+tests; touch-drive drives a lap with the stick (gas + steer at once, diagonals, brake/reverse) at 390x844 and 844x390 with the
+pad gone; the tuning panel changes the feel live and persists; keyboard tests identical; check/test/build. Taste gate: the user on
+the phone, live, using the tuning panel; then the chosen values become the defaults.
