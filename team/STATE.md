@@ -388,6 +388,9 @@ APPROVE; main 46c1524 (check clean, sim 669/669, bots 114/114, build ok); ClickU
 released; m4-catchup workspace + branch removed. Taste copy :3009 (node pid 44733) kept for the user's Normal-bot test; remove after.
 Phone can't reach the Mac on Wi-Fi (Tango and Tango_IoT): the Mac sees only the router in ARP, the phone answers no ARP -> likely client
 isolation on the router (hypothesis). Mac IP now 192.168.50.247. Open: user's Normal-bot verdict (fine / faster / Hard level).
+Bot verdict (user popup): ADD A HARD LEVEL; N3 side-by-side fine. Taste copy :3009 stopped (PIDs 44733/44712) and worktree removed.
+M4-HARD proposed as an addendum at the end of PLAN-M4.md; Fable advisor review running (Agent, read-only); then user approval, then
+a ClickUp ticket + Opus worker (can run beside M4-SCHEMA).
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).

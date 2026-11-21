@@ -337,3 +337,42 @@ off-centre (or the lane-0 bot always takes them). Wave 1 (M4-BOTS + M4-LOOKS) co
 - M4-CARS: bot corner scaling uses (grip/7.5)^(1/4) (the square root gave ~5% spread); with equal bot caution all three types lap within
   ~1%, so the types differ in feel (acceleration, grip, dirt, recovery), not raw lap time.
 
+
+## Addendum 2026-11-21: Hard bot level (M4-HARD) — PROPOSED, pending advisor review + user approval
+
+**Why.** User, after racing Normal bots with catch-up on (2026-11-21, popup): "Add a Hard level". Normal stays as it is, Easy is
+unchanged, and the side-by-side after a draft (review N3) is fine as it is. Section 5 listed "a Hard bot level" as out of scope;
+this addendum brings it in. Principle 2.8.4 holds: no hidden rubber band and no cheating stats. Hard only drives, shoots and shops
+better, with the same car, physics, upgrades and ammo rules as everyone else.
+
+**Design (all constants in `shared/botdrive.ts`, next to EASY_*):**
+1. **Level.** `BotLevel = "easy" | "normal" | "hard"`; `isBotLevel`, `BOT_LEVELS`, `addBot` and the lobby "Add bot" control gain
+   Hard. The BOT tag shows the level. Names and car round-robin as today (by add order).
+2. **Pace.** Bend targets (today 200/260/330 by bend sharpness) × `HARD_CORNER` (start ~1.12), brake hysteresis tightened, and the
+   lookahead scaled so the line holds at the higher speed. Tuned by measurement, not guessed: Hard laps 3-6 % faster than Normal on
+   every shipped track and car type, with no more falls, wall hits or dirt time than Normal (`tools/debug/hard-tune.ts` prints lap
+   time, falls and wall contacts for a sweep of the constants).
+3. **Line.** Hard shifts its lane toward the inside of the bend ahead (an apex bias, bounded by halfWidth - car - margin, never over
+   a hole lane or a mine), back to its own lane on straights.
+4. **Catch-up.** Same slipstream and cells as Normal; cells within a wider `HARD_CELL_LANE` (~45).
+5. **Weapons.** Rivets aimed with lead (the target's velocity over the rivet's flight time) instead of "within 15° now"; mines
+   dropped when a solid car is in its wake within ~150 units (minimum 4 s apart, none in the first 6 s) instead of on a fixed timer.
+   No ramming rule unchanged.
+6. **Shopping.** Hard: ammo to a lower floor (20 rivets, 2 mines), then engine and tyres before the welder, then ammo top-up.
+7. **Determinism.** Everything keyed by seat/add order and race steps (advisor change 2); identical on a rerun.
+
+**Ticket M4-HARD (Opus).** Owns `shared/botdrive.ts`, `shared/botshop.ts`, `shared/protocol.ts` (level type), `server/bots.ts`,
+`server/room.ts` (level accept only), `client/main.ts` + `client/game.ts` + `index.html` (lobby control and tag), `scripts/bot-ai.ts`,
+`scripts/botplay.ts` (level arg), own `sim-test`/`bots` sections, `tools/debug/hard-tune.ts` (new). Not `client/gfx/*`, `render.ts`,
+`preview.ts`, `shared/track.ts`, `shared/physics.ts`.
+- Accept:
+  - Easy and Normal bot output is byte-identical before and after (recorded control streams on every shipped track).
+  - 3 Hard server bots finish every shipped track with every car type, identically on a rerun, falls <= Normal's.
+  - Hard laps 3-6 % faster than Normal per track (median over 3 laps, printed per track and type).
+  - A 3 Hard vs 3 Normal race on each track: Hard wins on at least 2 of 3 tracks; wrecks reported.
+  - Median bot step within the M4-BOTS bound (<= 0.05 ms, fail above 0.2 ms); addBot "hard" accepted, a wrong level refused.
+  - `npm run check`, `npm test` twice, `npm run build`.
+- Taste: the user races 3 Hard bots in a frozen copy: "hard but beatable, and it does not feel like cheating".
+
+**Order.** M4-HARD touches only `botdrive.ts` among the shared files, so it can run beside M4-SCHEMA (which owns `track.ts`) within
+the 2-worker cap.

@@ -101,3 +101,4 @@
 - 2026-11-20 — Car types (user, after driving): "generally its a bit too easy to outrun normal bots, otherwise it looks good" -> M4-CARS merged; bot difficulty judged again after catch-up (user: "keep the merge, start catch-up next").
 - 2026-11-21 — M4-FX (user, popup): catch-up visuals approved from the contact sheet (lightning cells, boost flame, slipstream streaks, DRAFT/BOOST HUD panel).
 - 2026-11-21 — M4-DRAFT + M4-CELLS taste gate (user, popup, frozen copy 2d1af22 on :3009): "Approve, merge" -> merge after the quick re-check approves. Bot difficulty: user asked for a link to test Normal bots first (same :3009 copy).
+- 2026-11-21 — Bot difficulty after catch-up (user, popups, after racing Normal bots on :3009): "Add a Hard level" (Normal stays as it is; Easy unchanged). N3 (bots side by side after drafting up) — "Didn't notice / fine": no change.
