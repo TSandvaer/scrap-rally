@@ -1,5 +1,5 @@
 // Keyboard input: arrows or WASD to drive, Space / Z / J for the rivet gun (hold),
-// X / K to drop a mine (tap). Touch: TouchPad below (PLAN-TOUCH). Gamepad comes later.
+// X / K to drop a mine (tap). Touch: TouchPad below (PLAN-TOUCH, a thumbstick). Gamepad comes later.
 
 import type { Controls } from "./game";
 
@@ -62,12 +62,13 @@ function isTyping(t: EventTarget | null): boolean {
   return t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement;
 }
 
-// ---- touch (PLAN-TOUCH) -----------------------------------------------------------
-// On-screen controls for phones: an 8-way pad for the right thumb (up gas, down brake/reverse,
-// left/right steer, the corners both at once; one finger slides through all nine zones, the
-// centre is nothing) and FIRE (hold) / MINE (tap) for the left. They make the same Controls as
-// the keyboard; main.ts merges the two every step (mergeControls). The state machine is a pure
-// reducer (reducePad) so Node tests drive it; TouchPad wires it to the DOM.
+// ---- touch (PLAN-TOUCH, TOUCH-2) -----------------------------------------------------
+// On-screen controls for phones: a floating thumbstick for the right thumb and FIRE (hold) /
+// MINE (tap) for the left. A thumb that lands anywhere in the stick's zone (right of a split line)
+// puts the stick's centre there; pushed up it is full gas, down brake/reverse, sideways steer in
+// proportion, so gas and steer go together. They make the same Controls as the keyboard (steer may
+// be a fraction, as the bots' already is); main.ts merges the two every step (mergeControls). The
+// state machine is a pure reducer (reducePad) so Node tests drive it; TouchPad wires it to the DOM.
 
 /** A box in client (CSS) pixels. */
 export interface Rect {
@@ -77,41 +78,104 @@ export interface Rect {
   height: number;
 }
 
-/** Where the controls are on screen: cached by TouchPad, measured again after a resize. */
+/**
+ * The stick's feel. Distances are shares of the radius, so a bigger stick keeps its feel. The
+ * tuning panel (?debug=1, client/touchtune.ts) changes them live; everywhere else these defaults.
+ */
+export interface StickParams {
+  /** R, CSS px: how far the knob travels from the centre. */
+  radius: number;
+  /** Sideways, share of R: no steer up to here. */
+  steerDead: number;
+  /** Sideways, share of R: full lock from here (well inside R). */
+  steerLock: number;
+  /** Steer between the two: ((offset - dead) / (lock - dead)) ^ curve; 1 = linear, more = finer near the centre. */
+  steerCurve: number;
+  /** Up or down, share of R: no gas or brake up to here; past it full gas (up) or brake/reverse (down). */
+  throttleDead: number;
+  /** The stick's zone starts at this share of the screen's width (the weapons are left of it). */
+  split: number;
+}
+
+export const STICK_DEFAULTS: Readonly<StickParams> = { radius: 60, steerDead: 0.12, steerLock: 0.7, steerCurve: 1.4, throttleDead: 0.3, split: 0.5 };
+
+/** Where things are on screen: cached by TouchPad, measured again after a resize. */
 export interface PadGeometry {
-  pad: Rect; // the 8-way pad's cluster, cut into thirds
+  screen: Rect; // the stage (the visible screen): a stick's centre keeps its full reach inside it
   fire: Rect;
   mine: Rect;
 }
 
 export type PadEvent =
-  | { t: "down"; id: number; cluster: "pad" | "weapons"; x: number; y: number }
+  | { t: "down"; id: number; cluster: "stick" | "weapons"; x: number; y: number }
   | { t: "move"; id: number; x: number; y: number }
   | { t: "up"; id: number } // pointerup, pointercancel, lostpointercapture
   | { t: "release" } // window blur, the page hidden: every finger is up (a mine tapped just before still drops)
-  | { t: "clear" }; // the chat or the menu opened, the pad hid: every finger up and no mine either
+  | { t: "clear" }; // the chat or the menu opened, the controls hid: every finger up and no mine either
+
+/** The thumb on the stick: its pointer id, the centre it set, and where it is now (client px). */
+export interface Stick {
+  readonly id: number;
+  readonly cx: number;
+  readonly cy: number;
+  readonly x: number;
+  readonly y: number;
+}
 
 export interface PadState {
-  /** Fingers on the 8-way pad and the zone each is in: row * 3 + col, 0 = top left, 4 = the centre. */
-  readonly pad: readonly { readonly id: number; readonly zone: number }[];
+  /** The finger that owns the stick (the first one down in its zone), or none. */
+  readonly stick: Stick | null;
   readonly fire: readonly number[]; // fingers holding FIRE
   readonly mineHeld: readonly number[]; // fingers on MINE (lit only; a press is the latch)
   readonly mine: boolean; // MINE pressed since the last read
 }
 
-export const PAD_IDLE: PadState = { pad: [], fire: [], mineHeld: [], mine: false };
+export const PAD_IDLE: PadState = { stick: null, fire: [], mineHeld: [], mine: false };
 
-/** The pad's zone (0..8) of a point: thirds of the pad's box; a finger outside it keeps the nearest edge zone. */
-export function padZone(x: number, y: number, r: Rect): number {
-  const third = (v: number, size: number) => Math.max(0, Math.min(2, Math.floor((v * 3) / size)));
-  return third(y - r.top, r.height) * 3 + third(x - r.left, r.width);
+/** Room for the thumb's contact point at a screen edge (it cannot reach the last pixel). */
+const EDGE_PX = 8;
+
+/**
+ * Where a thumb landing at (x, y) puts the stick's centre: right there, unless that is so close to a
+ * screen edge that the full output toward the edge could not be reached. Then the centre moves
+ * inward just enough: sideways by the full-lock reach, up and down by the gas/brake dead zone (each
+ * plus EDGE_PX). Moving it further (a whole R) would start the stick off pushed: a thumb landing near
+ * the bottom would brake at once.
+ */
+export function stickCentre(x: number, y: number, screen: Rect, p: StickParams): [number, number] {
+  const keep = (v: number, lo: number, size: number, reach: number) => (size <= 2 * reach ? lo + size / 2 : Math.min(lo + size - reach, Math.max(lo + reach, v)));
+  return [keep(x, screen.left, screen.width, p.radius * p.steerLock + EDGE_PX), keep(y, screen.top, screen.height, p.radius * p.throttleDead + EDGE_PX)];
 }
 
-/** A zone as the arrow keys it holds: [throttle, steer]. */
-export function zoneControls(zone: number): [number, number] {
-  const row = Math.floor(zone / 3);
-  const col = zone % 3;
-  return [row === 0 ? 1 : row === 2 ? -1 : 0, col === 0 ? -1 : col === 2 ? 1 : 0];
+/** Two decimals, as Game.step rounds a command before it predicts and sends it; the same both ways, never -0. */
+const hundredths = (v: number) => (Math.sign(v) * Math.round(Math.abs(v) * 100)) / 100 + 0;
+
+/**
+ * The stick's output for the thumb's offset from the centre (client px; y grows downward):
+ * [throttle, steer]. Steer follows the sideways offset (capped at R): nothing inside the dead zone,
+ * then up the curve to full lock (1, the keyboard's) at steerLock; in hundredths, so Game.step's
+ * rounding leaves it as it is. Throttle is digital: 1 above the centre past the dead zone, -1 below.
+ */
+export function stickControls(dx: number, dy: number, p: StickParams): [number, number] {
+  const r = Math.max(1, p.radius);
+  const side = Math.min(1, Math.abs(dx) / r);
+  let steer = 0;
+  if (side > p.steerDead) {
+    const span = p.steerLock - p.steerDead;
+    const u = span > 0 ? Math.min(1, (side - p.steerDead) / span) : 1;
+    steer = hundredths(Math.sign(dx) * u ** Math.max(0.1, p.steerCurve));
+  }
+  const up = -dy / r;
+  return [up > p.throttleDead ? 1 : up < -p.throttleDead ? -1 : 0, steer];
+}
+
+/** Where the knob is drawn: the thumb's offset from the centre, kept within R. */
+export function stickKnob(s: Stick, p: StickParams): [number, number] {
+  const dx = s.x - s.cx;
+  const dy = s.y - s.cy;
+  const d = Math.hypot(dx, dy);
+  const k = d > p.radius ? p.radius / d : 1;
+  return [dx * k, dy * k];
 }
 
 /** FIRE or MINE: the button the point is on, else the nearer one (the gap between them is no dead spot). */
@@ -123,31 +187,34 @@ function weaponAt(x: number, y: number, g: PadGeometry): "fire" | "mine" {
 const without = (ids: readonly number[], id: number) => (ids.includes(id) ? ids.filter((i) => i !== id) : ids);
 
 /**
- * The pad's state machine, pure: each pointer event in, the new state out. Every finger is
- * tracked by its pointer id, so two thumbs (or more fingers) work at once. A finger on the pad is
- * hit-tested again as it moves (it slides from zone to zone); one on FIRE or MINE keeps that
- * button until it lifts. A move or lift of a finger the pad does not know is ignored.
+ * The controls' state machine, pure: each pointer event in, the new state out. Every finger is
+ * tracked by its pointer id, so two thumbs (or more fingers) work at once. The first finger down in
+ * the stick's zone owns the stick until it lifts (later ones there are ignored); it sets the centre
+ * where it lands (stickCentre) and drives by where it is. One on FIRE or MINE keeps that button
+ * until it lifts. A move or lift of a finger the controls do not know is ignored.
  */
-export function reducePad(s: PadState, ev: PadEvent, g: PadGeometry): PadState {
+export function reducePad(s: PadState, ev: PadEvent, g: PadGeometry, p: StickParams = STICK_DEFAULTS): PadState {
   switch (ev.t) {
     case "down": {
-      const up = reducePad(s, { t: "up", id: ev.id }, g); // a reused id starts afresh
-      if (ev.cluster === "pad") return { ...up, pad: [...up.pad, { id: ev.id, zone: padZone(ev.x, ev.y, g.pad) }] };
+      const up = reducePad(s, { t: "up", id: ev.id }, g, p); // a reused id starts afresh
+      if (ev.cluster === "stick") {
+        if (up.stick) return up; // the stick has its thumb
+        const [cx, cy] = stickCentre(ev.x, ev.y, g.screen, p);
+        return { ...up, stick: { id: ev.id, cx, cy, x: ev.x, y: ev.y } };
+      }
       if (weaponAt(ev.x, ev.y, g) === "fire") return { ...up, fire: [...up.fire, ev.id] };
       return { ...up, mineHeld: [...up.mineHeld, ev.id], mine: true };
     }
     case "move": {
-      const i = s.pad.findIndex((f) => f.id === ev.id);
-      if (i < 0) return s;
-      const zone = padZone(ev.x, ev.y, g.pad);
-      if (zone === s.pad[i].zone) return s;
-      return { ...s, pad: s.pad.map((f, k) => (k === i ? { id: f.id, zone } : f)) };
+      const st = s.stick;
+      if (!st || st.id !== ev.id || (st.x === ev.x && st.y === ev.y)) return s;
+      return { ...s, stick: { ...st, x: ev.x, y: ev.y } };
     }
     case "up": {
-      const pad = s.pad.some((f) => f.id === ev.id) ? s.pad.filter((f) => f.id !== ev.id) : s.pad;
+      const stick = s.stick?.id === ev.id ? null : s.stick;
       const fire = without(s.fire, ev.id);
       const mineHeld = without(s.mineHeld, ev.id);
-      return pad === s.pad && fire === s.fire && mineHeld === s.mineHeld ? s : { ...s, pad, fire, mineHeld };
+      return stick === s.stick && fire === s.fire && mineHeld === s.mineHeld ? s : { ...s, stick, fire, mineHeld };
     }
     case "release":
       return { ...PAD_IDLE, mine: s.mine };
@@ -157,24 +224,14 @@ export function reducePad(s: PadState, ev: PadEvent, g: PadGeometry): PadState {
 }
 
 /** What the fingers hold, as the keyboard's Controls; the mine latch is left for readPad. */
-export function padControls(s: PadState): Controls {
-  let up = false;
-  let down = false;
-  let left = false;
-  let right = false;
-  for (const f of s.pad) {
-    const [t, st] = zoneControls(f.zone);
-    up ||= t > 0;
-    down ||= t < 0;
-    left ||= st < 0;
-    right ||= st > 0;
-  }
-  return { throttle: (up ? 1 : 0) - (down ? 1 : 0), steer: (right ? 1 : 0) - (left ? 1 : 0), fire: s.fire.length > 0, mine: s.mine };
+export function padControls(s: PadState, p: StickParams = STICK_DEFAULTS): Controls {
+  const [throttle, steer] = s.stick ? stickControls(s.stick.x - s.stick.cx, s.stick.y - s.stick.cy, p) : [0, 0];
+  return { throttle, steer, fire: s.fire.length > 0, mine: s.mine };
 }
 
 /** One step's read: the controls, and the state with the mine latch taken (as Keyboard.read). */
-export function readPad(s: PadState): [Controls, PadState] {
-  return [padControls(s), s.mine ? { ...s, mine: false } : s];
+export function readPad(s: PadState, p: StickParams = STICK_DEFAULTS): [Controls, PadState] {
+  return [padControls(s, p), s.mine ? { ...s, mine: false } : s];
 }
 
 /** Keyboard and touch together: throttle and steer add up (clamped), fire and mine either. */
@@ -190,9 +247,11 @@ export function isDriveKey(e: KeyboardEvent): boolean {
 }
 
 export interface TouchPadEls {
-  stage: HTMLElement; // gets "touch" while touch is in use and "pad-on" while the pad shows
-  root: HTMLElement; // both clusters
-  pad: HTMLElement; // the 8-way pad's cluster
+  stage: HTMLElement; // gets "touch" while touch is in use and "pad-on" while the controls show; holds the stick's CSS variables
+  root: HTMLElement; // all the controls
+  stick: HTMLElement; // the stick's zone: right of the split line, below the top bar
+  base: HTMLElement; // the stick's gate, shown where the thumb set the centre
+  knob: HTMLElement; // in the gate, under the thumb
   weapons: HTMLElement; // FIRE and MINE's cluster
   fire: HTMLElement;
   mine: HTMLElement;
@@ -202,35 +261,39 @@ export interface TouchPadEls {
 
 /**
  * The on-screen controls in the page. One listener per cluster; hit tests use boxes cached when the
- * pad shows or the window changes (nothing is measured on a move). Classes change only when a
- * finger changes zone or button, the ammo text only when a count changes.
+ * controls show or the window changes (nothing is measured on a move). A move writes the knob's
+ * transform only; classes change only when the stick comes or goes, its throttle changes sign or a
+ * weapon is pressed or let go, the ammo text only when a count changes.
  */
 export class TouchPad {
   /** Touch is in use: a coarse pointer, or a finger on the screen; a driving key turns it off again. */
   touch = false;
   private state: PadState = PAD_IDLE;
-  private geo: PadGeometry | null = null; // null: measured at the next touch
+  private params: StickParams = { ...STICK_DEFAULTS };
+  private geo: (PadGeometry & { zone: Rect }) | null = null; // null: measured at the next touch
   private shown = false;
-  private lit = 0; // bit per pad zone, FIRE = bit 9, MINE = bit 10
+  private hinted = false;
+  private gas = 0; // the knob's colour: the throttle's sign
+  private fireLit = false;
+  private mineLit = false;
   private rivets = -1; // the counts shown
   private mines = -1;
-  private readonly caps: HTMLElement[];
 
   constructor(private readonly els: TouchPadEls) {
-    this.caps = Array.from({ length: 9 }, (_, z) => els.pad.querySelector<HTMLElement>(`[data-zone="${z}"]`)!);
-    const cluster = (el: HTMLElement, name: "pad" | "weapons") => {
+    this.setParams({});
+    const cluster = (el: HTMLElement, name: "stick" | "weapons") => {
       el.addEventListener("pointerdown", (e) => {
         e.preventDefault(); // no focus, no text selection, no mouse events after it
         el.setPointerCapture(e.pointerId);
         this.apply({ t: "down", id: e.pointerId, cluster: name, x: e.clientX, y: e.clientY });
       });
       el.addEventListener("pointermove", (e) => {
-        if (this.state.pad.some((f) => f.id === e.pointerId)) this.apply({ t: "move", id: e.pointerId, x: e.clientX, y: e.clientY });
+        if (this.state.stick?.id === e.pointerId) this.apply({ t: "move", id: e.pointerId, x: e.clientX, y: e.clientY });
       });
       for (const type of ["pointerup", "pointercancel", "lostpointercapture"]) el.addEventListener(type, (e) => this.apply({ t: "up", id: (e as PointerEvent).pointerId }));
       el.addEventListener("contextmenu", (e) => e.preventDefault()); // a long press opens nothing
     };
-    cluster(els.pad, "pad");
+    cluster(els.stick, "stick");
     cluster(els.weapons, "weapons");
     window.addEventListener("blur", () => this.apply({ t: "release" }));
     document.addEventListener("visibilitychange", () => {
@@ -242,7 +305,7 @@ export class TouchPad {
     window.visualViewport?.addEventListener("resize", stale);
     window.visualViewport?.addEventListener("scroll", stale);
     // Touch in use: a coarse pointer from the start, a finger on the screen (any pointerdown of a
-    // touch, in any phase); a driving key hides the pad again (a laptop with a touch screen, a
+    // touch, in any phase); a driving key hides the controls again (a laptop with a touch screen, a
     // tablet with a keyboard).
     const coarse = window.matchMedia("(pointer: coarse)");
     this.setTouch(coarse.matches);
@@ -251,7 +314,25 @@ export class TouchPad {
     window.addEventListener("keydown", (e) => isDriveKey(e) && this.setTouch(false), true);
   }
 
-  /** Show or hide the pad (main.ts, every frame): only a change touches the DOM; hiding lets go of everything. */
+  /** The stick's feel now (a copy). */
+  stickParams(): StickParams {
+    return { ...this.params };
+  }
+
+  /**
+   * Change the stick's feel (the tuning panel, live): the zone's split line and the stick's size
+   * are CSS variables on the stage; a thumb on the stick drives by the new values from the next read.
+   */
+  setParams(change: Partial<StickParams>): void {
+    this.params = { ...this.params, ...change };
+    const st = this.els.stage.style;
+    st.setProperty("--stick-split", `${this.params.split * 100}%`);
+    st.setProperty("--stick-r", `${this.params.radius}px`);
+    this.geo = null;
+    if (this.state.stick) this.drawKnob(this.state.stick);
+  }
+
+  /** Show or hide the controls (main.ts, every frame): only a change touches the DOM; hiding lets go of everything. */
   show(on: boolean): void {
     if (on === this.shown) return;
     this.shown = on;
@@ -261,16 +342,28 @@ export class TouchPad {
     if (!on) this.clear();
   }
 
-  /** Let go of every finger and the mine latch (chat focus, menu open, hidden). */
+  /** The countdown's hint where the stick is (main.ts while the controls show): written on change only. */
+  hint(on: boolean): void {
+    if (on === this.hinted) return;
+    this.hinted = on;
+    this.els.stick.classList.toggle("hint", on);
+  }
+
+  /** Let go of every finger and the mine latch (chat focus, menu open, hidden): the stick goes too. */
   clear(): void {
     this.apply({ t: "clear" });
   }
 
   /** The step's controls (main.ts, every step): the mine latch is taken. */
   read(): Controls {
-    const [ctl, next] = readPad(this.state);
+    const [ctl, next] = readPad(this.state, this.params);
     this.state = next;
     return ctl;
+  }
+
+  /** What the fingers hold now, without taking the mine latch (the tuning panel's readout). */
+  peek(): Controls {
+    return padControls(this.state, this.params);
   }
 
   /** The weapons' counts (rivets, mines); written only when one changed. */
@@ -297,31 +390,55 @@ export class TouchPad {
   }
 
   private apply(ev: PadEvent): void {
-    // Only a finger going down, or one on the pad moving, is hit-tested: the boxes are measured
-    // then if a resize or a show made them stale (never on an ordinary move).
-    const g = ev.t === "down" || ev.t === "move" ? (this.geo ??= this.measure()) : ZERO_GEO;
-    const next = reducePad(this.state, ev, g);
-    if (next === this.state) return;
+    // Only a finger going down is hit-tested: the boxes are measured then if a resize or a show
+    // made them stale (never on a move).
+    const g = ev.t === "down" ? (this.geo ??= this.measure()) : ZERO_GEO;
+    const was = this.state;
+    const next = reducePad(was, ev, g, this.params);
+    if (next === was) return;
     this.state = next;
-    let lit = 0;
-    for (const f of next.pad) lit |= 1 << f.zone;
-    if (next.fire.length) lit |= 1 << 9;
-    if (next.mineHeld.length) lit |= 1 << 10;
-    if (lit === this.lit) return;
-    const was = this.lit;
-    this.lit = lit;
-    const els = [...this.caps, this.els.fire, this.els.mine];
-    for (let b = 0; b < els.length; b++) if (((was ^ lit) >> b) & 1) els[b]?.classList.toggle("on", ((lit >> b) & 1) === 1);
+    const st = next.stick;
+    if (st !== was.stick) {
+      if (st && (!was.stick || st.cx !== was.stick.cx || st.cy !== was.stick.cy)) {
+        // A new thumb: the gate goes where it set the centre (the zone's box is fresh from the down).
+        const z = (this.geo ?? this.measure()).zone;
+        this.els.base.style.transform = `translate3d(${st.cx - z.left}px, ${st.cy - z.top}px, 0)`;
+      }
+      if (!!st !== !!was.stick) {
+        this.els.base.classList.toggle("on", !!st);
+        this.els.stick.classList.toggle("held", !!st);
+      }
+      if (st) this.drawKnob(st);
+      else this.setGas(0);
+    }
+    const fire = next.fire.length > 0;
+    const mine = next.mineHeld.length > 0;
+    if (fire !== this.fireLit) this.els.fire.classList.toggle("on", (this.fireLit = fire));
+    if (mine !== this.mineLit) this.els.mine.classList.toggle("on", (this.mineLit = mine));
   }
 
-  private measure(): PadGeometry {
+  /** The knob under the thumb (a transform only) and its colour: gas, brake or neither. */
+  private drawKnob(st: Stick): void {
+    const [kx, ky] = stickKnob(st, this.params);
+    this.els.knob.style.transform = `translate3d(${kx.toFixed(1)}px, ${ky.toFixed(1)}px, 0)`;
+    this.setGas(stickControls(st.x - st.cx, st.y - st.cy, this.params)[0]);
+  }
+
+  private setGas(gas: number): void {
+    if (gas === this.gas) return;
+    this.gas = gas;
+    this.els.knob.classList.toggle("gas", gas > 0);
+    this.els.knob.classList.toggle("brake", gas < 0);
+  }
+
+  private measure(): PadGeometry & { zone: Rect } {
     const box = (el: HTMLElement): Rect => {
       const r = el.getBoundingClientRect();
       return { left: r.left, top: r.top, width: r.width, height: r.height };
     };
-    return { pad: box(this.els.pad), fire: box(this.els.fire), mine: box(this.els.mine) };
+    return { screen: box(this.els.stage), zone: box(this.els.stick), fire: box(this.els.fire), mine: box(this.els.mine) };
   }
 }
 
 const ZERO_RECT: Rect = { left: 0, top: 0, width: 1, height: 1 };
-const ZERO_GEO: PadGeometry = { pad: ZERO_RECT, fire: ZERO_RECT, mine: ZERO_RECT };
+const ZERO_GEO: PadGeometry = { screen: ZERO_RECT, fire: ZERO_RECT, mine: ZERO_RECT };

@@ -101,7 +101,9 @@ const keyboard = new Keyboard(window);
 const touchPad = new TouchPad({
   stage: $("stage"),
   root: $("touch"),
-  pad: $("touch-pad"),
+  stick: $("touch-stick"),
+  base: $("touch-base"),
+  knob: $("touch-knob"),
   weapons: $("touch-weapons"),
   fire: $("touch-fire"),
   mine: $("touch-mine"),
@@ -157,7 +159,7 @@ const BLAST_SHAKE = 4; // view pixels: a mine under the own car (bumps are 1..3)
 const INTERP_DELAY_MS = 100;
 // Race effects (client/sfx.ts); other cars' event sounds wait out the same delay as the sparks.
 const sounds = new RaceSounds(audio, game, INTERP_DELAY_MS);
-if (debug) (window as unknown as { scrapDebug: unknown }).scrapDebug = { game, jerk, audio, music, sounds };
+if (debug) (window as unknown as { scrapDebug: unknown }).scrapDebug = { game, jerk, audio, music, sounds, touchPad };
 const BUMP_SHAKE_MAX = 3; // screen shake of a bump, 1..3 px of the 640x360 view ...
 const BUMP_SHAKE_PER = 120; // ... 1 px per this much closing speed (units/s)
 let flash = { text: "", until: 0 };
@@ -923,7 +925,7 @@ function soundFrame(): void {
 }
 
 /**
- * The touch pad shows on a touch screen while the own car can drive: the countdown or the race,
+ * The touch controls show on a touch screen while the own car can drive: the countdown or the race,
  * our car on the field and not finished, and no garage, menu or chat over it (PLAN-TOUCH advisor
  * change 2). Polled every frame, since snapshots and events change it; TouchPad touches the DOM
  * only when it changes, and hiding lets go of every finger. The weapons show their ammo.
@@ -938,6 +940,7 @@ function touchFrame(): void {
   const on = padWanted();
   touchPad.show(on);
   if (!on) return;
+  touchPad.hint(game.phase === "countdown"); // where the stick is, until GO
   const [rivets, mines] = game.predictedAmmo();
   touchPad.setAmmo(rivets, mines);
 }
@@ -1041,6 +1044,8 @@ function draw(alpha: number, elapsed: number): void {
 }
 
 if (soundBoard) void import("./soundboard").then((m) => m.mountEffects(m.mountSoundBoard(audio, music), audio));
+// Debug only: the touch stick's tuning panel (client/touchtune.ts, loaded only then; TOUCH-2).
+if (debug && !preview && !bench) void import("./touchtune").then((m) => m.mountTouchTune(touchPad, $("stage")));
 if (preview) {
   ui.menu.classList.add("hidden");
   void import("./preview").then((m) => m.runPreview($<HTMLCanvasElement>("view"), params));

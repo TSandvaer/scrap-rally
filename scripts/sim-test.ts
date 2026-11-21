@@ -10024,174 +10024,314 @@ function schemaDataOnly(): void {
   }).every(Boolean));
 }
 
-// ---- touch controls (TOUCH-1, PLAN-TOUCH: client/input.ts reducePad, mergeControls) ----
+// ---- touch controls (TOUCH-1, TOUCH-2, PLAN-TOUCH: client/input.ts reducePad, the stick, mergeControls) ----
 
-import { isDriveKey, mergeControls, PAD_IDLE, padControls, padZone, readPad, reducePad, zoneControls, type PadEvent, type PadGeometry, type PadState } from "../client/input";
+import {
+  isDriveKey,
+  mergeControls,
+  PAD_IDLE,
+  padControls,
+  readPad,
+  reducePad,
+  STICK_DEFAULTS,
+  stickCentre,
+  stickControls,
+  stickKnob,
+  type PadEvent,
+  type PadGeometry,
+  type PadState,
+  type StickParams,
+} from "../client/input";
 
-// The geometry as a phone in portrait lays it out: the pad 184 px square, FIRE 72 under MINE 60.
+// A phone in portrait: the screen 390 x 844, FIRE 72 under MINE 60 at the bottom left; the stick's
+// zone is the right half (the DOM decides that: a finger landing there arrives as cluster "stick").
 const TOUCH_GEO: PadGeometry = {
-  pad: { left: 190, top: 636, width: 184, height: 184 },
+  screen: { left: 0, top: 0, width: 390, height: 844 },
   fire: { left: 16, top: 748, width: 72, height: 72 },
   mine: { left: 16, top: 680, width: 60, height: 60 },
 };
-/** The centre of a pad zone (row * 3 + col) in client pixels. */
-function zoneAt(zone: number): [number, number] {
-  const r = TOUCH_GEO.pad;
-  return [r.left + ((zone % 3) + 0.5) * (r.width / 3), r.top + (Math.floor(zone / 3) + 0.5) * (r.height / 3)];
-}
-function touchRun(events: PadEvent[], s: PadState = PAD_IDLE): PadState {
-  for (const e of events) s = reducePad(s, e, TOUCH_GEO);
+const SP: StickParams = { ...STICK_DEFAULTS };
+function touchRun(events: PadEvent[], s: PadState = PAD_IDLE, p: StickParams = SP): PadState {
+  for (const e of events) s = reducePad(s, e, TOUCH_GEO, p);
   return s;
 }
-const padDown = (id: number, zone: number): PadEvent => ({ t: "down", id, cluster: "pad", x: zoneAt(zone)[0], y: zoneAt(zone)[1] });
-const padMove = (id: number, zone: number): PadEvent => ({ t: "move", id, x: zoneAt(zone)[0], y: zoneAt(zone)[1] });
-const ctlText = (s: PadState) => {
-  const c = padControls(s);
+/** A thumb down in the stick's zone at (x, y), and moved to (x, y). */
+const stickDown = (id: number, x: number, y: number): PadEvent => ({ t: "down", id, cluster: "stick", x, y });
+const stickMove = (id: number, x: number, y: number): PadEvent => ({ t: "move", id, x, y });
+const fireDown = (id: number): PadEvent => ({ t: "down", id, cluster: "weapons", x: TOUCH_GEO.fire.left + 36, y: TOUCH_GEO.fire.top + 36 });
+const mineDown = (id: number): PadEvent => ({ t: "down", id, cluster: "weapons", x: TOUCH_GEO.mine.left + 30, y: TOUCH_GEO.mine.top + 30 });
+const ctlText = (s: PadState, p: StickParams = SP) => {
+  const c = padControls(s, p);
   return `t${c.throttle} s${c.steer}${c.fire ? " fire" : ""}${c.mine ? " mine" : ""}`;
 };
-// The arrow keys each zone stands for: [throttle, steer], row 0 = up (gas), col 0 = left.
-const ZONE_KEYS: [number, number][] = [[1, -1], [1, 0], [1, 1], [0, -1], [0, 0], [0, 1], [-1, -1], [-1, 0], [-1, 1]];
+/** The stick's output for a thumb dx, dy from where it landed (well away from every edge). */
+const at = (dx: number, dy: number, p: StickParams = SP) => padControls(touchRun([stickDown(1, 290, 560), stickMove(1, 290 + dx, 560 + dy)], PAD_IDLE, p), p);
 
-function touchZones(): void {
-  const centres = Array.from({ length: 9 }, (_, z) => padZone(...zoneAt(z), TOUCH_GEO.pad));
-  check("touch pad: the nine zones are the thirds of the pad's box (row * 3 + col)", centres.every((z, i) => z === i), centres.join(","));
+function touchStickCentre(): void {
+  // A thumb landing in the zone sets the centre right there: nothing yet; the knob sits on it.
+  const s = touchRun([stickDown(1, 290, 560)]);
+  const st = s.stick!;
   check(
-    "touch pad: each zone holds the arrow keys it stands for (up gas, down brake/reverse, left/right steer, the corners both, the centre nothing)",
-    ZONE_KEYS.every(([t, st], z) => zoneControls(z)[0] === t && zoneControls(z)[1] === st),
+    "touch stick: a thumb landing in the zone puts the centre where it landed; nothing is held yet (no gas, no steer)",
+    st.id === 1 && st.cx === 290 && st.cy === 560 && st.x === 290 && st.y === 560 && ctlText(s) === "t0 s0" && stickKnob(st, SP).join(",") === "0,0",
+    JSON.stringify(st),
   );
-  // The gaps between the caps belong to a zone (no dead spots); the edges of a third go to the next one.
-  const r = TOUCH_GEO.pad;
-  const gap = padZone(r.left + 60, r.top + 30, r); // between the top-left and the top cap (caps 56, gap 8)
-  const edge = padZone(r.left + 62, r.top + 124, r); // just past the first third across, the second down
-  check("touch pad: a point in a gap between two caps is in a zone; just past a third's edge is the next zone", gap === 0 && edge === 7, `gap ${gap}, edge ${edge}`);
-  // A thumb that drifts past the pad's edge keeps the edge zone it left by (nothing lets go).
-  const out = [padZone(r.left - 40, r.top + 90, r), padZone(r.left + 90, r.top - 200, r), padZone(r.left + 400, r.top + 400, r), padZone(r.left - 5, r.top - 5, r)];
-  check("touch pad: outside the box a finger keeps the nearest edge zone (left, up, down-right, up-left)", out.join(",") === "3,1,8,0", out.join(","));
+  // Near the right and the bottom edge the centre moves in just as far as full lock (42 + 8 px) and
+  // the gas/brake dead zone (18 + 8 px) need: from there both are still reachable on screen.
+  const right = touchRun([stickDown(2, 385, 560)]).stick!;
+  const bottom = touchRun([stickDown(3, 290, 842)]).stick!;
+  const corner = touchRun([stickDown(4, 389, 843)]).stick!;
+  const inside = touchRun([stickDown(5, 330, 800)]).stick!; // 60 px from the right edge, 44 from the bottom: no shift
+  check(
+    "touch stick: a thumb landing near the right or bottom edge moves the centre in (right: to 390 - 50; bottom: to 844 - 26; a corner: both); further in it stays",
+    right.cx === 340 && right.cy === 560 && bottom.cx === 290 && bottom.cy === 818 && corner.cx === 340 && corner.cy === 818 && inside.cx === 330 && inside.cy === 800,
+    `right ${right.cx},${right.cy}; bottom ${bottom.cx},${bottom.cy}; corner ${corner.cx},${corner.cy}; inside ${inside.cx},${inside.cy}`,
+  );
+  // From the shifted centre the screen's last pixels still give full lock and brake.
+  const lock = padControls(touchRun([stickDown(2, 385, 560), stickMove(2, 389, 560)]));
+  const brake = padControls(touchRun([stickDown(3, 290, 842), stickMove(3, 290, 843)]));
+  const shifted = stickCentre(385, 560, TOUCH_GEO.screen, SP);
+  check(
+    "touch stick: from an edge-shifted centre full lock toward that edge and brake at the bottom stay reachable on screen (stickCentre is what the reducer uses)",
+    lock.steer === 1 && brake.throttle === -1 && shifted.join(",") === "340,560",
+    `right edge: ${JSON.stringify(lock)}; bottom edge: ${JSON.stringify(brake)}`,
+  );
+  // A screen too small for the reach both ways (a tiny window) puts the centre in its middle.
+  const tiny = stickCentre(5, 5, { left: 0, top: 0, width: 60, height: 30 }, SP);
+  check("touch stick: a screen narrower than the reach both ways centres the stick (no flipping past the middle)", tiny.join(",") === "30,15", tiny.join(","));
 }
 
-function touchSlide(): void {
-  // One finger down in the centre (nothing), then round all eight zones and back: each its keys.
-  const ring = [1, 2, 5, 8, 7, 6, 3, 0, 1, 4];
-  let s = touchRun([padDown(1, 4)]);
-  const seen = [ctlText(s)];
-  let ok = padControls(s).throttle === 0 && padControls(s).steer === 0;
-  for (const z of ring) {
-    s = reducePad(s, padMove(1, z), TOUCH_GEO);
-    const c = padControls(s);
-    ok &&= c.throttle === ZONE_KEYS[z][0] && c.steer === ZONE_KEYS[z][1] && !c.fire && !c.mine && s.pad.length === 1 && s.pad[0].zone === z;
+function touchStickClamp(): void {
+  // The knob follows the thumb but stays within R; the output caps at full lock and full gas.
+  const far = touchRun([stickDown(1, 290, 560), stickMove(1, 290 + 200, 560 - 200)]);
+  const [kx, ky] = stickKnob(far.stick!, SP);
+  const near = touchRun([stickDown(1, 290, 560), stickMove(1, 290 + 30, 560 - 20)]);
+  const [nx, ny] = stickKnob(near.stick!, SP);
+  check(
+    "touch stick: the knob follows the thumb inside R and stops on R past it (along the thumb's direction); the output caps at full gas and steer 1",
+    Math.abs(Math.hypot(kx, ky) - SP.radius) < 1e-9 && Math.abs(kx + ky) < 1e-9 && nx === 30 && ny === -20 && ctlText(far) === "t1 s1",
+    `far knob ${kx.toFixed(2)},${ky.toFixed(2)} (|${Math.hypot(kx, ky).toFixed(2)}|), near ${nx},${ny}; far ${ctlText(far)}`,
+  );
+  // A thumb far up keeps its steer (sideways offset, capped at R), as a thumb holding gas drifts up.
+  const highRight = at(30, -150);
+  check("touch stick: a thumb pushed far up still steers by its sideways offset (gas held, the thumb drifting up)", highRight.throttle === 1 && highRight.steer === at(30, -30).steer && highRight.steer > 0.5, JSON.stringify(highRight));
+}
+
+function touchStickDead(): void {
+  // Steer dead zone: 0.12 R = 7.2 px each way; just past it a little steer.
+  const steers = [0, 3, 7, 7.2, 8, -7, -8].map((dx) => at(dx, 0).steer);
+  check(
+    "touch stick: steer dead zone: nothing within 0.12 R (7.2 px) either way, a little just past it",
+    steers.slice(0, 4).every((v) => v === 0) && steers[4] > 0 && steers[4] < 0.05 && steers[5] === 0 && steers[6] === -steers[4],
+    steers.join(", "),
+  );
+  // Throttle dead zone: 0.3 R = 18 px up or down; past it full gas or brake, nothing in between.
+  const thr = [-10, -18, -19, -60, 10, 18, 19, 60].map((dy) => at(0, dy).throttle);
+  check("touch stick: throttle dead zone: nothing within 0.3 R (18 px) up or down; past it up is full gas (1), down brake/reverse (-1), never a fraction", thr.join(",") === "0,0,1,1,0,0,-1,-1", thr.join(","));
+  // Sideways only, with a little vertical wobble inside the dead zone: steer, no gas or brake.
+  const side = [at(40, 10), at(-40, -10)];
+  check("touch stick: a sideways push with a little up/down wobble steers only", side[0].throttle === 0 && side[0].steer > 0.9 && side[1].throttle === 0 && side[1].steer < -0.9, JSON.stringify(side));
+}
+
+function touchStickCurve(): void {
+  // Between the dead zone (7.2 px) and full lock (0.7 R = 42 px): ((d - 7.2) / 34.8) ^ 1.4, rising.
+  const xs: number[] = [];
+  for (let dx = 7.5; dx <= 60; dx += 0.5) xs.push(dx);
+  const ys = xs.map((dx) => at(dx, 0).steer);
+  const rising = ys.every((v, i) => i === 0 || v >= ys[i - 1]);
+  const mid = at(7.2 + 34.8 / 2, 0).steer; // halfway: 0.5 ^ 1.4 = 0.379
+  const lockAt = at(42, 0).steer;
+  const past = at(50, 0).steer;
+  const symmetric = xs.every((dx) => at(-dx, 0).steer === -at(dx, 0).steer);
+  check(
+    "touch stick: steer rises with the sideways offset up the curve (halfway 0.5^1.4 = 0.38), full lock (1, the keyboard's) at 0.7 R = 42 px, well inside R; left mirrors right",
+    rising && mid === 0.38 && lockAt === 1 && past === 1 && symmetric,
+    `halfway ${mid}, at 42 px ${lockAt}, at 50 px ${past}; rising ${rising}, symmetric ${symmetric}`,
+  );
+  // The curve and the lock are parameters: linear halfway is 0.5; a lock at 0.5 R gives 1 at 30 px.
+  const linear = { ...SP, steerCurve: 1 };
+  const short = { ...SP, steerLock: 0.5 };
+  const lin = at(7.2 + 34.8 / 2, 0, linear).steer;
+  const early = at(30, 0, short).steer;
+  // A lock at or inside the dead zone: past the dead zone it is full lock at once (no division by 0).
+  const flat = at(10, 0, { ...SP, steerDead: 0.2, steerLock: 0.1 }).steer;
+  check("touch stick: curve 1 is linear (halfway 0.5); full lock moves with steerLock (0.5 R: 1 at 30 px); a lock inside the dead zone steps to 1", lin === 0.5 && early === 1 && flat === 0 && at(13, 0, { ...SP, steerDead: 0.2, steerLock: 0.1 }).steer === 1, `linear ${lin}, lock 0.5 R at 30 px ${early}, odd params ${flat}`);
+}
+
+function touchStickOutput(): void {
+  // The user's ask: push up and to the side, gas and steer at once, from one finger.
+  const upRight = at(25, -30);
+  const upLeft = at(-25, -30);
+  const downRight = at(25, 30);
+  const downLeft = at(-25, 30);
+  const frac = (v: number) => v !== 0 && Math.abs(v) < 1;
+  check(
+    "touch stick: one finger up and to the right gives full gas (throttle 1) and a fractional steer right at once; up-left the same to the left",
+    upRight.throttle === 1 && frac(upRight.steer) && upRight.steer > 0 && upLeft.throttle === 1 && upLeft.steer === -upRight.steer && !upRight.fire && !upRight.mine,
+    `up-right ${JSON.stringify(upRight)}, up-left ${JSON.stringify(upLeft)}`,
+  );
+  check(
+    "touch stick: diagonals down: brake/reverse (-1) with a fractional steer; straight up, down, left, right: one control each",
+    downRight.throttle === -1 && frac(downRight.steer) && downRight.steer > 0 && downLeft.throttle === -1 && downLeft.steer < 0 &&
+      ctlText(touchRun([stickDown(1, 290, 560), stickMove(1, 290, 500)])) === "t1 s0" &&
+      ctlText(touchRun([stickDown(1, 290, 560), stickMove(1, 290, 620)])) === "t-1 s0" &&
+      ctlText(touchRun([stickDown(1, 290, 560), stickMove(1, 230, 560)])) === "t0 s-1" &&
+      ctlText(touchRun([stickDown(1, 290, 560), stickMove(1, 350, 560)])) === "t0 s1",
+    `down-right ${JSON.stringify(downRight)}, down-left ${JSON.stringify(downLeft)}`,
+  );
+  // A thumb that slides round: up, up-right, right, down-right, down, back to the centre.
+  const path: [number, number][] = [[0, -40], [30, -40], [40, 0], [30, 40], [0, 40], [0, 0]];
+  let s = touchRun([stickDown(7, 290, 560)]);
+  const seen: string[] = [];
+  for (const [dx, dy] of path) {
+    s = reducePad(s, stickMove(7, 290 + dx, 560 + dy), TOUCH_GEO, SP);
     seen.push(ctlText(s));
   }
-  check("touch pad: one finger slides from the centre through all eight zones (corners too) and back; each holds its keys", ok, seen.join(" | "));
-  // Straight across, up to down through the centre and left to right: no zone on the way is skipped.
-  const path: number[] = [];
-  s = touchRun([padDown(7, 1)]);
-  const r = TOUCH_GEO.pad;
-  for (let y = r.top; y < r.top + r.height; y += 4) {
-    s = reducePad(s, { t: "move", id: 7, x: r.left + r.width / 2, y }, TOUCH_GEO);
-    if (path[path.length - 1] !== s.pad[0].zone) path.push(s.pad[0].zone);
+  check(
+    "touch stick: one finger slides gas -> gas+right -> right -> brake+right -> brake -> centre (nothing); the centre stays where it landed",
+    seen[0] === "t1 s0" && seen[1].startsWith("t1 s0.") && seen[2] === `t0 s${Math.round(((40 / 60 - 0.12) / 0.58) ** 1.4 * 100) / 100}` && seen[3].startsWith("t-1 s0.") && seen[4] === "t-1 s0" && seen[5] === "t0 s0" && s.stick!.cx === 290 && s.stick!.cy === 560,
+    seen.join(" | "),
+  );
+  // A move to the same point returns the same state (no DOM write); lifting lets go of everything.
+  const before = touchRun([stickDown(2, 290, 560), stickMove(2, 300, 540)]);
+  const same = reducePad(before, stickMove(2, 300, 540), TOUCH_GEO, SP);
+  const lifted = reducePad(before, { t: "up", id: 2 }, TOUCH_GEO, SP);
+  check("touch stick: a move to the same point returns the same state; lifting the thumb takes the stick away (no output)", same === before && lifted.stick === null && ctlText(lifted) === "t0 s0", ctlText(lifted));
+}
+
+function touchStickRounding(): void {
+  // Game.step rounds throttle and steer to 2 decimals before it predicts and sends (client/game.ts),
+  // and the input goes as JSON: the stick's numbers must come through both unchanged, so the
+  // prediction, the replay and the server step with exactly what the stick gave.
+  const paramSets: StickParams[] = [SP, { ...SP, steerCurve: 1 }, { ...SP, steerCurve: 2.35, steerDead: 0.07, steerLock: 0.93, radius: 47 }, { ...SP, radius: 113, steerCurve: 1.15 }];
+  let n = 0;
+  const bad: string[] = [];
+  const values = new Set<number>();
+  for (const p of paramSets) {
+    for (let dx = -130; dx <= 130; dx += 0.37) {
+      for (const dy of [-70, -p.radius * p.throttleDead - 0.5, 0, 40]) {
+        const c = padControls(touchRun([stickDown(1, 250, 500), stickMove(1, 250 + dx, 500 + dy)], PAD_IDLE, p), p);
+        const merged = mergeControls({ throttle: 0, steer: 0, fire: false, mine: false }, c);
+        for (const v of [c.throttle, c.steer, merged.steer]) {
+          n++;
+          values.add(v);
+          const wire = JSON.parse(JSON.stringify({ v })).v;
+          if (round(v, 2) !== v || wire !== v || Object.is(v, -0) || v < -1 || v > 1) bad.push(`${v} (dx ${dx.toFixed(2)})`);
+        }
+      }
+    }
   }
-  check("touch pad: a finger dragged top to bottom goes gas -> nothing -> brake", path.join(",") === "1,4,7", path.join(","));
-  // A move that stays in its zone changes nothing (same state object: no class is written).
-  const before = touchRun([padDown(2, 1)]);
-  const [x, y] = zoneAt(1);
-  const after = reducePad(before, { t: "move", id: 2, x: x + 5, y: y - 5 }, TOUCH_GEO);
-  check("touch pad: a move inside the same zone returns the same state", after === before);
-  // Lifting the finger lets go.
-  s = touchRun([padDown(3, 2), { t: "up", id: 3 }]);
-  check("touch pad: lifting the finger lets go of everything", ctlText(s) === "t0 s0" && s.pad.length === 0, ctlText(s));
+  const tuples = JSON.parse(JSON.stringify([[1, at(25, -30).throttle, at(25, -30).steer, 0]]));
+  check(
+    "touch stick: every throttle and steer the stick gives (4 parameter sets, a sweep of offsets) survives game.ts's round(v, 2) and a JSON round trip unchanged, never -0, within -1..1",
+    bad.length === 0 && values.size > 150 && tuples[0][2] === at(25, -30).steer,
+    `${n} values, ${values.size} distinct${bad.length ? `; bad: ${bad.slice(0, 5).join(", ")}` : ""}`,
+  );
+}
+
+function touchStickOwner(): void {
+  // The first finger down in the zone owns the stick; a second one there is ignored (its down, its
+  // moves, its lift), and does not take over when the first lifts; a fresh finger after that does.
+  const one = touchRun([stickDown(1, 290, 560), stickMove(1, 290, 520)]);
+  const two = reducePad(one, stickDown(2, 340, 700), TOUCH_GEO, SP);
+  const twoMoved = reducePad(two, stickMove(2, 380, 600), TOUCH_GEO, SP);
+  const twoUp = reducePad(twoMoved, { t: "up", id: 2 }, TOUCH_GEO, SP);
+  check(
+    "touch stick owner: a second finger landing in the zone while the first holds the stick changes nothing (same state); its moves and lift neither",
+    two === one && twoMoved === one && twoUp === one && ctlText(one) === "t1 s0",
+    ctlText(twoUp),
+  );
+  const firstUp = touchRun([stickDown(2, 340, 700), { t: "up", id: 1 }, stickMove(2, 380, 650)], one);
+  const fresh = touchRun([stickDown(3, 300, 600)], firstUp);
+  check(
+    "touch stick owner: when the first finger lifts the stick is gone; a finger that landed while it was owned stays ignored; a new finger takes the stick at its own point",
+    firstUp.stick === null && ctlText(firstUp) === "t0 s0" && fresh.stick?.id === 3 && fresh.stick.cx === 300 && fresh.stick.cy === 600,
+    `${ctlText(firstUp)}; then ${JSON.stringify(fresh.stick)}`,
+  );
+  // A pointer id that goes down again (reused) starts afresh at its new point.
+  const reused = touchRun([stickDown(6, 290, 560), stickMove(6, 290, 500), stickDown(6, 320, 700)]);
+  check("touch stick owner: a pointer id that goes down again sets a new centre where it lands (nothing held)", reused.stick?.cx === 320 && reused.stick.cy === 700 && ctlText(reused) === "t0 s0", JSON.stringify(reused.stick));
 }
 
 function touchMulti(): void {
-  const [fx, fy] = [TOUCH_GEO.fire.left + 36, TOUCH_GEO.fire.top + 36];
-  const [mx, my] = [TOUCH_GEO.mine.left + 30, TOUCH_GEO.mine.top + 30];
-  // Right thumb on gas, left thumb on FIRE: both at once (the keyboard's up + Space).
-  let s = touchRun([padDown(1, 1), { t: "down", id: 2, cluster: "weapons", x: fx, y: fy }]);
+  // Right thumb on the stick (gas + right), left thumb on FIRE: both at once (the keyboard's up + right + Space).
+  let s = touchRun([stickDown(1, 290, 560), stickMove(1, 315, 520), fireDown(2)]);
   const both = padControls(s);
-  // The pad finger slides to up-right while FIRE stays held.
-  s = reducePad(s, padMove(1, 2), TOUCH_GEO);
+  // The stick thumb slides on while FIRE stays held.
+  s = reducePad(s, stickMove(1, 250, 600), TOUCH_GEO, SP);
   const slid = padControls(s);
   // The FIRE finger slides onto MINE: it keeps FIRE (a weapon finger is bound to its button) and drops nothing.
-  s = reducePad(s, { t: "move", id: 2, x: mx, y: my }, TOUCH_GEO);
+  s = reducePad(s, { t: "move", id: 2, x: TOUCH_GEO.mine.left + 30, y: TOUCH_GEO.mine.top + 30 }, TOUCH_GEO, SP);
   const stuck = padControls(s);
-  // A third finger taps MINE: the latch, FIRE and the pad still held.
-  s = touchRun([{ t: "down", id: 3, cluster: "weapons", x: mx, y: my }, { t: "up", id: 3 }], s);
+  // A third finger taps MINE: the latch, FIRE and the stick still held.
+  s = touchRun([mineDown(3), { t: "up", id: 3 }], s);
   const tapped = padControls(s);
-  // The pad finger lifts: FIRE stays; then FIRE lifts.
-  s = reducePad(s, { t: "up", id: 1 }, TOUCH_GEO);
-  const padUp = padControls(s);
-  s = reducePad(s, { t: "up", id: 2 }, TOUCH_GEO);
+  // The stick thumb lifts: FIRE stays; then FIRE lifts.
+  s = reducePad(s, { t: "up", id: 1 }, TOUCH_GEO, SP);
+  const stickUp = padControls(s);
+  s = reducePad(s, { t: "up", id: 2 }, TOUCH_GEO, SP);
   check(
-    "touch multi: gas and FIRE held at once by two fingers; the pad finger slides on while FIRE holds; a FIRE finger moved onto MINE keeps FIRE",
-    both.throttle === 1 && both.steer === 0 && both.fire && slid.throttle === 1 && slid.steer === 1 && slid.fire && stuck.fire && !stuck.mine && stuck.steer === 1,
+    "touch multi: the stick (gas + right) and FIRE held at once by two thumbs; the stick slides on (brake + left) while FIRE holds; a FIRE finger moved onto MINE keeps FIRE",
+    both.throttle === 1 && both.steer > 0 && both.steer < 1 && both.fire && slid.throttle === -1 && slid.steer < 0 && slid.fire && stuck.fire && !stuck.mine && stuck.steer === slid.steer,
     `both ${JSON.stringify(both)}, slid ${JSON.stringify(slid)}, moved ${JSON.stringify(stuck)}`,
   );
   check(
-    "touch multi: a third finger's MINE tap latches a mine with gas and FIRE still held; each finger lets go of its own control",
-    tapped.mine && tapped.fire && tapped.throttle === 1 && padUp.fire && padUp.throttle === 0 && padUp.steer === 0 && ctlText(s) === "t0 s0 mine",
-    `tap ${JSON.stringify(tapped)}, pad up ${JSON.stringify(padUp)}, end ${ctlText(s)}`,
+    "touch multi: a third finger's MINE tap latches a mine with the stick and FIRE still held; each finger lets go of its own control",
+    tapped.mine && tapped.fire && tapped.throttle === -1 && stickUp.fire && stickUp.throttle === 0 && stickUp.steer === 0 && ctlText(s) === "t0 s0 mine",
+    `tap ${JSON.stringify(tapped)}, stick up ${JSON.stringify(stickUp)}, end ${ctlText(s)}`,
   );
-  // Two fingers on the pad add up as keys do: gas + steer left from two zones; gas + brake cancel.
-  const two = padControls(touchRun([padDown(4, 1), padDown(5, 3)]));
-  const cancel = padControls(touchRun([padDown(4, 1), padDown(5, 7)]));
-  check("touch multi: two fingers on the pad hold both zones' keys (gas + left = up-left); gas and brake together cancel, as up + down", two.throttle === 1 && two.steer === -1 && cancel.throttle === 0, `${JSON.stringify(two)}, ${JSON.stringify(cancel)}`);
-  // A move or lift of a finger the pad never saw go down (it began elsewhere) changes nothing; a reused id starts afresh.
-  const idle = touchRun([padMove(9, 1), { t: "up", id: 9 }]);
-  const reused = touchRun([padDown(6, 1), padDown(6, 7)]);
-  check(
-    "touch multi: a stranger finger's move and lift are ignored; a pointer id that goes down again replaces its old zone",
-    idle === PAD_IDLE && reused.pad.length === 1 && padControls(reused).throttle === -1,
-    `${ctlText(idle)}; ${ctlText(reused)}`,
-  );
+  // A move or lift of a finger the controls never saw go down changes nothing.
+  const idle = touchRun([stickMove(9, 300, 500), { t: "up", id: 9 }]);
+  check("touch multi: a stranger finger's move and lift are ignored", idle === PAD_IDLE, ctlText(idle));
 }
 
 function touchRelease(): void {
-  const held = touchRun([padDown(1, 0), { t: "down", id: 2, cluster: "weapons", x: 30, y: 760 }, { t: "down", id: 3, cluster: "weapons", x: 30, y: 700 }]);
+  const held = touchRun([stickDown(1, 290, 560), stickMove(1, 260, 520), fireDown(2), mineDown(3)]);
   // pointercancel and lostpointercapture come in as "up" for their finger.
   const cancelled = touchRun([{ t: "up", id: 1 }, { t: "up", id: 2 }], held);
-  check("touch release: pointercancel / lostpointercapture (an up of that finger) let go of the pad and FIRE", ctlText(cancelled) === "t0 s0 mine" && cancelled.fire.length === 0, ctlText(cancelled));
+  check("touch release: pointercancel / lostpointercapture (an up of that finger) let go of the stick and FIRE", ctlText(cancelled) === "t0 s0 mine" && cancelled.stick === null && cancelled.fire.length === 0, ctlText(cancelled));
   // Window blur, the page hidden: every finger let go, a mine tapped just before still drops (as the keyboard's blur).
-  const blurred = reducePad(held, { t: "release" }, TOUCH_GEO);
-  check("touch release: window blur / visibilitychange let go of every finger (no stuck gas) and keep the mine latch", ctlText(blurred) === "t0 s0 mine" && blurred.pad.length === 0 && blurred.mineHeld.length === 0, ctlText(blurred));
-  // Chat focus, menu open, the pad hidden: everything, the mine latch too (as Keyboard.clear).
-  const cleared = reducePad(held, { t: "clear" }, TOUCH_GEO);
-  check("touch release: clear (chat focus, menu open, every hide) drops every finger and the mine latch", cleared === PAD_IDLE && ctlText(cleared) === "t0 s0");
+  const blurred = reducePad(held, { t: "release" }, TOUCH_GEO, SP);
+  check("touch release: window blur / visibilitychange let go of every finger (no stuck gas or steer) and keep the mine latch", ctlText(blurred) === "t0 s0 mine" && blurred.stick === null && blurred.mineHeld.length === 0, ctlText(blurred));
+  // Chat focus, menu open, the controls hidden: everything, the mine latch too (as Keyboard.clear); the stick goes (TouchPad hides the knob).
+  const cleared = reducePad(held, { t: "clear" }, TOUCH_GEO, SP);
+  check("touch release: clear (chat focus, menu open, every hide) drops every finger, the stick and the mine latch", cleared === PAD_IDLE && cleared.stick === null && ctlText(cleared) === "t0 s0");
   // After a release the fingers' later moves and lifts change nothing (they must go down again).
-  const later = touchRun([padMove(1, 2), { t: "up", id: 1 }], cleared);
-  check("touch release: a released finger that moves on does not drive until it goes down again", later === PAD_IDLE, ctlText(later));
+  const later = touchRun([stickMove(1, 290, 480), { t: "up", id: 1 }], cleared);
+  check("touch release: a released thumb that moves on does not drive until it goes down again", later === PAD_IDLE, ctlText(later));
 }
 
 function touchMine(): void {
-  const mineDown = (id: number): PadEvent => ({ t: "down", id, cluster: "weapons", x: TOUCH_GEO.mine.left + 30, y: TOUCH_GEO.mine.top + 30 });
   // A tap shorter than a step: down and up before the step reads it, still one mine.
   let s = touchRun([mineDown(1), { t: "up", id: 1 }]);
   let c: ReturnType<typeof padControls>;
-  [c, s] = readPad(s);
+  [c, s] = readPad(s, SP);
   const first = c.mine;
-  [c, s] = readPad(s);
+  [c, s] = readPad(s, SP);
   const second = c.mine;
   // Held across steps: one mine (only the press counts), as a held X key.
   s = touchRun([mineDown(2)], s);
   const reads: boolean[] = [];
   for (let i = 0; i < 3; i++) {
-    [c, s] = readPad(s);
+    [c, s] = readPad(s, SP);
     reads.push(c.mine);
   }
   s = touchRun([{ t: "up", id: 2 }, mineDown(3)], s);
-  [c, s] = readPad(s);
+  [c, s] = readPad(s, SP);
   check(
     "touch mine: a tap shorter than a step is latched and read once; a held MINE is one mine; the next tap another",
     first && !second && reads.join(",") === "true,false,false" && c.mine,
     `tap ${first}/${second}, held ${reads.join(",")}, again ${c.mine}`,
   );
   // FIRE is held, not latched: it reads true every step while held, false after the lift.
-  s = touchRun([{ t: "down", id: 4, cluster: "weapons", x: 50, y: 790 }]);
+  s = touchRun([fireDown(4)]);
   const fires: boolean[] = [];
   for (let i = 0; i < 2; i++) {
-    [c, s] = readPad(s);
+    [c, s] = readPad(s, SP);
     fires.push(c.fire);
   }
-  s = reducePad(s, { t: "up", id: 4 }, TOUCH_GEO);
-  [c, s] = readPad(s);
+  s = reducePad(s, { t: "up", id: 4 }, TOUCH_GEO, SP);
+  [c, s] = readPad(s, SP);
   fires.push(c.fire);
   // The gap between FIRE and MINE is no dead spot: a finger there gets the nearer one.
   const nearMine = touchRun([{ t: "down", id: 5, cluster: "weapons", x: 40, y: 743 }]);
@@ -10201,23 +10341,25 @@ function touchMine(): void {
     fires.join(",") === "true,true,false" && nearMine.mine && nearMine.fire.length === 0 && nearFire.fire.length === 1 && !nearFire.mine,
     `fire ${fires.join(",")}; gap y743 -> ${ctlText(nearMine)}, y746 -> ${ctlText(nearFire)}`,
   );
-  // The read takes the latch and nothing else (a state without a latch is returned as is).
-  const plain = touchRun([padDown(8, 1)]);
-  check("touch mine: a read with no mine pending returns the same state", readPad(plain)[1] === plain);
+  // The read takes the latch and nothing else (a state without a latch is returned as is), and reads the stick.
+  const plain = touchRun([stickDown(8, 290, 560), stickMove(8, 310, 520)]);
+  const [pc, ps] = readPad(plain, SP);
+  check("touch mine: a read with no mine pending returns the same state, with the stick's controls", ps === plain && pc.throttle === 1 && pc.steer > 0, JSON.stringify(pc));
 }
 
 function touchMerge(): void {
   const T = (throttle: number, steer: number, fire = false, mine = false) => ({ throttle, steer, fire, mine });
   const cases: [string, ReturnType<typeof T>, ReturnType<typeof T>, ReturnType<typeof T>][] = [
     ["keys only", T(1, -1, true, false), T(0, 0), T(1, -1, true, false)],
-    ["touch only", T(0, 0), T(-1, 1, false, true), T(-1, 1, false, true)],
-    ["both gas: clamped to 1", T(1, 1), T(1, 1), T(1, 1)],
+    ["touch only", T(0, 0), T(-1, 0.43, false, true), T(-1, 0.43, false, true)],
+    ["both gas: clamped to 1", T(1, 1), T(1, 0.6), T(1, 1)],
     ["key up + touch brake: 0", T(1, -1), T(-1, 1), T(0, 0)],
+    ["key left + stick 0.4 right: -0.6", T(0, -1), T(0, 0.4), T(0, -0.6)],
     ["fire either, mine either", T(0, 0, true, false), T(0, 0, false, true), T(0, 0, true, true)],
   ];
   const bad = cases.filter(([, a, b, want]) => JSON.stringify(mergeControls(a, b)) !== JSON.stringify(want)).map(([n]) => n);
-  check("touch merge: throttle and steer = clamp(sum), fire = OR, mine = OR", bad.length === 0, bad.join(", ") || cases.map(([n]) => n).join("; "));
-  // With the real Keyboard: arrow up held and the pad's brake = 0; the keyboard's mine and the pad's FIRE both reach the step.
+  check("touch merge: throttle and steer = clamp(sum) (a fractional stick steer with a key too), fire = OR, mine = OR", bad.length === 0, bad.join(", ") || cases.map(([n]) => n).join("; "));
+  // With the real Keyboard: arrow up held and the stick's brake = 0; the keyboard's mine and FIRE both reach the step.
   const g = globalThis as unknown as Record<string, unknown>;
   const stubbed = !g.HTMLInputElement;
   if (stubbed) {
@@ -10230,17 +10372,17 @@ function touchMerge(): void {
     const key = (code: string, on: unknown = null) => handlers.get("keydown")!({ code, key: code, repeat: false, target: on, preventDefault() {} });
     key("ArrowUp");
     key("KeyX");
-    let s = touchRun([padDown(1, 7), { t: "down", id: 2, cluster: "weapons", x: 50, y: 790 }]);
-    const [tc, next] = readPad(s);
+    let s = touchRun([stickDown(1, 290, 560), stickMove(1, 290, 620), fireDown(2)]);
+    const [tc, next] = readPad(s, SP);
     s = next;
     const merged = mergeControls(kb.read(), tc);
-    const after = mergeControls(kb.read(), readPad(s)[0]);
+    const after = mergeControls(kb.read(), readPad(s, SP)[0]);
     check(
-      "touch merge: Keyboard.read + the pad: up key and pad brake cancel, the X key's mine and the pad's FIRE both drive; each latch is read once",
+      "touch merge: Keyboard.read + the stick: the up key and the stick's brake cancel, the X key's mine and FIRE both drive; each latch is read once",
       merged.throttle === 0 && merged.steer === 0 && merged.fire && merged.mine && after.throttle === 0 && after.fire && !after.mine,
       `${JSON.stringify(merged)} then ${JSON.stringify(after)}`,
     );
-    // A driving key hides the pad (isDriveKey); typing in a field or another key does not.
+    // A driving key hides the controls (isDriveKey); typing in a field or another key does not.
     const ev = (code: string, target: unknown = null) => ({ code, key: code, target }) as unknown as KeyboardEvent;
     const field = new (g.HTMLInputElement as new () => object)();
     const drive = ["ArrowUp", "KeyW", "KeyS", "KeyA", "KeyD", "Space", "KeyZ", "KeyJ", "KeyX", "KeyK"].every((k) => isDriveKey(ev(k)));
@@ -10252,9 +10394,17 @@ function touchMerge(): void {
       delete g.HTMLTextAreaElement;
     }
   }
+  // The defaults keep full lock well inside R and the stick's direct function agrees with the reducer.
+  const direct = stickControls(25, -30, SP);
+  const viaPad = at(25, -30);
+  check(
+    "touch merge: the defaults put full lock well inside R (0.7 R) past a small dead zone; stickControls is what the reducer reads",
+    STICK_DEFAULTS.steerLock <= 0.8 && STICK_DEFAULTS.steerDead < STICK_DEFAULTS.steerLock && direct[0] === viaPad.throttle && direct[1] === viaPad.steer,
+    JSON.stringify(STICK_DEFAULTS),
+  );
 }
 
-for (const t of [rivets, gating, mines, wrecks, finishing, garage, armDelay, engine, readyCheck, collisions, trackFeatures, roomTrack, jumpsWired, shippedTracks, botDriver, botLaps, mineCap, chatRoom, chatClient, sound, raceSounds, surfaceSounds, audioUnlock, menuHostOnly, menuStop, menuRestart, menuKick, menuLock, menuHandover, menuClient, menuRestartClient, retireRules, retireField, retireRaceEnd, retireGarage, retireRefund, retireOthers, retireNotices, retireClient, pauseRefused, pauseFreeze, pauseResume, pauseHold, pauseAuto, pauseCooldown, pauseGrace, pauseCountdown, pauseControls, pauseClient, musicSwitch, soundMigration, soundLayers, soundServer, soundRandom, soundRoomDrag, soundSliderGrip, soundClient, songs, songPlayer, ghostRivets, minesSetting, minesStay, minesCap, minesFade, minesAtStart, minesCleared, minesPaused, minesClient, botsPointAt, botsAdd, botsKickHost, botsHandover, botsFullRoom, botsSoloStart, botsRace, botsShop, botsTick, botsCpu, botsClient, carsTypes, carsStats, carsPick, carsRejoin, carsBots, carsRunUps, carsBalance, carsCut, carsClient, envRt, envStep, envClient, draftRule, draftStraight, draftClient, draftJumps, draftBots, cellsRule, boostPhysics, cellsServer, cellsClient, cellsValidate, cellsBots, cellsOffCentre, schemaTypes, schemaArrays, schemaLateral, schemaRt, schemaValidate, schemaPreview, schemaDataOnly, hardGolden, hardLevels, hardShop, hardWeapons, hardApex, hardPace, hardTraffic, hardVs, hardClient, hardCpu, touchZones, touchSlide, touchMulti, touchRelease, touchMine, touchMerge]) {
+for (const t of [rivets, gating, mines, wrecks, finishing, garage, armDelay, engine, readyCheck, collisions, trackFeatures, roomTrack, jumpsWired, shippedTracks, botDriver, botLaps, mineCap, chatRoom, chatClient, sound, raceSounds, surfaceSounds, audioUnlock, menuHostOnly, menuStop, menuRestart, menuKick, menuLock, menuHandover, menuClient, menuRestartClient, retireRules, retireField, retireRaceEnd, retireGarage, retireRefund, retireOthers, retireNotices, retireClient, pauseRefused, pauseFreeze, pauseResume, pauseHold, pauseAuto, pauseCooldown, pauseGrace, pauseCountdown, pauseControls, pauseClient, musicSwitch, soundMigration, soundLayers, soundServer, soundRandom, soundRoomDrag, soundSliderGrip, soundClient, songs, songPlayer, ghostRivets, minesSetting, minesStay, minesCap, minesFade, minesAtStart, minesCleared, minesPaused, minesClient, botsPointAt, botsAdd, botsKickHost, botsHandover, botsFullRoom, botsSoloStart, botsRace, botsShop, botsTick, botsCpu, botsClient, carsTypes, carsStats, carsPick, carsRejoin, carsBots, carsRunUps, carsBalance, carsCut, carsClient, envRt, envStep, envClient, draftRule, draftStraight, draftClient, draftJumps, draftBots, cellsRule, boostPhysics, cellsServer, cellsClient, cellsValidate, cellsBots, cellsOffCentre, schemaTypes, schemaArrays, schemaLateral, schemaRt, schemaValidate, schemaPreview, schemaDataOnly, hardGolden, hardLevels, hardShop, hardWeapons, hardApex, hardPace, hardTraffic, hardVs, hardClient, hardCpu, touchStickCentre, touchStickClamp, touchStickDead, touchStickCurve, touchStickOutput, touchStickRounding, touchStickOwner, touchMulti, touchRelease, touchMine, touchMerge]) {
   console.log(`\n# ${t.name}`);
   try {
     t();
