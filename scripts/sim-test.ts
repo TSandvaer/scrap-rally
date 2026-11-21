@@ -10024,7 +10024,237 @@ function schemaDataOnly(): void {
   }).every(Boolean));
 }
 
-for (const t of [rivets, gating, mines, wrecks, finishing, garage, armDelay, engine, readyCheck, collisions, trackFeatures, roomTrack, jumpsWired, shippedTracks, botDriver, botLaps, mineCap, chatRoom, chatClient, sound, raceSounds, surfaceSounds, audioUnlock, menuHostOnly, menuStop, menuRestart, menuKick, menuLock, menuHandover, menuClient, menuRestartClient, retireRules, retireField, retireRaceEnd, retireGarage, retireRefund, retireOthers, retireNotices, retireClient, pauseRefused, pauseFreeze, pauseResume, pauseHold, pauseAuto, pauseCooldown, pauseGrace, pauseCountdown, pauseControls, pauseClient, musicSwitch, soundMigration, soundLayers, soundServer, soundRandom, soundRoomDrag, soundSliderGrip, soundClient, songs, songPlayer, ghostRivets, minesSetting, minesStay, minesCap, minesFade, minesAtStart, minesCleared, minesPaused, minesClient, botsPointAt, botsAdd, botsKickHost, botsHandover, botsFullRoom, botsSoloStart, botsRace, botsShop, botsTick, botsCpu, botsClient, carsTypes, carsStats, carsPick, carsRejoin, carsBots, carsRunUps, carsBalance, carsCut, carsClient, envRt, envStep, envClient, draftRule, draftStraight, draftClient, draftJumps, draftBots, cellsRule, boostPhysics, cellsServer, cellsClient, cellsValidate, cellsBots, cellsOffCentre, schemaTypes, schemaArrays, schemaLateral, schemaRt, schemaValidate, schemaPreview, schemaDataOnly, hardGolden, hardLevels, hardShop, hardWeapons, hardApex, hardPace, hardTraffic, hardVs, hardClient, hardCpu]) {
+// ---- touch controls (TOUCH-1, PLAN-TOUCH: client/input.ts reducePad, mergeControls) ----
+
+import { isDriveKey, mergeControls, PAD_IDLE, padControls, padZone, readPad, reducePad, zoneControls, type PadEvent, type PadGeometry, type PadState } from "../client/input";
+
+// The geometry as a phone in portrait lays it out: the pad 184 px square, FIRE 72 under MINE 60.
+const TOUCH_GEO: PadGeometry = {
+  pad: { left: 190, top: 636, width: 184, height: 184 },
+  fire: { left: 16, top: 748, width: 72, height: 72 },
+  mine: { left: 16, top: 680, width: 60, height: 60 },
+};
+/** The centre of a pad zone (row * 3 + col) in client pixels. */
+function zoneAt(zone: number): [number, number] {
+  const r = TOUCH_GEO.pad;
+  return [r.left + ((zone % 3) + 0.5) * (r.width / 3), r.top + (Math.floor(zone / 3) + 0.5) * (r.height / 3)];
+}
+function touchRun(events: PadEvent[], s: PadState = PAD_IDLE): PadState {
+  for (const e of events) s = reducePad(s, e, TOUCH_GEO);
+  return s;
+}
+const padDown = (id: number, zone: number): PadEvent => ({ t: "down", id, cluster: "pad", x: zoneAt(zone)[0], y: zoneAt(zone)[1] });
+const padMove = (id: number, zone: number): PadEvent => ({ t: "move", id, x: zoneAt(zone)[0], y: zoneAt(zone)[1] });
+const ctlText = (s: PadState) => {
+  const c = padControls(s);
+  return `t${c.throttle} s${c.steer}${c.fire ? " fire" : ""}${c.mine ? " mine" : ""}`;
+};
+// The arrow keys each zone stands for: [throttle, steer], row 0 = up (gas), col 0 = left.
+const ZONE_KEYS: [number, number][] = [[1, -1], [1, 0], [1, 1], [0, -1], [0, 0], [0, 1], [-1, -1], [-1, 0], [-1, 1]];
+
+function touchZones(): void {
+  const centres = Array.from({ length: 9 }, (_, z) => padZone(...zoneAt(z), TOUCH_GEO.pad));
+  check("touch pad: the nine zones are the thirds of the pad's box (row * 3 + col)", centres.every((z, i) => z === i), centres.join(","));
+  check(
+    "touch pad: each zone holds the arrow keys it stands for (up gas, down brake/reverse, left/right steer, the corners both, the centre nothing)",
+    ZONE_KEYS.every(([t, st], z) => zoneControls(z)[0] === t && zoneControls(z)[1] === st),
+  );
+  // The gaps between the caps belong to a zone (no dead spots); the edges of a third go to the next one.
+  const r = TOUCH_GEO.pad;
+  const gap = padZone(r.left + 60, r.top + 30, r); // between the top-left and the top cap (caps 56, gap 8)
+  const edge = padZone(r.left + 62, r.top + 124, r); // just past the first third across, the second down
+  check("touch pad: a point in a gap between two caps is in a zone; just past a third's edge is the next zone", gap === 0 && edge === 7, `gap ${gap}, edge ${edge}`);
+  // A thumb that drifts past the pad's edge keeps the edge zone it left by (nothing lets go).
+  const out = [padZone(r.left - 40, r.top + 90, r), padZone(r.left + 90, r.top - 200, r), padZone(r.left + 400, r.top + 400, r), padZone(r.left - 5, r.top - 5, r)];
+  check("touch pad: outside the box a finger keeps the nearest edge zone (left, up, down-right, up-left)", out.join(",") === "3,1,8,0", out.join(","));
+}
+
+function touchSlide(): void {
+  // One finger down in the centre (nothing), then round all eight zones and back: each its keys.
+  const ring = [1, 2, 5, 8, 7, 6, 3, 0, 1, 4];
+  let s = touchRun([padDown(1, 4)]);
+  const seen = [ctlText(s)];
+  let ok = padControls(s).throttle === 0 && padControls(s).steer === 0;
+  for (const z of ring) {
+    s = reducePad(s, padMove(1, z), TOUCH_GEO);
+    const c = padControls(s);
+    ok &&= c.throttle === ZONE_KEYS[z][0] && c.steer === ZONE_KEYS[z][1] && !c.fire && !c.mine && s.pad.length === 1 && s.pad[0].zone === z;
+    seen.push(ctlText(s));
+  }
+  check("touch pad: one finger slides from the centre through all eight zones (corners too) and back; each holds its keys", ok, seen.join(" | "));
+  // Straight across, up to down through the centre and left to right: no zone on the way is skipped.
+  const path: number[] = [];
+  s = touchRun([padDown(7, 1)]);
+  const r = TOUCH_GEO.pad;
+  for (let y = r.top; y < r.top + r.height; y += 4) {
+    s = reducePad(s, { t: "move", id: 7, x: r.left + r.width / 2, y }, TOUCH_GEO);
+    if (path[path.length - 1] !== s.pad[0].zone) path.push(s.pad[0].zone);
+  }
+  check("touch pad: a finger dragged top to bottom goes gas -> nothing -> brake", path.join(",") === "1,4,7", path.join(","));
+  // A move that stays in its zone changes nothing (same state object: no class is written).
+  const before = touchRun([padDown(2, 1)]);
+  const [x, y] = zoneAt(1);
+  const after = reducePad(before, { t: "move", id: 2, x: x + 5, y: y - 5 }, TOUCH_GEO);
+  check("touch pad: a move inside the same zone returns the same state", after === before);
+  // Lifting the finger lets go.
+  s = touchRun([padDown(3, 2), { t: "up", id: 3 }]);
+  check("touch pad: lifting the finger lets go of everything", ctlText(s) === "t0 s0" && s.pad.length === 0, ctlText(s));
+}
+
+function touchMulti(): void {
+  const [fx, fy] = [TOUCH_GEO.fire.left + 36, TOUCH_GEO.fire.top + 36];
+  const [mx, my] = [TOUCH_GEO.mine.left + 30, TOUCH_GEO.mine.top + 30];
+  // Right thumb on gas, left thumb on FIRE: both at once (the keyboard's up + Space).
+  let s = touchRun([padDown(1, 1), { t: "down", id: 2, cluster: "weapons", x: fx, y: fy }]);
+  const both = padControls(s);
+  // The pad finger slides to up-right while FIRE stays held.
+  s = reducePad(s, padMove(1, 2), TOUCH_GEO);
+  const slid = padControls(s);
+  // The FIRE finger slides onto MINE: it keeps FIRE (a weapon finger is bound to its button) and drops nothing.
+  s = reducePad(s, { t: "move", id: 2, x: mx, y: my }, TOUCH_GEO);
+  const stuck = padControls(s);
+  // A third finger taps MINE: the latch, FIRE and the pad still held.
+  s = touchRun([{ t: "down", id: 3, cluster: "weapons", x: mx, y: my }, { t: "up", id: 3 }], s);
+  const tapped = padControls(s);
+  // The pad finger lifts: FIRE stays; then FIRE lifts.
+  s = reducePad(s, { t: "up", id: 1 }, TOUCH_GEO);
+  const padUp = padControls(s);
+  s = reducePad(s, { t: "up", id: 2 }, TOUCH_GEO);
+  check(
+    "touch multi: gas and FIRE held at once by two fingers; the pad finger slides on while FIRE holds; a FIRE finger moved onto MINE keeps FIRE",
+    both.throttle === 1 && both.steer === 0 && both.fire && slid.throttle === 1 && slid.steer === 1 && slid.fire && stuck.fire && !stuck.mine && stuck.steer === 1,
+    `both ${JSON.stringify(both)}, slid ${JSON.stringify(slid)}, moved ${JSON.stringify(stuck)}`,
+  );
+  check(
+    "touch multi: a third finger's MINE tap latches a mine with gas and FIRE still held; each finger lets go of its own control",
+    tapped.mine && tapped.fire && tapped.throttle === 1 && padUp.fire && padUp.throttle === 0 && padUp.steer === 0 && ctlText(s) === "t0 s0 mine",
+    `tap ${JSON.stringify(tapped)}, pad up ${JSON.stringify(padUp)}, end ${ctlText(s)}`,
+  );
+  // Two fingers on the pad add up as keys do: gas + steer left from two zones; gas + brake cancel.
+  const two = padControls(touchRun([padDown(4, 1), padDown(5, 3)]));
+  const cancel = padControls(touchRun([padDown(4, 1), padDown(5, 7)]));
+  check("touch multi: two fingers on the pad hold both zones' keys (gas + left = up-left); gas and brake together cancel, as up + down", two.throttle === 1 && two.steer === -1 && cancel.throttle === 0, `${JSON.stringify(two)}, ${JSON.stringify(cancel)}`);
+  // A move or lift of a finger the pad never saw go down (it began elsewhere) changes nothing; a reused id starts afresh.
+  const idle = touchRun([padMove(9, 1), { t: "up", id: 9 }]);
+  const reused = touchRun([padDown(6, 1), padDown(6, 7)]);
+  check(
+    "touch multi: a stranger finger's move and lift are ignored; a pointer id that goes down again replaces its old zone",
+    idle === PAD_IDLE && reused.pad.length === 1 && padControls(reused).throttle === -1,
+    `${ctlText(idle)}; ${ctlText(reused)}`,
+  );
+}
+
+function touchRelease(): void {
+  const held = touchRun([padDown(1, 0), { t: "down", id: 2, cluster: "weapons", x: 30, y: 760 }, { t: "down", id: 3, cluster: "weapons", x: 30, y: 700 }]);
+  // pointercancel and lostpointercapture come in as "up" for their finger.
+  const cancelled = touchRun([{ t: "up", id: 1 }, { t: "up", id: 2 }], held);
+  check("touch release: pointercancel / lostpointercapture (an up of that finger) let go of the pad and FIRE", ctlText(cancelled) === "t0 s0 mine" && cancelled.fire.length === 0, ctlText(cancelled));
+  // Window blur, the page hidden: every finger let go, a mine tapped just before still drops (as the keyboard's blur).
+  const blurred = reducePad(held, { t: "release" }, TOUCH_GEO);
+  check("touch release: window blur / visibilitychange let go of every finger (no stuck gas) and keep the mine latch", ctlText(blurred) === "t0 s0 mine" && blurred.pad.length === 0 && blurred.mineHeld.length === 0, ctlText(blurred));
+  // Chat focus, menu open, the pad hidden: everything, the mine latch too (as Keyboard.clear).
+  const cleared = reducePad(held, { t: "clear" }, TOUCH_GEO);
+  check("touch release: clear (chat focus, menu open, every hide) drops every finger and the mine latch", cleared === PAD_IDLE && ctlText(cleared) === "t0 s0");
+  // After a release the fingers' later moves and lifts change nothing (they must go down again).
+  const later = touchRun([padMove(1, 2), { t: "up", id: 1 }], cleared);
+  check("touch release: a released finger that moves on does not drive until it goes down again", later === PAD_IDLE, ctlText(later));
+}
+
+function touchMine(): void {
+  const mineDown = (id: number): PadEvent => ({ t: "down", id, cluster: "weapons", x: TOUCH_GEO.mine.left + 30, y: TOUCH_GEO.mine.top + 30 });
+  // A tap shorter than a step: down and up before the step reads it, still one mine.
+  let s = touchRun([mineDown(1), { t: "up", id: 1 }]);
+  let c: ReturnType<typeof padControls>;
+  [c, s] = readPad(s);
+  const first = c.mine;
+  [c, s] = readPad(s);
+  const second = c.mine;
+  // Held across steps: one mine (only the press counts), as a held X key.
+  s = touchRun([mineDown(2)], s);
+  const reads: boolean[] = [];
+  for (let i = 0; i < 3; i++) {
+    [c, s] = readPad(s);
+    reads.push(c.mine);
+  }
+  s = touchRun([{ t: "up", id: 2 }, mineDown(3)], s);
+  [c, s] = readPad(s);
+  check(
+    "touch mine: a tap shorter than a step is latched and read once; a held MINE is one mine; the next tap another",
+    first && !second && reads.join(",") === "true,false,false" && c.mine,
+    `tap ${first}/${second}, held ${reads.join(",")}, again ${c.mine}`,
+  );
+  // FIRE is held, not latched: it reads true every step while held, false after the lift.
+  s = touchRun([{ t: "down", id: 4, cluster: "weapons", x: 50, y: 790 }]);
+  const fires: boolean[] = [];
+  for (let i = 0; i < 2; i++) {
+    [c, s] = readPad(s);
+    fires.push(c.fire);
+  }
+  s = reducePad(s, { t: "up", id: 4 }, TOUCH_GEO);
+  [c, s] = readPad(s);
+  fires.push(c.fire);
+  // The gap between FIRE and MINE is no dead spot: a finger there gets the nearer one.
+  const nearMine = touchRun([{ t: "down", id: 5, cluster: "weapons", x: 40, y: 743 }]);
+  const nearFire = touchRun([{ t: "down", id: 6, cluster: "weapons", x: 40, y: 746 }]);
+  check(
+    "touch mine: FIRE reads held every step until lifted; a finger in the gap between FIRE and MINE gets the nearer button",
+    fires.join(",") === "true,true,false" && nearMine.mine && nearMine.fire.length === 0 && nearFire.fire.length === 1 && !nearFire.mine,
+    `fire ${fires.join(",")}; gap y743 -> ${ctlText(nearMine)}, y746 -> ${ctlText(nearFire)}`,
+  );
+  // The read takes the latch and nothing else (a state without a latch is returned as is).
+  const plain = touchRun([padDown(8, 1)]);
+  check("touch mine: a read with no mine pending returns the same state", readPad(plain)[1] === plain);
+}
+
+function touchMerge(): void {
+  const T = (throttle: number, steer: number, fire = false, mine = false) => ({ throttle, steer, fire, mine });
+  const cases: [string, ReturnType<typeof T>, ReturnType<typeof T>, ReturnType<typeof T>][] = [
+    ["keys only", T(1, -1, true, false), T(0, 0), T(1, -1, true, false)],
+    ["touch only", T(0, 0), T(-1, 1, false, true), T(-1, 1, false, true)],
+    ["both gas: clamped to 1", T(1, 1), T(1, 1), T(1, 1)],
+    ["key up + touch brake: 0", T(1, -1), T(-1, 1), T(0, 0)],
+    ["fire either, mine either", T(0, 0, true, false), T(0, 0, false, true), T(0, 0, true, true)],
+  ];
+  const bad = cases.filter(([, a, b, want]) => JSON.stringify(mergeControls(a, b)) !== JSON.stringify(want)).map(([n]) => n);
+  check("touch merge: throttle and steer = clamp(sum), fire = OR, mine = OR", bad.length === 0, bad.join(", ") || cases.map(([n]) => n).join("; "));
+  // With the real Keyboard: arrow up held and the pad's brake = 0; the keyboard's mine and the pad's FIRE both reach the step.
+  const g = globalThis as unknown as Record<string, unknown>;
+  const stubbed = !g.HTMLInputElement;
+  if (stubbed) {
+    g.HTMLInputElement = class {};
+    g.HTMLTextAreaElement = class {};
+  }
+  try {
+    const handlers = new Map<string, (e: unknown) => void>();
+    const kb = new Keyboard({ addEventListener: (type: string, fn: (e: unknown) => void) => handlers.set(type, fn) } as unknown as Window);
+    const key = (code: string, on: unknown = null) => handlers.get("keydown")!({ code, key: code, repeat: false, target: on, preventDefault() {} });
+    key("ArrowUp");
+    key("KeyX");
+    let s = touchRun([padDown(1, 7), { t: "down", id: 2, cluster: "weapons", x: 50, y: 790 }]);
+    const [tc, next] = readPad(s);
+    s = next;
+    const merged = mergeControls(kb.read(), tc);
+    const after = mergeControls(kb.read(), readPad(s)[0]);
+    check(
+      "touch merge: Keyboard.read + the pad: up key and pad brake cancel, the X key's mine and the pad's FIRE both drive; each latch is read once",
+      merged.throttle === 0 && merged.steer === 0 && merged.fire && merged.mine && after.throttle === 0 && after.fire && !after.mine,
+      `${JSON.stringify(merged)} then ${JSON.stringify(after)}`,
+    );
+    // A driving key hides the pad (isDriveKey); typing in a field or another key does not.
+    const ev = (code: string, target: unknown = null) => ({ code, key: code, target }) as unknown as KeyboardEvent;
+    const field = new (g.HTMLInputElement as new () => object)();
+    const drive = ["ArrowUp", "KeyW", "KeyS", "KeyA", "KeyD", "Space", "KeyZ", "KeyJ", "KeyX", "KeyK"].every((k) => isDriveKey(ev(k)));
+    const not = [ev("KeyW", field), ev("Escape"), ev("KeyM"), ev("Enter")].every((e) => !isDriveKey(e));
+    check("touch merge: driving keys (arrows/WASD, Space/Z/J, X/K) count as keyboard driving; typing in a field, Esc, M, Enter do not", drive && not);
+  } finally {
+    if (stubbed) {
+      delete g.HTMLInputElement;
+      delete g.HTMLTextAreaElement;
+    }
+  }
+}
+
+for (const t of [rivets, gating, mines, wrecks, finishing, garage, armDelay, engine, readyCheck, collisions, trackFeatures, roomTrack, jumpsWired, shippedTracks, botDriver, botLaps, mineCap, chatRoom, chatClient, sound, raceSounds, surfaceSounds, audioUnlock, menuHostOnly, menuStop, menuRestart, menuKick, menuLock, menuHandover, menuClient, menuRestartClient, retireRules, retireField, retireRaceEnd, retireGarage, retireRefund, retireOthers, retireNotices, retireClient, pauseRefused, pauseFreeze, pauseResume, pauseHold, pauseAuto, pauseCooldown, pauseGrace, pauseCountdown, pauseControls, pauseClient, musicSwitch, soundMigration, soundLayers, soundServer, soundRandom, soundRoomDrag, soundSliderGrip, soundClient, songs, songPlayer, ghostRivets, minesSetting, minesStay, minesCap, minesFade, minesAtStart, minesCleared, minesPaused, minesClient, botsPointAt, botsAdd, botsKickHost, botsHandover, botsFullRoom, botsSoloStart, botsRace, botsShop, botsTick, botsCpu, botsClient, carsTypes, carsStats, carsPick, carsRejoin, carsBots, carsRunUps, carsBalance, carsCut, carsClient, envRt, envStep, envClient, draftRule, draftStraight, draftClient, draftJumps, draftBots, cellsRule, boostPhysics, cellsServer, cellsClient, cellsValidate, cellsBots, cellsOffCentre, schemaTypes, schemaArrays, schemaLateral, schemaRt, schemaValidate, schemaPreview, schemaDataOnly, hardGolden, hardLevels, hardShop, hardWeapons, hardApex, hardPace, hardTraffic, hardVs, hardClient, hardCpu, touchZones, touchSlide, touchMulti, touchRelease, touchMine, touchMerge]) {
   console.log(`\n# ${t.name}`);
   try {
     t();
