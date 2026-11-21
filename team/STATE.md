@@ -505,6 +505,8 @@ SLOT RULE: 2 authors max (CLAUDE.md). Next free slot -> the next startable ticke
 TOUCH-3 done: 424c2f7 (R 95; hint capped 176 at 360x740, moved under the minimap at 844x390; 777/777 + 118/118; touch-drive 96/96).
 Quick Opus review ctx_627ab8cbd55c (tmp/review-touch-3.md). Slot reused: M4-MAP 123jpnbffz7 (Fable) ctx_485a831c0ecb
 (~/orca/workspaces/scrap-rally/m4-map, :3006; spec tmp/spec-m4-map.md) - needs only the split DATA, so it starts now beside SURF-1.
+QA9 live PASS (ctx_e6b6ff0465ff, released; tmp/qa9-live-report.md): LOBBY-FIT 119/119, TOUCH-2 pass, smoke pass, no errors.
+ClickUp LOBBY-FIT 123jpnbffrm + TOUCH-2 123jpnbffxe COMPLETE.
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
