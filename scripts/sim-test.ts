@@ -10076,15 +10076,18 @@ function touchStickCentre(): void {
     st.id === 1 && st.cx === 290 && st.cy === 560 && st.x === 290 && st.y === 560 && ctlText(s) === "t0 s0" && stickKnob(st, SP).join(",") === "0,0",
     JSON.stringify(st),
   );
-  // Near the right and the bottom edge the centre moves in just as far as full lock (42 + 8 px) and
-  // the gas/brake dead zone (18 + 8 px) need: from there both are still reachable on screen.
+  // Near the right and the bottom edge the centre moves in just as far as full lock (0.7 R + 8 px)
+  // and the gas/brake dead zone (0.3 R + 8 px) need: from there both are still reachable on screen.
+  const lockIn = SP.radius * SP.steerLock + 8; // R 95: 74.5 px
+  const gasIn = SP.radius * SP.throttleDead + 8; // R 95: 36.5 px
   const right = touchRun([stickDown(2, 385, 560)]).stick!;
   const bottom = touchRun([stickDown(3, 290, 842)]).stick!;
   const corner = touchRun([stickDown(4, 389, 843)]).stick!;
-  const inside = touchRun([stickDown(5, 330, 800)]).stick!; // 60 px from the right edge, 44 from the bottom: no shift
+  const [ix, iy] = [Math.floor(390 - lockIn) - 1, Math.floor(844 - gasIn) - 1]; // just inside both reaches: no shift
+  const inside = touchRun([stickDown(5, ix, iy)]).stick!;
   check(
-    "touch stick: a thumb landing near the right or bottom edge moves the centre in (right: to 390 - 50; bottom: to 844 - 26; a corner: both); further in it stays",
-    right.cx === 340 && right.cy === 560 && bottom.cx === 290 && bottom.cy === 818 && corner.cx === 340 && corner.cy === 818 && inside.cx === 330 && inside.cy === 800,
+    `touch stick: a thumb landing near the right or bottom edge moves the centre in (right: to 390 - ${lockIn}; bottom: to 844 - ${gasIn}; a corner: both); further in it stays`,
+    right.cx === 390 - lockIn && right.cy === 560 && bottom.cx === 290 && bottom.cy === 844 - gasIn && corner.cx === 390 - lockIn && corner.cy === 844 - gasIn && inside.cx === ix && inside.cy === iy,
     `right ${right.cx},${right.cy}; bottom ${bottom.cx},${bottom.cy}; corner ${corner.cx},${corner.cy}; inside ${inside.cx},${inside.cy}`,
   );
   // From the shifted centre the screen's last pixels still give full lock and brake.
@@ -10093,8 +10096,32 @@ function touchStickCentre(): void {
   const shifted = stickCentre(385, 560, TOUCH_GEO.screen, SP);
   check(
     "touch stick: from an edge-shifted centre full lock toward that edge and brake at the bottom stay reachable on screen (stickCentre is what the reducer uses)",
-    lock.steer === 1 && brake.throttle === -1 && shifted.join(",") === "340,560",
+    lock.steer === 1 && brake.throttle === -1 && shifted.join(",") === `${390 - lockIn},560`,
     `right edge: ${JSON.stringify(lock)}; bottom edge: ${JSON.stringify(brake)}`,
+  );
+  // The phone sizes (TOUCH-3, the shipped R): from any landing point in the stick's zone (right of
+  // the split, from --touch-top = 92 px to the bottom; its corners, edge middles and middle) the
+  // thumb still reaches full lock both ways, gas and brake on screen (x 0..w-1, y 0..h-1).
+  const unreached: string[] = [];
+  let landings = 0;
+  for (const [w, h] of [[390, 844], [844, 390], [360, 740]]) {
+    const geo: PadGeometry = { ...TOUCH_GEO, screen: { left: 0, top: 0, width: w, height: h } };
+    const [zl, zt] = [w * SP.split, 92];
+    for (const x of [zl, (zl + w - 1) / 2, w - 1]) {
+      for (const y of [zt, (zt + h - 1) / 2, h - 1]) {
+        landings++;
+        const s = reducePad(PAD_IDLE, stickDown(1, x, y), geo, SP);
+        const { cx, cy } = s.stick!;
+        const to = (tx: number, ty: number) => padControls(reducePad(s, stickMove(1, Math.max(0, Math.min(w - 1, tx)), Math.max(0, Math.min(h - 1, ty))), geo, SP), SP);
+        const [l, r, g, b] = [to(cx - SP.radius, cy), to(cx + SP.radius, cy), to(cx, cy - SP.radius), to(cx, cy + SP.radius)];
+        if (!(l.steer === -1 && r.steer === 1 && g.throttle === 1 && b.throttle === -1)) unreached.push(`${w}x${h} at ${x},${y}: centre ${cx},${cy}: left ${l.steer}, right ${r.steer}, gas ${g.throttle}, brake ${b.throttle}`);
+      }
+    }
+  }
+  check(
+    `touch stick: at 390x844, 844x390 and 360x740 (R ${SP.radius}) a thumb landing anywhere in the zone (corners, edges, middle) reaches full lock both ways, gas and brake on screen`,
+    landings === 27 && unreached.length === 0,
+    unreached.join(" | ") || `${landings} landings`,
   );
   // A screen too small for the reach both ways (a tiny window) puts the centre in its middle.
   const tiny = stickCentre(5, 5, { left: 0, top: 0, width: 60, height: 30 }, SP);
@@ -10113,57 +10140,74 @@ function touchStickClamp(): void {
     `far knob ${kx.toFixed(2)},${ky.toFixed(2)} (|${Math.hypot(kx, ky).toFixed(2)}|), near ${nx},${ny}; far ${ctlText(far)}`,
   );
   // A thumb far up keeps its steer (sideways offset, capped at R), as a thumb holding gas drifts up.
-  const highRight = at(30, -150);
-  check("touch stick: a thumb pushed far up still steers by its sideways offset (gas held, the thumb drifting up)", highRight.throttle === 1 && highRight.steer === at(30, -30).steer && highRight.steer > 0.5, JSON.stringify(highRight));
+  const R = SP.radius;
+  const highRight = at(R / 2, -2.5 * R);
+  check("touch stick: a thumb pushed far up still steers by its sideways offset (gas held, the thumb drifting up)", highRight.throttle === 1 && highRight.steer === at(R / 2, -R / 2).steer && highRight.steer > 0.5, JSON.stringify(highRight));
 }
 
+// The tests below put the thumb at shares of R (the stick's feel is in shares of R), so they hold
+// for any shipped R; the labels name the pixels at the shipped one.
 function touchStickDead(): void {
-  // Steer dead zone: 0.12 R = 7.2 px each way; just past it a little steer.
-  const steers = [0, 3, 7, 7.2, 8, -7, -8].map((dx) => at(dx, 0).steer);
+  // Steer dead zone: 0.12 R each way; just past it (0.14 R) a little steer.
+  const R = SP.radius;
+  const dz = R * SP.steerDead;
+  const steers = [0, dz / 2, dz - 0.2, dz, 0.14 * R, -(dz - 0.2), -0.14 * R].map((dx) => at(dx, 0).steer);
   check(
-    "touch stick: steer dead zone: nothing within 0.12 R (7.2 px) either way, a little just past it",
+    `touch stick: steer dead zone: nothing within 0.12 R (${dz} px) either way, a little just past it`,
     steers.slice(0, 4).every((v) => v === 0) && steers[4] > 0 && steers[4] < 0.05 && steers[5] === 0 && steers[6] === -steers[4],
     steers.join(", "),
   );
-  // Throttle dead zone: 0.3 R = 18 px up or down; past it full gas or brake, nothing in between.
-  const thr = [-10, -18, -19, -60, 10, 18, 19, 60].map((dy) => at(0, dy).throttle);
-  check("touch stick: throttle dead zone: nothing within 0.3 R (18 px) up or down; past it up is full gas (1), down brake/reverse (-1), never a fraction", thr.join(",") === "0,0,1,1,0,0,-1,-1", thr.join(","));
-  // Sideways only, with a little vertical wobble inside the dead zone: steer, no gas or brake.
-  const side = [at(40, 10), at(-40, -10)];
+  // Throttle dead zone: 0.3 R up or down; past it full gas or brake, nothing in between.
+  const td = R * SP.throttleDead;
+  const thr = [-td / 2, -td, -(td + 1), -R, td / 2, td, td + 1, R].map((dy) => at(0, dy).throttle);
+  check(`touch stick: throttle dead zone: nothing within 0.3 R (${td} px) up or down; past it up is full gas (1), down brake/reverse (-1), never a fraction`, thr.join(",") === "0,0,1,1,0,0,-1,-1", thr.join(","));
+  // Sideways only (past full lock), with a little vertical wobble inside the dead zone: steer, no gas or brake.
+  const side = [at(R * SP.steerLock + 2, td / 2), at(-(R * SP.steerLock + 2), -td / 2)];
   check("touch stick: a sideways push with a little up/down wobble steers only", side[0].throttle === 0 && side[0].steer > 0.9 && side[1].throttle === 0 && side[1].steer < -0.9, JSON.stringify(side));
 }
 
 function touchStickCurve(): void {
-  // Between the dead zone (7.2 px) and full lock (0.7 R = 42 px): ((d - 7.2) / 34.8) ^ 1.4, rising.
+  // Between the dead zone (0.12 R) and full lock (0.7 R): ((d / R - 0.12) / 0.58) ^ 1.4, rising.
+  const R = SP.radius;
+  const dz = R * SP.steerDead;
+  const lock = R * SP.steerLock;
+  const span = lock - dz;
   const xs: number[] = [];
-  for (let dx = 7.5; dx <= 60; dx += 0.5) xs.push(dx);
+  for (let dx = Math.ceil(dz) + 0.5; dx <= R; dx += 0.5) xs.push(dx); // halves: 290 +- dx is exact
   const ys = xs.map((dx) => at(dx, 0).steer);
   const rising = ys.every((v, i) => i === 0 || v >= ys[i - 1]);
-  const mid = at(7.2 + 34.8 / 2, 0).steer; // halfway: 0.5 ^ 1.4 = 0.379
-  const lockAt = at(42, 0).steer;
-  const past = at(50, 0).steer;
+  const mid = at(dz + span / 2, 0).steer; // halfway: 0.5 ^ 1.4 = 0.379
+  const lockAt = at(lock, 0).steer;
+  const past = at(lock + 8, 0).steer;
   const symmetric = xs.every((dx) => at(-dx, 0).steer === -at(dx, 0).steer);
   check(
-    "touch stick: steer rises with the sideways offset up the curve (halfway 0.5^1.4 = 0.38), full lock (1, the keyboard's) at 0.7 R = 42 px, well inside R; left mirrors right",
+    `touch stick: steer rises with the sideways offset up the curve (halfway 0.5^1.4 = 0.38), full lock (1, the keyboard's) at 0.7 R = ${lock} px, well inside R; left mirrors right`,
     rising && mid === 0.38 && lockAt === 1 && past === 1 && symmetric,
-    `halfway ${mid}, at 42 px ${lockAt}, at 50 px ${past}; rising ${rising}, symmetric ${symmetric}`,
+    `halfway ${mid}, at ${lock} px ${lockAt}, at ${lock + 8} px ${past}; rising ${rising}, symmetric ${symmetric}`,
   );
-  // The curve and the lock are parameters: linear halfway is 0.5; a lock at 0.5 R gives 1 at 30 px.
+  // The curve and the lock are parameters: linear halfway is 0.5; a lock at 0.5 R gives 1 at 0.5 R.
   const linear = { ...SP, steerCurve: 1 };
   const short = { ...SP, steerLock: 0.5 };
-  const lin = at(7.2 + 34.8 / 2, 0, linear).steer;
-  const early = at(30, 0, short).steer;
+  const lin = at(dz + span / 2, 0, linear).steer;
+  const early = at(R / 2, 0, short).steer;
   // A lock at or inside the dead zone: past the dead zone it is full lock at once (no division by 0).
-  const flat = at(10, 0, { ...SP, steerDead: 0.2, steerLock: 0.1 }).steer;
-  check("touch stick: curve 1 is linear (halfway 0.5); full lock moves with steerLock (0.5 R: 1 at 30 px); a lock inside the dead zone steps to 1", lin === 0.5 && early === 1 && flat === 0 && at(13, 0, { ...SP, steerDead: 0.2, steerLock: 0.1 }).steer === 1, `linear ${lin}, lock 0.5 R at 30 px ${early}, odd params ${flat}`);
+  const odd = { ...SP, steerDead: 0.2, steerLock: 0.1 };
+  const flat = at(0.16 * R, 0, odd).steer;
+  check(
+    `touch stick: curve 1 is linear (halfway 0.5); full lock moves with steerLock (0.5 R: 1 at ${R / 2} px); a lock inside the dead zone steps to 1`,
+    lin === 0.5 && early === 1 && flat === 0 && at(0.22 * R, 0, odd).steer === 1,
+    `linear ${lin}, lock 0.5 R at ${R / 2} px ${early}, odd params ${flat}`,
+  );
 }
 
 function touchStickOutput(): void {
   // The user's ask: push up and to the side, gas and steer at once, from one finger.
-  const upRight = at(25, -30);
-  const upLeft = at(-25, -30);
-  const downRight = at(25, 30);
-  const downLeft = at(-25, 30);
+  const R = SP.radius;
+  const [sx, sy] = [Math.round(0.4 * R), Math.round(0.5 * R)];
+  const upRight = at(sx, -sy);
+  const upLeft = at(-sx, -sy);
+  const downRight = at(sx, sy);
+  const downLeft = at(-sx, sy);
   const frac = (v: number) => v !== 0 && Math.abs(v) < 1;
   check(
     "touch stick: one finger up and to the right gives full gas (throttle 1) and a fractional steer right at once; up-left the same to the left",
@@ -10173,23 +10217,25 @@ function touchStickOutput(): void {
   check(
     "touch stick: diagonals down: brake/reverse (-1) with a fractional steer; straight up, down, left, right: one control each",
     downRight.throttle === -1 && frac(downRight.steer) && downRight.steer > 0 && downLeft.throttle === -1 && downLeft.steer < 0 &&
-      ctlText(touchRun([stickDown(1, 290, 560), stickMove(1, 290, 500)])) === "t1 s0" &&
-      ctlText(touchRun([stickDown(1, 290, 560), stickMove(1, 290, 620)])) === "t-1 s0" &&
-      ctlText(touchRun([stickDown(1, 290, 560), stickMove(1, 230, 560)])) === "t0 s-1" &&
-      ctlText(touchRun([stickDown(1, 290, 560), stickMove(1, 350, 560)])) === "t0 s1",
+      ctlText(touchRun([stickDown(1, 290, 560), stickMove(1, 290, 560 - R)])) === "t1 s0" &&
+      ctlText(touchRun([stickDown(1, 290, 560), stickMove(1, 290, 560 + R)])) === "t-1 s0" &&
+      ctlText(touchRun([stickDown(1, 290, 560), stickMove(1, 290 - R, 560)])) === "t0 s-1" &&
+      ctlText(touchRun([stickDown(1, 290, 560), stickMove(1, 290 + R, 560)])) === "t0 s1",
     `down-right ${JSON.stringify(downRight)}, down-left ${JSON.stringify(downLeft)}`,
   );
   // A thumb that slides round: up, up-right, right, down-right, down, back to the centre.
-  const path: [number, number][] = [[0, -40], [30, -40], [40, 0], [30, 40], [0, 40], [0, 0]];
+  const g = Math.round((2 * R) / 3);
+  const path: [number, number][] = [[0, -g], [sy, -g], [g, 0], [sy, g], [0, g], [0, 0]];
   let s = touchRun([stickDown(7, 290, 560)]);
   const seen: string[] = [];
   for (const [dx, dy] of path) {
     s = reducePad(s, stickMove(7, 290 + dx, 560 + dy), TOUCH_GEO, SP);
     seen.push(ctlText(s));
   }
+  const rightOnly = Math.round(((g / R - SP.steerDead) / (SP.steerLock - SP.steerDead)) ** SP.steerCurve * 100) / 100;
   check(
     "touch stick: one finger slides gas -> gas+right -> right -> brake+right -> brake -> centre (nothing); the centre stays where it landed",
-    seen[0] === "t1 s0" && seen[1].startsWith("t1 s0.") && seen[2] === `t0 s${Math.round(((40 / 60 - 0.12) / 0.58) ** 1.4 * 100) / 100}` && seen[3].startsWith("t-1 s0.") && seen[4] === "t-1 s0" && seen[5] === "t0 s0" && s.stick!.cx === 290 && s.stick!.cy === 560,
+    seen[0] === "t1 s0" && seen[1].startsWith("t1 s0.") && seen[2] === `t0 s${rightOnly}` && seen[3].startsWith("t-1 s0.") && seen[4] === "t-1 s0" && seen[5] === "t0 s0" && s.stick!.cx === 290 && s.stick!.cy === 560,
     seen.join(" | "),
   );
   // A move to the same point returns the same state (no DOM write); lifting lets go of everything.
@@ -10249,8 +10295,8 @@ function touchStickOwner(): void {
     `${ctlText(firstUp)}; then ${JSON.stringify(fresh.stick)}`,
   );
   // A pointer id that goes down again (reused) starts afresh at its new point.
-  const reused = touchRun([stickDown(6, 290, 560), stickMove(6, 290, 500), stickDown(6, 320, 700)]);
-  check("touch stick owner: a pointer id that goes down again sets a new centre where it lands (nothing held)", reused.stick?.cx === 320 && reused.stick.cy === 700 && ctlText(reused) === "t0 s0", JSON.stringify(reused.stick));
+  const reused = touchRun([stickDown(6, 290, 560), stickMove(6, 290, 500), stickDown(6, 310, 700)]);
+  check("touch stick owner: a pointer id that goes down again sets a new centre where it lands (nothing held)", reused.stick?.cx === 310 && reused.stick.cy === 700 && ctlText(reused) === "t0 s0", JSON.stringify(reused.stick));
 }
 
 function touchMulti(): void {
