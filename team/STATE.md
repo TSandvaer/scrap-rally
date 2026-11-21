@@ -391,6 +391,34 @@ isolation on the router (hypothesis). Mac IP now 192.168.50.247. Open: user's No
 Bot verdict (user popup): ADD A HARD LEVEL; N3 side-by-side fine. Taste copy :3009 stopped (PIDs 44733/44712) and worktree removed.
 M4-HARD proposed as an addendum at the end of PLAN-M4.md; Fable advisor review running (Agent, read-only); then user approval, then
 a ClickUp ticket + Opus worker (can run beside M4-SCHEMA).
+M4-HARD APPROVED (user popup, with the 11 Fable advisor changes; PLAN-M4 addendum). WAVE 4 in flight (both Opus, base main a7fa942):
+- M4-HARD 123jpnbffqh ctx_ab92893722c2 (~/orca/workspaces/scrap-rally/m4-hard, :3006; spec tmp/spec-m4-hard.md). It will `ask` to confirm
+  the pace band (share of the Normal-to-flat-out gap) before locking constants. Taste gate: 3 Hard bots.
+- M4-SCHEMA 123jpnbffqj ctx_293724109f66 (~/orca/workspaces/scrap-rally/m4-schema, :3008; spec tmp/spec-m4-schema.md). Data only, no taste.
+Whichever merges second merges main first and re-proves its hashes. Then M4-WORLD (Fable) needs the 12 MB canvas cap decision first.
+M4-HARD pace band answered (user popups): 40-55% of the Normal-to-flat-out gap; rivet hit rate ~70-80% ('add a little miss').
+M4-SCHEMA done: acee696 (golden hashes 07d6ed0 first; schema-hash SAME x12; 717/717 + 114/114 twice; Preview Yard test track hidden).
+Evidence tmp/m4-schema/. Opus reviewer ctx_59d389e53131 (tmp/review-m4-schema.md). No taste gate (data only): merge on APPROVE + gate.
+Canvas cap (user popup): 16 MB counting everything (HUD/font included; ~12.8 MB today) -> M4-WORLD can start after M4-SCHEMA merges.
+M4-HARD done: 247a80c (golden cdedecb first; Easy/Normal hashes 7/7 same; gap closed 41.5-53.6% = 3.7-6.3% faster; traffic falls H0/N5;
+rivets H77%/N61%, mines H51%/N25%; Hard won 18/18 3v3; step 1.3 us; 692/692 + 116/116 twice). Evidence tmp/m4-hard/. Opus reviewer
+ctx_fbba44ce9791 (tmp/review-m4-hard.md). TASTE COPY :3009 = ~/orca/workspaces/scrap-rally/m4-hard-taste (detached 247a80c, node pid 11831).
+m4-hard conflicts with m4-schema only in the appended sim-test section + tools/debug/README.md: merge SCHEMA first, then the Hard worker
+merges main, resolves, re-proves golden hashes, re-runs tests; quick re-check; merge.
+M4-SCHEMA review APPROVE (ctx_59d389e53131, released; tmp/m4-schema/m4-schema-review.md). Fix round ctx_b013b9ca1eac (follow-up of
+ctx_293724109f66): F1 widen-vs-radius rule must use wall - car half-width (track.ts:1127; near miss sim-test.ts:9510), F2 0-tick barrel
+gutter (track.ts:1075), F3 try to remove the +34 B/query boxed lat (track.ts:578). Then merge (no taste). For M4-SURF later: the
+schema hash needs a wall-contact scenario before the collideWalls refactor (review F4); M4-MOVE owns the truck landing; M4-SURF per-sample isLost.
+M4-HARD review REQUEST_CHANGES (ctx_fbba44ce9791, released; tmp/m4-hard/m4-hard-review.md): BLOCKING bot-ai.ts:48 socket Hard bots keep
+lastMine across races -> no mines after race 1 (server seats fine: resetBotMem). Plus apexMineFree hint for mines behind (:483). Fix sent to
+ctx_ab92893722c2 (one round; a second REQUEST_CHANGES goes to the user). Easy/Normal hashes verified real by the reviewer; 18/18 = pace
+(with Normal's driving Hard wins 9/18). Taste copy :3009 unaffected (lobby bots = server seats).
+M4-SCHEMA fix round done (1a4eb17: reach = wall - half car; barrel gutter >= 1 tick; lat getter +8 B/call); MERGED 2026-11-21 main 8c67b5c
+(check clean, sim 719/719, bots 114/114, build ok); ClickUp 123jpnbffqj complete; workers released; m4-schema workspace + branch removed.
+M4-HARD fix round running as ctx_e36d7bf88127; queued after it: merge main (8c67b5c), keep both appended sections, re-prove golden 7/7 +
+schema-hash 12/12. Then a quick Opus re-check, the user's taste verdict (copy on :3009), merge. Next: M4-WORLD (Fable; 16 MB cap all-in).
+M4-WORLD 123jpnbffqz in flight (Fable): ctx_b0111cbb62bb (~/orca/workspaces/scrap-rally/m4-world, :3008; spec tmp/spec-m4-world.md;
+base main bbc1fad). Contact sheet via ask FIRST -> relay to the user. Bench scene for obstacles is S6 (S5 already = recovery teleport).
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).

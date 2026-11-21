@@ -9572,7 +9572,459 @@ function hardCpu(): void {
   check("hard CPU: the M4-HARD sim-test sections add at most 30 s (printed)", added <= 30, `${added.toFixed(1)} s`);
 }
 
-for (const t of [rivets, gating, mines, wrecks, finishing, garage, armDelay, engine, readyCheck, collisions, trackFeatures, roomTrack, jumpsWired, shippedTracks, botDriver, botLaps, mineCap, chatRoom, chatClient, sound, raceSounds, surfaceSounds, audioUnlock, menuHostOnly, menuStop, menuRestart, menuKick, menuLock, menuHandover, menuClient, menuRestartClient, retireRules, retireField, retireRaceEnd, retireGarage, retireRefund, retireOthers, retireNotices, retireClient, pauseRefused, pauseFreeze, pauseResume, pauseHold, pauseAuto, pauseCooldown, pauseGrace, pauseCountdown, pauseControls, pauseClient, musicSwitch, soundMigration, soundLayers, soundServer, soundRandom, soundRoomDrag, soundSliderGrip, soundClient, songs, songPlayer, ghostRivets, minesSetting, minesStay, minesCap, minesFade, minesAtStart, minesCleared, minesPaused, minesClient, botsPointAt, botsAdd, botsKickHost, botsHandover, botsFullRoom, botsSoloStart, botsRace, botsShop, botsTick, botsCpu, botsClient, carsTypes, carsStats, carsPick, carsRejoin, carsBots, carsRunUps, carsBalance, carsCut, carsClient, envRt, envStep, envClient, draftRule, draftStraight, draftClient, draftJumps, draftBots, cellsRule, boostPhysics, cellsServer, cellsClient, cellsValidate, cellsBots, cellsOffCentre, hardGolden, hardLevels, hardShop, hardWeapons, hardApex, hardPace, hardTraffic, hardVs, hardClient, hardCpu]) {
+// ---- track feature schema (M4-SCHEMA, PLAN-M4.md 2.2-2.6, ClickUp 123jpnbffqj, 2026-11-21) ----
+// Data only: the M4 surfaces, obstacles and split lanes are typed, placed by buildTrack and checked
+// by validateTrack; physics, bots and collisions do not read them yet (M4-SURF, M4-MOVE).
+
+// This section's imports (hoisted like the ones at the top).
+import {
+  BARREL_R,
+  barrelLat,
+  curvatureAt,
+  DRY_LANE_MIN,
+  GRID_SLOTS,
+  gridSlotSL,
+  halfAt,
+  LANE_MIN,
+  PRESS_DOWN,
+  PRESS_UP,
+  PRESS_WARN_TICKS,
+  PRESS_WARNING,
+  pressDown,
+  pressState,
+  SOLID_CLEAR,
+  TRUCK_BAND,
+  TRUCK_CAB,
+  TRUCK_HALF,
+  TRUCK_MIN_SPEED,
+  truckLipAt,
+  wallAt,
+  WIDEN_TAPER,
+  widenAt,
+  type Feature,
+} from "../shared/track";
+import { PREVIEW_YARD, TEST_TRACKS, testTrack } from "../shared/testtracks";
+import { isTrackId } from "../shared/tracks";
+import { CAR_LENGTH } from "../shared/physics";
+
+/** The preview yard's loop with no features: one feature at a time goes on it. */
+const SCHEMA_LOOP: TrackDef = { ...PREVIEW_YARD, id: "schema-loop", features: [], recovery: [0, 3200, 5500] };
+
+/** The preview yard with `extra` features added (and those `drop` picks removed): validateTrack's messages, joined. */
+function schemaErrs(extra: Feature[], drop: (f: Feature) => boolean = () => false): string {
+  const features = [...PREVIEW_YARD.features!.filter((f) => !drop(f)), ...extra];
+  return validateTrack(buildTrack({ ...PREVIEW_YARD, id: "schema-bad", features })).join(" | ");
+}
+
+/** A minimal valid placement of every M4 feature type (the island with the widen it needs). */
+const SCHEMA_ONE: Record<string, Feature[]> = {
+  water: [{ k: "water", s0: 1450, s1: 1620, lat0: -64, lat1: 64 }],
+  dirt: [{ k: "dirt", s0: 6000, s1: 6750, lat0: 28, lat1: 108 }],
+  belt: [{ k: "belt", s0: 8800, s1: 9100, lat0: -64, lat1: 64, vx: -60 }],
+  tyres: [{ k: "tyres", s: 880, lat: 32, r: 26 }],
+  barrels: [{ k: "barrels", s: 1260, n: 3, period: 240, speed: 110 }],
+  truck: [{ k: "truck", s: 3450, lat: 30, len: 110 }],
+  press: [{ k: "press", s: 6820, lat0: 0, lat1: 64, period: 180, down: 60 }],
+  widen: [{ k: "widen", s0: 5750, s1: 7050, left: 60, right: 60 }],
+  island: [{ k: "widen", s0: 5750, s1: 7050, left: 60, right: 60 }, { k: "island", s0: 5900, s1: 6900, lat0: -28, lat1: 28 }],
+};
+
+function schemaTypes(): void {
+  // Each feature type parses (buildTrack puts it in its own array, placed) and validates, alone on the loop.
+  const near = (a: number, b: number) => Math.abs(a - b) < 1e-9;
+  for (const [kind, features] of Object.entries(SCHEMA_ONE)) {
+    const t = buildTrack({ ...SCHEMA_LOOP, id: `schema-${kind}`, features });
+    const errs = validateTrack(t);
+    const f = features[features.length - 1];
+    let placed = false, detail = "";
+    switch (f.k) {
+      case "water":
+        placed = t.water.length === 1 && t.water[0].s0 === f.s0 && t.water[0].lat1 === f.lat1;
+        break;
+      case "dirt":
+        placed = t.dirt.length === 1 && t.dirt[0].s1 === f.s1;
+        break;
+      case "belt":
+        placed = t.belts.length === 1 && t.belts[0].vx === f.vx;
+        break;
+      case "tyres": {
+        const p = pointAt(t, f.s), m = t.tyres[0];
+        placed = t.tyres.length === 1 && near(m.x, p.x - Math.sin(p.h) * f.lat) && near(m.y, p.y + Math.cos(p.h) * f.lat) && m.seg === p.seg;
+        detail = `at ${m.x.toFixed(1)},${m.y.toFixed(1)}`;
+        break;
+      }
+      case "barrels": {
+        const b = t.barrels[0];
+        const span = 2 * t.wall - 2 * BARREL_R;
+        placed = t.barrels.length === 1 && b.lat0 === -t.wall + BARREL_R && b.lat1 === t.wall - BARREL_R && b.offsets.join() === "0,80,160" &&
+          near(b.roll, (span / 110) * TICK_HZ) && near(b.nx, -Math.sin(b.h)) && near(b.ny, Math.cos(b.h));
+        detail = `run ${b.lat0}..${b.lat1}, offsets ${b.offsets.join("/")}, a crossing ${b.roll.toFixed(1)} ticks`;
+        break;
+      }
+      case "truck": {
+        const k = t.trucks[0];
+        const a = pointAt(t, f.s + TRUCK_HALF), z = pointAt(t, f.s + f.len - TRUCK_HALF);
+        placed = t.trucks.length === 1 && k.lip === f.s + f.len - TRUCK_CAB && k.band0 === f.lat - TRUCK_BAND && k.band1 === f.lat + TRUCK_BAND &&
+          near(k.x0, a.x - Math.sin(a.h) * f.lat) && near(k.y1, z.y + Math.cos(z.h) * f.lat);
+        detail = `lip ${k.lip}, band ${k.band0}..${k.band1}`;
+        break;
+      }
+      case "press": {
+        const p = pointAt(t, f.s), m = t.presses[0];
+        placed = t.presses.length === 1 && m.x === p.x && m.y === p.y && m.h === p.h && m.seg === p.seg;
+        break;
+      }
+      case "widen":
+        placed = t.widens.length === 1 && t.halfL.some((h) => h === 64 + 60) && t.wallR.some((w) => w === 64 + 60 + 44);
+        break;
+      case "island":
+        placed = t.islands.length === 1 && t.islands[0].lat0 === -28 && t.widens.length === 1;
+        break;
+    }
+    const others = (["water", "dirt", "belts", "tyres", "barrels", "trucks", "presses", "widens", "islands"] as const).filter((key) => t[key].length > 0);
+    check(`schema types: a ${kind} parses (placed by buildTrack: ${others.join(", ")}) and validates alone on the loop`, placed && errs.length === 0, `${detail}${errs.length ? ` errors: ${errs.join(" | ")}` : ""}`);
+  }
+}
+
+function schemaArrays(): void {
+  // Per-sample half-widths and walls: today's halfWidth and wall everywhere on the shipped tracks
+  // (no widen), and none of the new features on them.
+  const shipped = trackList().filter((e) => CAR_TRACKS.includes(e.id)).map((e) => buildTrack(e.def));
+  const flat = shipped.every((t) => {
+    const n = t.pts.length;
+    return [t.halfL, t.halfR, t.wallL, t.wallR].every((a) => a.length === n) &&
+      t.halfL.every((h, i) => h === t.def.halfWidth && t.halfR[i] === t.def.halfWidth && t.wallL[i] === t.wall && t.wallR[i] === t.wall) &&
+      t.water.length + t.dirt.length + t.belts.length + t.tyres.length + t.barrels.length + t.trucks.length + t.presses.length + t.widens.length + t.islands.length === 0;
+  });
+  check("schema arrays: on every shipped track halfL = halfR = halfWidth and wallL = wallR = wall at every sample; no new features", flat && shipped.length === 3, shipped.map((t) => `${t.def.id}: ${t.pts.length} samples`).join(", "));
+
+  // A widen: 0 at s0, half at s0 + taper/2, full from s0 + taper to s1 - taper, back to 0 at s1; the
+  // per-sample arrays are halfAt/wallAt at each sample.
+  const w = { s0: 5750, s1: 7050, left: 60, right: 40 };
+  const t = buildTrack({ ...SCHEMA_LOOP, id: "schema-widen", features: [{ k: "widen", ...w }] });
+  const at = (s: number) => [halfAt(t, s, -1), halfAt(t, s, 1)].join("/");
+  const ok =
+    at(w.s0) === "64/64" && at(w.s0 - 1) === "64/64" && at(w.s0 + WIDEN_TAPER / 2) === "94/84" && at(w.s0 + WIDEN_TAPER) === "124/104" &&
+    at((w.s0 + w.s1) / 2) === "124/104" && at(w.s1 - WIDEN_TAPER) === "124/104" && at(w.s1 - WIDEN_TAPER / 2) === "94/84" && at(w.s1) === "64/64" &&
+    wallAt(t, 6400, -1) === 124 + 44 && wallAt(t, 6400, 1) === 104 + 44 && widenAt(t, 6400 + t.length, -1) === 60 &&
+    t.halfL.every((h, i) => h === halfAt(t, t.cum[i], -1) && t.halfR[i] === halfAt(t, t.cum[i], 1) && t.wallL[i] === h + 44 && t.wallR[i] === t.halfR[i] + 44);
+  const inWiden = t.cum.map((c, i) => ({ c, i })).filter((x) => x.c > w.s0 && x.c < w.s1);
+  check(
+    "schema arrays: a widen (left 60, right 40) tapers over 120 at each end; halfL/halfR/wallL/wallR are its widths at every sample",
+    ok && inWiden.length > 10,
+    `${inWiden.length} samples inside; s0+60: ${at(w.s0 + 60)}, middle: ${at(6400)}, s1: ${at(w.s1)}`,
+  );
+
+  // The corridor check reads the per-sample walls: a widen that pushes the bottom straight's right
+  // wall up to the top straight (2000 away) is rejected; a smaller one is not.
+  const corridor = (right: number) => validateTrack(buildTrack({ ...SCHEMA_LOOP, id: "schema-corridor", features: [{ k: "widen", s0: 5750, s1: 7050, left: 0, right }] })).join(" | ");
+  const wide = corridor(1900), fine = corridor(1500);
+  check("schema arrays: the corridor check uses the per-sample walls (a widen reaching another section is rejected)", wide.includes("ground corridors overlap") && fine === "", `right 1900: ${wide || "ok"}; right 1500: ${fine || "ok"}`);
+}
+
+function schemaLateral(): void {
+  // nearest() returns the signed lateral offset: + right of travel, - left, |lat| = dist exactly.
+  let worst = 0, worstFar = 0, bad = 0, samples = 0;
+  for (const id of CAR_TRACKS) {
+    const t = trackById(id);
+    for (let i = 0; i < t.pts.length; i += 3) {
+      const p = pointAt(t, t.cum[i] + 1.3);
+      for (const lat of [-100, -40, -2, 2, 40, 100]) {
+        const x = p.x - Math.sin(p.h) * lat, y = p.y + Math.cos(p.h) * lat;
+        const q = queryTrackNear(t, x, y, p.seg), g = queryTrack(t, x, y);
+        samples++;
+        if (Math.abs(q.lat) !== q.dist || Math.sign(q.lat) !== Math.sign(lat) || (g.seg === q.seg && g.lat !== q.lat)) bad++;
+        if (Math.abs(lat) <= 40) worst = Math.max(worst, Math.abs(q.lat - lat));
+        else worstFar = Math.max(worstFar, Math.abs(q.lat - lat));
+      }
+    }
+  }
+  check(
+    "schema lateral: queryTrackNear/queryTrack give the signed lateral offset (+ right of travel, |lat| = dist) on every shipped track",
+    bad === 0 && samples > 1000 && worst < 1,
+    `${samples} points, ${bad} wrong; the most |lat - offset| up to 40 off ${worst.toFixed(4)}, at 100 off ${worstFar.toFixed(2)} (points placed along a segment's normal; 100 off on the inside of a bend tighter than that is nearer another segment)`,
+  );
+}
+
+function schemaRt(): void {
+  // The moving obstacles are pure functions of the race tick: periodic, the same from any call
+  // order and from a second build of the same track (server, client and renderer agree).
+  const t = testTrack(PREVIEW_YARD.id)!, t2 = buildTrack(PREVIEW_YARD);
+  const b = t.barrels[0], b2 = t2.barrels[0];
+  const same = (u: number, v: number) => Object.is(u, v);
+  let periodic = true, determ = true, stagger = true;
+  for (let k = 0; k < b.n; k++) {
+    for (let rt = 0; rt < 3 * b.period; rt++) {
+      const v = barrelLat(b, k, rt);
+      periodic &&= same(v, barrelLat(b, k, rt + b.period)) && same(v, barrelLat(b, k, rt + 9 * b.period));
+      determ &&= same(v, barrelLat(b2, k, rt));
+      stagger &&= same(v, barrelLat(b, 0, rt + b.offsets[k]));
+    }
+  }
+  const shuffled = [517, 3, 240, 1, 999, 0, 77].map((rt) => barrelLat(b, 1, rt)).join();
+  const again = [517, 3, 240, 1, 999, 0, 77].map((rt) => barrelLat(b, 1, rt)).join();
+  // One cycle of barrel 0: from the left wall at |speed| per second, to the right wall, then the gutter.
+  const step = Math.abs(b.speed) / TICK_HZ;
+  const cycle = Array.from({ length: b.period }, (_, rt) => barrelLat(b, 0, rt));
+  const onRoad = cycle.filter((v) => !Number.isNaN(v));
+  const steady = onRoad.every((v, i) => i === 0 || Math.abs(v - onRoad[i - 1] - step) < 1e-9);
+  const gutter = cycle.slice(onRoad.length).every((v) => Number.isNaN(v));
+  const rev = buildTrack({ ...SCHEMA_LOOP, id: "schema-rev", features: [{ k: "barrels", s: 1260, n: 2, period: 200, speed: -90 }] }).barrels[0];
+  check(
+    "schema rt: a barrel's lateral position is periodic in its period, staggered by floor(k * period / n), deterministic (two builds, any call order)",
+    periodic && determ && stagger && shuffled === again,
+    `row of ${b.n}, period ${b.period}, offsets ${b.offsets.join("/")}`,
+  );
+  check(
+    "schema rt: a barrel rolls from the near wall to the far one at |speed| per second, then sits in the gutter (NaN) until its cycle starts again; speed < 0 rolls the other way",
+    steady && gutter && onRoad[0] === b.lat0 && onRoad.length === Math.floor(b.roll) + 1 && onRoad[onRoad.length - 1] <= b.lat1 &&
+      barrelLat(rev, 0, 0) === rev.lat1 && barrelLat(rev, 0, 1) < rev.lat1,
+    `on the road ${onRoad.length} ticks (${onRoad[0]} .. ${onRoad[onRoad.length - 1].toFixed(2)}), in the gutter ${b.period - onRoad.length}; reversed starts at ${rev.lat1}`,
+  );
+
+  // The press: up, then PRESS_WARN_TICKS of warning, then `down` ticks down, every period.
+  const p = t.presses[0], p2 = t2.presses[0];
+  const states = Array.from({ length: p.period }, (_, rt) => pressState(p, rt));
+  const count = (v: number) => states.filter((x) => x === v).length;
+  const firstDown = states.indexOf(PRESS_DOWN), firstWarn = states.indexOf(PRESS_WARNING);
+  let pPeriodic = true;
+  for (let rt = 0; rt < 4 * p.period; rt++) {
+    pPeriodic &&= pressState(p, rt) === pressState(p, rt + p.period) && pressState(p, rt) === pressState(p2, rt) && pressDown(p, rt) === (pressState(p, rt) === PRESS_DOWN);
+  }
+  check(
+    `schema rt: a press is down for its last \`down\` ticks of each period, its shadow warns for the ${PRESS_WARN_TICKS} ticks (0.5 s) before, periodic and deterministic`,
+    pPeriodic && count(PRESS_DOWN) === p.down && count(PRESS_WARNING) === PRESS_WARN_TICKS && count(PRESS_UP) === p.period - p.down - PRESS_WARN_TICKS &&
+      firstDown === p.period - p.down && firstWarn === firstDown - PRESS_WARN_TICKS && states.slice(firstWarn, firstDown).every((v) => v === PRESS_WARNING) && pressState(p, -1) === pressState(p, p.period - 1),
+    `period ${p.period}: up ${count(PRESS_UP)}, warning ${count(PRESS_WARNING)} from tick ${firstWarn}, down ${count(PRESS_DOWN)} from tick ${firstDown}`,
+  );
+
+  // The truck's lateral lip test: inside the band and the take-off zone only.
+  const k = t.trucks[0];
+  check(
+    "schema rt: truckLipAt is the lateral lip test (the band's take-off zone [lip, lip + LIP_ZONE), lat within the band); TRUCK_MIN_SPEED = MIN_TAKEOFF_SPEED",
+    truckLipAt(t, k.lip, k.lat) === k && truckLipAt(t, k.lip + LIP_ZONE - 0.01, k.band1) === k && truckLipAt(t, k.lip + LIP_ZONE, k.lat) === null &&
+      truckLipAt(t, k.lip - 0.01, k.lat) === null && truckLipAt(t, k.lip, k.band1 + 0.01) === null && truckLipAt(t, k.lip, k.band0 - 0.01) === null &&
+      TRUCK_MIN_SPEED === MIN_TAKEOFF_SPEED,
+    `lip ${k.lip}, band ${k.band0}..${k.band1}`,
+  );
+}
+
+function schemaValidate(): void {
+  // Each structural rule rejects a broken placement (on the valid preview yard), and the near miss passes.
+  const rule = (name: string, bad: string, want: string | string[], good?: string) => {
+    const wants = Array.isArray(want) ? want : [want];
+    check(`schema validate: ${name}`, wants.every((w) => bad.includes(w)) && (good === undefined || good === ""), `broken: ${bad || "accepted"}${good === undefined ? "" : ` || near miss: ${good || "accepted"}`}`);
+  };
+  const noWiden = (f: Feature) => f.k === "widen" || f.k === "island" || (f.k === "water" && f.lat0 === -124) || (f.k === "dirt" && f.lat1 === 124) || f.k === "press";
+  check("schema validate: the preview yard is valid as it is", schemaErrs([]) === "", schemaErrs([]));
+
+  // Ranges.
+  rule("a rectangle needs s1 > s0 and lat1 > lat0", schemaErrs([{ k: "water", s0: 4600, s1: 4500, lat0: 10, lat1: -10 }]), ["water 4600.0..4500.0: s1 must be > s0", "lat1 must be > lat0"]);
+  rule("surfaces stay inside the walls (dirt to the wall passes)", schemaErrs([{ k: "dirt", s0: 4600, s1: 4700, lat0: 0, lat1: 109 }]), "dirt 4600.0..4700.0: reaches past the wall", schemaErrs([{ k: "dirt", s0: 4600, s1: 4700, lat0: 0, lat1: 108 }]));
+  rule("a belt's drift is 0 < |vx| <= 200", schemaErrs([{ k: "belt", s0: 4600, s1: 4700, lat0: -64, lat1: 64, vx: 0 }]) + schemaErrs([{ k: "belt", s0: 4600, s1: 4700, lat0: -64, lat1: 64, vx: -201 }]), ["drift vx 0 outside", "drift vx -201 outside"], schemaErrs([{ k: "belt", s0: 4600, s1: 4700, lat0: -64, lat1: 64, vx: -200 }]));
+  rule("a tyre mound's radius is 18..30", schemaErrs([{ k: "tyres", s: 4600, lat: 0, r: 17 }]) + schemaErrs([{ k: "tyres", s: 4600, lat: 0, r: 31 }]), ["radius 17 outside 18..30", "radius 31 outside 18..30"], schemaErrs([{ k: "tyres", s: 4600, lat: 0, r: 18 }, { k: "tyres", s: 4700, lat: 0, r: 30 }]));
+  rule("a tyre mound stays inside the walls", schemaErrs([{ k: "tyres", s: 4600, lat: 80, r: 30 }]), "tyres at s=4600.0: reaches past the wall", schemaErrs([{ k: "tyres", s: 4600, lat: 78, r: 30 }]));
+  rule(
+    "barrels: n a whole 1..6, period whole ticks, |speed| 40..240",
+    schemaErrs([{ k: "barrels", s: 4600, n: 0, period: 240, speed: 110 }]) + schemaErrs([{ k: "barrels", s: 4600, n: 2.5, period: 240.5, speed: 110 }]) + schemaErrs([{ k: "barrels", s: 4600, n: 7, period: 900, speed: -39 }]),
+    ["n 0 is not a whole number 1..6", "n 2.5 is not", "period 240.5 is not a whole number of ticks", "n 7 is not", "speed -39 outside 40..240"],
+    schemaErrs([{ k: "barrels", s: 4600, n: 6, period: 900, speed: -40 }]),
+  );
+  // A crossing at 110 u/s is 108 ticks (198 units wall to wall): ticks 0..108 are on the road, so a
+  // period of 108 or 109 leaves no tick in the gutter and 110 leaves one; at 97 u/s (122.5 ticks) 123 none, 124 one.
+  const barrelRow = (period: number, speed: number) => schemaErrs([{ k: "barrels", s: 4600, n: 1, period, speed }]);
+  rule(
+    "barrels: a cycle of a crossing plus at least one tick in the gutter, and a row whose barrels do not overlap",
+    barrelRow(108, 110) + barrelRow(109, 110) + barrelRow(123, 97) + schemaErrs([{ k: "barrels", s: 4600, n: 6, period: 53, speed: 120 }]),
+    ["period 108 leaves no tick in the gutter (a crossing takes 108.0 ticks)", "period 109 leaves no tick in the gutter", "period 123 leaves no tick in the gutter (a crossing takes 122.5 ticks)", "the barrels of the row overlap each other"],
+    barrelRow(110, 110) + barrelRow(124, 97),
+  );
+  const gutter = (period: number, speed: number) => {
+    const b = buildTrack({ ...SCHEMA_LOOP, id: "schema-gutter", features: [{ k: "barrels", s: 4600, n: 1, period, speed }] }).barrels[0];
+    return Array.from({ length: period }, (_, rt) => barrelLat(b, 0, rt)).filter((v) => Number.isNaN(v)).length;
+  };
+  check(
+    "schema validate: the gutter rule is barrelLat's own (the accepted near misses have exactly one gutter tick, the rejected periods none)",
+    gutter(110, 110) === 1 && gutter(124, 97) === 1 && gutter(109, 110) === 0 && gutter(123, 97) === 0,
+    `gutter ticks: 109/110 u/s ${gutter(109, 110)}, 110/110 ${gutter(110, 110)}, 123/97 ${gutter(123, 97)}, 124/97 ${gutter(124, 97)}`,
+  );
+  rule("a truck's length is 80..160", schemaErrs([{ k: "truck", s: 4600, lat: 0, len: 79 }]) + schemaErrs([{ k: "truck", s: 4600, lat: 0, len: 161 }]), ["length 79 outside 80..160", "length 161 outside"], schemaErrs([{ k: "truck", s: 4600, lat: 0, len: 160 }]));
+  rule("a truck's body stays inside the walls", schemaErrs([{ k: "truck", s: 4600, lat: -89, len: 110 }]), "truck at s=4600.0: reaches past the wall", schemaErrs([{ k: "truck", s: 4600, lat: -88, len: 110 }]));
+  rule(
+    "a press: whole ticks, down >= 1, the 30-tick warning inside the up time, lat1 > lat0",
+    schemaErrs([{ k: "press", s: 4600, lat0: 0, lat1: 64, period: 90, down: 61 }]) + schemaErrs([{ k: "press", s: 4600, lat0: 0, lat1: 64, period: 90, down: 0 }]) + schemaErrs([{ k: "press", s: 4600, lat0: 64, lat1: 0, period: 90.5, down: 10 }]),
+    ["period 90 / down 61 must be whole ticks", "period 90 / down 0", "period 90.5 / down 10", "press at s=4600.0: lat1 must be > lat0"],
+    schemaErrs([{ k: "press", s: 4600, lat0: 0, lat1: 64, period: 90, down: 60 }]),
+  );
+  rule(
+    "a widen: at least 2 * 120 long, left and right >= 0 and not both 0",
+    schemaErrs([{ k: "widen", s0: 4500, s1: 4739, left: 20, right: 20 }]) + schemaErrs([{ k: "widen", s0: 4500, s1: 4800, left: -1, right: 20 }]) + schemaErrs([{ k: "widen", s0: 4500, s1: 4800, left: 0, right: 0 }]),
+    ["widen 4500.0..4739.0: shorter than its two tapers (240)", "left -1 / right 20 must be >= 0", "left 0 / right 0 must be >= 0 and not both 0"],
+    schemaErrs([{ k: "widen", s0: 4500, s1: 4740, left: 0, right: 20 }]),
+  );
+  rule("every new feature stays off the start zone", schemaErrs([{ k: "dirt", s0: 100, s1: 200, lat0: -64, lat1: 64 }]) + schemaErrs([{ k: "tyres", s: 9900, lat: 60, r: 20 }]), ["dirt 100.0..200.0: in the start zone", "tyres at s=9900.0: in the start zone"]);
+
+  // Overlaps.
+  rule("surfaces do not overlap each other (side by side passes)", schemaErrs([{ k: "dirt", s0: 1500, s1: 1700, lat0: 0, lat1: 64 }]), "water 1450.0..1620.0 overlaps dirt 1500.0..1700.0 (one surface at a time)", schemaErrs([{ k: "dirt", s0: 3800, s1: 4100, lat0: 0, lat1: 64 }]));
+  rule("solids do not overlap each other", schemaErrs([{ k: "tyres", s: 1250, lat: 0, r: 20 }]) + schemaErrs([{ k: "truck", s: 860, lat: 40, len: 100 }]), ["tyres at s=1250.0 overlaps barrels at s=1260.0", "tyres at s=880.0 overlaps truck at s=860.0"]);
+  rule(
+    "tyre mounds: circles whose boxes overlap diagonally overlap only if the circles do",
+    schemaErrs([{ k: "tyres", s: 1060 + 30, lat: -20 + 30, r: 23 }]),
+    "tyres at s=1060.0 overlaps tyres at s=1090.0",
+    schemaErrs([{ k: "tyres", s: 1060 + 30, lat: -20 + 30, r: Math.hypot(30, 30) - 20 - 0.01 }]),
+  );
+  const lip = 4500 + 80;
+  const jumpBase: Feature[] = [{ k: "ramp", s: 4500, len: 80 }, { k: "gap", s0: lip, s1: lip + 150 }, { k: "hole", s: 5000, lat: 30, r: 20 }, { k: "cell", s: 5200, lat: 60 }];
+  rule(
+    "solids do not overlap a gap, a ramp (take-off zone included), a hole or a ground cell",
+    schemaErrs([...jumpBase, { k: "tyres", s: lip + 100, lat: 0, r: 20 }]) + schemaErrs([...jumpBase, { k: "press", s: lip + 6, lat0: -64, lat1: 0, period: 120, down: 30 }]) +
+      schemaErrs([...jumpBase, { k: "tyres", s: 5000, lat: -8, r: 20 }]) + schemaErrs([...jumpBase, { k: "truck", s: 5150, lat: 40, len: 100 }]),
+    ["tyres at s=4680.0 overlaps gap 4580.0..4730.0", "press at s=4586.0 overlaps ramp at s=4500.0", "tyres at s=5000.0 overlaps hole at s=5000.0", "truck at s=5150.0 overlaps ground cell at s=5200.0"],
+    schemaErrs([...jumpBase, { k: "tyres", s: 5000, lat: -18, r: 20 }]),
+  );
+  rule(
+    "widens do not overlap each other, a ramp or a gap",
+    schemaErrs([{ k: "widen", s0: 6900, s1: 7300, left: 0, right: 30 }]) + schemaErrs([...jumpBase.slice(0, 2), { k: "widen", s0: 4300, s1: 4590, left: 30, right: 0 }]),
+    ["widen 5750.0..7050.0 overlaps widen 6900.0..7300.0", "widen 4300.0..4590.0 overlaps ramp at s=4500.0 (a widened road has no jumps)", "overlaps gap 4580.0..4730.0"],
+    schemaErrs([...jumpBase.slice(0, 2), { k: "widen", s0: 4200, s1: 4500, left: 30, right: 0 }]),
+  );
+
+  // Split lanes: each lane at least 72 wide (asphalt edge to island) at every s the island covers.
+  rule(
+    `split lanes: each lane >= ${LANE_MIN} at every s (the island running into the taper narrows a lane)`,
+    schemaErrs([{ k: "island", s0: 5900, s1: 6900, lat0: -53, lat1: 28 }], (f) => f.k === "island" && f.s0 === 5900) +
+      schemaErrs([{ k: "island", s0: 5900, s1: 6900, lat0: -28, lat1: 53 }], (f) => (f.k === "island" && f.s0 === 5900) || f.k === "press") +
+      schemaErrs([{ k: "island", s0: 5800, s1: 6900, lat0: -28, lat1: 28 }], (f) => f.k === "island" && f.s0 === 5900),
+    ["island 5900.0..6900.0: the left lane is 71.0 wide", "the right lane is 71.0 wide", "island 5800.0..6900.0: the left lane is"],
+    schemaErrs([{ k: "island", s0: 5900, s1: 6900, lat0: -52, lat1: 28 }], (f) => f.k === "island" && f.s0 === 5900),
+  );
+
+  // Advisor change 13: widening the inside of a bend so far that a car centre (the wall less half a
+  // car: 64 + 44 - 8 = 100 plus the widen) passes the local radius. The yard's tightest bend (a
+  // right-hander near s 2950: the inside is the right) has a radius of about 400. A widen whose
+  // asphalt stays below the radius but whose verge does not (half 376, wall 420) is rejected too.
+  const bend = buildTrack(SCHEMA_LOOP);
+  let tight = 0;
+  for (let i = 0; i < bend.pts.length; i++) if (Math.abs(curvatureAt(bend, i)) > Math.abs(curvatureAt(bend, tight))) tight = i;
+  const radius = 1 / Math.abs(curvatureAt(bend, tight)), sB = bend.cum[tight];
+  const inside = (right: number, left: number) => schemaErrs([{ k: "widen", s0: sB - 200, s1: sB + 200, left, right }]);
+  const reachOf = (right: number) => `a car centre reaches ${(64 + right + 44 - CAR_WIDTH / 2).toFixed(1)}`;
+  const verge = Math.floor(radius - 64) - 20, past = Math.ceil(radius - 100) + 1, fits = Math.floor(radius - 100) - 1;
+  const degen = (e: string) => (e.includes("degenerates") ? e : "");
+  rule(
+    "widen in a bend (advisor change 13): a car centre on the widened inside (the wall less half a car) stays below the local radius, verge included; the outside is not limited by it",
+    inside(verge, 0) + inside(past, 0),
+    [`${reachOf(verge)} (the wall ${(64 + verge + 44).toFixed(1)} less half a car)`, reachOf(past), "not below the local radius", "(nearest() degenerates)"],
+    degen(inside(fits, 0)) + degen(inside(0, Math.ceil(radius - 64) + 50)),
+  );
+  check(
+    "schema validate: the advisor-13 near misses straddle the radius (a centre reaching just under it passes, just over it fails)",
+    64 + verge < radius && 64 + verge + 44 - 8 > radius && 100 + past > radius && 100 + fits < radius,
+    `radius ${radius.toFixed(1)} at s=${sB.toFixed(1)}; asphalt-only widen ${verge}: half ${64 + verge}, reach ${100 + verge}; ${past}: reach ${100 + past}; passing ${fits}: reach ${100 + fits}`,
+  );
+
+  // Solids keep 40 from recovery points (3200 here) and the grid's slots.
+  rule(
+    `solids keep >= ${SOLID_CLEAR} from a recovery point (edge to point)`,
+    schemaErrs([{ k: "tyres", s: 3200 + 20 + SOLID_CLEAR - 0.5, lat: 0, r: 20 }]) + schemaErrs([{ k: "press", s: 3200 + 30, lat0: 10, lat1: 60, period: 120, down: 30 }]),
+    ["tyres at s=3259.5: 39.5 from recovery point s=3200.0", "press at s=3230.0: 20.6 from recovery point s=3200.0"],
+    schemaErrs([{ k: "tyres", s: 3200 + 20 + SOLID_CLEAR, lat: 0, r: 20 }]) + schemaErrs([{ k: "press", s: 3200 + 12 + SOLID_CLEAR, lat0: 0, lat1: 60, period: 120, down: 30 }]),
+  );
+  const slot = gridSlotSL(buildTrack(SCHEMA_LOOP), 5);
+  rule(`solids keep >= ${SOLID_CLEAR} from every grid slot`, schemaErrs([{ k: "tyres", s: slot.s + 30, lat: slot.lat, r: 20 }]), "from grid slot 5 (solids keep >= 40)");
+
+  // Water: off take-off zones (a ramp's; a truck's band, only laterally inside it) and recovery points.
+  rule(
+    "no water on a ramp's take-off zone",
+    schemaErrs([...jumpBase.slice(0, 2), { k: "water", s0: lip - 40, s1: lip + 1, lat0: 30, lat1: 60 }]),
+    "water 4540.0..4581.0: on the take-off zone of the ramp at s=4500.0",
+    schemaErrs([...jumpBase.slice(0, 2), { k: "water", s0: lip - 40, s1: lip, lat0: 30, lat1: 60 }]),
+  );
+  const tk = testTrack(PREVIEW_YARD.id)!.trucks[0];
+  rule(
+    "no water on a truck's take-off zone (inside its band; beside the band is fine)",
+    schemaErrs([{ k: "water", s0: tk.lip + 2, s1: tk.lip + 60, lat0: tk.band1 - 1, lat1: tk.band1 + 30 }]),
+    `on the take-off zone of the truck at s=${tk.s.toFixed(1)}`,
+    schemaErrs([{ k: "water", s0: tk.lip + 2, s1: tk.lip + 60, lat0: tk.band1, lat1: tk.band1 + 30 }]),
+  );
+  rule(
+    "no water on a recovery point (where a car put back there would touch it: half a car's length and width)",
+    schemaErrs([{ k: "water", s0: 3200 + CAR_LENGTH / 2, s1: 3300, lat0: -64, lat1: 0 }]) + schemaErrs([{ k: "water", s0: 3150, s1: 3250, lat0: CAR_WIDTH / 2, lat1: 60 }]),
+    ["water 3215.0..3300.0: on recovery point s=3200.0", "water 3150.0..3250.0: on recovery point s=3200.0"],
+    schemaErrs([{ k: "water", s0: 3200 + CAR_LENGTH / 2 + 0.01, s1: 3300, lat0: -64, lat1: 0 }, { k: "water", s0: 3100, s1: 3180, lat0: CAR_WIDTH / 2 + 0.01, lat1: 60 }]),
+  );
+
+  // A dry lane >= 48 at every s of a pool, or the pool lies on a straight.
+  const pool = (lat0: number, lat1: number) => schemaErrs([{ k: "water", s0: 3800, s1: 4100, lat0, lat1 }], (f) => f.k === "water" && f.s0 === 3800);
+  rule(
+    `a pool in a bend leaves a dry lane >= ${DRY_LANE_MIN}, or lies on a straight (the yard's full-width pool on the top straight passes)`,
+    pool(-64, 64 - DRY_LANE_MIN + 0.5) + pool(-64, 64),
+    [`water 3800.0..4100.0: no dry lane of ${DRY_LANE_MIN}`, "(the widest is 47.5)", "and not on a straight (the road turns", "(the widest is 0.0)"],
+    pool(-64, 64 - DRY_LANE_MIN) + schemaErrs([{ k: "water", s0: 6000, s1: 6800, lat0: -64, lat1: 64 }], noWiden),
+  );
+  rule(
+    "in a bend one dry split lane is enough; an island or a truck is not a dry lane",
+    schemaErrs([{ k: "water", s0: 7900, s1: 8200, lat0: -104, lat1: -24 }, { k: "water", s0: 7900, s1: 8200, lat0: 24, lat1: 104 }]) + schemaErrs([{ k: "truck", s: 3850, lat: 30, len: 110 }]),
+    ["water 7900.0..8200.0: no dry lane of 48", "(the widest is 0.0)", "water 3800.0..4100.0: no dry lane of 48", "(the widest is 14.0)"],
+    schemaErrs([{ k: "water", s0: 7900, s1: 8200, lat0: -104, lat1: -24 }]),
+  );
+}
+
+function schemaPreview(): void {
+  // The preview test tracks: every M4 feature type, valid, and hidden from the lobby and every client message.
+  const built = TEST_TRACKS.map((d) => testTrack(d.id)!);
+  const kinds = (["water", "dirt", "belts", "tyres", "barrels", "trucks", "presses", "widens", "islands"] as const).filter((k) => built.some((t) => t[k].length > 0));
+  const errs = built.flatMap((t) => validateTrack(t).map((e) => `${t.def.id}: ${e}`));
+  check(
+    "schema preview: the preview test tracks hold every M4 feature type, build and pass validateTrack (and validateRunUps)",
+    kinds.length === 9 && errs.length === 0 && built.every((t) => validateRunUps(t).length === 0) && testTrack(PREVIEW_YARD.id) === built[0] && testTrack("rust-bowl") === null,
+    `${TEST_TRACKS.map((d) => d.id).join(", ")}: ${kinds.join(", ")}${errs.length ? `; ${errs.join(" | ")}` : ""}`,
+  );
+  const ids = TEST_TRACKS.map((d) => d.id);
+  const listed = trackList().map((e) => e.id);
+  const sim = new Sim();
+  const host = sim.add("Host");
+  const direct = ids.map((id) => sim.room.setTrack(host, id));
+  const m = menuRooms(["Host", "B"]);
+  for (const id of ids) m.send(0, { t: "track", id });
+  const refused = errMsgs(m.s[0].conn).map((e) => e.msg);
+  check(
+    "schema preview: the test tracks are not in the lobby track list, unknown to isTrackId/findTrack, and a room refuses them (setTrack and the {t:\"track\"} message)",
+    ids.every((id) => !listed.includes(id) && !isTrackId(id) && findTrack(id) === null) && direct.every((e) => e === "Unknown track") && sim.room.trackId === DEFAULT_TRACK_ID &&
+      refused.length === ids.length && refused.every((e) => e === "Unknown track") && m.room.trackId === DEFAULT_TRACK_ID,
+    `lobby list: ${listed.join(", ")}; setTrack: ${direct.join(", ")}; message: ${refused.join(", ")}`,
+  );
+}
+
+function schemaDataOnly(): void {
+  // Data only: a car driven through the preview yard's features (the pool, the mounds, the barrels'
+  // lane, the split, the belt) steps exactly as on the same loop without them, server step and all.
+  const yard = testTrack(PREVIEW_YARD.id)!, bare = buildTrack(SCHEMA_LOOP);
+  const run = (t: Track) => {
+    const p = pointAt(t, 500);
+    const c: CarState = { x: p.x, y: p.y, h: p.h, vx: 0, vy: 0, seg: p.seg, wreck: 0, air: 0, fall: 0, boost: 0 };
+    const env = raceEnv(t);
+    const out: number[] = [];
+    for (let rt = 1; rt <= 60 * 28; rt++) {
+      env.rt = rt;
+      const q = queryTrackNear(t, c.x, c.y, c.seg);
+      const aim = pointAt(t, q.s + 60);
+      stepRaceCar(c, { throttle: 0.8, steer: clamp(angleDiff(c.h, Math.atan2(aim.y - c.y, aim.x - c.x)) * 2, -1, 1) }, BASE_STATS, env);
+      out.push(c.x, c.y, c.h, c.vx, c.vy, c.seg, c.air, c.fall);
+    }
+    return out;
+  };
+  const a = run(yard), b = run(bare);
+  const same = a.length === b.length && a.every((v, i) => Object.is(v, b[i]));
+  const s = queryTrackNear(yard, a[a.length - 8], a[a.length - 7], a[a.length - 3]).s;
+  check("schema data only: a car through every preview feature steps bit for bit as on the bare loop (physics does not read them yet)", same && s > 9200 && s < 9800, `28 s at 0.8 throttle from s=500 along the centre line, ended at s=${s.toFixed(0)} (past the belt)`);
+  check("schema data only: GRID_SLOTS = MAX_PLAYERS; gridSlotSL is where gridSlot puts each slot", GRID_SLOTS === MAX_PLAYERS && Array.from({ length: GRID_SLOTS }, (_, k) => {
+    const g = gridSlot(yard, k), sl = gridSlotSL(yard, k), p = pointAt(yard, sl.s);
+    return Math.hypot(p.x - Math.sin(p.h) * sl.lat - g.x, p.y + Math.cos(p.h) * sl.lat - g.y) < 1e-6;
+  }).every(Boolean));
+}
+
+for (const t of [rivets, gating, mines, wrecks, finishing, garage, armDelay, engine, readyCheck, collisions, trackFeatures, roomTrack, jumpsWired, shippedTracks, botDriver, botLaps, mineCap, chatRoom, chatClient, sound, raceSounds, surfaceSounds, audioUnlock, menuHostOnly, menuStop, menuRestart, menuKick, menuLock, menuHandover, menuClient, menuRestartClient, retireRules, retireField, retireRaceEnd, retireGarage, retireRefund, retireOthers, retireNotices, retireClient, pauseRefused, pauseFreeze, pauseResume, pauseHold, pauseAuto, pauseCooldown, pauseGrace, pauseCountdown, pauseControls, pauseClient, musicSwitch, soundMigration, soundLayers, soundServer, soundRandom, soundRoomDrag, soundSliderGrip, soundClient, songs, songPlayer, ghostRivets, minesSetting, minesStay, minesCap, minesFade, minesAtStart, minesCleared, minesPaused, minesClient, botsPointAt, botsAdd, botsKickHost, botsHandover, botsFullRoom, botsSoloStart, botsRace, botsShop, botsTick, botsCpu, botsClient, carsTypes, carsStats, carsPick, carsRejoin, carsBots, carsRunUps, carsBalance, carsCut, carsClient, envRt, envStep, envClient, draftRule, draftStraight, draftClient, draftJumps, draftBots, cellsRule, boostPhysics, cellsServer, cellsClient, cellsValidate, cellsBots, cellsOffCentre, schemaTypes, schemaArrays, schemaLateral, schemaRt, schemaValidate, schemaPreview, schemaDataOnly, hardGolden, hardLevels, hardShop, hardWeapons, hardApex, hardPace, hardTraffic, hardVs, hardClient, hardCpu]) {
   console.log(`\n# ${t.name}`);
   try {
     t();
