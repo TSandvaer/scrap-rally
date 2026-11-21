@@ -393,6 +393,7 @@ async function run(ctx: Ctx, bots: Bot[]): Promise<void> {
   await runDraft(ctx, bots);
   await runCells(ctx, bots);
   await runHard(ctx, bots);
+  await runSurf(ctx, bots);
 }
 
 const lost = new Map<string, (ConnReason | undefined)[]>();
@@ -1981,5 +1982,75 @@ async function runHard(ctx: Ctx, bots: Bot[]): Promise<void> {
     if (room && tick) room.tick = tick;
     H.script = null;
     H.game.leave();
+  }
+}
+
+// ---- surfaces and tyre mounds (M4-SURF part 1, PLAN-M4.md 2.2-2.4 and section 3, ClickUp 123jpnbffyz) ----
+
+// This section's imports (hoisted like the ones at the top).
+import { testTrack as surfTestTrack } from "../shared/testtracks";
+import { surfaceAt as surfSurfaceAt, SURF_BELT as SURF_BELT_K, SURF_DIRT as SURF_DIRT_K, SURF_WATER as SURF_WATER_K } from "../shared/track";
+import { touchesMound } from "../tools/debug/surf-tune";
+
+/**
+ * A lagged socket bot (80±10 ms) races an unlagged one on the Surf Yard (pools, dirt patches,
+ * belts, tyre mounds, a jump), the server started with the dev flag SCRAP_DEV_TRACK=surf-yard (set
+ * for this section only): a new room starts on it, both clients build it, and the lagged bot's
+ * prediction of belts, aquaplaning and mound bounces keeps a median reconciliation error below 0.5.
+ */
+async function runSurf(ctx: Ctx, bots: Bot[]): Promise<void> {
+  const old = process.env.SCRAP_DEV_TRACK;
+  process.env.SCRAP_DEV_TRACK = "surf-yard";
+  const H = new Bot("Hotel3", ctx.url, 24);
+  const S = new Bot("Sierra", ctx.url, -24, { lag: 80, jitter: 10 });
+  bots.push(H, S);
+  for (const b of [H, S]) b.weapons = false;
+  let room: ReturnType<typeof ctx.server.rooms.rooms.get> | undefined;
+  let tick: ((t: number, now: number) => void) | null = null;
+  try {
+    H.game.create(H.name);
+    await waitFor("surf: H welcome", () => !!H.game.you, 3000);
+    S.game.join(H.game.code, S.name);
+    await waitFor("surf: S in H's room", () => H.game.players.length === 2 && !!S.game.you, 3000);
+    room = ctx.server.rooms.rooms.get(H.game.code)!;
+    await waitFor("surf: both clients on the Surf Yard", () => H.game.trackId === "surf-yard" && S.game.trackId === "surf-yard", 3000);
+    const yard = surfTestTrack("surf-yard")!;
+    check(
+      "surf over sockets: with SCRAP_DEV_TRACK=surf-yard a new room starts on the Surf Yard, and both clients build that track",
+      room.trackId === "surf-yard" && H.game.trackId === "surf-yard" && S.game.track === yard && H.game.track === yard,
+      `room ${room.trackId}, clients ${H.game.trackId} / ${S.game.trackId}`,
+    );
+    const r = room;
+    tick = r.tick.bind(r);
+    const met = { belt: 0, water: 0, dirt: 0, mound: 0 };
+    r.tick = (t: number, now: number) => {
+      tick!(t, now);
+      const c = r.players.get(S.game.you)?.car;
+      if (!c || c.air > 0 || c.fall > 0 || r.phase !== "racing") return;
+      const q = queryTrackNear(r.track, c.x, c.y, c.seg);
+      const f = surfSurfaceAt(r.track, q.seg, q.s, q.lat);
+      if (f?.kind === SURF_BELT_K) met.belt++;
+      else if (f?.kind === SURF_WATER_K) met.water++;
+      else if (f?.kind === SURF_DIRT_K) met.dirt++;
+      if (touchesMound(r.track, c)) met.mound++;
+    };
+    const e0 = S.game.recErrors.length, st0 = S.game.recStateErrors;
+    const rows = await runRace("surf", bots, H, [H, S]);
+    const s = stats(S.game.recErrors.slice(e0));
+    const st = S.game.recStateErrors - st0;
+    console.log(
+      `      Sierra (80±10 ms, lane -24) on the Surf Yard: ticks on belt ${met.belt}, water ${met.water}, dirt ${met.dirt}, touching a mound ${met.mound}; rec err n=${s.n} median=${s.median.toFixed(3)} p95=${s.p95.toFixed(3)} max=${s.max.toFixed(2)}; ` +
+        `state mismatches ${st}; finish ${rows.map((x) => `${x.name} ${(x.timeMs / 1000).toFixed(2)}s`).join(", ")}`,
+    );
+    check(
+      "surf over sockets: a lagged bot (80±10 ms) races the Surf Yard (belts, pools, dirt, mounds, the jump): both finish, it keeps a median reconciliation error below 0.5, no error > 50, at most 4 state mismatches",
+      rows.length === 2 && rows.every((x) => x.timeMs > 0) && met.belt > 0 && s.n > 500 && s.median < 0.5 && s.max <= 50 && st <= 4 && H.errors.length + S.errors.length === 0,
+      `belt ${met.belt}, water ${met.water}, dirt ${met.dirt}, mound ${met.mound}; median ${s.median.toFixed(3)}, max ${s.max.toFixed(2)}; state mismatches ${st}`,
+    );
+  } finally {
+    if (room && tick) room.tick = tick;
+    for (const b of [H, S]) b.game.leave();
+    if (old === undefined) delete process.env.SCRAP_DEV_TRACK;
+    else process.env.SCRAP_DEV_TRACK = old;
   }
 }

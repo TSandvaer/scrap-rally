@@ -9997,9 +9997,12 @@ function schemaPreview(): void {
 }
 
 function schemaDataOnly(): void {
-  // Data only: a car driven through the preview yard's features (the pool, the mounds, the barrels'
-  // lane, the split, the belt) steps exactly as on the same loop without them, server step and all.
-  const yard = testTrack(PREVIEW_YARD.id)!, bare = buildTrack(SCHEMA_LOOP);
+  // Data only: a car driven through the preview yard's features that do not act yet (the barrels'
+  // lane, the truck, the press, the splits; M4-MOVE and M4-SURF part 2) steps exactly as on the same
+  // loop without them, server step and all. (Water, dirt, belts and tyre mounds act since M4-SURF
+  // part 1: its own section, below; they are left off the yard for this run.)
+  const acts = (f: Feature) => f.k === "water" || f.k === "dirt" || f.k === "belt" || f.k === "tyres";
+  const yard = buildTrack({ ...PREVIEW_YARD, id: "schema-inert", features: PREVIEW_YARD.features!.filter((f) => !acts(f)) }), bare = buildTrack(SCHEMA_LOOP);
   const run = (t: Track) => {
     const p = pointAt(t, 500);
     const c: CarState = { x: p.x, y: p.y, h: p.h, vx: 0, vy: 0, seg: p.seg, wreck: 0, air: 0, fall: 0, boost: 0 };
@@ -10017,7 +10020,7 @@ function schemaDataOnly(): void {
   const a = run(yard), b = run(bare);
   const same = a.length === b.length && a.every((v, i) => Object.is(v, b[i]));
   const s = queryTrackNear(yard, a[a.length - 8], a[a.length - 7], a[a.length - 3]).s;
-  check("schema data only: a car through every preview feature steps bit for bit as on the bare loop (physics does not read them yet)", same && s > 9200 && s < 9800, `28 s at 0.8 throttle from s=500 along the centre line, ended at s=${s.toFixed(0)} (past the belt)`);
+  check("schema data only: a car through the preview yard's barrels, truck, press and splits steps bit for bit as on the bare loop (physics does not read them yet)", same && s > 9200 && s < 9800, `28 s at 0.8 throttle from s=500 along the centre line, ended at s=${s.toFixed(0)} (past the belt)`);
   check("schema data only: GRID_SLOTS = MAX_PLAYERS; gridSlotSL is where gridSlot puts each slot", GRID_SLOTS === MAX_PLAYERS && Array.from({ length: GRID_SLOTS }, (_, k) => {
     const g = gridSlot(yard, k), sl = gridSlotSL(yard, k), p = pointAt(yard, sl.s);
     return Math.hypot(p.x - Math.sin(p.h) * sl.lat - g.x, p.y + Math.cos(p.h) * sl.lat - g.y) < 1e-6;
@@ -10404,7 +10407,668 @@ function touchMerge(): void {
   );
 }
 
-for (const t of [rivets, gating, mines, wrecks, finishing, garage, armDelay, engine, readyCheck, collisions, trackFeatures, roomTrack, jumpsWired, shippedTracks, botDriver, botLaps, mineCap, chatRoom, chatClient, sound, raceSounds, surfaceSounds, audioUnlock, menuHostOnly, menuStop, menuRestart, menuKick, menuLock, menuHandover, menuClient, menuRestartClient, retireRules, retireField, retireRaceEnd, retireGarage, retireRefund, retireOthers, retireNotices, retireClient, pauseRefused, pauseFreeze, pauseResume, pauseHold, pauseAuto, pauseCooldown, pauseGrace, pauseCountdown, pauseControls, pauseClient, musicSwitch, soundMigration, soundLayers, soundServer, soundRandom, soundRoomDrag, soundSliderGrip, soundClient, songs, songPlayer, ghostRivets, minesSetting, minesStay, minesCap, minesFade, minesAtStart, minesCleared, minesPaused, minesClient, botsPointAt, botsAdd, botsKickHost, botsHandover, botsFullRoom, botsSoloStart, botsRace, botsShop, botsTick, botsCpu, botsClient, carsTypes, carsStats, carsPick, carsRejoin, carsBots, carsRunUps, carsBalance, carsCut, carsClient, envRt, envStep, envClient, draftRule, draftStraight, draftClient, draftJumps, draftBots, cellsRule, boostPhysics, cellsServer, cellsClient, cellsValidate, cellsBots, cellsOffCentre, schemaTypes, schemaArrays, schemaLateral, schemaRt, schemaValidate, schemaPreview, schemaDataOnly, hardGolden, hardLevels, hardShop, hardWeapons, hardApex, hardPace, hardTraffic, hardVs, hardClient, hardCpu, touchStickCentre, touchStickClamp, touchStickDead, touchStickCurve, touchStickOutput, touchStickRounding, touchStickOwner, touchMulti, touchRelease, touchMine, touchMerge]) {
+// ---- surfaces and tyre mounds (M4-SURF part 1, PLAN-M4.md 2.2-2.4, ClickUp 123jpnbffyz, 2026-11-21) ----
+// Water, dirt patches, conveyor belts and tyre mounds act: shared/physics.ts stepCar (per-segment
+// buckets from buildTrack), rivets die on mounds, respawns and recoveries take the nearest clear
+// lane, validateRunUps drives through any pool in a run-up, short and wall-to-wall-in-a-bend belts
+// are rejected, and the bots' lane-cost search (shared/botdrive.ts laneFor) replaces holeLane.
+// Proven on the Surf Yard test track (shared/testtracks.ts), picked with the dev flag SCRAP_DEV_TRACK.
+
+// This section's imports (hoisted like the ones at the top; namespaces, so no name clashes).
+import { execFileSync as surfExec } from "node:child_process";
+import * as surfPuddle from "../client/gfx/puddle-shape";
+import * as surfPhys from "../shared/physics";
+import * as surfTrack from "../shared/track";
+import * as surfW from "../shared/weapons";
+import * as surfBot from "../shared/botdrive";
+import * as surfRoom from "../server/room";
+import * as surfTune from "../tools/debug/surf-tune";
+import * as surfServerBots from "../server/bots";
+import { readFileSync as surfRead } from "node:fs";
+import { SURF_YARD } from "../shared/testtracks";
+
+const surfClock = { t0: 0 };
+
+/**
+ * The Hard bots' control-stream hashes on the shipped tracks (tools/debug/surf-tune.ts --golden =
+ * hard-tune.ts goldenServer with 3 Hard bots, two 3-lap races, and goldenClient on Overpass Knot)
+ * printed on the branch's base d6f8e5e BEFORE M4-SURF touched shared/botdrive.ts. With the Easy and
+ * Normal ones (HARD_GOLDEN above) and tools/debug/schema-hash.ts --check: the shipped tracks drive
+ * exactly as before.
+ */
+const SURF_HARD_GOLDEN: Record<string, string> = {
+  "rust-bowl hard": "e0f1ea47119cadc91a558b1173d68c83064475606605c7e2934f3baf7ba876e4",
+  "crusher-run hard": "1b825b94bd9abd7cfc07cef84c223fc126208cfbc82996dc590d4cc44ef8304b",
+  "overpass-knot hard": "01ff9a07ed19d599cece47bb540d746aff6b83cbdbf02db9bd3bc0ed06be29f0",
+  "client overpass-knot hard": "32dac062df09e77728e9545c1339b0b1f26349c974d371c7c27d1c864e3ca9ec",
+};
+
+/** Run fn with the dev flag SCRAP_DEV_TRACK set to id (undefined = unset), then put it back. */
+function withDevTrack<T>(id: string | undefined, fn: () => T): T {
+  const old = process.env.SCRAP_DEV_TRACK;
+  if (id === undefined) delete process.env.SCRAP_DEV_TRACK;
+  else process.env.SCRAP_DEV_TRACK = id;
+  try {
+    return fn();
+  } finally {
+    if (old === undefined) delete process.env.SCRAP_DEV_TRACK;
+    else process.env.SCRAP_DEV_TRACK = old;
+  }
+}
+
+/** A car at s, lat on track t, heading along the track (+ dh), at speed v along its heading. */
+function surfCar(t: Track, s: number, lat: number, v: number, dh = 0): CarState {
+  const p = pointAt(t, s);
+  const h = p.h + dh;
+  return { x: p.x - Math.sin(p.h) * lat, y: p.y + Math.cos(p.h) * lat, h, vx: Math.cos(h) * v, vy: Math.sin(h) * v, seg: p.seg, wreck: 0, air: 0, fall: 0, boost: 0 };
+}
+
+const surfYard = () => testTrack(SURF_YARD.id)!;
+/** The Surf Yard with its surfaces and mounds taken off (the same loop, ramp, gap and hole). */
+const surfDry = () => surfTune.yardWith(SURF_YARD.features!.filter((f) => f.k !== "water" && f.k !== "dirt" && f.k !== "belt" && f.k !== "tyres"));
+
+function surfTraction(): void {
+  surfClock.t0 = performance.now();
+  // Moved from client/gfx/puddle-shape.ts into shared/track.ts unchanged: the constant, the function,
+  // and the re-export the debug tools import (one function object, not a copy).
+  const old = (f: { s0: number; s1: number; lat0: number; lat1: number }) => {
+    const long = f.s1 - f.s0 >= 24, wide = f.lat1 - f.lat0 >= 24;
+    const s = (f.s0 + f.s1) / 2, lat = (f.lat0 + f.lat1) / 2;
+    return { s0: long ? f.s0 + 12 : s, s1: long ? f.s1 - 12 : s, lat0: wide ? f.lat0 + 12 : lat, lat1: wide ? f.lat1 - 12 : lat };
+  };
+  const rects = [{ s0: 1450, s1: 1620, lat0: -64, lat1: 64 }, { s0: 0, s1: 23.9, lat0: -5, lat1: 30 }, { s0: 10, s1: 34, lat0: 0, lat1: 24 }, { s0: 5, s1: 9, lat0: -1, lat1: 1 }];
+  check(
+    "surf traction: PUDDLE_TRACTION_INSET (12) and tractionRect now live in shared/track.ts, unchanged (the M4-WORLD formula, its degenerate lines included); client/gfx/puddle-shape.ts re-exports the same function",
+    surfTrack.PUDDLE_TRACTION_INSET === 12 && surfPuddle.PUDDLE_TRACTION_INSET === 12 && surfPuddle.tractionRect === surfTrack.tractionRect &&
+      rects.every((r) => JSON.stringify(surfTrack.tractionRect(r)) === JSON.stringify(old(r))),
+    rects.map((r) => JSON.stringify(surfTrack.tractionRect(r))).join(" "),
+  );
+  // What a car feels: a pool's and a patch's traction rectangle, a belt's declared one.
+  const t = surfYard();
+  const felt = t.surfaces.map((f) => `${f.kind}:${f.s0}..${f.s1}x${f.lat0}..${f.lat1}${f.vx ? ` vx ${f.vx}` : ""}`);
+  const want = [
+    ...t.water.map((w) => ({ kind: surfTrack.SURF_WATER, ...surfTrack.tractionRect(w), vx: 0 })),
+    ...t.dirt.map((d) => ({ kind: surfTrack.SURF_DIRT, ...surfTrack.tractionRect(d), vx: 0 })),
+    ...t.belts.map((b) => ({ kind: surfTrack.SURF_BELT, s0: b.s0, s1: b.s1, lat0: b.lat0, lat1: b.lat1, vx: b.vx })),
+  ].sort((a, b) => a.s0 - b.s0 || a.lat0 - b.lat0);
+  check(
+    "surf traction: Track.surfaces holds every pool and dirt patch by its traction rectangle and every belt by its declared one, sorted by s",
+    JSON.stringify(t.surfaces) === JSON.stringify(want) && t.surfaces.length === 9,
+    felt.join(", "),
+  );
+}
+
+function surfBuckets(): void {
+  // surfaceAt (one segment's bucket) against a scan of every surface; the mound buckets hold every
+  // mound a car capsule (any heading) or a rivet's swept tick near that segment can touch.
+  let bad = 0, pts = 0, on = 0, first = "";
+  let missed = 0, touches = 0, rivetMiss = 0;
+  for (const t of [surfYard(), testTrack(PREVIEW_YARD.id)!]) {
+    let seed = 99;
+    const rnd = () => ((seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648);
+    for (let i = 0; i < 40_000; i++) {
+      const s = rnd() * t.length, lat = (rnd() * 2 - 1) * (t.wall - 8);
+      const p = pointAt(t, s);
+      const x = p.x - Math.sin(p.h) * lat, y = p.y + Math.cos(p.h) * lat;
+      const q = queryTrackNear(t, x, y, p.seg);
+      const got = surfTrack.surfaceAt(t, q.seg, q.s, q.lat);
+      const brute = t.surfaces.find((f) => q.s > f.s0 && q.s < f.s1 && q.lat > f.lat0 && q.lat < f.lat1) ?? null;
+      pts++;
+      if (got) on++;
+      if (got !== brute) {
+        bad++;
+        if (!first) first = `${t.def.id} s=${q.s.toFixed(2)} lat=${q.lat.toFixed(2)}`;
+      }
+      // A capsule at a random heading: every mound it overlaps is in its segment's bucket.
+      const h = rnd() * 2 * Math.PI, ux = Math.cos(h), uy = Math.sin(h);
+      for (const m of t.tyres) {
+        const k = clamp((m.x - x) * ux + (m.y - y) * uy, -surfPhys.CAPSULE_HALF, surfPhys.CAPSULE_HALF);
+        if (Math.hypot(x + ux * k - m.x, y + uy * k - m.y) >= m.r + surfPhys.CAPSULE_R + 9) continue; // + a tick at 537 u/s
+        touches++;
+        if (!t.tyresAt[q.seg].includes(m)) missed++;
+      }
+      // A rivet's tick (900 u/s plus a car's 537) ending here: every mound its sweep touches.
+      const bx = x - ux * 24, by = y - uy * 24;
+      for (const m of t.tyres) {
+        const dx = x - bx, dy = y - by;
+        const f = clamp(((m.x - bx) * dx + (m.y - by) * dy) / (dx * dx + dy * dy), 0, 1);
+        if (Math.hypot(bx + dx * f - m.x, by + dy * f - m.y) <= m.r + surfW.RIVET_RADIUS && !t.tyresAt[q.seg].includes(m)) rivetMiss++;
+      }
+    }
+  }
+  check(
+    "surf buckets: surfaceAt (the car's segment's bucket, strictly inside) equals a scan of every surface at 80k points of the Surf Yard and the Preview Yard",
+    bad === 0 && on > 1000,
+    `${pts} points, ${on} on a surface${first ? `; first mismatch ${first}` : ""}`,
+  );
+  check(
+    "surf buckets: every tyre mound a car capsule (any heading, plus a tick) or a rivet's swept tick can touch is in that segment's bucket",
+    missed === 0 && rivetMiss === 0 && touches > 100,
+    `${touches} capsule touches checked; missing ${missed}, rivet sweeps missing ${rivetMiss}`,
+  );
+  // The shipped tracks: no surface, no mound, every bucket empty (one shared frozen list).
+  const shipped = trackList().filter((e) => CAR_TRACKS.includes(e.id)).map((e) => trackById(e.id));
+  const empty = shipped.every((t) => t.surfaces.length === 0 && t.surfAt.every((b) => b.length === 0 && b === t.surfAt[0]) && t.tyresAt.every((b) => b.length === 0 && b === t.tyresAt[0]) && Object.isFrozen(t.surfAt[0]));
+  const y = surfYard();
+  const sizes = `Surf Yard: ${y.surfAt.filter((b) => b.length).length} of ${y.pts.length} segments with a surface (at most ${Math.max(...y.surfAt.map((b) => b.length))}), ${y.tyresAt.filter((b) => b.length).length} with a mound (at most ${Math.max(...y.tyresAt.map((b) => b.length))})`;
+  check("surf buckets: on the shipped tracks every bucket is the one shared empty list (a lookup costs one array read)", empty && shipped.length === 3, sizes);
+}
+
+function surfWater(): void {
+  // One water step against the model: every force along the car x WATER_FORCE, grip x dirtGrip / 3, turn x 0.5.
+  const t = surfYard();
+  const rows: string[] = [];
+  let unit = true;
+  for (const type of CAR_TYPES) {
+    const st = statsFor(type, { engine: 0, tyres: 0, welder: 0 });
+    for (const [thr, steer] of [[1, 0.6], [-1, -0.3], [0, 1]] as const) {
+      const c = surfCar(t, 1535, 5, 300, 0.2); // in the straight pool (felt 1462..1608), sliding 0.2 rad
+      const p = pointAt(t, 1535);
+      const cos = Math.cos(c.h), sin = Math.sin(c.h);
+      let vf = c.vx * cos + c.vy * sin, vl = -c.vx * sin + c.vy * cos;
+      const drag = (st.accel / st.topSpeed) * surfPhys.WATER_FORCE;
+      if (thr > 0) vf += st.accel * surfPhys.WATER_FORCE * thr * DT;
+      else if (thr < 0) vf -= 900 * surfPhys.WATER_FORCE * -thr * DT;
+      else vf -= 60 * surfPhys.WATER_FORCE * DT;
+      vf -= vf * drag * DT;
+      vl *= Math.exp(-st.grip * st.dirtGrip * surfPhys.WATER_GRIP_OF_DIRT * DT);
+      const h = c.h + steer * st.turn * surfPhys.WATER_TURN * clamp(vf / 140, -1, 1) * DT;
+      stepCar(c, { throttle: thr, steer }, st, t);
+      const ok = Math.abs(c.vx - (vf * cos - vl * sin)) < 1e-9 && Math.abs(c.vy - (vf * sin + vl * cos)) < 1e-9 && Math.abs(angleDiff(c.h, h)) < 1e-12;
+      unit &&= ok && Math.abs(p.h) < 1e-9;
+    }
+    rows.push(`${type} grip x${(st.dirtGrip * surfPhys.WATER_GRIP_OF_DIRT).toFixed(3)}`);
+  }
+  check(
+    `surf water: one step on water is the model exactly (throttle, brake, roll and drag x ${surfPhys.WATER_FORCE}, sideways grip x dirtGrip x ${surfPhys.WATER_GRIP_OF_DIRT.toFixed(3)}, steering x ${surfPhys.WATER_TURN}) for every type`,
+    unit,
+    rows.join(", "),
+  );
+  // Advisor change 4, measured: a pool on a straight costs little (the top speed is unchanged); a
+  // pool in a bend throws you wide (on the line a dry car holds at the same speed).
+  const dry = surfDry();
+  const out: string[] = [];
+  let straight = true, bend = true;
+  for (const type of CAR_TYPES) {
+    const lost = [430, 300].map((v) => {
+      const a = surfTune.passes(t, surfTune.laneRun(t, type, 1300, v, 0, 120).states, 1700).tick, b = surfTune.passes(dry, surfTune.laneRun(dry, type, 1300, v, 0, 120).states, 1700).tick;
+      return a - b;
+    });
+    const wide = (tt: Track) => Math.min(...surfTune.laneRun(tt, type, 2780, 330, -32, 110).states.map((c) => surfTune.sOf(tt, c).lat));
+    const w = wide(t), d = wide(dry);
+    straight &&= lost[0] <= 1 && lost[1] <= 3;
+    bend &&= w < d - 10;
+    out.push(`${type}: straight pool 1450..1620 costs ${lost[0]} ticks from 430 u/s, ${lost[1]} from 300; the bend pool at 330 u/s on lane -32 takes it to lat ${w.toFixed(1)} (dry ${d.toFixed(1)})`);
+  }
+  console.log(`  ${out.join("\n  ")}`);
+  check("surf water: a pool on a straight costs little (<= 1 tick from top speed, <= 3 from 300 u/s, every type)", straight, out.map((x) => x.split(";")[0]).join("; "));
+  check("surf water: a pool in a bend throws you wide (at least 10 units wider than the same line dry, every type)", bend, out.map((x) => x.split("; ")[1]).join("; "));
+  // The type's grip on water follows its dirt grip: the Truck holds best, the Racer least.
+  const g = CAR_TYPES.map((x) => CARS[x].base.grip * CARS[x].base.dirtGrip * surfPhys.WATER_GRIP_OF_DIRT);
+  check("surf water: by car type, sideways grip on water Truck > Sport > Racer", g[2] > g[0] && g[0] > g[1], g.map((x) => x.toFixed(2)).join(" / "));
+}
+
+function surfDirt(): void {
+  // A dirt patch on the asphalt is the verge's dirt by car type: the same step as a car on the verge.
+  const t = surfYard(), dry = surfDry();
+  let same = true;
+  const rows: string[] = [];
+  for (const type of CAR_TYPES) {
+    const st = statsFor(type, { engine: 2, tyres: 1, welder: 0 });
+    const a = surfCar(t, 1320, 40, 380, 0.15); // in the patch (felt 1252..1388 x 28..52), on asphalt
+    const b = surfCar(dry, 1320, 85, 380, 0.15); // on the verge of the same straight, no patch
+    const a0 = { vx: a.vx, vy: a.vy, h: a.h };
+    stepCar(a, { throttle: 1, steer: 0.4 }, st, t);
+    stepCar(b, { throttle: 1, steer: 0.4 }, st, dry);
+    same &&= Math.abs(a.vx - b.vx) < 1e-9 && Math.abs(a.vy - b.vy) < 1e-9 && Math.abs(a.h - b.h) < 1e-12 && (a.vx !== a0.vx || a.h !== a0.h);
+    // Off the patch (lat 20, beside it): plain asphalt.
+    const c = surfCar(t, 1320, 20, 380, 0.15), d = surfCar(dry, 1320, 20, 380, 0.15);
+    stepCar(c, { throttle: 1, steer: 0.4 }, st, t);
+    stepCar(d, { throttle: 1, steer: 0.4 }, st, dry);
+    same &&= c.vx === d.vx && c.vy === d.vy && c.h === d.h;
+    rows.push(`${type}: on the patch ${speedOf(a).toFixed(2)} u/s after a step from 380 (asphalt ${speedOf(c).toFixed(2)})`);
+  }
+  check("surf dirt: a dirt patch steps a car exactly as the dirt verge (the type's dirtDrag and dirtGrip); beside the patch it is plain asphalt", same, rows.join("; "));
+  const out: string[] = [];
+  for (const type of CAR_TYPES) {
+    const a = surfTune.passes(t, surfTune.laneRun(t, type, 1100, 380, 40, 150).states, 1420), b = surfTune.passes(dry, surfTune.laneRun(dry, type, 1100, 380, 40, 150).states, 1420);
+    out.push(`${type} +${a.tick - b.tick} ticks, out at ${a.v.toFixed(0)} u/s (dry ${b.v.toFixed(0)})`);
+  }
+  console.log(`  dirt patch 1240..1400 on lane 40 from 380 u/s: ${out.join(", ")}`);
+}
+
+function surfBelt(): void {
+  // A belt moves a grounded car by vx * DT toward the right of travel each tick; velocity unchanged.
+  const t = surfYard(), dry = surfDry();
+  const belt = t.belts[0];
+  const a = surfCar(t, 2400, 10, 300, 0.05), b = surfCar(dry, 2400, 10, 300, 0.05);
+  stepCar(a, { throttle: 1, steer: 0.2 }, BASE_STATS, t);
+  stepCar(b, { throttle: 1, steer: 0.2 }, BASE_STATS, dry);
+  const d = surfTrack.segDir(t, queryTrackNear(t, surfCar(t, 2400, 10, 0).x, surfCar(t, 2400, 10, 0).y, pointAt(t, 2400).seg).seg);
+  const nx = -d.y, ny = d.x;
+  const moved = (a.x - b.x) * nx + (a.y - b.y) * ny, along = (a.x - b.x) * ny - (a.y - b.y) * nx;
+  check(
+    `surf belt: a grounded car on a belt is moved its drift (vx ${belt.vx} u/s = ${(belt.vx * DT).toFixed(3)} a tick) toward the right of travel, velocity and heading as without it`,
+    Math.abs(moved - belt.vx * DT) < 1e-9 && Math.abs(along) < 1e-9 && a.vx === b.vx && a.vy === b.vy && a.h === b.h,
+    `moved ${moved.toFixed(6)} across, ${along.toExponential(1)} along`,
+  );
+  // Airborne over the belt: no drift (a flight is committed).
+  const fa = { ...surfCar(t, 2400, 10, 300), air: 20 }, fb = { ...surfCar(dry, 2400, 10, 300), air: 20 };
+  for (let i = 0; i < 10; i++) {
+    stepRaceCar(fa, { throttle: 1, steer: 1 }, BASE_STATS, raceEnv(t));
+    stepRaceCar(fb, { throttle: 1, steer: 1 }, BASE_STATS, raceEnv(dry));
+  }
+  check("surf belt: an airborne car over a belt is not moved by it", fa.x === fb.x && fa.y === fb.y && fa.air === 10, `${fa.x.toFixed(3)},${fa.y.toFixed(3)}`);
+  const n = surfTune.waterNumbers().find((l) => l.startsWith("belt"));
+  console.log(`  ${n}`);
+}
+
+function surfMounds(): void {
+  const t = surfYard();
+  const m = t.tyres[0]; // s 700, lat -30, r 24
+  const reach = m.r + surfPhys.CAPSULE_R;
+  // collideTyres on a car overlapping the mound, cases by the speed into it.
+  const gap = (c: CarState) => {
+    const ux = Math.cos(c.h), uy = Math.sin(c.h);
+    const k = clamp((m.x - c.x) * ux + (m.y - c.y) * uy, -surfPhys.CAPSULE_HALF, surfPhys.CAPSULE_HALF);
+    return Math.hypot(c.x + ux * k - m.x, c.y + uy * k - m.y) - reach;
+  };
+  const p = pointAt(t, m.s);
+  const cases: { name: string; vn: number; vt: number }[] = [
+    { name: "fast head-on", vn: -300, vt: 40 },
+    { name: "slow", vn: -50, vt: 120 },
+    { name: "leaving slowly", vn: 30, vt: 200 },
+    { name: "leaving fast", vn: 150, vt: 50 },
+  ];
+  const rows: string[] = [];
+  let ok = true;
+  for (const cs of cases) {
+    // The car sits beside the mound (on its right of travel), overlapping by 5, heading along the road.
+    const nx = -Math.sin(p.h), ny = Math.cos(p.h); // right of travel: from the mound towards the car
+    const c: CarState = {
+      x: m.x + nx * (reach - 5), y: m.y + ny * (reach - 5), h: p.h,
+      vx: nx * cs.vn + Math.cos(p.h) * cs.vt, vy: ny * cs.vn + Math.sin(p.h) * cs.vt, seg: m.seg, wreck: 0, air: 0, fall: 0, boost: 0,
+    };
+    surfPhys.collideTyres(c, t.tyresAt[m.seg]);
+    const vn = c.vx * nx + c.vy * ny, vt = c.vx * Math.cos(p.h) + c.vy * Math.sin(p.h);
+    const wantN = cs.vn < surfPhys.TYRES_MIN_OUT ? Math.max(-surfPhys.TYRES_RESTITUTION * cs.vn, surfPhys.TYRES_MIN_OUT) : cs.vn;
+    const wantT = cs.vn < surfPhys.TYRES_MIN_OUT ? cs.vt * surfPhys.TYRES_TANGENT : cs.vt;
+    const good = Math.abs(gap(c)) < 1e-9 && Math.abs(vn - wantN) < 1e-9 && Math.abs(vt - wantT) < 1e-9;
+    ok &&= good;
+    rows.push(`${cs.name} (${cs.vn}, along ${cs.vt}) -> out ${vn.toFixed(1)}, along ${vt.toFixed(1)}`);
+  }
+  check(
+    `surf mounds: a car capsule is pushed fully out of a tyre mound (touching after); into it or out slower than ${surfPhys.TYRES_MIN_OUT}: out at max(${surfPhys.TYRES_RESTITUTION} x in, ${surfPhys.TYRES_MIN_OUT}) u/s, along it x ${surfPhys.TYRES_TANGENT}; leaving fast: only pushed`,
+    ok,
+    rows.join("; "),
+  );
+  // Through stepRaceCar: a driving car never ends inside a mound; an airborne one passes over it.
+  let inside = 0, contacts = 0;
+  for (const lat of [-50, -38, -30, -22, -10]) {
+    for (const v of [120, 300, 430]) {
+      const c = surfCar(t, m.s - 120, lat, v);
+      for (let i = 0; i < 90; i++) {
+        stepRaceCar(c, { throttle: 1, steer: 0 }, BASE_STATS, raceEnv(t));
+        if (surfTune.touchesMound(t, c)) contacts++;
+        if (gap(c) < -1e-6) inside++;
+      }
+    }
+  }
+  const fa = { ...surfCar(t, m.s - 40, m.lat, 400), air: 30 }, fb = { ...surfCar(surfDry(), m.s - 40, m.lat, 400), air: 30 };
+  for (let i = 0; i < 6; i++) {
+    stepRaceCar(fa, { throttle: 1, steer: 0 }, BASE_STATS, raceEnv(t));
+    stepRaceCar(fb, { throttle: 1, steer: 0 }, BASE_STATS, raceEnv(surfDry()));
+  }
+  check(
+    "surf mounds: driven straight at a mound from 15 lanes and speeds, a car is never left overlapping it (contacts happen); an airborne car flies over it untouched",
+    inside === 0 && contacts > 10 && fa.x === fb.x && fa.y === fb.y && gap(fa) < 0,
+    `${contacts} contact ticks, ${inside} overlapping; the flight passes over the mound (gap ${gap(fa).toFixed(1)})`,
+  );
+  const lines = surfTune.waterNumbers().filter((l) => l.startsWith("mound"));
+  console.log(`  ${lines.join("\n  ")}`);
+}
+
+function surfRivets(): void {
+  // Rivets die on a tyre mound (a swept test), and pass one they miss; on a mound-less track moveShot is as before.
+  const t = surfYard();
+  const m = t.tyres[1]; // s 880, lat 32, r 26
+  const shoot = (lat: number) => {
+    const c = surfCar(t, m.s - 200, lat, 0);
+    const s = surfW.spawnShot(c, 1, "a");
+    let ticks = 0;
+    while (ticks < 40 && surfW.moveShot(s, t)) ticks++;
+    return { ticks, s: queryTrackNear(t, s.x, s.y, s.seg).s };
+  };
+  const hit = shoot(m.lat), edge = shoot(m.lat + m.r + surfW.RIVET_RADIUS - 0.5), past = shoot(m.lat - m.r - surfW.RIVET_RADIUS - 1);
+  check(
+    "surf rivets: a rivet dies on a tyre mound (straight at it, and grazing its edge), and flies on past one it misses by a unit",
+    hit.s < m.s && hit.s > m.s - m.r - 20 && edge.s < m.s + 5 && past.s > m.s + 100,
+    `at the centre: died at s=${hit.s.toFixed(1)} after ${hit.ticks} ticks; grazing: s=${edge.s.toFixed(1)}; a unit past the edge: s=${past.s.toFixed(1)} after ${past.ticks} ticks`,
+  );
+}
+
+function surfRespawn(): void {
+  const t = surfYard();
+  // A car wrecked on a mound respawns on the nearest clear lane at its s (not inside it); one wrecked
+  // clear of every mound respawns on the centerline as before.
+  const rows: string[] = [];
+  let ok = true;
+  for (const m of t.tyres) {
+    const c = surfCar(t, m.s, m.lat, 0);
+    c.wreck = 1;
+    stepRaceCar(c, surfPhys.NO_INPUT, BASE_STATS, raceEnv(t));
+    const at = surfTune.sOf(t, c);
+    const good = c.wreck === 0 && !surfTune.touchesMound(t, c) && Math.abs(at.lat) <= t.def.halfWidth - CAR_WIDTH / 2 && Math.abs(at.s - m.s) < 1;
+    ok &&= good;
+    rows.push(`mound s ${m.s} lat ${m.lat}: lane ${at.lat.toFixed(0)}`);
+  }
+  const free = surfCar(t, 2000, 30, 0);
+  free.wreck = 1;
+  stepRaceCar(free, surfPhys.NO_INPUT, BASE_STATS, raceEnv(t));
+  const fp = pointAt(t, surfTune.sOf(t, free).s);
+  check(
+    "surf respawn: a car wrecked on each tyre mound respawns on the nearest clear lane at its s (asphalt, touching no mound); clear of mounds it respawns on the centerline as before",
+    ok && Math.hypot(free.x - fp.x, free.y - fp.y) < 1e-9 && surfTrack.clearLaneAt(t, 2000) === 0,
+    rows.join(", "),
+  );
+  // A fall goes to the recovery point on its clear lane: the centerline (solids keep SOLID_CLEAR from it).
+  const f = surfCar(t, 5000, 26, 0); // in the pit
+  f.fall = 1;
+  stepRaceCar(f, surfPhys.NO_INPUT, BASE_STATS, raceEnv(t));
+  const rp = pointAt(t, 3300);
+  check(
+    "surf respawn: a recovery is on the recovery point's clear lane (the centerline there), and clearLaneAt is 0 at every recovery point of the test tracks",
+    Math.hypot(f.x - rp.x, f.y - rp.y) < 1e-9 && TEST_TRACKS.every((d) => testTrack(d.id)!.recovery.every((r) => surfTrack.clearLaneAt(testTrack(d.id)!, r) === 0)),
+    `recovered at ${f.x.toFixed(1)},${f.y.toFixed(1)}`,
+  );
+}
+
+function surfValidate(): void {
+  const rule = (name: string, bad: string, want: string[], good: string) =>
+    check(`surf validate: ${name}`, want.every((w) => bad.includes(w)) && good === "", `broken: ${bad || "accepted"} || near miss: ${good || "accepted"}`);
+  const loop = (features: Feature[], recovery = [0, 3200, 5500]) => buildTrack({ ...SCHEMA_LOOP, id: "surf-v", features, recovery });
+  const errs = (features: Feature[], recovery?: number[]) => validateTrack(loop(features, recovery)).join(" | ");
+  // Belts: at least 48 long; wall to wall only on a straight.
+  rule(
+    `a belt is at least ${surfTrack.BELT_LEN_MIN} long`,
+    errs([{ k: "belt", s0: 1200, s1: 1247.9, lat0: -64, lat1: 64, vx: 50 }]),
+    ["belt 1200.0..1247.9: 47.9 long, shorter than 48"],
+    errs([{ k: "belt", s0: 1200, s1: 1248, lat0: -64, lat1: 64, vx: 50 }]),
+  );
+  rule(
+    "a wall-to-wall belt in a bend is rejected (on a straight it passes, and a bend belt that leaves a wall free passes)",
+    errs([{ k: "belt", s0: 2300, s1: 2520, lat0: -108, lat1: 108, vx: 50 }]),
+    ["belt 2300.0..2520.0: runs wall to wall in a bend"],
+    errs([{ k: "belt", s0: 1000, s1: 1300, lat0: -108, lat1: 108, vx: 50 }]) + errs([{ k: "belt", s0: 2300, s1: 2520, lat0: -108, lat1: 107, vx: 50 }]),
+  );
+  // Run-ups through water: a chasm on the bottom straight that a dry run-up from 5850 clears; a pool
+  // on the left half of the run-up (the centre lane misses it) is driven through and leaves the car
+  // short; the same pool past the landing is not in the run-up.
+  const jump = (extra: Feature[]) => buildTrack({ ...PREVIEW_YARD, id: "surf-ru", features: [{ k: "ramp", s: 6400, len: 80 }, { k: "gap", s0: 6480, s1: 6750 }, ...extra], recovery: [0, 3200, 5850] });
+  const pool = (s0: number, s1: number): Feature => ({ k: "water", s0, s1, lat0: -64, lat1: 0 });
+  const dryRun = validateRunUps(jump([])).join(" | ");
+  const wet = jump([pool(5950, 6350)]);
+  const wetRun = CAR_TYPES.map((type) => `${type}: ${validateRunUps(wet, statsFor(type, { engine: 0, tyres: 0, welder: 0 })).join(" | ") || "passes"}`).join(" || ");
+  const after = validateRunUps(jump([pool(6790, 6960)])).join(" | ");
+  const sportWet = validateRunUps(wet);
+  check(
+    "surf validate: the run-up validator drives a lane through any pool in a run-up (a pool beside the centre lane that leaves a Sport short of the chasm is rejected, though the centre-lane run clears it; dry, or the pool past the landing, it passes)",
+    dryRun === "" && after === "" && sportWet.length === 1 && sportWet[0].includes("driven through the water 5950.0..6350.0 at lat -32.0") && sportWet[0].includes("lands short in a gap") && validateTrack(wet).length === 0,
+    `wet, per type: ${wetRun}`,
+  );
+  // The Surf Yard passes every check for every type at L0 and L3, and the overspeed sweep.
+  const t = surfYard();
+  const all = [...validateTrack(t), ...CAR_TYPES.flatMap((type) => [0, 3].flatMap((lv) => validateRunUps(t, statsFor(type, { engine: lv, tyres: lv, welder: lv })))), ...validateJumpSweep(t, 537)];
+  check("surf validate: the Surf Yard validates (validateTrack, validateRunUps for every type at L0 and L3 incl. the pool in its jump's run-up, the 537 u/s jump sweep)", all.length === 0, all.join(" | "));
+}
+
+function surfLanes(): void {
+  // laneFor: with neither a mound nor a surface ahead it is holeLane exactly (every shipped track).
+  let diff = 0, n = 0;
+  for (const e of trackList()) {
+    const t = trackById(e.id);
+    for (let s = 0; s < t.length; s += 13) {
+      const p = pointAt(t, s);
+      for (const [look, pref] of [[200, 0], [400, -24], [330, 30]]) {
+        const a = surfBot.laneFor(t, s, p.seg, look, pref, pref, BASE_STATS), b = holeLane(t, s, look, pref);
+        n++;
+        if (a.lane !== b.lane || a.holes !== b.holes || a.dodge) diff++;
+      }
+    }
+  }
+  check("surf lanes: on the shipped tracks laneFor is holeLane exactly (no mound, no surface: no dodge)", diff === 0 && n > 2000, `${n} queries, ${diff} differ`);
+  // Costs by car type: a road split into water (left) and dirt (right): the Sport and the Racer take
+  // the water, the Truck the dirt; with the dirt gone, all three take the dry half.
+  // (Overlapping rectangles out to the walls, so their traction areas leave no dry lane: laneFor does not validate.)
+  const split = buildTrack({ ...SCHEMA_LOOP, id: "surf-split", features: [{ k: "water", s0: 1200, s1: 1500, lat0: -108, lat1: 12 }, { k: "dirt", s0: 1200, s1: 1500, lat0: -12, lat1: 108 }] });
+  const wetOnly = buildTrack({ ...SCHEMA_LOOP, id: "surf-wet", features: [{ k: "water", s0: 1200, s1: 1500, lat0: -64, lat1: 0 }] });
+  const pick = (t: Track, type: CarType, racing: number) => surfBot.laneFor(t, 1100, pointAt(t, 1100).seg, 300, racing, racing, statsFor(type, { engine: 0, tyres: 0, welder: 0 }));
+  const lanes = CAR_TYPES.map((type) => pick(split, type, -24).lane);
+  const dryLanes = CAR_TYPES.map((type) => pick(wetOnly, type, -24));
+  const costs = CAR_TYPES.map((type) => `${type} water ${surfBot.laneCost(surfTrack.SURF_WATER, statsFor(type, { engine: 0, tyres: 0, welder: 0 })).toFixed(2)} dirt ${surfBot.laneCost(surfTrack.SURF_DIRT, statsFor(type, { engine: 0, tyres: 0, welder: 0 })).toFixed(2)}`);
+  check(
+    "surf lanes: water and dirt cost by car type: on a road all pool on the left and all dirt on the right the Sport and the Racer keep to the pool, the Truck crosses to the dirt; with a dry half every type leaves its line (-24) for it (past the pool's felt edge -12, by the margin)",
+    lanes[0] < 0 && lanes[1] < 0 && lanes[2] > 0 && dryLanes.every((x) => x.dodge && x.lane >= -8),
+    `split: ${lanes.join("/")}; pool + dry: ${dryLanes.map((x) => x.lane).join("/")}; ${costs.join("; ")}`,
+  );
+  // Mounds are blocked like holes: in the chicane the lane clears the next mound by a car's width.
+  const t = surfYard();
+  const rows: string[] = [];
+  let clears = true;
+  for (const m of t.tyres.slice(0, 3)) {
+    const s = m.s - 150;
+    const r = surfBot.laneFor(t, s, pointAt(t, s).seg, 300, 0, 0, BASE_STATS);
+    clears &&= r.holes > 0 && Math.abs(r.lane - m.lat) > m.r + CAR_WIDTH / 2 + 8;
+    rows.push(`150 before the mound at s ${m.s} (lat ${m.lat}, r ${m.r}): lane ${r.lane}`);
+  }
+  check("surf lanes: a tyre mound ahead is blocked as a hole is (the lane clears it by half a car + 8)", clears, rows.join("; "));
+}
+
+function surfBots(): void {
+  // Easy, Normal and Hard: three server bots each (Sport, Racer, Truck by seat), 3 laps of the Surf
+  // Yard: all finish, no fall, identically on a rerun.
+  const rows: string[] = [];
+  let ok = true, met = { water: 0, dirt: 0, belt: 0, mounds: 0 };
+  for (const level of BOT_LEVELS) {
+    const a = surfTune.surfRace(level), b = surfTune.surfRace(level);
+    const good = a.phase === "results" && a.finish.length === 3 && a.falls.every((x) => x === 0) && a.digest === b.digest && JSON.stringify(a.finish) === JSON.stringify(b.finish);
+    ok &&= good;
+    for (const o of a.on) {
+      met.water += o.water;
+      met.dirt += o.dirt;
+      met.belt += o.belt;
+    }
+    met.mounds += a.mounds.reduce((x, y) => x + y, 0);
+    rows.push(`${level}: ${a.finish.join(", ")}; falls ${a.falls.join("/")}; wall-hit ticks ${a.walls.join("/")}; mound-contact ticks ${a.mounds.join("/")}; water/dirt/belt ticks ${a.on.map((o) => `${o.water}/${o.dirt}/${o.belt}`).join(" ")}; rerun ${a.digest === b.digest ? "identical" : "DIFFERS"}`);
+  }
+  console.log(`  ${rows.join("\n  ")}`);
+  check("surf bots: Easy, Normal and Hard bots (Sport, Racer, Truck) all finish 3 laps of the Surf Yard (every surface and mound) with no fall, identically on a rerun", ok, rows.map((r) => r.split(";")[0]).join(" | "));
+  check("surf bots: the bots meet the features (belt ticks, mound contacts) and mostly keep off water and dirt", met.belt > 300 && met.mounds > 0, JSON.stringify(met));
+}
+
+function surfShipped(): void {
+  // The shipped tracks drive exactly as before M4-SURF: schema-hash (built arrays, queries and
+  // validators, server bots, a room race, wall contacts) and the Hard bots' streams.
+  let out = "";
+  let ok = true;
+  try {
+    out = surfExec(process.execPath, ["--import", "tsx", "tools/debug/schema-hash.ts", "--check"], { encoding: "utf8" });
+  } catch (e) {
+    ok = false;
+    out = String((e as { stdout?: string }).stdout ?? e);
+  }
+  const lines = out.split("\n").filter((l) => /^(SAME|DIFF) /.test(l));
+  check(
+    "surf shipped: tools/debug/schema-hash.ts --check: every part SAME on every shipped track (built, queries, botsDirect, room, walls), against the golden recorded before M4-SURF changed physics",
+    ok && lines.length === 15 && lines.every((l) => l.startsWith("SAME")),
+    lines.filter((l) => l.startsWith("DIFF")).join("; ") || `${lines.length} parts SAME`,
+  );
+  const got = surfTune.hardHashes();
+  const bad = Object.keys(SURF_HARD_GOLDEN).filter((k) => got[k] !== SURF_HARD_GOLDEN[k]);
+  check(
+    "surf shipped: Hard bots drive, shoot and shop byte-identically to before M4-SURF (server bots on every shipped track, two races; the client bot path); Easy and Normal: hard golden above",
+    bad.length === 0,
+    bad.map((k) => `${k}: ${got[k]?.slice(0, 12)} != ${SURF_HARD_GOLDEN[k].slice(0, 12)}`).join("; ") || `${Object.keys(got).length} hashes match`,
+  );
+}
+
+function surfParity(): void {
+  // stepRaceCar on a clone equals the server's pose exactly, tick by tick, for a lone server bot of
+  // each level and car type over 2 laps of the Surf Yard (belts, pools, dirt, mounds, the jump).
+  const rows: string[] = [];
+  let all = true;
+  withDevTrack(SURF_YARD.id, () => {
+    for (const [level, car] of [["easy", "sport"], ["normal", "racer"], ["hard", "truck"]] as const) {
+      const sim = new Sim(2);
+      const host = sim.add("Host");
+      if (sim.room.setTrack(host, SURF_YARD.id)) throw new Error("dev track refused");
+      const b = sim.room.addBot(host, level, sim.now) as Player;
+      if (sim.room.setCar(host, car, b.id)) throw new Error("car");
+      b.wallet.ammo.rivets = 0; // no mines of its own to drive over on lap 2 (a spin-out is combat, not the step)
+      b.wallet.ammo.mines = 0;
+      sim.room.start(host, sim.now);
+      while (sim.room.phase !== "racing") sim.tick();
+      sim.room.retire(host);
+      const t = sim.room.track;
+      let ctl: surfBot.BotControls | null = null;
+      surfServerBots.botTrace.fn = (p, c) => {
+        if (p === b) ctl = c;
+      };
+      let ticks = 0, mismatch = 0, first = "", contacts = 0, wet = 0, dirt = 0, belt = 0;
+      try {
+        while (sim.room.phase === "racing" && ticks < 60 * 120) {
+          const clone = cloneCar(b.car!);
+          sim.tick();
+          ticks++;
+          if (!b.car || sim.room.phase !== "racing") break;
+          const c = ctl as surfBot.BotControls | null;
+          stepRaceCar(clone, { throttle: c?.throttle ?? 0, steer: c?.steer ?? 0 }, b.stats, raceEnv(t, sim.room.rt, 0));
+          const keys = ["x", "y", "h", "vx", "vy", "seg", "wreck", "air", "fall", "boost"] as const;
+          if (!keys.every((k) => Object.is(clone[k], b.car![k]))) {
+            mismatch++;
+            if (!first) first = `tick ${ticks}: ${keys.filter((k) => !Object.is(clone[k], b.car![k])).join(",")}`;
+          }
+          if (surfTune.touchesMound(t, b.car!)) contacts++;
+          const q = queryTrackNear(t, clone.x, clone.y, clone.seg);
+          const f = surfTrack.surfaceAt(t, q.seg, q.s, q.lat);
+          if (f?.kind === surfTrack.SURF_WATER) wet++;
+          else if (f?.kind === surfTrack.SURF_DIRT) dirt++;
+          else if (f?.kind === surfTrack.SURF_BELT) belt++;
+        }
+      } finally {
+        surfServerBots.botTrace.fn = null;
+      }
+      const good = mismatch === 0 && ticks > 60 * 30 && b.hp === CAR_HP && b.progress!.fin > 0;
+      all &&= good;
+      rows.push(`${level} ${car}: ${ticks} ticks, ${mismatch} mismatches${first ? ` (${first})` : ""}; belt ${belt}, water ${wet}, dirt ${dirt}, mound-contact ${contacts} ticks; HP ${b.hp}`);
+    }
+  });
+  console.log(`  ${rows.join("\n  ")}`);
+  check("surf parity: stepRaceCar on a clone equals the server's pose bit for bit every tick (a lone server bot per level and type, 2 laps of the Surf Yard); mounds do no damage", all, rows.join(" | "));
+  // The client's prediction (reconcile and replay through stepRaceCar) over the wire, no lag: three
+  // socket-bot cars (Sport, Racer, Truck) race 1 lap of the Surf Yard.
+  const r = withDevTrack(SURF_YARD.id, () => carsClientLap(SURF_YARD.id));
+  check(
+    `surf parity: three client cars (Sport, Racer, Truck) racing the Surf Yard over the wire predict it exactly: no state mismatch, no error > ${LARGE_ERR}`,
+    r.ticks.every((x) => x > 0) && r.stateErrs === 0 && r.large === 0 && r.samples > 500 && r.same,
+    `laps ${r.ticks.map((x) => (x / 60).toFixed(1)).join("/")} s; ${r.samples} samples, ${r.stateErrs} state mismatches, ${r.large} > ${LARGE_ERR}, max ${r.maxErr.toFixed(4)}`,
+  );
+}
+
+function surfCpu(): void {
+  // 1 human (retired at GO) + 5 bots (Easy, Normal, Hard, Normal, Hard), 3 laps of the Surf Yard: every bot step and room tick timed.
+  const r = withDevTrack(SURF_YARD.id, () => {
+    const sim = new Sim(3);
+    const host = sim.add("Host");
+    sim.room.setTrack(host, SURF_YARD.id);
+    for (const l of ["easy", "normal", "hard", "normal", "hard"] as BotLevel[]) sim.room.addBot(host, l, sim.now);
+    sim.room.start(host, sim.now);
+    while (sim.room.phase !== "racing") sim.tick();
+    sim.room.retire(host);
+    const tickMs: number[] = [];
+    const steps: number[] = [];
+    botTiming.samples = steps;
+    let ticks = 0;
+    try {
+      while (sim.room.phase === "racing" && ticks < 60 * 300) {
+        sim.tickNo++;
+        sim.now += 1000 / 60;
+        const t0 = performance.now();
+        sim.room.tick(sim.tickNo, sim.now);
+        tickMs.push(performance.now() - t0);
+        ticks++;
+      }
+    } finally {
+      botTiming.samples = null;
+    }
+    return { tickMs, steps, phase: sim.room.phase as string };
+  });
+  const pct = (a: number[], p: number) => [...a].sort((x, y) => x - y)[Math.min(a.length - 1, Math.floor(a.length * p))];
+  const med = pct(r.steps, 0.5), tickMed = pct(r.tickMs, 0.5);
+  console.log(`  CPU (Surf Yard): bot step median ${(med * 1000).toFixed(2)} us, p99 ${(pct(r.steps, 0.99) * 1000).toFixed(2)} us over ${r.steps.length} steps; room tick with 5 bots median ${(tickMed * 1000).toFixed(2)} us, p99 ${(pct(r.tickMs, 0.99) * 1000).toFixed(2)} us, max ${(Math.max(...r.tickMs) * 1000).toFixed(1)} us over ${r.tickMs.length} ticks`);
+  check(
+    "surf CPU: on the Surf Yard the median bot step stays <= 0.05 ms (the M4-BOTS gate fails above 0.2 ms); room tick with 5 bots printed",
+    r.steps.length > 5 * 3000 && med <= 0.2 && r.phase === "results",
+    `median bot step ${med.toFixed(5)} ms (${med <= 0.05 ? "within" : "OVER"} the 0.05 ms target); room tick median ${tickMed.toFixed(4)} ms`,
+  );
+  // The surface lookup in stepCar: a step on a track with surfaces costs about what one on a plain track does.
+  const time = (t: Track, s: number, lat: number) => {
+    const c = surfCar(t, s, lat, 300);
+    const t0 = performance.now();
+    for (let i = 0; i < 20_000; i++) {
+      const d = { ...c };
+      stepCar(d, { throttle: 1, steer: 0.1 }, BASE_STATS, t);
+    }
+    return ((performance.now() - t0) / 20_000) * 1000;
+  };
+  const plain = time(trackById("rust-bowl"), 3000, 0), surf = time(surfYard(), 1535, 0), mound = time(surfYard(), 690, 10);
+  console.log(`  stepCar: ${plain.toFixed(3)} us on Rust Bowl, ${surf.toFixed(3)} us in a Surf Yard pool, ${mound.toFixed(3)} us beside a mound`);
+  const added = (performance.now() - surfClock.t0) / 1000;
+  console.log(`  M4-SURF sim-test sections' runtime (surfTraction .. surfCpu): ${added.toFixed(1)} s`);
+}
+
+function surfDevFlag(): void {
+  // Off (unset, the default; also on Render): new rooms on Rust Bowl, the test tracks refused.
+  const off = withDevTrack(undefined, () => {
+    const rooms = new Rooms(1);
+    const x = { conn: new FakeConn(), room: null, player: null } as Session;
+    rooms.onMessage(x, { t: "create", name: "Ann" }, 1000);
+    const room = x.room!;
+    return { id: room.trackId, flag: surfRoom.devTrackId(), refuse: [room.setTrack(x.player!, SURF_YARD.id), room.setTrack(x.player!, PREVIEW_YARD.id)] };
+  });
+  const bogus = withDevTrack("rust-bowl", () => surfRoom.devTrackId()) ?? withDevTrack("nope", () => surfRoom.devTrackId()) ?? withDevTrack("", () => surfRoom.devTrackId());
+  // On: a new room starts on the named test track; the host picks the other one and a shipped one; an unknown id is still refused.
+  const on = withDevTrack(SURF_YARD.id, () => {
+    const rooms = new Rooms(1);
+    const x = { conn: new FakeConn(), room: null, player: null } as Session;
+    rooms.onMessage(x, { t: "create", name: "Ann" }, 1000);
+    const room = x.room!;
+    const first = room.trackId;
+    const yard = room.track === testTrack(SURF_YARD.id);
+    rooms.onMessage(x, { t: "track", id: PREVIEW_YARD.id }, 1000);
+    const second = room.trackId;
+    const msgOk = room.track === testTrack(PREVIEW_YARD.id);
+    const shipped = room.setTrack(x.player!, "crusher-run");
+    const third = room.trackId;
+    const unknown = room.setTrack(x.player!, "nope");
+    return { first, yard, second, msgOk, shipped, third, unknown };
+  });
+  check(
+    "surf dev flag: SCRAP_DEV_TRACK unset (the default, and on Render): new rooms start on Rust Bowl and the test tracks are refused as unknown; a value that is not a test track's id is off too",
+    off.id === DEFAULT_TRACK_ID && off.flag === null && off.refuse.every((e) => e === "Unknown track") && bogus === null,
+    JSON.stringify(off),
+  );
+  check(
+    "surf dev flag: SCRAP_DEV_TRACK=surf-yard: a new room starts on the Surf Yard, the host picks the Preview Yard by a {t:\"track\"} message and a shipped track as ever; an unknown id is still refused",
+    on.first === SURF_YARD.id && on.yard && on.second === PREVIEW_YARD.id && on.msgOk && on.shipped === null && on.third === "crusher-run" && on.unknown === "Unknown track",
+    JSON.stringify(on),
+  );
+  // The client builds a test track's id it is sent (Game.useTrack), and the render.yaml sets no such variable.
+  const yaml = surfRead("render.yaml", "utf8");
+  check("surf dev flag: render.yaml does not set SCRAP_DEV_TRACK (off on Render)", !yaml.includes("SCRAP_DEV_TRACK"));
+}
+
+for (const t of [rivets, gating, mines, wrecks, finishing, garage, armDelay, engine, readyCheck, collisions, trackFeatures, roomTrack, jumpsWired, shippedTracks, botDriver, botLaps, mineCap, chatRoom, chatClient, sound, raceSounds, surfaceSounds, audioUnlock, menuHostOnly, menuStop, menuRestart, menuKick, menuLock, menuHandover, menuClient, menuRestartClient, retireRules, retireField, retireRaceEnd, retireGarage, retireRefund, retireOthers, retireNotices, retireClient, pauseRefused, pauseFreeze, pauseResume, pauseHold, pauseAuto, pauseCooldown, pauseGrace, pauseCountdown, pauseControls, pauseClient, musicSwitch, soundMigration, soundLayers, soundServer, soundRandom, soundRoomDrag, soundSliderGrip, soundClient, songs, songPlayer, ghostRivets, minesSetting, minesStay, minesCap, minesFade, minesAtStart, minesCleared, minesPaused, minesClient, botsPointAt, botsAdd, botsKickHost, botsHandover, botsFullRoom, botsSoloStart, botsRace, botsShop, botsTick, botsCpu, botsClient, carsTypes, carsStats, carsPick, carsRejoin, carsBots, carsRunUps, carsBalance, carsCut, carsClient, envRt, envStep, envClient, draftRule, draftStraight, draftClient, draftJumps, draftBots, cellsRule, boostPhysics, cellsServer, cellsClient, cellsValidate, cellsBots, cellsOffCentre, schemaTypes, schemaArrays, schemaLateral, schemaRt, schemaValidate, schemaPreview, schemaDataOnly, hardGolden, hardLevels, hardShop, hardWeapons, hardApex, hardPace, hardTraffic, hardVs, hardClient, hardCpu, touchStickCentre, touchStickClamp, touchStickDead, touchStickCurve, touchStickOutput, touchStickRounding, touchStickOwner, touchMulti, touchRelease, touchMine, touchMerge, surfTraction, surfBuckets, surfWater, surfDirt, surfBelt, surfMounds, surfRivets, surfRespawn, surfValidate, surfLanes, surfBots, surfShipped, surfParity, surfCpu, surfDevFlag]) {
   console.log(`\n# ${t.name}`);
   try {
     t();
