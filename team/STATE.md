@@ -409,6 +409,10 @@ M4-SCHEMA review APPROVE (ctx_59d389e53131, released; tmp/m4-schema/m4-schema-re
 ctx_293724109f66): F1 widen-vs-radius rule must use wall - car half-width (track.ts:1127; near miss sim-test.ts:9510), F2 0-tick barrel
 gutter (track.ts:1075), F3 try to remove the +34 B/query boxed lat (track.ts:578). Then merge (no taste). For M4-SURF later: the
 schema hash needs a wall-contact scenario before the collideWalls refactor (review F4); M4-MOVE owns the truck landing; M4-SURF per-sample isLost.
+M4-HARD review REQUEST_CHANGES (ctx_fbba44ce9791, released; tmp/m4-hard/m4-hard-review.md): BLOCKING bot-ai.ts:48 socket Hard bots keep
+lastMine across races -> no mines after race 1 (server seats fine: resetBotMem). Plus apexMineFree hint for mines behind (:483). Fix sent to
+ctx_ab92893722c2 (one round; a second REQUEST_CHANGES goes to the user). Easy/Normal hashes verified real by the reviewer; 18/18 = pace
+(with Normal's driving Hard wins 9/18). Taste copy :3009 unaffected (lobby bots = server seats).
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
