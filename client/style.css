@@ -364,6 +364,12 @@ kbd {
   white-space: nowrap;
 }
 
+/* In the lobby a long name must not widen its column (on a phone a bot row with its car picker
+   and Remove would push them past the panel): it takes what the row has left, ellipsis beyond. */
+#lobby-players .name {
+  width: 0;
+}
+
 .players .tag-pill {
   font-size: 10px;
   text-transform: uppercase;
@@ -608,17 +614,45 @@ h2 {
   color: var(--muted-solid);
 }
 
+/* The native arrow is off (it covered the car's name): the well ends in a small key cap with our
+   own arrow, the track picker's drawn at half size (rows 5, 3 and 1 px wide, 1 px tall), and the
+   padding keeps the name clear of it. The select is as wide as its longest car. */
 .players .row-car {
   flex: none;
   font: inherit;
   font-size: 11px;
   font-weight: 700;
   color: var(--text);
-  background: var(--soot0);
+  -webkit-appearance: none;
+  appearance: none;
+  background-color: var(--soot0);
+  background-image:
+    linear-gradient(var(--text), var(--text)), linear-gradient(var(--text), var(--text)),
+    linear-gradient(var(--text), var(--text)),
+    linear-gradient(var(--line), var(--line)), linear-gradient(var(--soot3), var(--soot3));
+  background-position:
+    right 4px top calc(50% - 1px), right 5px top 50%, right 6px top calc(50% + 1px),
+    right 12px top, right top;
+  background-size: 5px 1px, 3px 1px, 1px 1px, 1px 100%, 12px 100%;
+  background-repeat: no-repeat;
   border: 1px solid var(--line);
-  padding: 1px 0;
+  padding: 2px 17px 2px 5px; /* 19 px tall, as the native control was */
   margin: -2px 0;
-  max-width: 62px;
+  cursor: pointer;
+}
+
+.players .row-car:hover {
+  border-color: var(--steel);
+}
+
+/* The host's bot row (tag, car picker and Remove): 6 px between its parts so the bot's name
+   shows in full on a phone; the name keeps its 10 px from the swatch, in line with the rows above. */
+.players li.bot-row {
+  gap: 6px;
+}
+
+.players li.bot-row .name {
+  margin-left: 4px;
 }
 
 .players .row-car option {
@@ -681,10 +715,15 @@ h2 {
   color: var(--muted-solid);
 }
 
-/* Add bot: the label, then Easy, Normal and Hard sharing the rest of the row. */
+/* Add bot: the label, then Easy, Normal and Hard sharing the rest of the row. A third of the
+   row is narrower than "Normal" plus a key cap's 16 px sides, so the side padding goes and the
+   label sits centred in the whole cap. */
 .bot-add .btn {
   flex: 1;
   min-width: 0;
+  padding-left: 0;
+  padding-right: 0;
+  white-space: nowrap;
 }
 
 /* Lobby track: the host's selector next to Start, the track name for everyone else. */
