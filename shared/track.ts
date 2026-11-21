@@ -36,7 +36,69 @@ export interface Hole { k: "hole"; s: number; lat: number; r: number }
  */
 export interface Cell { k: "cell"; s: number; lat: number; air?: boolean }
 
-export type Feature = Ramp | Gap | Hole | Cell;
+// ---- M4 surfaces, obstacles and split lanes (M4-SCHEMA, PLAN-M4.md 2.2-2.4, 2.6 B) ----------
+// Data only so far: buildTrack places them and validateTrack checks their layout, but the race
+// step, the bots and the collisions do not read them yet (M4-SURF and M4-MOVE add the behaviour).
+// Track coordinates: s along the centerline, lat across it (+ = right of travel, as a hole's).
+
+/** Water (M4-SURF: cars aquaplane on it): a rectangle s0..s1 by lat0..lat1. */
+export interface Water { k: "water"; s0: number; s1: number; lat0: number; lat1: number }
+
+/** Dirt (M4-SURF: loose ground, the verge's drag and grip by car type): a rectangle s0..s1 by lat0..lat1. */
+export interface Dirt { k: "dirt"; s0: number; s1: number; lat0: number; lat1: number }
+
+/**
+ * A conveyor belt (M4-SURF): a rectangle s0..s1 by lat0..lat1 that drifts a car on it across the
+ * road at vx units/s (+ = toward the right of travel), a fixed drift each tick. Static.
+ */
+export interface Belt { k: "belt"; s0: number; s1: number; lat0: number; lat1: number; vx: number }
+
+/** A tyre mound (M4-SURF): a static solid circle of radius r (TYRES_R_MIN..TYRES_R_MAX) at s, lat. */
+export interface Tyres { k: "tyres"; s: number; lat: number; r: number }
+
+/**
+ * Rolling barrels (M4-MOVE): n barrels of radius BARREL_R roll across the road at s, from wall to
+ * wall at |speed| units/s (speed > 0: from the left wall to the right one; < 0: from the right to
+ * the left). Each runs a cycle of `period` ticks, the k-th one floor(k * period / n) ticks ahead of
+ * the first: it crosses, drops into the gutter at the far wall and comes back in at the near wall
+ * when its cycle starts again. Where a barrel is is a pure function of the race tick (barrelLat).
+ */
+export interface Barrels { k: "barrels"; s: number; n: number; period: number; speed: number }
+
+/**
+ * A parked ramp truck (M4-MOVE), facing along the track: its body is a solid capsule from s (the
+ * rear) to s + len (the front of the cab), centred `lat` units sideways, TRUCK_HALF wide either
+ * side. Its ramp band is a narrow ramp TRUCK_BAND either side of `lat`, from the rear up to the lip
+ * at the cab (s + len - TRUCK_CAB): a car whose centre is in the band, moving forward at
+ * TRUCK_MIN_SPEED or more, rides up and takes off in the band's take-off zone [lip, lip + LIP_ZONE)
+ * (truckLipAt: the lateral lip test lipAt does not have). Slower than that, the band is as solid as
+ * the rest of the body. The flight is an ordinary jump's (airTicksFor): no longer air time.
+ */
+export interface Truck { k: "truck"; s: number; lat: number; len: number }
+
+/**
+ * A crusher press (M4-MOVE): a gate PRESS_DEPTH long at s across lat0..lat1, on a cycle of `period`
+ * ticks of which the last `down` it is down (solid); for the PRESS_WARN_TICKS before it slams its
+ * shadow warns. A pure function of the race tick (pressState). No damage.
+ */
+export interface Press { k: "press"; s: number; lat0: number; lat1: number; period: number; down: number }
+
+/**
+ * The road widens (split lanes, PLAN-M4 2.6 B) from s0 to s1: `left` more asphalt on the left and
+ * `right` more on the right (the verge and the wall move out with it). The extra width grows from 0
+ * at s0 to full at s0 + WIDEN_TAPER and shrinks back to 0 between s1 - WIDEN_TAPER and s1. buildTrack
+ * precomputes the per-sample half-widths and walls (Track.halfL, halfR, wallL, wallR).
+ */
+export interface Widen { k: "widen"; s0: number; s1: number; left: number; right: number }
+
+/**
+ * An island (split lanes): a solid band s0..s1 by lat0..lat1 inside a widened road, with a lane of
+ * at least LANE_MIN either side; drawn with tyre-stack noses at both ends. s, checkpoints, rd, laps
+ * and positions are unchanged: the shorter lane is simply faster.
+ */
+export interface Island { k: "island"; s0: number; s1: number; lat0: number; lat1: number }
+
+export type Feature = Ramp | Gap | Hole | Cell | Water | Dirt | Belt | Tyres | Barrels | Truck | Press | Widen | Island;
 
 export interface TrackDef {
   /** Registry id (e.g. "rust-bowl"): the key in shared/tracks.ts and on the wire. */
@@ -57,6 +119,46 @@ export interface PlacedHole extends Hole { x: number; y: number }
 /** A cell with its centre in world coordinates (buildTrack). Track.cells' order is the snapshot's (cells[i]). */
 export interface PlacedCell extends Cell { x: number; y: number; seg: number }
 
+/** A tyre mound with its centre in world coordinates (buildTrack). */
+export interface PlacedTyres extends Tyres { x: number; y: number; seg: number }
+
+/**
+ * Rolling barrels placed by buildTrack: the centerline point at s, its heading h and the unit normal
+ * (nx, ny) to the right of travel (a barrel at lateral offset v is at x + nx * v, y + ny * v); lat0..lat1
+ * is the range a barrel's centre rolls (wall to wall, BARREL_R off each wall); offsets[k] is the k-th
+ * barrel's head start in ticks; roll the ticks a crossing takes.
+ */
+export interface PlacedBarrels extends Barrels {
+  x: number;
+  y: number;
+  h: number;
+  nx: number;
+  ny: number;
+  seg: number;
+  lat0: number;
+  lat1: number;
+  offsets: number[];
+  roll: number;
+}
+
+/**
+ * A ramp truck placed by buildTrack: its body capsule's axis from (x0, y0) (rear) to (x1, y1)
+ * (front), radius TRUCK_HALF, so the body covers s..s + len; the ramp band's lateral range
+ * band0..band1 and its lip (s of the take-off, at the cab).
+ */
+export interface PlacedTruck extends Truck {
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+  lip: number;
+  band0: number;
+  band1: number;
+}
+
+/** A crusher press placed by buildTrack: the centerline point at s, its heading and right normal. */
+export interface PlacedPress extends Press { x: number; y: number; h: number; nx: number; ny: number; seg: number }
+
 export interface Track {
   def: TrackDef;
   pts: Vec[]; // sampled centerline, closed (pts[n-1] connects back to pts[0])
@@ -69,6 +171,23 @@ export interface Track {
   holes: PlacedHole[]; // sorted by s
   cells: PlacedCell[]; // sorted by s (then lat): the index is the snapshot's
   recovery: number[]; // sorted, never empty
+  // M4-SCHEMA: per sample i (at s = cum[i]), the asphalt half-width and the wall's distance from
+  // the centerline on the left (L) and the right (R), widens included. Without a widen they equal
+  // def.halfWidth and wall everywhere.
+  halfL: number[];
+  halfR: number[];
+  wallL: number[];
+  wallR: number[];
+  // M4-SCHEMA features, each sorted by s (s0); data only so far (see Water and below).
+  water: Water[];
+  dirt: Dirt[];
+  belts: Belt[];
+  tyres: PlacedTyres[];
+  barrels: PlacedBarrels[];
+  trucks: PlacedTruck[];
+  presses: PlacedPress[];
+  widens: Widen[];
+  islands: Island[];
 }
 
 export interface TrackQuery {
@@ -77,6 +196,7 @@ export interface TrackQuery {
   ny: number;
   s: number; // distance along the track of the nearest centerline point
   seg: number; // nearest segment index
+  lat: number; // signed lateral offset (M4-SCHEMA): +dist right of travel, -dist left (|lat| = dist)
 }
 
 // Original layout: long left straight, a sweeping top section, a chicane in the
@@ -182,6 +302,51 @@ export const START_STRAIGHT_TOLERANCE = 0.05; // radians (~3 degrees)
 /** Near sections must be more than 2 * LOCAL_WINDOW + this many segment indices apart. */
 export const SECTION_INDEX_MARGIN = 4;
 
+// M4-SCHEMA constants. No runtime import of physics, weapons or protocol here (they import this
+// file); sim-test checks the copies against the originals.
+/** Ticks per second (physics TICK_HZ): the moving obstacles' speeds are per second, rt is in ticks. */
+const TICKS_PER_S = 60;
+/** Half a car's length and width (physics CAR_LENGTH / 2, CAR_WIDTH / 2). */
+const CAR_HALF_LEN = 15;
+const CAR_HALF_WID = 8;
+/** Grid slots gridSlot places (protocol MAX_PLAYERS). */
+export const GRID_SLOTS = 6;
+/** A tyre mound's radius range. */
+export const TYRES_R_MIN = 18;
+export const TYRES_R_MAX = 30;
+/** A rolling barrel's radius, and the bounds on a row of them. */
+export const BARREL_R = 9;
+export const BARRELS_MAX = 6;
+export const BARREL_SPEED_MIN = 40;
+export const BARREL_SPEED_MAX = 240;
+/** The ramp truck: its body's half-width, its ramp band's half-width, its cab's length. */
+export const TRUCK_HALF = 20;
+export const TRUCK_BAND = 14;
+export const TRUCK_CAB = 30;
+export const TRUCK_LEN_MIN = 80;
+export const TRUCK_LEN_MAX = 160;
+/** Below this forward speed the truck's ramp band is solid (weapons MIN_TAKEOFF_SPEED). */
+export const TRUCK_MIN_SPEED = 220;
+/** The crusher press: its depth along the track, and how long its shadow warns before it slams. */
+export const PRESS_DEPTH = 24;
+export const PRESS_WARN_TICKS = 30; // 0.5 s
+/** pressState's values. */
+export const PRESS_UP = 0;
+export const PRESS_WARNING = 1;
+export const PRESS_DOWN = 2;
+/** A conveyor belt's largest drift (units/s). */
+export const BELT_MAX = 200;
+/** A widen's taper at each end (units along the track). */
+export const WIDEN_TAPER = 120;
+/** A split lane's narrowest width (asphalt edge to island). */
+export const LANE_MIN = 72;
+/** Solids keep at least this far from recovery points and from the grid's slots. */
+export const SOLID_CLEAR = 40;
+/** A pool in a bend leaves a dry lane at least this wide... */
+export const DRY_LANE_MIN = 48;
+/** ... unless the road turns less than this (radians) over the pool's length: it lies on a straight. */
+export const POOL_STRAIGHT_TOLERANCE = 0.05;
+
 function catmull(p0: number, p1: number, p2: number, p3: number, t: number): number {
   const t2 = t * t;
   const t3 = t2 * t;
@@ -217,24 +382,173 @@ export function buildTrack(def: TrackDef): Track {
     holes: [],
     cells: [],
     recovery: [],
+    halfL: [],
+    halfR: [],
+    wallL: [],
+    wallR: [],
+    water: [],
+    dirt: [],
+    belts: [],
+    tyres: [],
+    barrels: [],
+    trucks: [],
+    presses: [],
+    widens: [],
+    islands: [],
   };
-  for (const f of def.features ?? []) {
-    if (f.k === "ramp") track.ramps.push({ ...f });
-    else if (f.k === "gap") track.gaps.push({ ...f });
-    else {
-      const p = pointAt(track, f.s);
-      const at = { x: p.x - Math.sin(p.h) * f.lat, y: p.y + Math.cos(p.h) * f.lat };
-      if (f.k === "hole") track.holes.push({ ...f, ...at });
-      else track.cells.push({ ...f, ...at, seg: p.seg });
+  const features = def.features ?? [];
+  // The widens first: the per-sample walls, and the barrels' wall-to-wall run, depend on them.
+  for (const f of features) if (f.k === "widen") track.widens.push({ ...f });
+  track.widens.sort((a, b) => a.s0 - b.s0);
+  for (let i = 0; i < pts.length; i++) {
+    const hl = halfAt(track, cum[i], -1), hr = halfAt(track, cum[i], 1);
+    track.halfL.push(hl);
+    track.halfR.push(hr);
+    track.wallL.push(hl + def.verge);
+    track.wallR.push(hr + def.verge);
+  }
+  for (const f of features) {
+    switch (f.k) {
+      case "ramp":
+        track.ramps.push({ ...f });
+        break;
+      case "gap":
+        track.gaps.push({ ...f });
+        break;
+      case "hole":
+      case "cell": {
+        const p = pointAt(track, f.s);
+        const at = { x: p.x - Math.sin(p.h) * f.lat, y: p.y + Math.cos(p.h) * f.lat };
+        if (f.k === "hole") track.holes.push({ ...f, ...at });
+        else track.cells.push({ ...f, ...at, seg: p.seg });
+        break;
+      }
+      case "water":
+        track.water.push({ ...f });
+        break;
+      case "dirt":
+        track.dirt.push({ ...f });
+        break;
+      case "belt":
+        track.belts.push({ ...f });
+        break;
+      case "tyres": {
+        const p = trackPoint(track, f.s, f.lat);
+        track.tyres.push({ ...f, x: p.x, y: p.y, seg: p.seg });
+        break;
+      }
+      case "barrels": {
+        const p = pointAt(track, f.s);
+        const lat0 = -wallAt(track, f.s, -1) + BARREL_R, lat1 = wallAt(track, f.s, 1) - BARREL_R;
+        const offsets: number[] = [];
+        for (let k = 0; k < f.n; k++) offsets.push(Math.floor((k * f.period) / f.n));
+        const roll = Math.abs(f.speed) > 0 ? ((lat1 - lat0) / Math.abs(f.speed)) * TICKS_PER_S : Infinity;
+        track.barrels.push({ ...f, x: p.x, y: p.y, h: p.h, nx: -Math.sin(p.h), ny: Math.cos(p.h), seg: p.seg, lat0, lat1, offsets, roll });
+        break;
+      }
+      case "truck": {
+        // The body's axis: TRUCK_HALF in from either end, so the capsule covers s..s + len.
+        const a = trackPoint(track, f.s + TRUCK_HALF, f.lat), b = trackPoint(track, f.s + f.len - TRUCK_HALF, f.lat);
+        track.trucks.push({ ...f, x0: a.x, y0: a.y, x1: b.x, y1: b.y, lip: f.s + f.len - TRUCK_CAB, band0: f.lat - TRUCK_BAND, band1: f.lat + TRUCK_BAND });
+        break;
+      }
+      case "press": {
+        const p = pointAt(track, f.s);
+        track.presses.push({ ...f, x: p.x, y: p.y, h: p.h, nx: -Math.sin(p.h), ny: Math.cos(p.h), seg: p.seg });
+        break;
+      }
+      case "widen":
+        break; // above
+      case "island":
+        track.islands.push({ ...f });
+        break;
     }
   }
   track.ramps.sort((a, b) => a.s - b.s);
   track.gaps.sort((a, b) => a.s0 - b.s0);
   track.holes.sort((a, b) => a.s - b.s);
   track.cells.sort((a, b) => a.s - b.s || a.lat - b.lat);
+  track.water.sort((a, b) => a.s0 - b.s0);
+  track.dirt.sort((a, b) => a.s0 - b.s0);
+  track.belts.sort((a, b) => a.s0 - b.s0);
+  track.tyres.sort((a, b) => a.s - b.s);
+  track.barrels.sort((a, b) => a.s - b.s);
+  track.trucks.sort((a, b) => a.s - b.s);
+  track.presses.sort((a, b) => a.s - b.s);
+  track.islands.sort((a, b) => a.s0 - b.s0);
   const rec = def.recovery?.length ? def.recovery : [0];
   track.recovery = rec.map((r) => wrapS(track, r)).sort((a, b) => a - b);
   return track;
+}
+
+/** The world point `lat` units sideways (+ = right of travel) of the centerline at s, and its segment. */
+function trackPoint(track: Track, s: number, lat: number): { x: number; y: number; seg: number } {
+  const p = pointAt(track, s);
+  return { x: p.x - Math.sin(p.h) * lat, y: p.y + Math.cos(p.h) * lat, seg: p.seg };
+}
+
+/**
+ * How much wider the asphalt is on `side` (-1 = left, +1 = right) at s than def.halfWidth: the
+ * widens' extra width there, tapered over WIDEN_TAPER at each end (M4-SCHEMA). 0 without a widen.
+ */
+export function widenAt(track: Track, s: number, side: number): number {
+  s = wrapS(track, s);
+  let extra = 0;
+  for (const w of track.widens) {
+    if (s < w.s0 || s > w.s1) continue;
+    extra += (side < 0 ? w.left : w.right) * Math.min(1, (s - w.s0) / WIDEN_TAPER, (w.s1 - s) / WIDEN_TAPER);
+  }
+  return extra;
+}
+
+/** The asphalt's half-width on `side` (-1 = left, +1 = right) at s: def.halfWidth plus any widen. */
+export function halfAt(track: Track, s: number, side: number): number {
+  return track.def.halfWidth + widenAt(track, s, side);
+}
+
+/** The wall's distance from the centerline on `side` at s: the asphalt plus the verge. */
+export function wallAt(track: Track, s: number, side: number): number {
+  return halfAt(track, s, side) + track.def.verge;
+}
+
+/**
+ * Where barrel k (0..n-1) of a row is across the road at race tick rt: its lateral offset (+ = right
+ * of travel, from b.lat0 to b.lat1), or NaN while it is in the gutter (off the road, on its way back
+ * to the near wall). A pure function of rt (integer ticks), so the server, the client's prediction
+ * and the renderer agree; periodic in b.period.
+ */
+export function barrelLat(b: PlacedBarrels, k: number, rt: number): number {
+  const p = b.period;
+  const phase = (((rt + b.offsets[k]) % p) + p) % p;
+  const d = (phase * Math.abs(b.speed)) / TICKS_PER_S;
+  if (d > b.lat1 - b.lat0) return NaN;
+  return b.speed > 0 ? b.lat0 + d : b.lat1 - d;
+}
+
+/**
+ * A crusher press's state at race tick rt: PRESS_DOWN (solid) for the last `down` ticks of each
+ * period, PRESS_WARNING (its shadow warns) for the PRESS_WARN_TICKS before that, PRESS_UP otherwise.
+ * A pure function of rt (integer ticks), periodic in p.period.
+ */
+export function pressState(p: Press, rt: number): number {
+  const phase = ((rt % p.period) + p.period) % p.period;
+  const downAt = p.period - p.down;
+  return phase >= downAt ? PRESS_DOWN : phase >= downAt - PRESS_WARN_TICKS ? PRESS_WARNING : PRESS_UP;
+}
+
+/** Is the press down (solid) at race tick rt? */
+export function pressDown(p: Press, rt: number): boolean {
+  return pressState(p, rt) === PRESS_DOWN;
+}
+
+/**
+ * The ramp truck whose take-off zone holds a car centre at (s, lat): s in [lip, lip + LIP_ZONE) and
+ * lat inside the ramp band (the lateral lip test; lipAt is the full-width ramps'). null if none.
+ */
+export function truckLipAt(track: Track, s: number, lat: number): PlacedTruck | null {
+  s = wrapS(track, s);
+  for (const t of track.trucks) if (s >= t.lip && s < t.lip + LIP_ZONE && lat >= t.band0 && lat <= t.band1) return t;
+  return null;
 }
 
 function nearest(track: Track, x: number, y: number, from: number, count: number): TrackQuery {
@@ -254,13 +568,15 @@ function nearest(track: Track, x: number, y: number, from: number, count: number
   }
   const dist = Math.sqrt(best);
   let nx = x - bx, ny = y - by;
+  const a = pts[bestSeg], b = pts[(bestSeg + 1) % n];
   if (dist > 1e-6) { nx /= dist; ny /= dist; } else {
-    const a = pts[bestSeg], b = pts[(bestSeg + 1) % n];
     const l = Math.hypot(b.x - a.x, b.y - a.y) || 1;
     nx = -(b.y - a.y) / l; ny = (b.x - a.x) / l;
   }
   const s = cum[bestSeg] + (cum[bestSeg + 1] - cum[bestSeg]) * bestT;
-  return { dist, nx, ny, s, seg: bestSeg };
+  // The side: the cross product of the segment's direction and the point (+ = right of travel).
+  const lat = (b.x - a.x) * (y - a.y) - (b.y - a.y) * (x - a.x) < 0 ? -dist : dist;
+  return { dist, nx, ny, s, seg: bestSeg, lat };
 }
 
 /** Nearest point on the whole centerline. Use only when there is no position history. */
@@ -428,9 +744,9 @@ function vertexNormal(track: Track, i: number): Vec {
   return { x: -dy, y: dx };
 }
 
-/** The corridor (centerline +-wall) cut into ground and gap pieces, one quad each. */
+/** The corridor (centerline -wallL..+wallR, per sample) cut into ground and gap pieces, one quad each. */
 function corridorPieces(track: Track): Piece[] {
-  const { pts, cum, wall } = track;
+  const { pts, cum, wallL, wallR } = track;
   const n = pts.length;
   const normals = pts.map((_, i) => vertexNormal(track, i));
   const out: Piece[] = [];
@@ -442,20 +758,25 @@ function corridorPieces(track: Track): Piece[] {
     const cuts = [s0, s1];
     for (const g of track.gaps) for (const c of [g.s0, g.s1]) if (c > s0 && c < s1) cuts.push(c);
     cuts.sort((p, q) => p - q);
+    const j = (i + 1) % n;
     const at = (s: number) => {
       const t = (s - s0) / (s1 - s0 || 1);
-      const nrm = s === s0 ? normals[i] : s === s1 ? normals[(i + 1) % n] : segN;
-      return { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t, nx: nrm.x, ny: nrm.y };
+      const nrm = s === s0 ? normals[i] : s === s1 ? normals[j] : segN;
+      // The walls of the samples either end, and in between along the segment (equal walls: exactly that wall).
+      const wl = s === s0 ? wallL[i] : s === s1 ? wallL[j] : wallL[i] + (wallL[j] - wallL[i]) * t;
+      const wr = s === s0 ? wallR[i] : s === s1 ? wallR[j] : wallR[i] + (wallR[j] - wallR[i]) * t;
+      return { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t, nx: nrm.x, ny: nrm.y, wl, wr };
     };
     for (let k = 0; k + 1 < cuts.length; k++) {
       const u = cuts[k], v = cuts[k + 1];
       if (v - u < 1e-6) continue;
       const p = at(u), q = at(v);
+      // The normal points right of travel (vertexNormal): + is the right wall, - the left one.
       const quad = [
-        { x: p.x + p.nx * wall, y: p.y + p.ny * wall },
-        { x: q.x + q.nx * wall, y: q.y + q.ny * wall },
-        { x: q.x - q.nx * wall, y: q.y - q.ny * wall },
-        { x: p.x - p.nx * wall, y: p.y - p.ny * wall },
+        { x: p.x + p.nx * p.wr, y: p.y + p.ny * p.wr },
+        { x: q.x + q.nx * q.wr, y: q.y + q.ny * q.wr },
+        { x: q.x - q.nx * q.wl, y: q.y - q.ny * q.wl },
+        { x: p.x - p.nx * p.wl, y: p.y - p.ny * p.wl },
       ];
       const cx = (p.x + q.x) / 2, cy = (p.y + q.y) / 2;
       const rad = Math.max(...quad.map((c) => Math.hypot(c.x - cx, c.y - cy)));
@@ -546,6 +867,7 @@ export function validateTrack(track: Track): string[] {
     });
     if (gapAt(track, r) || nearHole || lipAt(track, r)) errors.push(`recovery point s=${f1(r)}: not on solid ground (gap, hole or take-off zone)`);
   }
+  validateSchema(track, errors, zone);
 
   const pieces = corridorPieces(track);
   const n = track.pts.length;
@@ -581,4 +903,292 @@ export function validateTrack(track: Track): string[] {
     `sections at s=${f1(p.a.s0)} and s=${f1(p.b.s0)} come near but are only ${p.di} segments apart (need > ${indexMin})`,
   );
   return errors;
+}
+
+// ---- M4-SCHEMA validation: surfaces, obstacles, split lanes ----------------------------
+
+/** Where grid slot `slot` stands in track coordinates (gridSlot's s and lateral offset; s wrapped). */
+export function gridSlotSL(track: Track, slot: number): { s: number; lat: number } {
+  const row = Math.floor(slot / 2);
+  const side = slot % 2 === 0 ? -1 : 1;
+  return { s: wrapS(track, -50 - row * 70 - (side > 0 ? 35 : 0)), lat: side * track.def.halfWidth * 0.45 };
+}
+
+/**
+ * The bend at sample i: its signed curvature (radians per unit; + = turning right, - = left) from
+ * the turn between the segments either side over half their lengths. 0 on a straight.
+ */
+export function curvatureAt(track: Track, i: number): number {
+  const { cum } = track;
+  const n = track.pts.length;
+  const a = segDir(track, (i - 1 + n) % n), b = segDir(track, i);
+  const turn = Math.atan2(a.x * b.y - a.y * b.x, a.x * b.x + a.y * b.y);
+  const before = i === 0 ? cum[n] - cum[n - 1] : cum[i] - cum[i - 1];
+  return turn / ((before + (cum[i + 1] - cum[i])) / 2 || 1);
+}
+
+/** s0, every sample strictly between, and s1: where a check over s0..s1 looks. */
+function samplesIn(track: Track, s0: number, s1: number): number[] {
+  const out = [s0];
+  for (const c of track.cum) if (c > s0 && c < s1) out.push(c);
+  if (s1 > s0) out.push(s1);
+  return out;
+}
+
+/**
+ * A feature's extent in track coordinates for the overlap and clearance checks: the rectangle
+ * s0..s1 by lat0..lat1 (+-Infinity = the full width), or a circle of radius r at (s, lat) (the
+ * rectangle is then its bounding box). Measured in track coordinates, as the features are placed.
+ */
+interface Foot { what: string; s0: number; s1: number; lat0: number; lat1: number; circle?: { s: number; lat: number; r: number } }
+
+const box = (what: string, s0: number, s1: number, lat0 = -Infinity, lat1 = Infinity): Foot => ({ what, s0, s1, lat0, lat1 });
+const round = (what: string, s: number, lat: number, r: number): Foot => ({ what, s0: s - r, s1: s + r, lat0: lat - r, lat1: lat + r, circle: { s, lat, r } });
+const clampTo = (v: number, lo: number, hi: number) => (v < lo ? lo : v > hi ? hi : v);
+
+/** Do two feet overlap (touching is not overlapping)? */
+function feetOverlap(a: Foot, b: Foot): boolean {
+  if (!(a.s0 < b.s1 && b.s0 < a.s1 && a.lat0 < b.lat1 && b.lat0 < a.lat1)) return false;
+  const ca = a.circle, cb = b.circle;
+  if (ca && cb) return Math.hypot(ca.s - cb.s, ca.lat - cb.lat) < ca.r + cb.r;
+  const c = ca ?? cb;
+  if (!c) return true;
+  const r = ca ? b : a;
+  return Math.hypot(c.s - clampTo(c.s, r.s0, r.s1), c.lat - clampTo(c.lat, r.lat0, r.lat1)) < c.r;
+}
+
+/** Distance from a foot's edge to the point (s, lat), the nearer way round the lap (0 inside). */
+function footDist(track: Track, f: Foot, s: number, lat: number): number {
+  let best = Infinity;
+  for (const v of [s - track.length, s, s + track.length]) {
+    const d = f.circle
+      ? Math.hypot(v - f.circle.s, lat - f.circle.lat) - f.circle.r
+      : Math.hypot(v - clampTo(v, f.s0, f.s1), lat - clampTo(lat, f.lat0, f.lat1));
+    best = Math.min(best, Math.max(0, d));
+  }
+  return best;
+}
+
+/**
+ * The widest stretch of asphalt across the road at s with no water and no static solid on it
+ * (islands, tyre mounds, trucks): the dry lane a pool in a bend must leave.
+ */
+function widestDry(track: Track, s: number): number {
+  const blocked: [number, number][] = [];
+  for (const w of track.water) if (s >= w.s0 && s <= w.s1) blocked.push([w.lat0, w.lat1]);
+  for (const i of track.islands) if (s >= i.s0 && s <= i.s1) blocked.push([i.lat0, i.lat1]);
+  for (const t of track.tyres) {
+    const ds = Math.abs(s - t.s);
+    if (ds < t.r) {
+      const half = Math.sqrt(t.r * t.r - ds * ds);
+      blocked.push([t.lat - half, t.lat + half]);
+    }
+  }
+  for (const t of track.trucks) if (s >= t.s && s <= t.s + t.len) blocked.push([t.lat - TRUCK_HALF, t.lat + TRUCK_HALF]);
+  blocked.sort((p, q) => p[0] - q[0]);
+  const lo = -halfAt(track, s, -1), hi = halfAt(track, s, 1);
+  let at = lo, widest = 0;
+  for (const [a, b] of blocked) {
+    if (a > at) widest = Math.max(widest, Math.min(a, hi) - at);
+    at = Math.max(at, b);
+    if (at >= hi) break;
+  }
+  return Math.max(widest, hi - at);
+}
+
+/** How far the road's heading turns (radians, the most) between s0 and anywhere up to s1. */
+function turnOver(track: Track, s0: number, s1: number): number {
+  const h0 = pointAt(track, s0).h;
+  let most = 0;
+  for (const s of samplesIn(track, s0, s1)) {
+    const d = pointAt(track, s).h - h0;
+    most = Math.max(most, Math.abs(Math.atan2(Math.sin(d), Math.cos(d))));
+  }
+  return most;
+}
+
+/**
+ * The structural checks of the M4-SCHEMA features (validateTrack runs them; behavioural checks such
+ * as run-ups through water and the bots' lane costs are M4-SURF's):
+ * - Ranges: rectangles have s1 > s0 and lat1 > lat0 and stay inside the walls; tyre mounds have
+ *   r in TYRES_R_MIN..TYRES_R_MAX; barrels n 1..BARRELS_MAX, whole ticks, |speed| in range, a cycle no
+ *   shorter than a crossing and rows that do not overlap; a truck's length in range and its body
+ *   inside the walls; a press's cycle in whole ticks with the warning inside the up time; a belt's
+ *   drift 0 < |vx| <= BELT_MAX; a widen at least 2 * WIDEN_TAPER long, left and right >= 0, not both 0.
+ *   All off the start zone and inside 0..length (as every feature).
+ * - Overlaps: surfaces (water, dirt, belts) do not overlap each other; solids (tyre mounds, barrel
+ *   rows, trucks, presses, islands) do not overlap each other, a hole, a gap, a ramp or its take-off
+ *   zone, or a ground cell; widens do not overlap each other, a ramp (take-off zone included) or a gap.
+ * - Split lanes: an island leaves a lane of at least LANE_MIN either side, at every s it covers.
+ * - Widen in a bend (PLAN-M4 advisor change 13): where a widen widens the inside of a bend, the
+ *   half-width there stays below the local radius, or nearest() degenerates.
+ * - Solids keep SOLID_CLEAR from every recovery point and from every grid slot.
+ * - No water on a take-off zone (a ramp's, or a truck's band) or on a recovery point (a car put back
+ *   there would touch it).
+ * - A pool leaves a dry lane of at least DRY_LANE_MIN at every s it covers, or lies on a straight
+ *   (the road turns less than POOL_STRAIGHT_TOLERANCE over it).
+ */
+function validateSchema(track: Track, errors: string[], zone: (what: string, lo: number, hi: number) => void): void {
+  const f1 = (v: number) => v.toFixed(1);
+  const span = (s0: number, s1: number) => `${f1(s0)}..${f1(s1)}`;
+  const inside = (what: string, s0: number, s1: number, lat0: number, lat1: number) => {
+    for (const s of samplesIn(track, s0, s1)) {
+      if (lat0 < -wallAt(track, s, -1) || lat1 > wallAt(track, s, 1)) {
+        errors.push(`${what}: reaches past the wall at s=${f1(s)}`);
+        return;
+      }
+    }
+  };
+  const rect = (what: string, r: { s0: number; s1: number; lat0: number; lat1: number }) => {
+    if (!(r.s1 > r.s0)) errors.push(`${what}: s1 must be > s0`);
+    if (!(r.lat1 > r.lat0)) errors.push(`${what}: lat1 must be > lat0`);
+    zone(what, r.s0, r.s1);
+    inside(what, r.s0, r.s1, r.lat0, r.lat1);
+    return box(what, r.s0, r.s1, r.lat0, r.lat1);
+  };
+
+  // Surfaces.
+  const surfaces: Foot[] = [];
+  for (const w of track.water) surfaces.push(rect(`water ${span(w.s0, w.s1)}`, w));
+  for (const d of track.dirt) surfaces.push(rect(`dirt ${span(d.s0, d.s1)}`, d));
+  for (const b of track.belts) {
+    const what = `belt ${span(b.s0, b.s1)}`;
+    if (!(Math.abs(b.vx) > 0 && Math.abs(b.vx) <= BELT_MAX)) errors.push(`${what}: drift vx ${b.vx} outside 0 < |vx| <= ${BELT_MAX}`);
+    surfaces.push(rect(what, b));
+  }
+
+  // Solids.
+  const solids: Foot[] = [];
+  for (const t of track.tyres) {
+    const what = `tyres at s=${f1(t.s)}`;
+    if (!(t.r >= TYRES_R_MIN && t.r <= TYRES_R_MAX)) errors.push(`${what}: radius ${t.r} outside ${TYRES_R_MIN}..${TYRES_R_MAX}`);
+    zone(what, t.s - t.r, t.s + t.r);
+    inside(what, t.s - t.r, t.s + t.r, t.lat - t.r, t.lat + t.r);
+    solids.push(round(what, t.s, t.lat, t.r));
+  }
+  for (const b of track.barrels) {
+    const what = `barrels at s=${f1(b.s)}`;
+    const speed = Math.abs(b.speed);
+    if (!(Number.isInteger(b.n) && b.n >= 1 && b.n <= BARRELS_MAX)) errors.push(`${what}: n ${b.n} is not a whole number 1..${BARRELS_MAX}`);
+    if (!(Number.isInteger(b.period) && b.period >= 1)) errors.push(`${what}: period ${b.period} is not a whole number of ticks`);
+    if (!(speed >= BARREL_SPEED_MIN && speed <= BARREL_SPEED_MAX)) errors.push(`${what}: speed ${b.speed} outside ${BARREL_SPEED_MIN}..${BARREL_SPEED_MAX} (either way)`);
+    else if (!(b.period >= b.roll)) errors.push(`${what}: period ${b.period} is shorter than a crossing (${f1(b.roll)} ticks)`);
+    if (!((speed * Math.floor(b.period / b.n)) / TICKS_PER_S >= 2 * BARREL_R)) errors.push(`${what}: the barrels of the row overlap each other (period / n too short)`);
+    zone(what, b.s - BARREL_R, b.s + BARREL_R);
+    solids.push(box(what, b.s - BARREL_R, b.s + BARREL_R));
+  }
+  for (const t of track.trucks) {
+    const what = `truck at s=${f1(t.s)}`;
+    if (!(t.len >= TRUCK_LEN_MIN && t.len <= TRUCK_LEN_MAX)) errors.push(`${what}: length ${t.len} outside ${TRUCK_LEN_MIN}..${TRUCK_LEN_MAX}`);
+    zone(what, t.s, t.s + t.len);
+    inside(what, t.s, t.s + t.len, t.lat - TRUCK_HALF, t.lat + TRUCK_HALF);
+    solids.push(box(what, t.s, t.s + t.len, t.lat - TRUCK_HALF, t.lat + TRUCK_HALF));
+  }
+  for (const p of track.presses) {
+    const what = `press at s=${f1(p.s)}`;
+    if (!(Number.isInteger(p.period) && Number.isInteger(p.down) && p.down >= 1 && p.period - p.down >= PRESS_WARN_TICKS)) {
+      errors.push(`${what}: period ${p.period} / down ${p.down} must be whole ticks, down >= 1, and leave the ${PRESS_WARN_TICKS}-tick warning inside the up time`);
+    }
+    if (!(p.lat1 > p.lat0)) errors.push(`${what}: lat1 must be > lat0`);
+    zone(what, p.s - PRESS_DEPTH / 2, p.s + PRESS_DEPTH / 2);
+    inside(what, p.s - PRESS_DEPTH / 2, p.s + PRESS_DEPTH / 2, p.lat0, p.lat1);
+    solids.push(box(what, p.s - PRESS_DEPTH / 2, p.s + PRESS_DEPTH / 2, p.lat0, p.lat1));
+  }
+  for (const i of track.islands) {
+    const what = `island ${span(i.s0, i.s1)}`;
+    solids.push(rect(what, i));
+    // Split lanes: asphalt edge to island, either side, at every s the island covers.
+    for (const [side, name] of [[-1, "left"], [1, "right"]] as const) {
+      for (const s of samplesIn(track, i.s0, i.s1)) {
+        const lane = side < 0 ? i.lat0 + halfAt(track, s, -1) : halfAt(track, s, 1) - i.lat1;
+        if (!(lane >= LANE_MIN)) {
+          errors.push(`${what}: the ${name} lane is ${f1(lane)} wide at s=${f1(s)} (a split lane is >= ${LANE_MIN})`);
+          break;
+        }
+      }
+    }
+  }
+
+  // Widens.
+  const widens: Foot[] = [];
+  for (const w of track.widens) {
+    const what = `widen ${span(w.s0, w.s1)}`;
+    if (!(w.s1 - w.s0 >= 2 * WIDEN_TAPER)) errors.push(`${what}: shorter than its two tapers (${2 * WIDEN_TAPER})`);
+    if (!(w.left >= 0 && w.right >= 0 && w.left + w.right > 0)) errors.push(`${what}: left ${w.left} / right ${w.right} must be >= 0 and not both 0`);
+    zone(what, w.s0, w.s1);
+    widens.push(box(what, w.s0, w.s1));
+    // Advisor change 13: the widened inside of a bend stays inside the bend's radius.
+    for (let i = 0; i < track.pts.length; i++) {
+      const s = track.cum[i];
+      if (s < w.s0 || s > w.s1) continue;
+      const k = curvatureAt(track, i);
+      const side = k > 0 ? 1 : -1; // the inside of the bend
+      if (k === 0 || widenAt(track, s, side) <= 0) continue;
+      const half = side > 0 ? track.halfR[i] : track.halfL[i];
+      if (!(half < 1 / Math.abs(k))) {
+        errors.push(`${what}: the half-width ${f1(half)} on the inside of the bend at s=${f1(s)} is not below the local radius ${f1(1 / Math.abs(k))} (nearest() degenerates)`);
+        break;
+      }
+    }
+  }
+
+  // Overlaps.
+  const jumps: Foot[] = [
+    ...track.gaps.map((g) => box(`gap ${span(g.s0, g.s1)}`, g.s0, g.s1)),
+    ...track.ramps.map((r) => box(`ramp at s=${f1(r.s)}`, r.s, r.s + r.len + LIP_ZONE)),
+  ];
+  const hazards: Foot[] = [
+    ...jumps,
+    ...track.holes.map((h) => round(`hole at s=${f1(h.s)}`, h.s, h.lat, h.r)),
+    ...track.cells.filter((c) => !c.air).map((c) => round(`ground cell at s=${f1(c.s)}`, c.s, c.lat, CELL_EDGE)),
+  ];
+  const among = (list: Foot[], why: string) => {
+    for (let i = 0; i < list.length; i++) for (let j = i + 1; j < list.length; j++) if (feetOverlap(list[i], list[j])) errors.push(`${list[i].what} overlaps ${list[j].what}${why}`);
+  };
+  const across = (list: Foot[], others: Foot[], why: string) => {
+    for (const a of list) for (const b of others) if (feetOverlap(a, b)) errors.push(`${a.what} overlaps ${b.what}${why}`);
+  };
+  among(surfaces, " (one surface at a time)");
+  among(solids, "");
+  across(solids, hazards, "");
+  among(widens, "");
+  across(widens, jumps, " (a widened road has no jumps)");
+
+  // Clearances of solids: recovery points (on the centerline) and grid slots.
+  for (const f of solids) {
+    for (const r of track.recovery) {
+      const d = footDist(track, f, r, 0);
+      if (d < SOLID_CLEAR) errors.push(`${f.what}: ${f1(d)} from recovery point s=${f1(r)} (solids keep >= ${SOLID_CLEAR})`);
+    }
+    for (let k = 0; k < GRID_SLOTS; k++) {
+      const g = gridSlotSL(track, k);
+      const d = footDist(track, f, g.s, g.lat);
+      if (d < SOLID_CLEAR) errors.push(`${f.what}: ${f1(d)} from grid slot ${k} (solids keep >= ${SOLID_CLEAR})`);
+    }
+  }
+
+  // Water: off take-off zones and recovery points; a dry lane, or on a straight.
+  for (const w of track.water) {
+    const what = `water ${span(w.s0, w.s1)}`;
+    const pool = box(what, w.s0, w.s1, w.lat0, w.lat1);
+    for (const r of track.ramps) {
+      if (feetOverlap(pool, box("", r.s + r.len, r.s + r.len + LIP_ZONE))) errors.push(`${what}: on the take-off zone of the ramp at s=${f1(r.s)}`);
+    }
+    for (const t of track.trucks) {
+      if (feetOverlap(pool, box("", t.lip, t.lip + LIP_ZONE, t.band0, t.band1))) errors.push(`${what}: on the take-off zone of the truck at s=${f1(t.s)}`);
+    }
+    for (const r of track.recovery) {
+      const car = box("", w.s0 - CAR_HALF_LEN, w.s1 + CAR_HALF_LEN, w.lat0 - CAR_HALF_WID, w.lat1 + CAR_HALF_WID);
+      if (footDist(track, car, r, 0) === 0) errors.push(`${what}: on recovery point s=${f1(r)} (a car put back there touches it)`);
+    }
+    for (const s of samplesIn(track, w.s0, w.s1)) {
+      const dry = widestDry(track, s);
+      if (dry >= DRY_LANE_MIN) continue;
+      const turn = turnOver(track, w.s0, w.s1);
+      if (turn > POOL_STRAIGHT_TOLERANCE) {
+        errors.push(`${what}: no dry lane of ${DRY_LANE_MIN} at s=${f1(s)} (the widest is ${f1(dry)}) and not on a straight (the road turns ${turn.toFixed(3)} rad over it)`);
+      }
+      break;
+    }
+  }
 }
