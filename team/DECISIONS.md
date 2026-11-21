@@ -113,3 +113,4 @@
 - 2026-11-21 — Puddles sheet (user, popups): "More irregular" (bigger lobes/bays, no straight sides, varying width on long patches); traction inset 12 kept; water #3a5068 OK.
 - 2026-11-21 — Lobby layout (user, live screenshot + popup): "normal is not centered in the button" -> LOBBY-FIT 123jpnbffrm: fix all three (Add-bot labels, clipped car picker text, truncated bot names).
 - 2026-11-21 — LOBBY-FIT (user, popup): bot names in the lobby list drop the " (bot)" suffix (the BOT tag says it); chat/results/race labels keep it.
+- 2026-11-21 — Puddles sheet 2 (user, popup): GO (irregular puddles; long lanes stay bands; inset 12).
