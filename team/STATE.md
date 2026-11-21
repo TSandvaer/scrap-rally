@@ -405,6 +405,10 @@ rivets H77%/N61%, mines H51%/N25%; Hard won 18/18 3v3; step 1.3 us; 692/692 + 11
 ctx_fbba44ce9791 (tmp/review-m4-hard.md). TASTE COPY :3009 = ~/orca/workspaces/scrap-rally/m4-hard-taste (detached 247a80c, node pid 11831).
 m4-hard conflicts with m4-schema only in the appended sim-test section + tools/debug/README.md: merge SCHEMA first, then the Hard worker
 merges main, resolves, re-proves golden hashes, re-runs tests; quick re-check; merge.
+M4-SCHEMA review APPROVE (ctx_59d389e53131, released; tmp/m4-schema/m4-schema-review.md). Fix round ctx_b013b9ca1eac (follow-up of
+ctx_293724109f66): F1 widen-vs-radius rule must use wall - car half-width (track.ts:1127; near miss sim-test.ts:9510), F2 0-tick barrel
+gutter (track.ts:1075), F3 try to remove the +34 B/query boxed lat (track.ts:578). Then merge (no taste). For M4-SURF later: the
+schema hash needs a wall-contact scenario before the collideWalls refactor (review F4); M4-MOVE owns the truck landing; M4-SURF per-sample isLost.
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
