@@ -494,6 +494,9 @@ starting set (R 90, Full lock 0.95, Curve 2.0, Steer dead 0.15); waiting for the
 Fallback if still twitchy at R 120 / lock 1 / curve 3: a touch-only max-steer cap (fairness note: below the keyboard's max).
 User's tuned values: radius 95 (rest default). TOUCH-3 123jpnbffye (Opus) ctx_383040c1e557 (~/orca/workspaces/scrap-rally/touch-3,
 :3006; spec tmp/spec-touch-3.md): new STICK_DEFAULTS + fit checks at R 95. Then quick review, merge, push on the user's go.
+M4-SURF-1 123jpnbffyz (Opus) ctx_5e2e79169b9d (~/orca/workspaces/scrap-rally/m4-surf-1, :3008; spec tmp/spec-m4-surf-1.md):
+water/dirt (tractionRect moved to shared), belt drift, tyre mounds, lane-cost bots, validation, buckets, dev flag to drive Preview Yard.
+Taste gate on the Mac (frozen copy). Order after: SURF-2 (widen + islands), M4-MOVE, M4-TRACKS + M4-MAP.
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
