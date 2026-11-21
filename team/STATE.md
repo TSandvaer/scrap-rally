@@ -427,7 +427,7 @@ M4-HARD MERGED 2026-11-21: re-check APPROVE (ctx_b4c667487139) + user taste APPR
 118/118, build ok); ClickUp 123jpnbffqh ready for qa test; workers released; m4-hard workspace + branch removed; taste copy :3009 stopped.
 M4-WORLD contact sheet: user 'Go with changes' = murky blue-grey water tone; then puddle rule (final): water/dirt drawn organic INSIDE the
 declared rect; traction area = rect inset by PUDDLE_TRACTION_INSET (tractionRect), fully inside the drawn puddle; M4-SURF moves both into
-shared/track.ts. Worker sends a follow-up puddle sheet via ask. Local main is 18+ commits ahead of origin (2e9ec7f); push only on the user's go.
+shared/track.ts. Worker sends a follow-up puddle sheet via ask. Local main is 101 commits ahead of origin (2e9ec7f) at 736c275; push only on the user's go.
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
