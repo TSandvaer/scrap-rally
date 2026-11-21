@@ -513,6 +513,13 @@ TOUCH-3 gate: check clean, sim 777/777, bots 118/118, build ok; ClickUp 123jpnbf
 PUSHED 2026-11-21 (user popup): origin/main 8c39954..7defc76. Waiting for the user's Manual Deploy; expected bundle index-B58xVwLA.js.
 DEPLOYED (live index-B58xVwLA.js, curl). User tuned again: lock 0.9, curve 3 -> TOUCH-4 123jpnbffzn (Opus) ctx_1e8acbbfd5ca
 (~/orca/workspaces/scrap-rally/touch-4, :3010; spec tmp/spec-touch-4.md) as a one-off 3rd worker (user popup).
+M4-MAP: user picked A (island in casing tone, 2 px); worker finishing.
+M4-SURF-1 done: e465e2a (golden + wall-contact first 2b9e300; water x0.35 forces/grip dirtGrip/3/steer x0.5; straight pool 0-1 ticks,
+bend pool +18-19 units wide; Surf Yard; 0 falls all levels x types; schema-hash 15/15, golden 7/7, Hard 4/4; 810/810 + 123/123 twice).
+Opus reviewer ctx_5e4241c749eb (tmp/review-m4-surf-1.md). TASTE COPY :3009 = ~/orca/workspaces/scrap-rally/surf1-taste (detached e465e2a,
+SCRAP_DEV_TRACK=surf-yard, node pid 62645): Create room -> Surf Yard. Known: lobby Track dropdown blank on a test track (dev only).
+TOUCH-4 done: d9b8a42 (defaults v2; curve 3 + rounding -> felt dead zone ~0.26 R; 777/777 + 118/118 x2; touch-drive 96/96).
+Opus reviewer ctx_c8ccf2bf8248 (tmp/review-touch-4.md). surf-1 vs m4-map: README-only conflict (second to merge keeps both).
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
