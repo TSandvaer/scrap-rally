@@ -413,6 +413,10 @@ M4-HARD review REQUEST_CHANGES (ctx_fbba44ce9791, released; tmp/m4-hard/m4-hard-
 lastMine across races -> no mines after race 1 (server seats fine: resetBotMem). Plus apexMineFree hint for mines behind (:483). Fix sent to
 ctx_ab92893722c2 (one round; a second REQUEST_CHANGES goes to the user). Easy/Normal hashes verified real by the reviewer; 18/18 = pace
 (with Normal's driving Hard wins 9/18). Taste copy :3009 unaffected (lobby bots = server seats).
+M4-SCHEMA fix round done (1a4eb17: reach = wall - half car; barrel gutter >= 1 tick; lat getter +8 B/call); MERGED 2026-11-21 main 8c67b5c
+(check clean, sim 719/719, bots 114/114, build ok); ClickUp 123jpnbffqj complete; workers released; m4-schema workspace + branch removed.
+M4-HARD fix round running as ctx_e36d7bf88127; queued after it: merge main (8c67b5c), keep both appended sections, re-prove golden 7/7 +
+schema-hash 12/12. Then a quick Opus re-check, the user's taste verdict (copy on :3009), merge. Next: M4-WORLD (Fable; 16 MB cap all-in).
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
