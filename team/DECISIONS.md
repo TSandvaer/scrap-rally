@@ -114,3 +114,4 @@
 - 2026-11-21 — Lobby layout (user, live screenshot + popup): "normal is not centered in the button" -> LOBBY-FIT 123jpnbffrm: fix all three (Add-bot labels, clipped car picker text, truncated bot names).
 - 2026-11-21 — LOBBY-FIT (user, popup): bot names in the lobby list drop the " (bot)" suffix (the BOT tag says it); chat/results/race labels keep it.
 - 2026-11-21 — Puddles sheet 2 (user, popup): GO (irregular puddles; long lanes stay bands; inset 12).
+- 2026-11-21 — Touch controls (user, from a phone: "How do i drive on my phone? There is no controls"; popups): on-screen buttons (not joystick/tilt), built now in parallel with M4-WORLD. PLAN-TOUCH.md drafted; Fable advisor review running.
