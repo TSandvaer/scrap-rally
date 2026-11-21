@@ -379,6 +379,10 @@ MINES-1 DEPLOYED 2026-11-21 (user: "deployed"; live bundle index-pWtsH_4Y.js = o
 ctx_58124cb2ffa5 in the main checkout (tmp/spec-qa-live-7.md -> tmp/qa7-mines-live-report.md); on PASS close ClickUp 123jpnbfdq6.
 QA7 PASS (no bugs; cap 40 not checked live, sim covers it; screenshots tmp/qa7/). MINES-1 123jpnbfdq6 COMPLETE; QA worker released.
 Live = origin 2e9ec7f. Local main has M4-BOTS/LOOKS/CARS/ENV/FX on top, not pushed.
+Catch-up follow-up DONE: 2d1af22 (697e03e N1 air cells |lat|>=28 + test; 2d1af22 main.ts mapping pooled, cells from the countdown;
+669/669 + 114/114 twice; bake in countdown frame 0, 20-26 ms; steady 0 B/frame, cold race 600-740 B/frame during V8 tier-up). Evidence
+tmp/m4-catchup-followup/. Quick Opus re-check ctx_acfb6e2a085e (tmp/review-m4-catchup-map.md). TASTE COPY on :3009 =
+~/orca/workspaces/scrap-rally/m4-catchup-taste (detached 2d1af22); m4-cars-taste removed. Merge after re-check APPROVE + user taste.
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
