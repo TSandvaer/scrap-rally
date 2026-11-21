@@ -431,6 +431,10 @@ shared/track.ts. Worker sends a follow-up puddle sheet via ask. Local main is 10
 PUSHED 2026-11-21 (user popup 'Push now'): origin/main 2e9ec7f..e409e09 (M4 so far: bots E/N/H, car types, catch-up, schema). Waiting for the
 user's Manual Deploy; local build of e409e09 gives bundle index-B6F4Id_2.js -> verify live, then a muted live QA (QA8, Opus).
 M4-WORLD puddles (62fe276): water #3a5068 ok, inset 12 kept, shapes 'More irregular' -> one more puddles sheet via ask.
+DEPLOYED 2026-11-21: live serves index-B6F4Id_2.js (= local build of e409e09; checked with curl). Muted live QA8 (Opus) ctx_aeab51f0ac4f
+(tmp/spec-qa-live-8.md -> tmp/qa8-m4-live-report.md); on PASS close the M4 tickets that are ready for qa test.
+LOBBY-FIT 123jpnbffrm (Opus) ctx_e5bb0bfb07f9 (~/orca/workspaces/scrap-rally/lobby-fit, :3006; spec tmp/spec-lobby-fit.md): Normal label
+overflows its button (style.css:685), car picker text clipped, bot names truncated. Next push after its review.
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
