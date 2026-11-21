@@ -42,10 +42,9 @@
 // barrels rolls in). What moves itself is drawn a frame at a time by gfx/obstacles.ts.
 
 import { MAX_PLAYERS } from "../../shared/protocol";
-import { BARREL_R, gapAt, gridSlot, holeAt, pointAt, PRESS_DEPTH, queryTrack, TRUCK_BAND, TRUCK_CAB, TRUCK_HALF, wallAt, widenAt, type Track, type Vec } from "../../shared/track";
+import { BARREL_R, gapAt, gridSlot, holeAt, pointAt, PRESS_DEPTH, PUDDLE_TRACTION_INSET, queryTrack, TRUCK_BAND, TRUCK_CAB, TRUCK_HALF, wallAt, widenAt, type Track, type Vec } from "../../shared/track";
 import type { CarView } from "../render";
 import { BAYER4, LIT, P, PALETTE, palette32, SCRAPYARD, SHADE, type PaletteName } from "./palette";
-import { PUDDLE_TRACTION_INSET } from "./puddle-shape";
 
 export const VIEW_W = 640;
 export const VIEW_H = 360;

@@ -37,14 +37,16 @@ export interface Hole { k: "hole"; s: number; lat: number; r: number }
 export interface Cell { k: "cell"; s: number; lat: number; air?: boolean }
 
 // ---- M4 surfaces, obstacles and split lanes (M4-SCHEMA, PLAN-M4.md 2.2-2.4, 2.6 B) ----------
-// Data only so far: buildTrack places them and validateTrack checks their layout, but the race
-// step, the bots and the collisions do not read them yet (M4-SURF and M4-MOVE add the behaviour).
+// buildTrack places them and validateTrack checks their layout. Water, dirt, belts and tyre mounds
+// act (M4-SURF part 1: shared/physics.ts stepCar reads the per-segment buckets below, the bots
+// cost their lanes by them, rivets die on mounds); barrels, trucks, presses, widens and islands are
+// still data only (M4-MOVE and M4-SURF part 2 add the behaviour).
 // Track coordinates: s along the centerline, lat across it (+ = right of travel, as a hole's).
 
-/** Water (M4-SURF: cars aquaplane on it): a rectangle s0..s1 by lat0..lat1. */
+/** Water (cars aquaplane on it, shared/physics.ts): a rectangle s0..s1 by lat0..lat1; felt inside tractionRect. */
 export interface Water { k: "water"; s0: number; s1: number; lat0: number; lat1: number }
 
-/** Dirt (M4-SURF: loose ground, the verge's drag and grip by car type): a rectangle s0..s1 by lat0..lat1. */
+/** Dirt (loose ground: the verge's drag and grip by car type): a rectangle s0..s1 by lat0..lat1; felt inside tractionRect. */
 export interface Dirt { k: "dirt"; s0: number; s1: number; lat0: number; lat1: number }
 
 /**
@@ -188,6 +190,37 @@ export interface Track {
   presses: PlacedPress[];
   widens: Widen[];
   islands: Island[];
+  // M4-SURF: what a car feels, in per-segment buckets built once (no scan of every feature per tick).
+  /** Water, dirt and belts where a car feels them (Surface), sorted by s0. */
+  surfaces: Surface[];
+  /** Per segment i: the surfaces whose s range overlaps cum[i]..cum[i + 1] (a car whose nearest segment is i). */
+  surfAt: readonly Surface[][];
+  /** Per segment i: the first index in surfaces whose s1 > cum[i] (the bots look ahead from there). */
+  surfFrom: number[];
+  /** Per segment i: the tyre mounds a car or a rivet whose nearest segment is i can touch. */
+  tyresAt: readonly PlacedTyres[][];
+  /** Per segment i: the first index in tyres whose far edge (s + r) is less than TYRES_BEHIND behind cum[i]. */
+  tyresFrom: number[];
+}
+
+/** What a surface does (Surface.kind). */
+export const SURF_WATER = 1;
+export const SURF_DIRT = 2;
+export const SURF_BELT = 3;
+
+/**
+ * A surface as a car feels it (M4-SURF): a water pool or a dirt patch by its traction rectangle
+ * (tractionRect: the declared one less PUDDLE_TRACTION_INSET), a belt by its declared rectangle; a
+ * car whose centre is strictly inside (s0 < s < s1, lat0 < lat < lat1) is on it. vx: a belt's drift
+ * (units/s, + = toward the right of travel), 0 for water and dirt.
+ */
+export interface Surface {
+  kind: number;
+  s0: number;
+  s1: number;
+  lat0: number;
+  lat1: number;
+  vx: number;
 }
 
 export interface TrackQuery {
@@ -371,6 +404,52 @@ export const SOLID_CLEAR = 40;
 export const DRY_LANE_MIN = 48;
 /** ... unless the road turns less than this (radians) over the pool's length: it lies on a straight. */
 export const POOL_STRAIGHT_TOLERANCE = 0.05;
+/** A belt is at least this long (M4-WORLD re-check finding 1: a shorter one's arrows reach past its end in a bend). */
+export const BELT_LEN_MIN = 48;
+
+// ---- the traction area of a puddle (M4-WORLD; moved here from client/gfx/puddle-shape.ts by M4-SURF, unchanged) ----
+// User decisions 2026-11-21: "dirt and water puddles should not be square, it should read as a
+// puddle", and "the traction square" is to be made smaller so that it fits inside the puddle.
+// A water pool and a dirt patch are rectangles in track coordinates (Water, Dirt: s0..s1 along the
+// road, lat0..lat1 across it). Two things are made of that rectangle:
+// - What is drawn: a puddle inside the rectangle, which is its bounds (client/gfx/world.ts).
+// - What a car feels (where it aquaplanes, where the ground is loose): the rectangle less
+//   PUDDLE_TRACTION_INSET on every side, tractionRect below. A plain rectangle test.
+// The inset is chosen with the outline so that the whole traction rectangle lies inside the drawn
+// puddle, on every track, at every point (tools/debug/puddle-probe.ts holds the baked tiles
+// against it): a car is never slowed or sent sliding by ground that does not show it.
+
+/** A puddle's declared rectangle: a water pool's or a dirt patch's, in track coordinates (world units). */
+export type PuddleRect = Pick<Water, "s0" | "s1" | "lat0" | "lat1"> | Pick<Dirt, "s0" | "s1" | "lat0" | "lat1">;
+
+/** The traction area lies this far inside a puddle's declared rectangle, on every side (world units). */
+export const PUDDLE_TRACTION_INSET = 12;
+
+/**
+ * The traction area of a puddle: its declared rectangle less PUDDLE_TRACTION_INSET on every
+ * side. A rectangle narrower (or shorter) than two insets has no area left that way: its
+ * traction area is then the line down its middle (s0 = s1, or lat0 = lat1), which no car
+ * centre is inside of by a test with `<`.
+ */
+export function tractionRect(f: PuddleRect): { s0: number; s1: number; lat0: number; lat1: number } {
+  const long = f.s1 - f.s0 >= 2 * PUDDLE_TRACTION_INSET, wide = f.lat1 - f.lat0 >= 2 * PUDDLE_TRACTION_INSET;
+  const s = (f.s0 + f.s1) / 2, lat = (f.lat0 + f.lat1) / 2;
+  return {
+    s0: long ? f.s0 + PUDDLE_TRACTION_INSET : s,
+    s1: long ? f.s1 - PUDDLE_TRACTION_INSET : s,
+    lat0: wide ? f.lat0 + PUDDLE_TRACTION_INSET : lat,
+    lat1: wide ? f.lat1 - PUDDLE_TRACTION_INSET : lat,
+  };
+}
+
+/**
+ * A tyre mound goes in the bucket of every segment whose corridor piece (wall to wall) comes within
+ * its radius plus this: a car capsule's reach from its centre (physics CAPSULE_HALF + CAPSULE_R =
+ * 15.5) plus a tick's travel, and a rivet's swept tick (~24 units at 900 + 537 u/s) plus its radius.
+ */
+const TYRES_BUCKET_REACH = 30;
+/** The bots keep a tyre mound in view until it is this far behind the car (as a hole: botdrive's lane search). */
+const TYRES_BEHIND = 40;
 
 function catmull(p0: number, p1: number, p2: number, p3: number, t: number): number {
   const t2 = t * t;
@@ -420,6 +499,11 @@ export function buildTrack(def: TrackDef): Track {
     presses: [],
     widens: [],
     islands: [],
+    surfaces: [],
+    surfAt: [],
+    surfFrom: [],
+    tyresAt: [],
+    tyresFrom: [],
   };
   const features = def.features ?? [];
   // The widens first: the per-sample walls, and the barrels' wall-to-wall run, depend on them.
@@ -503,7 +587,120 @@ export function buildTrack(def: TrackDef): Track {
   track.islands.sort((a, b) => a.s0 - b.s0);
   const rec = def.recovery?.length ? def.recovery : [0];
   track.recovery = rec.map((r) => wrapS(track, r)).sort((a, b) => a - b);
+  buildBuckets(track);
   return track;
+}
+
+const NO_SURFACES: readonly Surface[] = Object.freeze([]) as readonly Surface[];
+const NO_TYRES: readonly PlacedTyres[] = Object.freeze([]) as readonly PlacedTyres[];
+
+/**
+ * M4-SURF's per-segment buckets: the surfaces as a car feels them (Surface) and, per segment, the
+ * surfaces and tyre mounds a car whose nearest segment it is can be on or touch, and where the bots'
+ * look ahead starts. A segment with none shares one frozen empty list (no allocation per segment).
+ */
+function buildBuckets(track: Track): void {
+  const { cum, tyres } = track;
+  const n = track.pts.length;
+  const surfaces: Surface[] = [];
+  for (const w of track.water) surfaces.push({ kind: SURF_WATER, ...tractionRect(w), vx: 0 });
+  for (const d of track.dirt) surfaces.push({ kind: SURF_DIRT, ...tractionRect(d), vx: 0 });
+  for (const b of track.belts) surfaces.push({ kind: SURF_BELT, s0: b.s0, s1: b.s1, lat0: b.lat0, lat1: b.lat1, vx: b.vx });
+  surfaces.sort((a, b) => a.s0 - b.s0 || a.lat0 - b.lat0);
+  track.surfaces = surfaces;
+  const surfAt: Surface[][] = [], surfFrom: number[] = [], tyresAt: PlacedTyres[][] = [], tyresFrom: number[] = [];
+  const normals = tyres.length ? track.pts.map((_, i) => vertexNormal(track, i)) : [];
+  for (let i = 0; i < n; i++) {
+    const a = cum[i], b = cum[i + 1];
+    // A car centre on segment i has a, its s, in a..b: a surface strictly overlapping that range.
+    const on = surfaces.filter((f) => f.s0 < b && f.s1 > a);
+    surfAt.push(on.length ? on : (NO_SURFACES as Surface[]));
+    const k = surfaces.findIndex((f) => f.s1 > a);
+    surfFrom.push(k < 0 ? surfaces.length : k);
+    const t = tyres.findIndex((m) => m.s + m.r + TYRES_BEHIND > a);
+    tyresFrom.push(t < 0 ? tyres.length : t);
+    if (!tyres.length) {
+      tyresAt.push(NO_TYRES as PlacedTyres[]);
+      continue;
+    }
+    // The corridor piece of segment i (the vertex normals either end, wall to wall): where a car
+    // centre whose nearest segment is i lies. A mound within its radius + TYRES_BUCKET_REACH of it.
+    const j = (i + 1) % n, p = track.pts[i], q = track.pts[j];
+    const quad: Vec[] = [
+      { x: p.x + normals[i].x * track.wallR[i], y: p.y + normals[i].y * track.wallR[i] },
+      { x: q.x + normals[j].x * track.wallR[j], y: q.y + normals[j].y * track.wallR[j] },
+      { x: q.x - normals[j].x * track.wallL[j], y: q.y - normals[j].y * track.wallL[j] },
+      { x: p.x - normals[i].x * track.wallL[i], y: p.y - normals[i].y * track.wallL[i] },
+    ];
+    const near = tyres.filter((m) => {
+      const ds = Math.abs(m.s - (a + b) / 2);
+      if (Math.min(ds, track.length - ds) > 4 * (track.wall + m.r + TYRES_BUCKET_REACH)) return false; // another section
+      return quadDist(quad, m.x, m.y) <= m.r + TYRES_BUCKET_REACH;
+    });
+    tyresAt.push(near.length ? near : (NO_TYRES as PlacedTyres[]));
+  }
+  track.surfAt = surfAt;
+  track.surfFrom = surfFrom;
+  track.tyresAt = tyresAt;
+  track.tyresFrom = tyresFrom;
+}
+
+/** Distance from (x, y) to a convex quad (0 inside it). */
+function quadDist(quad: Vec[], x: number, y: number): number {
+  let inside = true, best = Infinity;
+  let sign = 0;
+  for (let k = 0; k < quad.length; k++) {
+    const a = quad[k], b = quad[(k + 1) % quad.length];
+    const ex = b.x - a.x, ey = b.y - a.y;
+    const cross = ex * (y - a.y) - ey * (x - a.x);
+    if (cross !== 0) {
+      if (sign === 0) sign = Math.sign(cross);
+      else if (Math.sign(cross) !== sign) inside = false;
+    }
+    const len2 = ex * ex + ey * ey || 1;
+    const t = Math.max(0, Math.min(1, ((x - a.x) * ex + (y - a.y) * ey) / len2));
+    best = Math.min(best, Math.hypot(x - a.x - ex * t, y - a.y - ey * t));
+  }
+  return inside ? 0 : best;
+}
+
+/**
+ * The surface a car centre at (s, lat) on its nearest segment `seg` is on (strictly inside its
+ * Surface rectangle), or null: a look in that segment's bucket (empty on a track without any).
+ */
+export function surfaceAt(track: Track, seg: number, s: number, lat: number): Surface | null {
+  const list = track.surfAt[seg];
+  if (list === undefined || list.length === 0) return null;
+  for (let i = 0; i < list.length; i++) {
+    const f = list[i];
+    if (s > f.s0 && s < f.s1 && lat > f.lat0 && lat < f.lat1) return f;
+  }
+  return null;
+}
+
+/**
+ * The lateral offset nearest the centerline (0, then +-2, +-4, ... up to the asphalt's edge less
+ * half a car) at s where a car facing along the track touches no tyre mound (clear by `margin`)
+ * and stands on ground (no gap or hole): where a respawn or a recovery puts a car (M4-SURF, "the
+ * nearest clear lane"). 0 when no mound is near (the centerline, as before M4-SURF).
+ */
+export function clearLaneAt(track: Track, s: number, margin = 4): number {
+  const p = pointAt(track, s);
+  const near = track.tyresAt[p.seg];
+  if (near === undefined || near.length === 0) return 0;
+  const ux = Math.cos(p.h), uy = Math.sin(p.h);
+  const clear = (lat: number) => {
+    const x = p.x - uy * lat, y = p.y + ux * lat;
+    for (const m of near) {
+      const dx = m.x - x, dy = m.y - y;
+      const t = Math.max(-CAR_HALF_LEN / 2, Math.min(CAR_HALF_LEN / 2, dx * ux + dy * uy)); // CAPSULE_HALF 7.5
+      if (Math.hypot(dx - ux * t, dy - uy * t) < m.r + CAR_HALF_WID + margin) return false; // CAPSULE_R 8
+    }
+    return !overHazard(track, x, y, s);
+  };
+  const max = track.def.halfWidth - CAR_HALF_WID;
+  for (let k = 0; k <= max; k += 2) for (const lat of k === 0 ? [0] : [-k, k]) if (clear(lat)) return lat;
+  return 0;
 }
 
 /** The world point `lat` units sideways (+ = right of travel) of the centerline at s, and its segment. */
@@ -1038,7 +1235,9 @@ function turnOver(track: Track, s0: number, s1: number): number {
  *   r in TYRES_R_MIN..TYRES_R_MAX; barrels n 1..BARRELS_MAX, whole ticks, |speed| in range, a cycle of
  *   a crossing plus at least one tick in the gutter, and rows that do not overlap; a truck's length in range and its body
  *   inside the walls; a press's cycle in whole ticks with the warning inside the up time; a belt's
- *   drift 0 < |vx| <= BELT_MAX; a widen at least 2 * WIDEN_TAPER long, left and right >= 0, not both 0.
+ *   drift 0 < |vx| <= BELT_MAX, its length >= BELT_LEN_MIN, and no wall-to-wall belt in a bend (the
+ *   road turns more than POOL_STRAIGHT_TOLERANCE over it: on its inside the arrows would reach past
+ *   its end; M4-SURF); a widen at least 2 * WIDEN_TAPER long, left and right >= 0, not both 0.
  *   All off the start zone and inside 0..length (as every feature).
  * - Overlaps: surfaces (water, dirt, belts) do not overlap each other; solids (tyre mounds, barrel
  *   rows, trucks, presses, islands) do not overlap each other, a hole, a gap, a ramp or its take-off
@@ -1079,6 +1278,14 @@ function validateSchema(track: Track, errors: string[], zone: (what: string, lo:
   for (const b of track.belts) {
     const what = `belt ${span(b.s0, b.s1)}`;
     if (!(Math.abs(b.vx) > 0 && Math.abs(b.vx) <= BELT_MAX)) errors.push(`${what}: drift vx ${b.vx} outside 0 < |vx| <= ${BELT_MAX}`);
+    // M4-SURF (the M4-WORLD re-check's finding 1): on the inside of a bend a belt's arrows reach
+    // past its end when it is very short or runs wall to wall.
+    if (!(b.s1 - b.s0 >= BELT_LEN_MIN)) errors.push(`${what}: ${f1(b.s1 - b.s0)} long, shorter than ${BELT_LEN_MIN}`);
+    else {
+      const wallToWall = samplesIn(track, b.s0, b.s1).some((s) => b.lat0 <= -wallAt(track, s, -1) && b.lat1 >= wallAt(track, s, 1));
+      const turn = wallToWall ? turnOver(track, b.s0, b.s1) : 0;
+      if (wallToWall && turn > POOL_STRAIGHT_TOLERANCE) errors.push(`${what}: runs wall to wall in a bend (the road turns ${turn.toFixed(3)} rad over it; its inside's arrows would reach past its end)`);
+    }
     surfaces.push(rect(what, b));
   }
 
