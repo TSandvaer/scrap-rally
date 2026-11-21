@@ -14,7 +14,7 @@ import { ChatPanel, fitViewport } from "./chat";
 import { Game, lostMessage, NO_CONTROLS, type Controls, type TokenStore } from "./game";
 import { driving, Effects } from "./gfx/actors";
 import { clearMarks } from "./gfx/world";
-import { Keyboard } from "./input";
+import { Keyboard, mergeControls, TouchPad } from "./input";
 import { JerkMeter } from "./jerk";
 import { GameMenu } from "./menu";
 import { MusicPlayer, songById } from "./music";
@@ -97,6 +97,17 @@ const ui = {
 
 const game = new Game(() => connectWs(wsUrl, { lag, jitter }), tokens);
 const keyboard = new Keyboard(window);
+// On-screen controls for touch screens (PLAN-TOUCH): read and cleared wherever the keyboard is.
+const touchPad = new TouchPad({
+  stage: $("stage"),
+  root: $("touch"),
+  pad: $("touch-pad"),
+  weapons: $("touch-weapons"),
+  fire: $("touch-fire"),
+  mine: $("touch-mine"),
+  fireAmmo: $("touch-fire-ammo"),
+  mineAmmo: $("touch-mine-ammo"),
+});
 fitViewport();
 const chat = new ChatPanel({
   root: $("chat"),
@@ -105,7 +116,10 @@ const chat = new ChatPanel({
   view: $<HTMLCanvasElement>("view"),
   me: () => game.you,
   send: (text) => game.say(text),
-  onFocus: () => keyboard.clear(), // a key held as the chat opens must not keep driving
+  onFocus: () => {
+    keyboard.clear(); // a key held as the chat opens must not keep driving
+    touchPad.clear();
+  },
 });
 // Sound: unlocked by the first gesture; music in the room's lobby and results (soundFrame).
 const audio = new AudioEngine();
@@ -258,6 +272,7 @@ const menu = new GameMenu({
   audio,
   onOpen: () => {
     keyboard.clear(); // a key held as the menu opens must not keep driving afterwards
+    touchPad.clear();
     soundControls.close();
   },
   leave: leaveRoom,
@@ -395,7 +410,10 @@ function updatePanels(): void {
     ...game.players.map((p) => {
       const li = document.createElement("li");
       if (!p.connected) li.classList.add("offline");
-      li.append(swatch(p.color), span("name", p.name));
+      // LOBBY-FIT: a bot's row drops the " (bot)" of its name (its BOT tag says it), so the name
+      // fits beside the tag, car picker and Remove; chat, results and the race keep the full name.
+      li.append(swatch(p.color), span("name", p.bot ? p.name.replace(/ \(bot\)$/, "") : p.name));
+      if (p.bot && hostLobby) li.classList.add("bot-row");
       if (p.id === game.you) li.append(span("tag-pill", "you"));
       if (p.id === game.hostId) li.append(span("tag-pill host", "host"));
       if (!p.connected) li.append(span("tag-pill", "offline"));
@@ -750,7 +768,10 @@ function pauseView(): { center: string; sub: string; banner: string } | null {
   return {
     center: "PAUSED",
     sub: `by ${by}`,
-    banner: game.isHost() ? `Race paused — Esc, then Resume race (resumes by itself in ${autoText})` : `Race paused by ${by} — resumes by itself in ${autoText}`,
+    // A touch screen has no Esc: the ☰ button opens the menu (the HUD font has no ☰, so its word).
+    banner: game.isHost()
+      ? `Race paused — ${touchPad.touch ? "tap Menu" : "Esc"}, then Resume race (resumes by itself in ${autoText})`
+      : `Race paused by ${by} — resumes by itself in ${autoText}`,
   };
 }
 
@@ -856,14 +877,15 @@ function frame(now: number): void {
   let steps = 0;
   while (acc >= STEP_MS && steps < MAX_CATCH_UP) {
     // Read every step (a mine tap is latched until read), but drive with nothing while the
-    // menu is open: the race keeps running and the car coasts.
-    const ctl = pilot ? pilot.controls() : keyboard.read();
+    // menu is open: the race keeps running and the car coasts. Keys and touch drive together.
+    const ctl = pilot ? pilot.controls() : mergeControls(keyboard.read(), touchPad.read());
     lastControls = menu.isOpen ? NO_CONTROLS : ctl;
     game.step(lastControls, STEP_MS);
     acc -= STEP_MS;
     steps++;
   }
   if (acc >= STEP_MS) acc = 0;
+  touchFrame();
   draw(acc / STEP_MS, elapsed);
   soundFrame();
   if (garageOpen()) {
@@ -898,6 +920,26 @@ function soundFrame(): void {
   sounds.frame(lastControls, renderer.cam);
   if (game.phase === "countdown" && soundPhase !== "countdown") soundControls.close();
   soundPhase = game.phase;
+}
+
+/**
+ * The touch pad shows on a touch screen while the own car can drive: the countdown or the race,
+ * our car on the field and not finished, and no garage, menu or chat over it (PLAN-TOUCH advisor
+ * change 2). Polled every frame, since snapshots and events change it; TouchPad touches the DOM
+ * only when it changes, and hiding lets go of every finger. The weapons show their ammo.
+ */
+function padWanted(): boolean {
+  if (!touchPad.touch || (game.phase !== "countdown" && game.phase !== "racing")) return false;
+  const s = game.ownSnap();
+  return !!game.car && !!s && !s.fin && !garageOpen() && !menu.isOpen && !chat.open;
+}
+
+function touchFrame(): void {
+  const on = padWanted();
+  touchPad.show(on);
+  if (!on) return;
+  const [rivets, mines] = game.predictedAmmo();
+  touchPad.setAmmo(rivets, mines);
 }
 
 /** A new room track gets a new Renderer; the camera tour restarts at its start line. */

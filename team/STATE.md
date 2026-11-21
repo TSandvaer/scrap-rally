@@ -428,6 +428,47 @@ M4-HARD MERGED 2026-11-21: re-check APPROVE (ctx_b4c667487139) + user taste APPR
 M4-WORLD contact sheet: user 'Go with changes' = murky blue-grey water tone; then puddle rule (final): water/dirt drawn organic INSIDE the
 declared rect; traction area = rect inset by PUDDLE_TRACTION_INSET (tractionRect), fully inside the drawn puddle; M4-SURF moves both into
 shared/track.ts. Worker sends a follow-up puddle sheet via ask. Local main is 101 commits ahead of origin (2e9ec7f) at 736c275; push only on the user's go.
+PUSHED 2026-11-21 (user popup 'Push now'): origin/main 2e9ec7f..e409e09 (M4 so far: bots E/N/H, car types, catch-up, schema). Waiting for the
+user's Manual Deploy; local build of e409e09 gives bundle index-B6F4Id_2.js -> verify live, then a muted live QA (QA8, Opus).
+M4-WORLD puddles (62fe276): water #3a5068 ok, inset 12 kept, shapes 'More irregular' -> one more puddles sheet via ask.
+DEPLOYED 2026-11-21: live serves index-B6F4Id_2.js (= local build of e409e09; checked with curl). Muted live QA8 (Opus) ctx_aeab51f0ac4f
+(tmp/spec-qa-live-8.md -> tmp/qa8-m4-live-report.md); on PASS close the M4 tickets that are ready for qa test.
+LOBBY-FIT 123jpnbffrm (Opus) ctx_e5bb0bfb07f9 (~/orca/workspaces/scrap-rally/lobby-fit, :3006; spec tmp/spec-lobby-fit.md): Normal label
+overflows its button (style.css:685), car picker text clipped, bot names truncated. Next push after its review.
+QA8 PASS (ctx_aeab51f0ac4f, released; tmp/qa8-m4-live-report.md): all M4 tickets live, no bugs. COMPLETE in ClickUp: M4-BOTS, M4-HARD,
+M4-LOOKS, M4-CARS, M4-ENV, M4-DRAFT, M4-CELLS, M4-FX (+ M4-SCHEMA earlier). Not checked live: Remove click, Hard vs Normal live, cards locked
+in a race, a cell in view during the countdown. Lobby bot names drop '(bot)' (user popup). Puddles sheet 2: GO.
+LOBBY-FIT done: 4140d9f (Normal 10.1/10.1 px; picker own arrow; lobby names without '(bot)'; host 360 no longer 31 px over;
+743/743 + 118/118). Evidence tmp/lobby-fit/. Opus reviewer ctx_e5dd0297c233 (tmp/review-lobby-fit.md). Then merge; push needs the user's go.
+LOBBY-FIT MERGED 2026-11-21: review APPROVE; main 3c2c9e6 (check clean, sim 743/743, bots 118/118, build ok); workers released;
+workspace + branch removed. Flaky: bots 'knot lagged reconciliation' failed once in the review run (6 large, max 29.02), passed on rerun -> parked.
+TOUCH: user wants on-screen buttons now (PLAN-TOUCH.md proposed; Fable advisor review running). Push of 3c2c9e6 waits for the user's go.
+PLAN-TOUCH APPROVED (Fable: sound with changes; user: 8-way pad right, FIRE/MINE left, no auto-gas, no heal). TOUCH-1 123jpnbffvf (Opus)
+ctx_43c14e2d36e7 (~/orca/workspaces/scrap-rally/touch-1, :3006; spec tmp/spec-touch-1.md). Push lobby fix + touch together (user popup);
+the phone taste gate runs on the live site after that push.
+M4-WORLD done: ccd0cf1 (0 px diff on 22 scenes; S6 within S2 x1.10; census 13.99/16 MB; puddle-probe 0 misses; 743/743 + 118/118; gate
+PASS x2, FAIL x1 on one metric-B cell that main also shows 8/30). Evidence tmp/m4-world/. Fable reviewer ctx_a549b6c3d252
+(tmp/review-m4-world.md). User judges the Preview Yard screenshots (tmp/m4-world/shots/). Leftovers: main.ts fills WorldFx.rt (M4-MOVE);
+M4-SURF moves PUDDLE_TRACTION_INSET + tractionRect into shared/track.ts.
+M4-WORLD: user approved the look (screenshots). Fable review REQUEST_CHANGES (ctx_a549b6c3d252, released; tmp/m4-world/REVIEW-m4-world.md):
+belt arrows drawn past a narrow belt's far edge (obstacles.ts:170,361-372). Fix round sent to ctx_b0111cbb62bb (+ sprites.ts:498 comment,
+measure actors.ts:639 verge scan; keep the press's leaving shadow). One round; a second REQUEST_CHANGES goes to the user. Reviewer's
+own gate run PASS; Rule 1 holds (the 5.2 B/frame is on main too); census 13.99/16 MB.
+TOUCH-1 done: c72a574 (touch-drive 54/54 incl. real two-finger touch over DevTools; 3-lap race by touch, 1366/1366 step Controls;
+hidden in every non-driving phase; 765/765 + 118/118 on runs 2-3, run 1 had a bots contact flake 55<60). Evidence tmp/touch-1/.
+Opus reviewer ctx_5e8bb5d9979b (tmp/review-touch-1.md). Conflicts with m4-world only in tools/debug/README.md (second to merge resolves).
+Known: a second-finger tap on Menu/Chat while a thumb holds the pad makes no click in Chrome (reviewer judges).
+TOUCH-1 review APPROVE (ctx_5e8bb5d9979b, released; tmp/touch-1/review-verdict.txt): no findings; second-finger Menu/Chat tap = Chrome
+behaviour (bare control page shows it; optional fix: open menu/chat on touch pointerup) -> judge at the phone gate. MERGED into main f57a8e3;
+gate running. M4-WORLD fix round: a53c73b committed, worker silent ~46 min -> nudged (ctx_15e23180e27f) to finish in the foreground; it must
+merge main (README conflict with touch) before its merge.
+TOUCH-1 gate on main: check clean, sim 765/765, bots 118/118, build ok; ClickUp 123jpnbffvf ready for qa test; workspace removed.
+PUSHED 2026-11-21 (user popup): origin/main e409e09..c655bd8 (touch + lobby fix). Waiting for the user's Manual Deploy; local build of
+c655bd8 gives index-DnnpZQ-5.js -> verify live, then the user's real-phone touch test (PLAN-TOUCH advisor change 11 checklist).
+Phone test: user REJECTED the 8-way pad (no gas+steer at once). TOUCH-2 (floating thumbstick right half, up = full gas, proportional
+steer, tuning panel behind ?debug=1) proposed in PLAN-TOUCH.md; Fable advisor review running. Then the user approves, then an Opus worker.
+Orca restarted ~16:19: run re-bound; M4-WORLD fix-round worker ctx_15e23180e27f alive (rate-limit retries; branch a53c73b, not reported);
+the TOUCH-2 advisor review was cut off and has been resumed. Live = c655bd8 (index-DnnpZQ-5.js).
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).

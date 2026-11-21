@@ -116,8 +116,12 @@ Reviewer (runs in the orchestrator's workspace; it only reads):
 `worker-start --spec-file tmp/review-<slug>.md --worktree current --agent claude --json`, spec:
 "Review branch <branch> against main (`git diff main...<branch>`) with /code-review for
 correctness; stay inside the ticket's scope (the parking rule in your instructions). Do not edit
-anything. Report in worker_done: first line `REVIEW VERDICT: APPROVE` or
-`REVIEW VERDICT: REQUEST_CHANGES`, then findings with file:line."
+anything. Run npm test and any long command in the FOREGROUND with a long Bash timeout (up to
+600000 ms); never end your turn waiting on a background job (ending the turn stops you). Report in
+worker_done: first line `REVIEW VERDICT: APPROVE` or `REVIEW VERDICT: REQUEST_CHANGES`, then
+findings with file:line."
+(2026-11-21: two reviewers stalled with "stopped without reporting" while their npm test ran in
+the background; reply to the msg_stop telling them to re-run it in the foreground.)
 REQUEST_CHANGES → `send` the findings to the author worker once; a second REQUEST_CHANGES goes
 to the user.
 

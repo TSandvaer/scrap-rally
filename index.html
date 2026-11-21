@@ -24,10 +24,17 @@
           <button id="join" class="btn">Join</button>
         </div>
         <p id="menu-err" class="err" role="alert"></p>
-        <p class="keys">
+        <p class="keys keys-keyboard">
           <kbd>↑</kbd><kbd>↓</kbd><kbd>←</kbd><kbd>→</kbd> or <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> drive<br />
           <kbd>Space</kbd> / <kbd>Z</kbd> / <kbd>J</kbd> rivet gun · <kbd>X</kbd> / <kbd>K</kbd> drop a mine<br />
           <kbd>M</kbd> mute sound · <kbd>Esc</kbd> menu in a room
+        </p>
+        <!-- The same help for touch screens (shown instead while touch is in use: #stage.touch). -->
+        <p class="keys keys-touch">
+          Right thumb: the pad, <span class="nw"><kbd>▲</kbd> gas</span>, <span class="nw"><kbd>▼</kbd> brake</span>,
+          <span class="nw"><kbd>◀</kbd><kbd>▶</kbd> steer</span><br />
+          Left thumb: <span class="nw"><kbd>FIRE</kbd> hold</span> for the rivet gun · <span class="nw"><kbd>MINE</kbd> tap</span> to drop one<br />
+          Speaker button: sound · <span class="nw"><kbd>☰</kbd> menu</span> in a room
         </p>
       </section>
 
@@ -138,6 +145,32 @@
         </div>
         <button type="button" class="chat-open"><kbd>Enter</kbd> Chat <b class="chat-unread hidden">0</b></button>
       </section>
+
+      <!-- On-screen controls (PLAN-TOUCH, client/input.ts TouchPad): touch screens only, while the
+           own car can drive (client/main.ts padWanted). Left thumb: FIRE (hold) and MINE (tap) with
+           their ammo; right thumb: an 8-way pad like the arrow keys, one finger slides through the
+           zones (centre: nothing). Out of the tab order: the keyboard has its own keys. -->
+      <div id="touch" class="touch-ctl hidden">
+        <div id="touch-weapons" class="touch-weapons" role="group" aria-label="Weapons">
+          <button id="touch-fire" type="button" class="tcap fire" tabindex="-1" aria-label="Rivet gun: hold to fire">
+            FIRE<b id="touch-fire-ammo" class="ammo">0</b>
+          </button>
+          <button id="touch-mine" type="button" class="tcap mine" tabindex="-1" aria-label="Mine: tap to drop one">
+            MINE<b id="touch-mine-ammo" class="ammo">0</b>
+          </button>
+        </div>
+        <div id="touch-pad" class="touch-pad" role="group" aria-label="Drive pad: up gas, down brake or reverse, left and right steer">
+          <button type="button" class="tcap diag" data-zone="0" tabindex="-1" aria-label="Gas and steer left">◤</button>
+          <button type="button" class="tcap gas" data-zone="1" tabindex="-1" aria-label="Gas">▲<small>GAS</small></button>
+          <button type="button" class="tcap diag" data-zone="2" tabindex="-1" aria-label="Gas and steer right">◥</button>
+          <button type="button" class="tcap" data-zone="3" tabindex="-1" aria-label="Steer left">◀</button>
+          <span class="hub" data-zone="4" aria-hidden="true"></span>
+          <button type="button" class="tcap" data-zone="5" tabindex="-1" aria-label="Steer right">▶</button>
+          <button type="button" class="tcap diag" data-zone="6" tabindex="-1" aria-label="Brake and steer left">◣</button>
+          <button type="button" class="tcap" data-zone="7" tabindex="-1" aria-label="Brake or reverse">▼<small>BRAKE</small></button>
+          <button type="button" class="tcap diag" data-zone="8" tabindex="-1" aria-label="Brake and steer right">◢</button>
+        </div>
+      </div>
 
       <div id="sound" class="sound">
         <button

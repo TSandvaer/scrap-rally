@@ -364,6 +364,12 @@ kbd {
   white-space: nowrap;
 }
 
+/* In the lobby a long name must not widen its column (on a phone a bot row with its car picker
+   and Remove would push them past the panel): it takes what the row has left, ellipsis beyond. */
+#lobby-players .name {
+  width: 0;
+}
+
 .players .tag-pill {
   font-size: 10px;
   text-transform: uppercase;
@@ -608,17 +614,45 @@ h2 {
   color: var(--muted-solid);
 }
 
+/* The native arrow is off (it covered the car's name): the well ends in a small key cap with our
+   own arrow, the track picker's drawn at half size (rows 5, 3 and 1 px wide, 1 px tall), and the
+   padding keeps the name clear of it. The select is as wide as its longest car. */
 .players .row-car {
   flex: none;
   font: inherit;
   font-size: 11px;
   font-weight: 700;
   color: var(--text);
-  background: var(--soot0);
+  -webkit-appearance: none;
+  appearance: none;
+  background-color: var(--soot0);
+  background-image:
+    linear-gradient(var(--text), var(--text)), linear-gradient(var(--text), var(--text)),
+    linear-gradient(var(--text), var(--text)),
+    linear-gradient(var(--line), var(--line)), linear-gradient(var(--soot3), var(--soot3));
+  background-position:
+    right 4px top calc(50% - 1px), right 5px top 50%, right 6px top calc(50% + 1px),
+    right 12px top, right top;
+  background-size: 5px 1px, 3px 1px, 1px 1px, 1px 100%, 12px 100%;
+  background-repeat: no-repeat;
   border: 1px solid var(--line);
-  padding: 1px 0;
+  padding: 2px 17px 2px 5px; /* 19 px tall, as the native control was */
   margin: -2px 0;
-  max-width: 62px;
+  cursor: pointer;
+}
+
+.players .row-car:hover {
+  border-color: var(--steel);
+}
+
+/* The host's bot row (tag, car picker and Remove): 6 px between its parts so the bot's name
+   shows in full on a phone; the name keeps its 10 px from the swatch, in line with the rows above. */
+.players li.bot-row {
+  gap: 6px;
+}
+
+.players li.bot-row .name {
+  margin-left: 4px;
 }
 
 .players .row-car option {
@@ -681,10 +715,15 @@ h2 {
   color: var(--muted-solid);
 }
 
-/* Add bot: the label, then Easy, Normal and Hard sharing the rest of the row. */
+/* Add bot: the label, then Easy, Normal and Hard sharing the rest of the row. A third of the
+   row is narrower than "Normal" plus a key cap's 16 px sides, so the side padding goes and the
+   label sits centred in the whole cap. */
 .bot-add .btn {
   flex: 1;
   min-width: 0;
+  padding-left: 0;
+  padding-right: 0;
+  white-space: nowrap;
 }
 
 /* Lobby track: the host's selector next to Start, the track name for everyone else. */
@@ -1388,5 +1427,234 @@ h2 {
 @media (hover: none) and (pointer: coarse) {
   .gm .btn {
     min-height: 44px;
+  }
+}
+
+/* ---- Touch controls (PLAN-TOUCH; client/input.ts TouchPad) ------------------------------
+   #stage.touch: touch is in use (a coarse pointer or a finger seen; a driving key ends it).
+   #stage.pad-on: the pad shows (countdown and race, own car driving; main.ts padWanted).
+   The view and the pad take no browser gestures (no scroll, pinch or double-tap zoom, no
+   long-press callout); #stage keeps them, so the lobby and the chat still scroll. */
+#view {
+  touch-action: none;
+}
+
+.keys-touch {
+  display: none;
+}
+
+#stage.touch .keys-keyboard {
+  display: none;
+}
+
+#stage.touch .keys-touch {
+  display: block;
+}
+
+.keys-touch .nw {
+  white-space: nowrap; /* a key and its word stay on one line */
+}
+
+#stage {
+  /* The view's size, as #view's own rule works it out, for placing the pad around it. */
+  --tv-w: min(100vw, calc(var(--app-h, 100dvh) * 16 / 9));
+  --tv-h: calc(var(--tv-w) * 9 / 16);
+  --cap: 56px; /* a pad zone's key cap: a thumb */
+  --cap-gap: 8px;
+  --pad: calc(3 * var(--cap) + 2 * var(--cap-gap)); /* 184 px */
+  --fire: 72px;
+  --mine: 60px;
+  /* Portrait: the view's top, under the speaker and ☰ (10 + 34 + 6 + 34 px, audio.ts layout). */
+  --touch-top: 92px;
+  --touch-bottom: 24px;
+}
+
+.touch-ctl {
+  position: absolute;
+  inset: 0;
+  z-index: 6; /* over the race view and the chat overlay; under the speaker, the menu and the toast */
+  pointer-events: none; /* only the clusters take a finger */
+}
+
+.touch-pad,
+.touch-weapons {
+  position: absolute;
+  pointer-events: auto;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* The 8-way pad: nine zones in a 3 x 3 grid (the centre is a stud, not a key). The hit test cuts
+   the whole box in thirds, so the gaps between the caps are no dead spots. */
+.touch-pad {
+  display: grid;
+  grid-template-columns: repeat(3, var(--cap));
+  grid-template-rows: repeat(3, var(--cap));
+  gap: var(--cap-gap);
+}
+
+.touch-weapons {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--cap-gap);
+}
+
+/* A key cap as .btn (GFX-3), see-through so the track shows under it; lit while a finger holds it. */
+.tcap {
+  font: inherit;
+  font-size: 20px;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--text);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  padding: 0;
+  background: var(--soot3);
+  border: 2px solid var(--soot0);
+  box-shadow:
+    inset 1px 1px 0 var(--line),
+    inset -1px -1px 0 var(--bg),
+    3px 3px 0 var(--cast);
+  opacity: 0.55;
+  cursor: pointer;
+  touch-action: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.tcap small {
+  font-size: 9px;
+  letter-spacing: 1px;
+  color: var(--muted-solid);
+}
+
+.tcap.diag {
+  font-size: 15px;
+  color: var(--muted-solid);
+}
+
+.tcap.gas {
+  background: var(--rust);
+  color: var(--soot0);
+  box-shadow:
+    inset 1px 1px 0 var(--haz2),
+    inset -1px -1px 0 var(--rust-dark),
+    inset -2px -2px 0 var(--rust-dark),
+    3px 3px 0 var(--cast);
+}
+
+.tcap.gas small {
+  color: var(--soot0);
+}
+
+.tcap.on {
+  transform: translate(2px, 2px);
+  border-color: var(--haz1); /* the held zone reads at a glance, under a thumb's edge */
+  background: var(--panel);
+  box-shadow:
+    inset 1px 1px 0 var(--soot0),
+    inset -1px -1px 0 var(--line),
+    1px 1px 0 var(--cast);
+  opacity: 0.9;
+}
+
+.tcap.gas.on {
+  background: var(--rust);
+  box-shadow:
+    inset 1px 1px 0 var(--rust-dark),
+    inset 2px 2px 0 var(--rust-dark),
+    inset -1px -1px 0 var(--blast),
+    1px 1px 0 var(--cast);
+}
+
+.touch-pad .hub {
+  place-self: center;
+  width: 12px;
+  height: 12px;
+  background: var(--rivet);
+  opacity: 0.5;
+}
+
+.tcap.fire {
+  width: var(--fire);
+  height: var(--fire);
+  font-size: 13px;
+  letter-spacing: 1px;
+}
+
+.tcap.mine {
+  width: var(--mine);
+  height: var(--mine);
+  font-size: 12px;
+  letter-spacing: 1px;
+}
+
+.tcap .ammo {
+  font-size: 16px;
+  letter-spacing: 0;
+  color: var(--haz2);
+}
+
+.tcap.empty {
+  opacity: 0.35;
+}
+
+.tcap.empty .ammo {
+  color: var(--err);
+}
+
+/* Portrait: the view goes to the top (under the speaker and ☰), both clusters into the space
+   under it, at the bottom where the thumbs are: the weapons left (FIRE under MINE), the pad right. */
+@media (orientation: portrait) {
+  #stage.touch #view {
+    align-self: start;
+    margin-top: var(--touch-top);
+  }
+
+  .touch-pad {
+    right: 16px;
+    bottom: var(--touch-bottom);
+  }
+
+  .touch-weapons {
+    left: 16px;
+    bottom: var(--touch-bottom);
+    flex-direction: column-reverse;
+    align-items: flex-start;
+  }
+}
+
+/* Phones held upright: the closed chat (its lines and the Chat button) moves up over the
+   clusters while the pad shows; opened, the pad hides and the chat is back at the bottom. */
+@media (max-width: 600px) and (orientation: portrait) {
+  #stage.pad-on .chat.overlay {
+    bottom: calc(var(--touch-bottom) + var(--pad) + 12px);
+  }
+}
+
+/* Landscape: the pad on the right under the speaker and ☰, the weapons bottom left, both with
+   their bottom edge over the view's banner strip (26 of 360 view pixels; the ping label sits in
+   it too). The chat moves right of the weapons, along the same bottom line. */
+@media (orientation: landscape) {
+  .touch-pad,
+  .touch-weapons {
+    bottom: calc((var(--app-h, 100dvh) - var(--tv-h)) / 2 + var(--tv-h) * 30 / 360);
+  }
+
+  .touch-pad {
+    right: 10px;
+  }
+
+  .touch-weapons {
+    left: 10px;
+  }
+
+  #stage.pad-on .chat.overlay {
+    left: max(calc(var(--view-left, 0px) + 8px), calc(10px + var(--fire) + var(--cap-gap) + var(--mine) + 12px));
   }
 }
