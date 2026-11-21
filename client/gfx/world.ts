@@ -277,10 +277,13 @@ interface Flat {
   y1: number;
   flip: boolean; // F_ROW: the barrels roll from right to left
   // F_WATER, F_DIRT: the puddle's outline (puddleEdge). Its seed, the radius of each of its four
-  // corners (by nearer end along, then nearer side across), and how much of the wobble it has.
+  // corners (by nearer end along, then nearer side across), how much of the lobes it has (a
+  // small one: less), and how long its widest lobes are along the road and across it.
   seed: number;
   round: Float64Array;
   swell: number;
+  lobeS: number;
+  lobeL: number;
 }
 
 const T_TYRES = 0, T_TRUCK = 1, T_JUNK = 2;
@@ -314,21 +317,21 @@ const TYRE = 6.5; // a tyre's radius
 const NOSE = 26; // an island's nose: two rows of tyre stacks
 const GORE = 46; // the painted wedge on the road before a nose
 // A puddle (a pool, a dirt patch) is drawn inside its declared rectangle, which is its bounds
-// (puddleEdge): its corners round, each by a radius of its own up to PUDDLE_ROUND, its edge
-// between PUDDLE_NEAR and PUDDLE_FAR inside the rectangle's sides, in lobes. What a car feels
-// is the rectangle less PUDDLE_TRACTION_INSET (gfx/puddle-shape.ts): that lies inside the
-// puddle wherever one is drawn. Along a side the edge is at most PUDDLE_FAR in; in a corner
-// the lobes are held back (PUDDLE_HOLD) to what the round corner leaves of the way to the
-// traction rectangle's corner; and whatever the outline does, the traction rectangle and
-// PUDDLE_KEEP round it are part of the puddle (puddleEdge's last lines).
-const PUDDLE_ROUND = 3.3 * PUDDLE_TRACTION_INSET; // a corner's radius at most (under 3.41 insets the traction rectangle's corner is inside the round one)
-const PUDDLE_NEAR = 1.2;
-const PUDDLE_LOBE = 0.62 * PUDDLE_TRACTION_INSET; // the wide lobes go this much further in at most ...
-const PUDDLE_WOBBLE = 2; // ... and the finer wobble this much
-const PUDDLE_FAR = PUDDLE_NEAR + PUDDLE_LOBE + PUDDLE_WOBBLE;
-const PUDDLE_HOLD = 0.92; // on a corner's diagonal this share of the lobes is held back
-const PUDDLE_KEEP = 1; // the traction rectangle and this much round it are always puddle
-if (!(PUDDLE_FAR < PUDDLE_TRACTION_INSET - PUDDLE_KEEP)) throw new Error("gfx/world.ts: a puddle's lobes reach its traction rectangle");
+// (puddleEdge): its corners round, each by a radius of its own (PUDDLE_ROUND_MIN to _MAX, no two
+// of a puddle alike), its edge between PUDDLE_NEAR and PUDDLE_FAR inside the rectangle's sides,
+// in lobes and bays of its own on every side. What a car feels is the rectangle less
+// PUDDLE_TRACTION_INSET (gfx/puddle-shape.ts), and that lies inside the puddle with PUDDLE_KEEP
+// to spare wherever one is drawn: along a side the edge is at most PUDDLE_FAR in; in a corner
+// it is held to what the round corner leaves of the way to the traction rectangle's corner;
+// and whatever the outline does, the traction rectangle and PUDDLE_KEEP round it are part of
+// the puddle (puddleEdge's last lines: where a bay would cut into it, the rectangle wins).
+const PUDDLE_KEEP = 2; // the clear margin between the puddle's edge and what a car feels
+const PUDDLE_NEAR = 0.5; // the edge's least way in from a side of the rectangle ...
+const PUDDLE_FAR = PUDDLE_TRACTION_INSET - PUDDLE_KEEP; // ... and its most
+const PUDDLE_WOBBLE = 2.2; // of that, the fine wobble that rides on every lobe and bay
+const PUDDLE_ROUND_MIN = 12;
+const PUDDLE_ROUND_MAX = 34; // under (INSET * sqrt 2 - KEEP - NEAR) / (sqrt 2 - 1) = 34.9 the traction rectangle's corner is inside the round one
+if (!(PUDDLE_FAR > PUDDLE_NEAR + PUDDLE_WOBBLE && PUDDLE_TRACTION_INSET * Math.SQRT2 - (Math.SQRT2 - 1) * PUDDLE_ROUND_MAX - PUDDLE_KEEP > PUDDLE_NEAR)) throw new Error("gfx/world.ts: a puddle's outline no longer holds its traction rectangle");
 const ROW_JAMB = 2.5; // the frame of the hatch a row of barrels comes out of
 
 const arts = new WeakMap<Track, Art>();
@@ -634,8 +637,15 @@ function furnish(art: Art): void {
     const seed = Math.imul(Math.round(s0 * 4), 73856093) ^ Math.imul(Math.round(s1 * 4), 19349663) ^ Math.imul(Math.round(l0 * 4), 83492791) ^ Math.imul(Math.round(l1 * 4), 265443576);
     const short = Math.min(s1 - s0, l1 - l0);
     const rnd = mulberry32(seed);
-    const round = Float64Array.from([0, 0, 0, 0], () => Math.min(short / 2, PUDDLE_ROUND * (0.7 + 0.3 * rnd())));
-    art.flats.push({ kind, s0, s1, l0, l1, x0: Math.floor(x0) - 2, y0: Math.floor(y0) - 2, x1: Math.ceil(x1) + 3, y1: Math.ceil(y1) + 3, flip, seed, round, swell: Math.min(1, short / 48) });
+    // Its four corners: a tight one, a wide one and two between, dealt out by the seed, so no two are alike.
+    const radii = [0, 1, 2, 3].map((k) => PUDDLE_ROUND_MIN + ((PUDDLE_ROUND_MAX - PUDDLE_ROUND_MIN) * (k + 0.15 + 0.7 * rnd())) / 4);
+    for (let k = 3; k > 0; k--) {
+      const j = Math.floor(rnd() * (k + 1));
+      [radii[k], radii[j]] = [radii[j], radii[k]];
+    }
+    const round = Float64Array.from(radii, (r) => Math.min(short / 2, r));
+    const lobe = (side: number) => Math.max(60, Math.min(140, side / 2));
+    art.flats.push({ kind, s0, s1, l0, l1, x0: Math.floor(x0) - 2, y0: Math.floor(y0) - 2, x1: Math.ceil(x1) + 3, y1: Math.ceil(y1) + 3, flip, seed, round, swell: Math.min(1, short / 48), lobeS: lobe(s1 - s0), lobeL: lobe(l1 - l0) });
   };
   // A thing's box, from the view-pixel box of what is drawn: room for its shadow down-right.
   const thing = (kind: number, x0: number, y0: number, x1: number, y1: number, more: Partial<Thing>): void => {
@@ -1579,54 +1589,80 @@ const EDGE = new Float64Array(3);
 
 /**
  * The outline of a puddle (a pool, a dirt patch) at the point in EDGE: the feature's rectangle
- * with its four corners rounded, each by its own radius, less a way in that wanders over the
- * track's plane: PUDDLE_NEAR, wide lobes of up to PUDDLE_LOBE more and a finer wobble of up to
- * PUDDLE_WOBBLE (two waves of smooth noise, seeded by the feature). So the edge lies between
- * PUDDLE_NEAR and PUDDLE_FAR inside the rectangle's sides, is nowhere straight, and is the same
- * wherever it is worked out: whole-number hashes, + - * / and a square root, nothing an engine
- * may round its own way. And the traction rectangle (the declared one less
- * PUDDLE_TRACTION_INSET) with PUDDLE_KEEP round it is inside the outline, come what may.
+ * with its four corners rounded, each by its own radius, less a way in that is the edge's own
+ * on every side: along a flank it changes with the distance along the road, along an end with
+ * the offset across it, each side by a seed of its own, so no two sides run alike and a long
+ * puddle is now wide, now narrow. The way in is a slow swell (smooth noise as long as half the
+ * side, at most half of the room on a long side) and on it a row of lobes and bays: a wave that
+ * goes out and in and is never level, its length the side's own and stretched and squeezed
+ * along the side by smooth noise, so that no two bays are as far apart or as deep as the next
+ * two; a fine wobble rides on all of it. Between PUDDLE_NEAR and PUDDLE_FAR in all. Round a corner the two
+ * sides' ways run into each other, and the edge is held to what the traction rectangle's
+ * corner leaves it. It is the same wherever it is worked out: whole-number hashes, + - * / and
+ * a square root, nothing an engine may round its own way. And the traction rectangle (the
+ * declared one less PUDDLE_TRACTION_INSET) with PUDDLE_KEEP round it is inside the outline,
+ * come what may.
  */
 function puddleEdge(f: Flat): void {
   const s = EDGE[0], l = EDGE[1];
   const a = s - f.s0, b = f.s1 - s, c = l - f.l0, d = f.l1 - l;
   const ds = a < b ? a : b, dl = c < d ? c : d;
   const r = f.round[(a < b ? 0 : 1) | (c < d ? 0 : 2)]; // the nearest corner's radius
-  let e = ds < dl ? ds : dl, lobes = f.swell;
-  if (ds < r && dl < r) {
-    const u = r - ds, v = r - dl;
-    e = r - Math.sqrt(u * u + v * v);
-    // In a corner the lobes are held back, most on its diagonal: there the traction rectangle's corner is nearest the edge.
-    const q = 1 - (u > v ? u - v : v - u) / r;
-    lobes *= 1 - PUDDLE_HOLD * q * q;
-  }
-  let way = 0;
-  for (let wave = 0; wave < 2; wave++) {
-    const cell = wave ? 13 : 38, seed = wave ? f.seed ^ 0x5bd1e995 : f.seed;
-    const x = s / cell, y = l / cell;
-    const xi = Math.floor(x), yi = Math.floor(y);
-    const fx = x - xi, fy = y - yi;
-    const sx = fx * fx * (3 - 2 * fx), sy = fy * fy * (3 - 2 * fy);
-    const hx0 = Math.imul(xi, 374761393), hx1 = Math.imul(xi + 1, 374761393);
-    const hy0 = Math.imul(yi, 668265263) ^ seed, hy1 = Math.imul(yi + 1, 668265263) ^ seed;
-    let h = Math.imul(hx0 ^ hy0 ^ ((hx0 ^ hy0) >>> 13), 1274126177);
-    const p00 = ((h ^ (h >>> 16)) >>> 0) / 4294967296;
-    h = Math.imul(hx1 ^ hy0 ^ ((hx1 ^ hy0) >>> 13), 1274126177);
-    const p10 = ((h ^ (h >>> 16)) >>> 0) / 4294967296;
-    h = Math.imul(hx0 ^ hy1 ^ ((hx0 ^ hy1) >>> 13), 1274126177);
-    const p01 = ((h ^ (h >>> 16)) >>> 0) / 4294967296;
-    h = Math.imul(hx1 ^ hy1 ^ ((hx1 ^ hy1) >>> 13), 1274126177);
-    const p11 = ((h ^ (h >>> 16)) >>> 0) / 4294967296;
-    let n = p00 + (p10 - p00) * sx + (p01 - p00) * sy + (p00 - p10 - p01 + p11) * sx * sy;
-    if (!wave) {
-      // The wide lobes use most of their room: the noise's middle part stretched toward 0..1.
-      n = (n - 0.12) / 0.76;
-      n = n < 0 ? 0 : n > 1 ? 1 : n;
+  const corner = ds < r && dl < r;
+  // The way in the nearer flank asks for here (it changes with s) and the nearer end (with l).
+  let flank = 0, end = 0;
+  for (let k = 0; k < 2; k++) {
+    if (!corner && (k ? ds >= dl : dl > ds)) continue; // not that side's stretch of the edge
+    const x = k ? l : s;
+    const seed = f.seed ^ Math.imul(k ? (a < b ? 3 : 4) : c < d ? 1 : 2, 0x9e3779b1);
+    // Three smooth noises along the side: slow (the swell), middling (the wave's stretch and depth), fine (the wobble).
+    let slow = 0, warp = 0, fine = 0;
+    for (let w = 0; w < 3; w++) {
+      const t = x / (w === 0 ? (k ? f.lobeL : f.lobeS) : w === 1 ? 53 : 10);
+      const i = Math.floor(t), g = t - i;
+      const sd = seed ^ Math.imul(w + 1, 0x632be5ab);
+      let h = Math.imul(i, 374761393) ^ sd;
+      h = Math.imul(h ^ (h >>> 13), 1274126177);
+      const p0 = ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+      h = Math.imul(i + 1, 374761393) ^ sd;
+      h = Math.imul(h ^ (h >>> 13), 1274126177);
+      const p1 = ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+      const n = p0 + (p1 - p0) * g * g * (3 - 2 * g);
+      if (w === 0) slow = n;
+      else if (w === 1) warp = n;
+      else fine = n;
     }
-    way += (wave ? PUDDLE_WOBBLE : PUDDLE_LOBE) * n;
+    // The wave: this side's own length (42 to 66 units) and start, stretched and squeezed by the middling noise.
+    let h = Math.imul(seed ^ (seed >>> 15), 0x2c1b3c6d);
+    h ^= h >>> 12;
+    const phase = x / (42 + ((h & 255) * 24) / 255) + ((h >>> 8) & 255) / 255 + 1.1 * warp;
+    const p = phase - Math.floor(phase);
+    const bump = 16 * p * p * (1 - p) * (1 - p); // 0 on a lobe's crest, 1 in the depth of a bay, never level between
+    // Of the room there is, a long side gives up to half to its slow swell (the puddle is now
+    // wide, now narrow along it) and the rest to its lobes and bays; a short side nearly all to those.
+    const room = PUDDLE_FAR - PUDDLE_NEAR - PUDDLE_WOBBLE;
+    let share = ((k ? f.l1 - f.l0 : f.s1 - f.s0) - 120) / 400;
+    share = share < 0.15 ? 0.15 : share > 0.5 ? 0.5 : share;
+    let swellIn = (slow - 0.2) / 0.6;
+    swellIn = swellIn < 0 ? 0 : swellIn > 1 ? 1 : swellIn;
+    const way = PUDDLE_NEAR + f.swell * (room * share * swellIn * swellIn * (3 - 2 * swellIn) + room * (1 - share) * (0.6 + 0.4 * warp) * bump + PUDDLE_WOBBLE * fine);
+    if (k) end = way;
+    else flank = way;
   }
-  let edge = e - PUDDLE_NEAR - lobes * way;
-  // The traction rectangle and PUDDLE_KEEP round it, whatever the outline did: how far inside that the point is.
+  let edge: number;
+  if (corner) {
+    // Round the corner: from the one side's way to the other's, and no further in than the
+    // traction rectangle's corner allows (least on the corner's diagonal, where that is nearest).
+    const u = r - ds, v = r - dl;
+    let way = u + v > 0 ? (u * end + v * flank) / (u + v) : flank;
+    const most = PUDDLE_TRACTION_INSET * Math.SQRT2 - (Math.SQRT2 - 1) * r - PUDDLE_KEEP - 0.2;
+    if (most < PUDDLE_FAR) {
+      const cap = PUDDLE_FAR + (most - PUDDLE_FAR) * (1 - (u > v ? u - v : v - u) / (u + v || 1));
+      if (way > cap) way = cap;
+    }
+    edge = r - Math.sqrt(u * u + v * v) - way;
+  } else edge = dl <= ds ? dl - flank : ds - end;
+  // The traction rectangle and PUDDLE_KEEP round it, whatever the outline did: where a bay would cut into it, it wins.
   if (f.s1 - f.s0 >= 2 * PUDDLE_TRACTION_INSET && f.l1 - f.l0 >= 2 * PUDDLE_TRACTION_INSET) {
     const ts = ds - PUDDLE_TRACTION_INSET, tl = dl - PUDDLE_TRACTION_INSET;
     const keep = ts < 0 && tl < 0 ? PUDDLE_KEEP - Math.sqrt(ts * ts + tl * tl) : PUDDLE_KEEP + (ts < tl ? ts : tl);
