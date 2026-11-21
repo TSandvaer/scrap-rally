@@ -369,6 +369,12 @@ accepted). NOT merged yet: after M4-FX merges, the catch-up worker merges main, 
 user's taste gate on that branch head, then merge.
 M4-FX done: 3b32b11 (gate PASS, noise 0.004, 30 A ratios 0.021-0.719; canvas 11,715,912 B of 12,000,000; 0 px diff 18 scenes; +0.04/0.07 ms
 per frame with everything on). Merges cleanly with main and with m4-catchup. Fable reviewer ctx_c90a75a666fd (tmp/review-m4-fx.md).
+M4-FX MERGED 2026-11-21: review APPROVE (no blocking; notes: canvas headroom 284,088 B < one more car sheet -> new art must use free cells,
+and whether the 12 MB cap should also count HUD label/font canvases (~1.1 MB, already on main) is a user call before the next art ticket;
+catch-up sheet bakes ~17 ms on first cell frame -> hand cells over from the countdown); main 9e15773 (check clean, sim 628/628, bots
+109/109, build ok); ticket ready for qa test; workers released, m4-fx workspace removed.
+Catch-up FOLLOW-UP (Opus) ctx_1153e3b15f09 in the m4-catchup workspace (tmp/spec-m4-catchup-map.md): merge main, map CarView/HudView/
+WorldFx fields, bake in the countdown, N1 off-centre rule, browser check. Then quick re-check, taste copy, user taste gate, merge.
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
