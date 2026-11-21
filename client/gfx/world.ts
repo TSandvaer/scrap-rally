@@ -34,9 +34,15 @@
 //
 // What a race leaves on it (track marks, further down): a mine's scorch and the tyre marks of
 // a sliding car are put into the tiles' pixels where they lie, once, and cost nothing after.
+//
+// What lies on a road besides (M4-WORLD; PLAN-M4.md 2.2-2.4, 2.6 B; "the road's furniture",
+// further down) is baked as well, in a step of its own that a track without any never runs: the
+// widened road of a split and its island, water, dirt, a conveyor belt's bed, tyre mounds, the
+// parked ramp truck, and the still parts of what moves (a crusher press's bed, the lane a row of
+// barrels rolls in). What moves itself is drawn a frame at a time by gfx/obstacles.ts.
 
 import { MAX_PLAYERS } from "../../shared/protocol";
-import { gapAt, gridSlot, holeAt, pointAt, queryTrack, type Track, type Vec } from "../../shared/track";
+import { BARREL_R, gapAt, gridSlot, holeAt, pointAt, PRESS_DEPTH, queryTrack, TRUCK_BAND, TRUCK_CAB, TRUCK_HALF, wallAt, widenAt, type Track, type Vec } from "../../shared/track";
 import type { CarView } from "../render";
 import { BAYER4, LIT, P, PALETTE, palette32, SHADE, type PaletteName } from "./palette";
 
@@ -92,7 +98,8 @@ const {
   steel0: STEEL0, steel1: STEEL1, steel2: STEEL2, steel3: STEEL3,
   rust0: RUST0, rust1: RUST1, rust2: RUST2,
   bone0: BONE0, bone1: BONE1, bone2: BONE2,
-  haz0: HAZ0, haz1: HAZ1,
+  haz0: HAZ0, haz1: HAZ1, haz2: HAZ2,
+  blast: BLAST,
 } = IDX;
 
 // What a pixel is, for the passes that look at their neighbours (shadows, bevels, clips).
@@ -104,6 +111,13 @@ const C_KERB = 4;
 const C_TARMAC = 5;
 const C_PLATE = 6; // a ramp's plate
 const C_VOID = 7;
+// The road's furniture (M4-WORLD). From C_WATER on a pixel takes no track marks.
+const C_DIRT = 8; // a dirt patch on the road
+const C_BED = 9; // a crusher press's bed
+const C_WATER = 10;
+const C_BELT = 11;
+const C_ISLE = 12; // the yard inside an island
+const C_SOLID = 13; // a tyre, the ramp truck
 
 // ---- noise --------------------------------------------------------------------------
 
@@ -120,7 +134,7 @@ function mulberry32(seed: number): () => number {
 // What corners() and stainNoise() work out. They leave it here and hand nothing back: a
 // fraction handed back from a call is boxed (see "The bake allocates nothing" below).
 const CORNERS = new Float64Array(4);
-const NOISE_OUT = new Float64Array(1);
+const NOISE_OUT = new Float64Array(2);
 
 /**
  * A hash 0..1 of each corner of lattice cell (x, y), whole numbers, into CORNERS:
@@ -143,6 +157,17 @@ function stainNoise(X: number, Y: number): void {
   corners(xi, yi, 9);
   const a = CORNERS[0], b = CORNERS[1], c = CORNERS[2], d = CORNERS[3];
   NOISE_OUT[0] = a + (b - a) * sx + (c - a) * sy + (a - b - c + d) * sx * sy;
+}
+
+/** Smooth value noise 0..1 on a 21 px lattice at view pixel (X, Y), into NOISE_OUT[1]: the deeps of a pool. */
+function poolNoise(X: number, Y: number): void {
+  const x = X / 21, y = Y / 21;
+  const xi = Math.floor(x), yi = Math.floor(y);
+  const fx = x - xi, fy = y - yi;
+  const sx = fx * fx * (3 - 2 * fx), sy = fy * fy * (3 - 2 * fy);
+  corners(xi, yi, 23);
+  const a = CORNERS[0], b = CORNERS[1], c = CORNERS[2], d = CORNERS[3];
+  NOISE_OUT[1] = a + (b - a) * sx + (c - a) * sy + (a - b - c + d) * sx * sy;
 }
 
 /** White noise, 256x256 bytes, read at an offset of its own per tile and per use (so no tile repeats another). */
@@ -221,7 +246,68 @@ interface Art {
   marks: Float64Array[]; // grid slot marks: quads (x, y pairs)
   recX: Float64Array; // the recovery points, world units
   recY: Float64Array;
+  // M4-WORLD. A widened road (a split's): the bands of the road are measured from the widened
+  // edge, so per piece the extra width at a and at b, left and right of travel (world units).
+  wide: boolean; // some widen on the track
+  wallMax: number; // the wall furthest from the centreline, world units (track.wall without a widen)
+  wL0: Float64Array;
+  wL1: Float64Array;
+  wR0: Float64Array;
+  wR1: Float64Array;
+  furnished: boolean; // anything in `flats` or `things`: the bake's furniture step runs
+  flats: Flat[]; // what is painted flat on the road, in the order it is painted
+  things: Thing[]; // what stands on it, the order it is drawn in
 }
+
+// The road's furniture (M4-WORLD): see furniture() for how each is drawn.
+const F_DIRT = 0, F_WATER = 1, F_BELT = 2, F_ROW = 3, F_BED = 4, F_ISLAND = 5;
+
+/** A rectangle in track coordinates (s along, l across, + = right of travel; world units) that is painted flat on the road. */
+interface Flat {
+  kind: number; // F_*
+  s0: number;
+  s1: number;
+  l0: number;
+  l1: number;
+  x0: number; // the box it is painted in, view pixels (x1, y1 exclusive)
+  y0: number;
+  x1: number;
+  y1: number;
+  flip: boolean; // F_ROW: the barrels roll from right to left
+}
+
+const T_TYRES = 0, T_TRUCK = 1, T_JUNK = 2;
+
+/** Something that stands on the road: a heap of tyres, the ramp truck, a piece of junk on an island. */
+interface Thing {
+  kind: number; // T_*
+  x0: number; // the box it and its shadow lie in, view pixels (x1, y1 exclusive)
+  y0: number;
+  x1: number;
+  y1: number;
+  tyres: Float64Array; // T_TYRES: x, y, radius (view pixels) and paint (palette index) of each, the lowest first
+  junk: Junk | null; // T_JUNK
+  truck: TruckArt | null; // T_TRUCK
+}
+
+/** The ramp truck: its rear end's middle in view pixels, its heading, its sizes in world units, its two arrows. */
+interface TruckArt {
+  x: number;
+  y: number;
+  cos: number;
+  sin: number;
+  len: number;
+  ramp: number; // the ramp plate ends here, from the rear
+  lip: number; // ... and the deck here: the take-off, at the cab's back
+  chevrons: Float64Array[][]; // [outline, inside] per arrow
+}
+
+// Sizes of the furniture, world units.
+const TYRE = 6.5; // a tyre's radius
+const NOSE = 26; // an island's nose: two rows of tyre stacks
+const GORE = 46; // the painted wedge on the road before a nose
+const POOL_ROUND = 12; // a pool's and a dirt patch's corners are rounded this much
+const ROW_JAMB = 2.5; // the frame of the hatch a row of barrels comes out of
 
 const arts = new WeakMap<Track, Art>();
 
@@ -250,6 +336,13 @@ function buildArt(track: Track): Art {
   const hw = track.def.halfWidth;
   const R = wall + BARRIER;
   const wrap = (s: number) => ((s % L) + L) % L;
+  // A widened road (a split): how much wider it is at s on a side, and how far a point is from
+  // the centreline less that (so the track's bands and the yard's clearances hold beside it).
+  const wide = track.widens.length > 0;
+  const away = (x: number, y: number): number => {
+    const q = queryTrack(track, x, y);
+    return wide ? q.dist - widenAt(track, q.s, q.side) : q.dist;
+  };
 
   // The pieces: every centreline segment, cut where a gap begins or ends.
   const cuts: { a: Vec; b: Vec; s0: number; s1: number; gap: number; capA: boolean; capB: boolean }[] = [];
@@ -280,7 +373,18 @@ function buildArt(track: Track): Art {
     start: frameAt(track, 0), marks: [],
     recX: Float64Array.from(track.recovery, (s) => pointAt(track, s).x),
     recY: Float64Array.from(track.recovery, (s) => pointAt(track, s).y),
+    wide, wallMax: wall, wL0: f64(), wL1: f64(), wR0: f64(), wR1: f64(),
+    furnished: false, flats: [], things: [],
   };
+  if (wide) {
+    for (let i = 0; i < pts.length; i++) art.wallMax = Math.max(art.wallMax, track.wallL[i], track.wallR[i]);
+    cuts.forEach((c, i) => {
+      art.wL0[i] = widenAt(track, c.s0, -1);
+      art.wL1[i] = widenAt(track, c.s1, -1);
+      art.wR0[i] = widenAt(track, c.s0, 1);
+      art.wR1[i] = widenAt(track, c.s1, 1);
+    });
+  }
   // A stretch of ground starts where the gap before it ends; a track without gaps at s = 0.
   const runStart = (s: number): number => {
     let best = 0, found = false;
@@ -332,13 +436,13 @@ function buildArt(track: Track): Art {
       const s = rnd() * L;
       const side = rnd() < 0.5 ? -1 : 1;
       const at = offset(s, side * (wall + 40 + rnd() * 150));
-      if (queryTrack(track, at.x, at.y).dist < R + 34) continue;
+      if (away(at.x, at.y) < R + 34) continue;
       if (heaps.some((h) => Math.hypot(h.x - at.x, h.y - at.y) < 90)) continue; // heaps stand apart
       heaps.push(at);
       for (let count = 2 + Math.floor(rnd() * 3), k = 0; k < count; k++) {
         const x = at.x + (rnd() - 0.5) * 52, y = at.y + (rnd() - 0.5) * 40;
         const pick = rnd(), r = 9 + rnd() * 8, a = rnd() * Math.PI, c = paints[Math.floor(rnd() * paints.length)];
-        if (queryTrack(track, x, y).dist < R + 16) continue;
+        if (away(x, y) < R + 16) continue;
         const kind = pick < 0.3 ? K_CUBE : pick < 0.46 ? K_DRUM : pick < 0.62 ? K_TYRES : pick < 0.72 ? K_PLATE : pick < 0.82 ? K_PALLET : pick < 0.92 ? K_ENGINE : K_COIL;
         art.junk.push({ kind, x: x * ZOOM, y: y * ZOOM, r: r * ZOOM, a, c });
       }
@@ -356,7 +460,7 @@ function buildArt(track: Track): Art {
         for (let u = 0; u <= len; u += 6) {
           const q = offset(from + u, side * (base + half + swing * Math.sin(u / wave)));
           // A rut stops where another part of the track comes near.
-          if (queryTrack(track, q.x, q.y).dist < R + 14) break;
+          if (away(q.x, q.y) < R + 14) break;
           line.push(q.x * ZOOM, q.y * ZOOM);
         }
         if (line.length >= 8) art.ruts.push(Float32Array.from(line));
@@ -406,7 +510,16 @@ function buildArt(track: Track): Art {
     for (const [from, to] of runs) {
       for (let s = from + 30; s < to; s += 60) {
         for (const side of [-1, 1]) {
-          const q = offset(s, side * (wall + 3.2));
+          const q = offset(s, side * ((wide ? wallAt(track, s, side) : wall) + 3.2));
+          posts.push(Math.round(q.x * ZOOM) - 1, Math.round(q.y * ZOOM) - 1);
+        }
+      }
+    }
+    // An island's barrier has its posts too, inside its two long sides.
+    for (const isle of track.islands) {
+      for (let s = isle.s0 + NOSE + 20; s < isle.s1 - NOSE - 8; s += 60) {
+        for (const lat of [isle.lat0 + 3.2, isle.lat1 - 3.2]) {
+          const q = offset(s, lat);
           posts.push(Math.round(q.x * ZOOM) - 1, Math.round(q.y * ZOOM) - 1);
         }
       }
@@ -467,7 +580,128 @@ function buildArt(track: Track): Art {
       art.marks.push(quad);
     }
   }
+  furnish(art);
   return art;
+}
+
+/**
+ * The road's furniture of a track (M4-WORLD), laid out once: the rectangles painted flat on
+ * the road and the things that stand on it, each with the box of view pixels it is drawn in.
+ */
+function furnish(art: Art): void {
+  const track = art.track;
+  const offset = (s: number, lat: number): Vec => {
+    const p = pointAt(track, s);
+    return { x: p.x - Math.sin(p.h) * lat, y: p.y + Math.cos(p.h) * lat };
+  };
+  // The box of view pixels a rectangle of the track lies in, `pad` world units wider all round.
+  const flat = (kind: number, s0: number, s1: number, l0: number, l1: number, pad: number, flip = false): void => {
+    let x0 = BIG, y0 = BIG, x1 = -BIG, y1 = -BIG;
+    const steps = Math.max(1, Math.ceil((s1 - s0 + 2 * pad) / 12));
+    for (let k = 0; k <= steps; k++) {
+      const s = s0 - pad + ((s1 - s0 + 2 * pad) * k) / steps;
+      for (const lat of [l0 - pad, l1 + pad]) {
+        const q = offset(s, lat);
+        x0 = Math.min(x0, q.x * ZOOM);
+        x1 = Math.max(x1, q.x * ZOOM);
+        y0 = Math.min(y0, q.y * ZOOM);
+        y1 = Math.max(y1, q.y * ZOOM);
+      }
+    }
+    art.flats.push({ kind, s0, s1, l0, l1, x0: Math.floor(x0) - 2, y0: Math.floor(y0) - 2, x1: Math.ceil(x1) + 3, y1: Math.ceil(y1) + 3, flip });
+  };
+  // A thing's box, from the view-pixel box of what is drawn: room for its shadow down-right.
+  const thing = (kind: number, x0: number, y0: number, x1: number, y1: number, more: Partial<Thing>): void => {
+    art.things.push({ kind, x0: Math.floor(x0) - 2, y0: Math.floor(y0) - 2, x1: Math.ceil(x1) + 9, y1: Math.ceil(y1) + 10, tyres: new Float64Array(0), junk: null, truck: null, ...more });
+  };
+  /** A heap of tyres as a thing: `list` holds x, y (world units), paint of each, the lowest first. */
+  const heap = (list: number[]): void => {
+    const out = new Float64Array((list.length / 3) * 4);
+    let x0 = BIG, y0 = BIG, x1 = -BIG, y1 = -BIG;
+    for (let k = 0; k * 3 < list.length; k++) {
+      const x = list[k * 3] * ZOOM, y = list[k * 3 + 1] * ZOOM, r = TYRE * ZOOM;
+      out.set([x, y, r, list[k * 3 + 2]], k * 4);
+      x0 = Math.min(x0, x - r);
+      x1 = Math.max(x1, x + r);
+      y0 = Math.min(y0, y - r);
+      y1 = Math.max(y1, y + r);
+    }
+    thing(T_TYRES, x0, y0, x1, y1, { tyres: out });
+  };
+
+  // Painted flat, in this order: the surfaces first (they never overlap each other), then what
+  // may lie on one (the lane of a row of barrels, a press's bed), the islands last.
+  for (const d of track.dirt) flat(F_DIRT, d.s0, d.s1, d.lat0, d.lat1, 4);
+  for (const w of track.water) flat(F_WATER, w.s0, w.s1, w.lat0, w.lat1, 0);
+  for (const b of track.belts) flat(F_BELT, b.s0, b.s1, b.lat0, b.lat1, 0);
+  for (const b of track.barrels) flat(F_ROW, b.s - BARREL_R - ROW_JAMB, b.s + BARREL_R + ROW_JAMB, b.lat0 - BARREL_R - BARRIER, b.lat1 + BARREL_R + BARRIER, 0, b.speed < 0);
+  for (const p of track.presses) flat(F_BED, p.s - PRESS_DEPTH / 2, p.s + PRESS_DEPTH / 2, p.lat0, p.lat1, 0);
+  for (const i of track.islands) flat(F_ISLAND, i.s0, i.s1, i.lat0, i.lat1, GORE);
+
+  // Tyre mounds: rings of tyres one on the other up to a top one, the outer ring painted in the
+  // kerb's two colours, so the heap's edge shows on any ground.
+  track.tyres.forEach((m, k) => {
+    const rnd = mulberry32(601 + 13 * k);
+    const list: number[] = [];
+    const turn = rnd() * Math.PI * 2;
+    for (let ring = 0, rr = m.r - TYRE; rr >= TYRE * 0.8; ring++, rr -= TYRE * 1.45) {
+      let count = Math.max(3, Math.round((2 * Math.PI * rr) / (TYRE * 1.72)));
+      if (!ring && count & 1) count++; // the outer ring: its two paints in turn, all the way round
+      for (let j = 0; j < count; j++) {
+        const a = turn + ring * 0.6 + (j / count) * Math.PI * 2 + (ring ? (rnd() - 0.5) * 0.18 : 0);
+        list.push(m.x + Math.cos(a) * rr, m.y + Math.sin(a) * rr, ring ? SOOT2 : j & 1 ? RUST2 : BONE1);
+      }
+    }
+    list.push(m.x, m.y, BONE1); // the top of the heap
+    heap(list);
+  });
+
+  // Islands: at either end a nose of tyre stacks, two rows across its whole width; between them
+  // a strip of the yard behind a barrier, with a piece of junk now and then where it is wide.
+  track.islands.forEach((isle, k) => {
+    const rnd = mulberry32(811 + 17 * k);
+    const width = isle.lat1 - isle.lat0, mid = (isle.lat0 + isle.lat1) / 2;
+    const across = Math.max(2, Math.round(width / (TYRE * 1.8)));
+    for (const end of [0, 1]) {
+      const list: number[] = [];
+      // From the body outward, so the stacks at the very end lie on top.
+      for (let row = 1; row >= 0; row--) {
+        const count = across - row;
+        const s = end ? isle.s1 - TYRE - row * TYRE * 1.9 : isle.s0 + TYRE + row * TYRE * 1.9;
+        for (let j = 0; j < count; j++) {
+          const q = offset(s, mid + (j - (count - 1) / 2) * ((width - 2 * TYRE) / Math.max(1, across - 1)));
+          list.push(q.x, q.y, (j + row) & 1 ? RUST2 : BONE1);
+        }
+      }
+      heap(list);
+    }
+    const paints = [RUST1, RUST2, RUST0, HAZ0, STEEL1, STEEL2];
+    const room = width - 2 * BARRIER - 8; // the yard inside the barrier, less some air
+    if (room >= 14) {
+      for (let s = isle.s0 + NOSE + 34 + rnd() * 30; s < isle.s1 - NOSE - 30; s += 46 + rnd() * 70) {
+        const r = Math.min(room / 2.3, 7 + rnd() * 5);
+        const q = offset(s, mid + (rnd() - 0.5) * Math.max(0, room - r * 2.2));
+        const pick = rnd(), a = rnd() * Math.PI, c = paints[Math.floor(rnd() * paints.length)];
+        const kind = pick < 0.3 ? K_CUBE : pick < 0.5 ? K_DRUM : pick < 0.66 ? K_TYRES : pick < 0.76 ? K_PLATE : pick < 0.86 ? K_PALLET : pick < 0.94 ? K_ENGINE : K_COIL;
+        const j: Junk = { kind, x: q.x * ZOOM, y: q.y * ZOOM, r: r * ZOOM, a, c };
+        thing(T_JUNK, j.x - j.r * 1.5 - 4, j.y - j.r * 1.5 - 4, j.x + j.r * 1.5 + 4, j.y + j.r * 1.5 + 4, { junk: j });
+      }
+    }
+  });
+
+  // Ramp trucks: the frame of each (its rear end's middle, its heading) and its two arrows.
+  for (const t of track.trucks) {
+    const len = Math.hypot(t.x1 - t.x0, t.y1 - t.y0) || 1;
+    const cos = (t.x1 - t.x0) / len, sin = (t.y1 - t.y0) / len;
+    const rx = t.x0 - cos * TRUCK_HALF, ry = t.y0 - sin * TRUCK_HALF; // the rear end's middle
+    const lip = t.len - TRUCK_CAB, ramp = Math.min(42, lip * 0.5);
+    const at = (u: number): Frame => ({ x: (rx + cos * u) * ZOOM, y: (ry + sin * u) * ZOOM, cos, sin });
+    const chevrons = [ramp * 0.52, (ramp + lip - 3) / 2].map((u) => [chevron(at(u), 5.5, 0, 3), chevron(at(u), 5.5, 0, 1.5)]);
+    const reach = (t.len / 2 + TRUCK_HALF) * ZOOM;
+    const mx = (rx + (cos * t.len) / 2) * ZOOM, my = (ry + (sin * t.len) / 2) * ZOOM;
+    thing(T_TRUCK, mx - reach, my - reach, mx + reach, my + reach, { truck: { x: rx * ZOOM, y: ry * ZOOM, cos, sin, len: t.len, ramp, lip, chevrons } });
+  }
+  art.furnished = art.flats.length + art.things.length > 0;
 }
 
 /** A chevron pointing along the frame, `half` wide either side of its line, with a mitred tip. */
@@ -537,6 +771,8 @@ const PAL_OFF = (() => {
   return t;
 })();
 const cand = new Int16Array(1024); // pieces near the tile
+const fcand = new Int16Array(64); // flats near the tile (furniture)
+const tcand = new Int16Array(256); // things near the tile
 const near = new Int16Array(64); // ... near the block
 const nearD = new Float32Array(64); // ... and how far from its centre
 const polyX = new Float64Array(32);
@@ -558,6 +794,9 @@ const job = {
   voids: false, // ... and one of a gap among them? (only then can a pixel be void)
   patched: false, // any repair on this tile? (its joint is drawn at the end of the road pass)
   nc: 0, // pieces in `cand`
+  row: 0, // the furniture step: the next row of the flats, then the next thing
+  nf: 0, // flats near this tile, in `fcand`
+  nt: 0, // things near it, in `tcand`
   o1: 0, // this tile's offsets into the noise
   o2: 0,
   o3: 0,
@@ -572,6 +811,8 @@ function bakeStart(art: Art, tx: number, ty: number): void {
   job.by = ty * TILE - PAD;
   job.step = 0;
   job.sub = 0;
+  job.row = 0;
+  job.nf = job.nt = 0;
   job.patched = false;
   // A hash of the tile, 24 bits (as corners() hashes a lattice corner, with seed 17).
   let h = Math.imul(tx, 374761393) ^ Math.imul(ty, 668265263) ^ Math.imul(17, 1442695041);
@@ -620,6 +861,9 @@ function bakeStep(): boolean {
     case 5:
       finish();
       return true;
+    case 6:
+      furniture();
+      return true;
     default:
       return false;
   }
@@ -643,7 +887,8 @@ function classify(): void {
   const { ax, ay, ex, ey, inv, nx, ny, s0, ds, gap, capA, capB } = art;
   const { bx, by } = job;
   const wall = art.track.wall;
-  const reach = (wall + REACH) * ZOOM + 1; // view pixels
+  const reach = (art.wallMax + REACH) * ZOOM + 1; // view pixels
+  const wide = art.wide, wL0 = art.wL0, wL1 = art.wL1, wR0 = art.wR0, wR1 = art.wR1;
   if (job.sub === 0) {
     // The pieces that can reach into this tile.
     let nc = 0, voids = false;
@@ -735,7 +980,10 @@ function classify(): void {
             b.dist[p] = Math.sqrt(best) * UNIT;
             b.seg[p] = gi;
             b.tt[p] = gt;
-            b.lat[p] = ((px - ax[gi]) * nx[gi] + (py - ay[gi]) * ny[gi]) * UNIT;
+            const l = ((px - ax[gi]) * nx[gi] + (py - ay[gi]) * ny[gi]) * UNIT;
+            b.lat[p] = l;
+            // Beside a widened road: the distance from where the road's edge would be without the widening.
+            if (wide) b.dist[p] -= l < 0 ? wL0[gi] + (wL1[gi] - wL0[gi]) * gt : wR0[gi] + (wR1[gi] - wR0[gi]) * gt;
           }
         }
         continue;
@@ -783,7 +1031,9 @@ function classify(): void {
             b.dist[p] = Math.sqrt(bestG) * UNIT;
             b.seg[p] = gi;
             b.tt[p] = gt;
-            b.lat[p] = ((px - ax[gi]) * nx[gi] + (py - ay[gi]) * ny[gi]) * UNIT;
+            const l = ((px - ax[gi]) * nx[gi] + (py - ay[gi]) * ny[gi]) * UNIT;
+            b.lat[p] = l;
+            if (wide) b.dist[p] -= l < 0 ? wL0[gi] + (wL1[gi] - wL0[gi]) * gt : wR0[gi] + (wR1[gi] - wR0[gi]) * gt;
           }
           if (vi >= 0) {
             b.gap[p] = gap[vi];
@@ -1189,7 +1439,7 @@ function details(): void {
     }
   }
   clipClass = -1;
-  next();
+  next(art.furnished ? 6 : 5); // the road's furniture, where a track has any, before the tile is finished
   COST[0] = cost + done * 8;
 }
 
@@ -1250,6 +1500,12 @@ function finish(): void {
         for (let x = xa; x <= xb; x++) idx[y * S + x] |= OFF;
       }
     }
+    // The road's furniture: water, a belt, an island's yard and what stands on the road.
+    if (job.nf || job.nt) {
+      for (let y = PAD; y < PAD + TILE; y++) {
+        for (let p = y * S + PAD, end = p + TILE; p < end; p++) if (cls[p] >= C_WATER) idx[p] |= OFF;
+      }
+    }
   }
   // The pixels; and the tile keeps its colours (with the bit) for the marks to come.
   const base = baking ? baking.base : spareBase(), rows = b.rows;
@@ -1258,8 +1514,400 @@ function finish(): void {
     for (let x = 0; x < TILE; x++) out32[o++] = PAL_OFF[idx[p++]];
     base.set(rows[y], y * TILE);
   }
-  next();
+  next(7); // done (step 6, the furniture, comes before this one)
   COST[0] = job.track ? 110 : 60;
+}
+
+// ---- the road's furniture (M4-WORLD) ----------------------------------------------------
+//
+// What lies and stands on a road besides its ramps, gaps and pits (PLAN-M4.md 2.2-2.4, 2.6 B),
+// as shared/track.ts places it. Flat things are painted pixel by pixel from where the pixel is
+// on the track (its distance along, its offset across: classify() knows both); what stands is
+// drawn as the junk is, a shape in the sun with its cast shadow. What can be driven on is flat
+// and casts nothing; what is solid has the lit and the dark edge, a shadow, and either the
+// barrier's steel or tyres in the kerb's two paints.
+// - Water: flat steel grey with no speckle (the only flat ground there is), a dark edge, the
+//   ground wet round it, short ripples of light and darker deeps. A kerb and the road's paint
+//   show through, so the road can still be read under it.
+// - Dirt: the yard's earth on the road, ragged, thrown a little past its edge, wheel ruts along it.
+// - A conveyor belt: slats of rusted steel between two rollers (it runs across the road), a
+//   steel skirt along its two sides. The arrows that run on it are drawn a frame at a time.
+// - A row of rolling barrels leaves its lane: worn ground from wall to wall, the kerbs striped
+//   in hazard colours there, a hatch in the barrier they come out of and a grated gutter in the
+//   one they drop into. The barrels themselves are drawn a frame at a time.
+// - A crusher press: its bed, a steel tread plate with a hazard strip where a car drives on
+//   and off it. The slab and its shadow are drawn a frame at a time.
+// - An island: the barrier round a strip of the yard, and at either end a nose of tyre stacks;
+//   on the road before each nose a painted wedge that sends the traffic either side.
+// - A tyre mound: tyres heaped in rings, the outer ring painted.
+// - The ramp truck: a ramp plate and a deck striped and lit as every ramp is, with the same
+//   hazard lip where a car takes off; side boards, and beyond the lip the cab it flies over.
+
+/** The furniture step: what is near the tile, then the flats a slice of rows at a time, then the things a few at a time. */
+function furniture(): void {
+  const art = job.art!;
+  if (job.sub === 0) {
+    const { bx, by } = job;
+    const flats = art.flats, list = art.things;
+    let nf = 0, nt = 0;
+    for (let q = 0; q < flats.length && nf < fcand.length; q++) {
+      const f = flats[q];
+      if (f.x1 > bx && f.x0 < bx + S && f.y1 > by && f.y0 < by + S) fcand[nf++] = q;
+    }
+    for (let q = 0; q < list.length && nt < tcand.length; q++) {
+      const t = list[q];
+      if (t.x1 > bx && t.x0 < bx + S && t.y1 > by && t.y0 < by + S) tcand[nt++] = q;
+    }
+    job.nf = nf;
+    job.nt = nt;
+    job.row = 0;
+    job.sub = nf ? 1 : 2;
+    if (!nf && !nt) {
+      next(5);
+      COST[0] = 3;
+      return;
+    }
+  }
+  if (job.sub === 1) flats();
+  else things();
+}
+
+/** The flats near the tile, a slice of rows per call. */
+function flats(): void {
+  const art = job.art!, b = buffers(), N = noiseTable();
+  const { bx, by, o1, o2, o3, nf } = job;
+  const { idx, cls, dist, seg, tt, lat: latOf } = b;
+  const ps0 = art.s0, pds = art.ds, list = art.flats;
+  const wall = art.track.wall, hw = art.track.def.halfWidth;
+  let work = 0, y = job.row;
+  for (; y < S && work < 7000; y++) {
+    const Y = by + y;
+    for (let q = 0; q < nf; q++) {
+      const f = list[fcand[q]];
+      if (Y < f.y0 || Y >= f.y1) continue;
+      const kind = f.kind;
+      const xa = f.x0 - bx > 0 ? f.x0 - bx : 0, xb = f.x1 - bx < S ? f.x1 - bx : S;
+      work += 8;
+      for (let x = xa; x < xb; x++) {
+        const p = y * S + x;
+        const d = dist[p];
+        if (d > wall + BARRIER) continue; // off the track
+        work++;
+        const i = seg[p];
+        const s = ps0[i] + pds[i] * tt[p], l = latOf[p];
+        const X = bx + x;
+        const k = cls[p];
+        const n = N[((((Y + (o1 >> 8)) & 255) << 8) | ((X + o1) & 255))];
+        // How far inside the rectangle, along and across.
+        const es = s - f.s0 < f.s1 - s ? s - f.s0 : f.s1 - s, el = l - f.l0 < f.l1 - l ? l - f.l0 : f.l1 - l;
+        if (kind === F_DIRT) {
+          if (d > hw + KERB || (k !== C_TARMAC && k !== C_KERB) || es < -4 || el < -4) continue;
+          let e = es < el ? es : el;
+          if (es < POOL_ROUND && el < POOL_ROUND) {
+            const u = POOL_ROUND - es, v = POOL_ROUND - el;
+            e = POOL_ROUND - Math.sqrt(u * u + v * v);
+          }
+          stainNoise(X, Y);
+          const rag = 4.5 * NOISE_OUT[0] - 1.5;
+          if (e <= rag - 3.5) continue;
+          if (e <= rag) {
+            // Loose earth thrown past the patch's edge.
+            if (n < 76 && k === C_TARMAC) idx[p] = n & 1 ? DIRT2 : DIRT1;
+            continue;
+          }
+          let c = DIRT2;
+          if (N[(((((Y >> 1) + (o3 >> 8)) & 255) << 8) | (((X >> 1) + o3) & 255))] < 2) c = GRAVEL0; // a pebble
+          else if (n < 24) c = DIRT3;
+          else if (n > 234) c = DIRT1;
+          // Wheel ruts along it, wandering a little: one pair down a narrow patch, two down a wide one.
+          const width = f.l1 - f.l0;
+          poolNoise(X, Y);
+          let a = l - (f.l0 + f.l1) / 2 + 7 * (NOISE_OUT[1] - 0.5);
+          if (width >= 64) a = (a < 0 ? -a : a) - width / 4;
+          const r = Math.abs((a < 0 ? -a : a) - 6.5);
+          if (r < 1.2) {
+            if (N[(((((Y >> 2) + (o2 >> 8)) & 255) << 8) | (((X >> 2) + o2 + 37) & 255))] < 150) c = DIRT1;
+          } else if (r < 2.3 && n < 60) c = DIRT3;
+          idx[p] = c;
+          cls[p] = C_DIRT;
+        } else if (kind === F_WATER) {
+          if (d > wall || (k !== C_TARMAC && k !== C_KERB && k !== C_VERGE) || es <= 0 || el <= 0) continue;
+          let e = es < el ? es : el;
+          if (es < POOL_ROUND && el < POOL_ROUND) {
+            const u = POOL_ROUND - es, v = POOL_ROUND - el;
+            e = POOL_ROUND - Math.sqrt(u * u + v * v);
+          }
+          stainNoise(X, Y);
+          const rag = 0.4 + 3.4 * NOISE_OUT[0];
+          if (e <= rag - 2.4) continue;
+          const was = idx[p];
+          if (e <= rag) {
+            idx[p] = SHADE_I[was]; // the ground is wet round the pool
+            continue;
+          }
+          const depth = e - rag;
+          let c = STEEL1;
+          if (depth < 1.4) c = STEEL0; // the water's edge
+          else if (k === C_KERB) c = SHADE_I[was]; // a kerb shows through ...
+          else if (was === TAR3) c = STEEL2; // ... and so does the paint on the road
+          // Ripples: short dashes lying across the pool, light ones (a glint at the head of some) and dark ones.
+          if (depth >= 1.4) {
+            let h = Math.imul(X >> 3, 374761393) ^ Math.imul(Y, 668265263);
+            h = Math.imul(h ^ (h >>> 13), 1274126177);
+            h ^= h >>> 16;
+            const at = (X & 7) - ((h >> 8) & 3);
+            if (at >= 0 && at < 3 + ((h >> 10) & 3)) {
+              if ((h & 255) < 22) c = at === 0 && ((h >> 12) & 3) === 0 ? STEEL3 : STEEL2;
+              else if ((h & 255) > 238 && depth > 3) c = STEEL0;
+            }
+          }
+          idx[p] = c;
+          cls[p] = C_WATER;
+        } else if (kind === F_BELT) {
+          if (d > wall || (k !== C_TARMAC && k !== C_KERB && k !== C_VERGE) || es < 0 || el < 0) continue;
+          let c: number;
+          // A roller at either end (the belt runs across the road), a skirt along either side, slats between.
+          if (el < 5.6) c = el < 1.2 ? SOOT1 : el < 2.3 ? STEEL2 : el < 3.3 ? STEEL3 : el < 4.5 ? STEEL2 : SOOT2;
+          else if (es < 4.6) c = es < 1.2 ? SOOT1 : es < 3.5 ? ((l - f.l0) % 9 < 1.5 ? STEEL3 : STEEL1) : SOOT2;
+          else c = (s - f.s0) % 10 < 2 ? SOOT3 : n < 20 ? RUST1 : RUST0;
+          idx[p] = c;
+          cls[p] = C_BELT;
+        } else if (kind === F_ROW) {
+          const a = Math.abs(s - (f.s0 + f.s1) / 2);
+          if (a > BARREL_R + ROW_JAMB) continue;
+          if (d > wall) {
+            // In the barrier: the hatch the barrels come out of, the grated gutter they drop into.
+            if (k !== C_BARRIER && k !== C_RAIL) continue;
+            const gutter = l > 0 !== f.flip;
+            idx[p] = a > BARREL_R ? STEEL3 : gutter && Math.floor((s + 4000) / 2.6) & 1 ? STEEL1 : d - wall < 1.6 ? SOOT2 : SOOT0;
+            cls[p] = C_BARRIER;
+            continue;
+          }
+          if (a > BARREL_R) continue;
+          // Their lane: worn ground, and the kerbs in hazard stripes where they cross.
+          if (k === C_KERB) idx[p] = Math.floor((s + l + 4000) / 4) & 1 ? HAZ1 : SOOT2;
+          else if (k === C_TARMAC) {
+            if (idx[p] !== TAR3 && n < 104) idx[p] = TAR0;
+          } else if (k === C_VERGE) {
+            if (n < 96) idx[p] = GRAVEL0;
+          } else if (k === C_DIRT && n < 84) idx[p] = DIRT1;
+        } else if (kind === F_BED) {
+          if (d > wall || k === C_VOID || k === C_PLATE || es < 0 || el < 0) continue;
+          // A steel plate, a hazard strip where a car drives on and off it, and on each corner
+          // a post with a lamp (dark here: gfx/obstacles.ts lights it).
+          if (es < 5.2 && el < 5.8) idx[p] = es < 1.1 || el < 1.1 || es > 4.1 || el > 4.7 ? SOOT2 : Math.abs(es - 2.6) < 1 && Math.abs(el - 2.9) < 1 ? RUST0 : STEEL2;
+          else idx[p] = es < 3.4 ? (Math.floor((s + l + 4000) / 4.5) & 1 ? HAZ1 : SOOT2) : es < 4.7 || el < 1.5 ? SOOT2 : n < 26 ? STEEL2 : n > 226 ? STEEL0 : STEEL1;
+          cls[p] = C_BED;
+        } else {
+          // An island.
+          const mid = (f.l0 + f.l1) / 2, half = (f.l1 - f.l0) / 2;
+          if (s < f.s0 || s > f.s1) {
+            // The wedge painted on the road before a nose: worn stripes, on tarmac only.
+            const g = s < f.s0 ? f.s0 - s : s - f.s1;
+            if (g > GORE || k !== C_TARMAC) continue;
+            const a = Math.abs(l - mid), w = half * (1 - g / GORE);
+            if (a <= w && (a > w - 1.7 || (Math.floor((g + a) / 5) & 1) === 0) && n < 214) idx[p] = BONE1;
+            continue;
+          }
+          if (el < 0) continue;
+          const head = s - f.s0 - NOSE, tail = f.s1 - s - NOSE;
+          if (head < 0 || tail < 0) {
+            // Under a nose's tyre stacks.
+            idx[p] = n < 56 ? DIRT0 : SOOT3;
+            cls[p] = C_SOLID;
+            continue;
+          }
+          const ends = head < tail ? head : tail, e = el < ends ? el : ends;
+          if (e <= BARRIER) {
+            // The barrier round it, as the track's own (its rail nearer the road).
+            if (e > RAIL_IN && e <= RAIL_OUT) {
+              idx[p] = STEEL2;
+              cls[p] = C_RAIL;
+            } else {
+              idx[p] = STEEL0;
+              cls[p] = C_BARRIER;
+            }
+            continue;
+          }
+          // The yard inside it, gravel thrown over the barrier as outside the track's.
+          const far = e - BARRIER;
+          let c = n < 22 ? DIRT3 : n > 234 ? DIRT1 : DIRT2;
+          if (far <= FRINGE_FAR) {
+            const m = N[((((Y + (o2 >> 8)) & 255) << 8) | ((X + o2) & 255))];
+            if (m < (far <= FRINGE_NEAR ? 108 : 36)) c = m & 1 ? GRAVEL0 : GRAVEL1;
+          }
+          idx[p] = c;
+          cls[p] = C_ISLE;
+        }
+      }
+    }
+  }
+  if (y >= S) {
+    job.sub = 2;
+    job.row = 0;
+    if (!job.nt) next(5);
+  } else job.row = y;
+  COST[0] = 6 + work * 0.03;
+}
+
+/** The things near the tile, a few per call. */
+function things(): void {
+  const list = job.art!.things;
+  let cost = 4;
+  for (let done = 0; job.row < job.nt && done < 3; done++) {
+    const t = list[tcand[job.row++]];
+    if (t.kind === T_TYRES) {
+      tyres(t.tyres);
+      cost += 4 + t.tyres.length * 1.5;
+    } else if (t.kind === T_TRUCK) {
+      truck(t.truck!);
+      cost += 90;
+    } else {
+      // A piece of junk in an island's yard: it stays inside the barrier.
+      clipClass = C_ISLE;
+      junk(t.junk!);
+      clipClass = -1;
+      cost += 8;
+    }
+  }
+  if (job.row >= job.nt) next(5);
+  COST[0] = cost;
+}
+
+/** The pixels of the shape in the mask stand on the road: solid, and they take no marks. */
+function stands(): void {
+  const { cls, mask } = buffers();
+  for (let y = my0; y < my1; y++) for (let x = mx0; x < mx1; x++) if (mask[y * S + x] === 1) cls[y * S + x] = C_SOLID;
+}
+
+/** A heap of tyres (x, y, radius, paint each; view pixels), the lowest first: each a ring in the sun with its shadow on what lies under it. */
+function tyres(a: Float64Array): void {
+  const { mask } = buffers();
+  const { bx, by } = job;
+  for (let k = 0; k < a.length; k += 4) {
+    const x = a[k] - bx, y = a[k + 1] - by, r = a[k + 2], c = a[k + 3] | 0;
+    if (x + r + 6 < 0 || y + r + 6 < 0 || x - r > S || y - r > S) continue;
+    Q[0] = x, Q[1] = y, Q[2] = r;
+    fillDisc(mask, 1);
+    solid(c, 2);
+    stands();
+    if (c === SOOT2) {
+      // A black tyre: its inner wall, lighter, round the hole.
+      Q[2] = r * 0.56;
+      inlayDisc(TAR2);
+      Q[2] = r * 0.26;
+      inlayDisc(SOOT0);
+    } else {
+      Q[2] = r * 0.42;
+      inlayDisc(SOOT1);
+    }
+    maskClear(mask);
+  }
+}
+
+/** The parked ramp truck: its body with the ramp plate, the deck and the side boards, then its cab, which stands higher. */
+function truck(t: TruckArt): void {
+  const { idx, cls, mask } = buffers();
+  const { bx, by } = job;
+  const cos = t.cos, sin = t.sin, len = t.len, lip = t.lip, ramp = t.ramp;
+  const CUT = 8 * ZOOM, TOE = 12 * ZOOM, HALF = TRUCK_HALF * ZOOM, LEN = len * ZOOM;
+  AT[0] = t.x - bx;
+  AT[1] = t.y - by;
+  AT[2] = cos;
+  AT[3] = sin;
+  // The body: a long box with its corners cut, as the shape it is hit by is round at both ends.
+  polyN = 8;
+  Q[0] = 0, Q[1] = -TOE;
+  corner(0);
+  Q[0] = CUT, Q[1] = -HALF;
+  corner(1);
+  Q[0] = LEN - CUT, Q[1] = -HALF;
+  corner(2);
+  Q[0] = LEN, Q[1] = -TOE;
+  corner(3);
+  Q[0] = LEN, Q[1] = TOE;
+  corner(4);
+  Q[0] = LEN - CUT, Q[1] = HALF;
+  corner(5);
+  Q[0] = CUT, Q[1] = HALF;
+  corner(6);
+  Q[0] = 0, Q[1] = TOE;
+  corner(7);
+  fillPoly(mask, 1);
+  solid(STEEL1, 3);
+  stands();
+  for (let y = my0; y < my1; y++) {
+    for (let x = mx0; x < mx1; x++) {
+      const p = y * S + x;
+      if (mask[p] !== 1) continue;
+      if (x === 0 || y === 0 || x === S - 1 || y === S - 1 || mask[p - 1] === 0 || mask[p - S] === 0 || mask[p + 1] === 0 || mask[p + S] === 0) continue; // the lit and the dark edge stay
+      const rx = (x + 0.5 - AT[0]) * UNIT, ry = (y + 0.5 - AT[1]) * UNIT;
+      const u = rx * cos + ry * sin, v = ry * cos - rx * sin, a = v < 0 ? -v : v;
+      if (u >= lip) continue; // under the cab
+      let c: number;
+      if (a <= TRUCK_BAND) {
+        if (u < ramp) {
+          // The ramp plate: striped and rising in three steps, as every ramp.
+          const base = Math.floor((u - v + 400) / 6) & 1 ? STEEL2 : RUST2;
+          const rise = u / ramp, seam = (bx + x + by + y) & 1;
+          c = rise < 0.34 ? (rise > 0.3 && seam ? base : SHADE_I[base]) : rise > 0.67 ? (rise < 0.71 && seam ? base : LIT_I[base]) : base;
+        } else c = u > lip - 3.2 ? HAZ1 : (u - ramp) % 11 < 1.3 ? STEEL2 : STEEL3; // the deck, the lip at its end
+        if (a > TRUCK_BAND - 1.5 && u <= lip - 3.2) c = SOOT2; // the band's edge
+      } else if (a <= TRUCK_BAND + 1.3) c = SOOT2;
+      else if (u < ramp) c = STEEL1; // the ramp's cheeks
+      else if (a > 17.4 && u > ramp + 6 && u < ramp + 23) c = SOOT2; // a wheel under the board
+      else c = (u - ramp) % 14 < 1.5 ? RUST0 : RUST1; // the side boards
+      idx[p] = c;
+    }
+  }
+  maskClear(mask);
+  // The arrows up the ramp and the deck: a dark outline, bone white inside, on the truck only.
+  for (let j = 0; j < t.chevrons.length; j++) {
+    for (let k = 0; k < 2; k++) {
+      if (!polyFrom(t.chevrons[j][k], bx, by)) continue;
+      fillPoly(mask, 1);
+      for (let y = my0; y < my1; y++) for (let x = mx0; x < mx1; x++) if (mask[y * S + x] && cls[y * S + x] === C_SOLID) idx[y * S + x] = k ? BONE1 : SOOT2;
+      maskClear(mask);
+    }
+  }
+  // The cab: higher, so its shadow is longer (and lies on the deck where the sun is behind it).
+  polyN = 6;
+  Q[0] = (lip + 1.5) * ZOOM, Q[1] = -HALF;
+  corner(0);
+  Q[0] = LEN - CUT, Q[1] = -HALF;
+  corner(1);
+  Q[0] = LEN, Q[1] = -TOE;
+  corner(2);
+  Q[0] = LEN, Q[1] = TOE;
+  corner(3);
+  Q[0] = LEN - CUT, Q[1] = HALF;
+  corner(4);
+  Q[0] = (lip + 1.5) * ZOOM, Q[1] = HALF;
+  corner(5);
+  fillPoly(mask, 1);
+  solid(HAZ1, 5);
+  stands();
+  for (let y = my0; y < my1; y++) {
+    for (let x = mx0; x < mx1; x++) {
+      const p = y * S + x;
+      if (mask[p] !== 1) continue;
+      if (x === 0 || y === 0 || x === S - 1 || y === S - 1 || mask[p - 1] === 0 || mask[p - S] === 0 || mask[p + 1] === 0 || mask[p + S] === 0) continue;
+      const rx = (x + 0.5 - AT[0]) * UNIT, ry = (y + 0.5 - AT[1]) * UNIT;
+      const u = rx * cos + ry * sin, v = ry * cos - rx * sin, a = v < 0 ? -v : v;
+      const w = u - lip; // from the cab's back wall
+      let c = HAZ1;
+      if (w < 4.2) c = HAZ0; // its back wall, in its own shade
+      else if (w < 15.5) {
+        // The roof, a lamp on it.
+        if (a > 16.4) c = HAZ0;
+        else if ((w - 9.6) * (w - 9.6) + v * v < 5.2) c = (w - 9.6) * (w - 9.6) + v * v < 1.6 ? HAZ2 : BLAST;
+      } else if (w < 21.2) c = a > 16 ? HAZ0 : w < 17.4 && v < -6.5 && v > -13 ? STEEL2 : STEEL0; // the windscreen, a glint in it
+      else if (u < len - 2.8) c = a < 1.3 ? HAZ0 : HAZ1; // the bonnet
+      else c = a >= 8.5 && a <= 14.5 ? HAZ2 : STEEL2; // the bumper, a lamp either side
+      idx[p] = c;
+    }
+  }
+  maskClear(mask);
 }
 
 // ---- shapes -------------------------------------------------------------------------
