@@ -59,7 +59,11 @@ const OUT = path.resolve(arg("out", "tmp/touch-drive"));
 const ONLY = arg("only", "drive-portrait,drive-landscape,tune-portrait,tune-landscape,look-portrait,look-landscape,look-small,desktop").split(",");
 const LAPS = Number(arg("laps", "3")); // drive-portrait: laps by touch (3 = the whole race, then the finish and the results)
 const MID = !process.argv.includes("--no-mid"); // drive-portrait: the menu, chat and key checks mid-race
-const CHROME_ARGS = "--mute-audio,--disable-background-timer-throttling,--disable-renderer-backgrounding";
+// The page must stay visible: Chrome holds touch input for a hidden page (an occluded window on macOS)
+// until it is shown again, and the tool would wait for ever.
+const CHROME_ARGS = "--mute-audio,--disable-background-timer-throttling,--disable-renderer-backgrounding,--disable-backgrounding-occluded-windows";
+/** A DevTools call that has no answer after this is a failure (it names the call), not a hang. */
+const CDP_TIMEOUT_MS = 30_000;
 
 const checks: { name: string; ok: boolean; detail: string }[] = [];
 function check(name: string, ok: boolean, detail = ""): void {
@@ -81,6 +85,10 @@ class Cdp {
   /** Uncaught errors and console errors of the page, as they come (a check at the end of each pass). */
   readonly pageErrors: string[] = [];
   private constructor(private readonly ws: WebSocket) {
+    ws.on("close", () => {
+      for (const [, done] of this.wait) done({ error: "the DevTools socket closed" });
+      this.wait.clear();
+    });
     ws.on("message", (d) => {
       const m = JSON.parse(String(d));
       if (m.id && this.wait.has(m.id)) {
@@ -110,13 +118,24 @@ class Cdp {
     console.log(`  browser window ${bounds.width}x${bounds.height} -> ${after.width}x${after.height}`);
     await c.send("Page.enable");
     await c.send("Runtime.enable");
+    // Visible and focused whatever the real window does (see CHROME_ARGS).
+    await c.send("Page.bringToFront");
+    await c.send("Emulation.setFocusEmulationEnabled", { enabled: true });
     return c;
   }
 
   private raw(method: string, params: object, sessionId: string): Promise<unknown> {
     const i = ++this.id;
     return new Promise((ok, fail) => {
-      this.wait.set(i, (m) => (m.error ? fail(new Error(`${method}: ${JSON.stringify(m.error)}`)) : ok(m.result)));
+      const timer = setTimeout(() => {
+        this.wait.delete(i);
+        fail(new Error(`${method}: no answer in ${CDP_TIMEOUT_MS / 1000} s`));
+      }, CDP_TIMEOUT_MS);
+      this.wait.set(i, (m) => {
+        clearTimeout(timer);
+        if (m.error) fail(new Error(`${method}: ${JSON.stringify(m.error)}`));
+        else ok(m.result);
+      });
       this.ws.send(JSON.stringify({ id: i, method, params, ...(sessionId ? { sessionId } : {}) }));
     });
   }
@@ -215,6 +234,7 @@ class PageDriver {
   async load(query: string): Promise<void> {
     await this.cdp.send("Page.navigate", { url: `${URL}/${query}` });
     await this.until("the page loads", "document.readyState === 'complete' && !!document.getElementById('create')", 20_000);
+    await this.until("the page to be visible (Chrome holds touches for a hidden page)", "document.visibilityState === 'visible'", 10_000);
     await sleep(300);
     // Silence: the game's own mute too (M, a synthetic key; not a driving key).
     await this.cdp.eval(`document.getElementById('sound-btn').classList.contains('muted') || window.dispatchEvent(new KeyboardEvent('keydown', { key: 'm', code: 'KeyM' }))`);
