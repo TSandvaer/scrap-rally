@@ -538,6 +538,11 @@ Fable "sound with changes", approved). TOUCH-5 123jpnbfgbc (Opus) in flight: ctx
 :3006; spec tmp/spec-touch-5.md; base main f2ca592). Taste gate: the user on the phone, live (push + deploy), A/B via the TUNE switch.
 QA10 live PASS (ctx_29619ea77ece, released; tmp/qa10-live-report.md): smoke 30.0/s, RTT ~40 ms; stick v2 24/24 CDP touch passes at
 3 sizes; Crusher Run 3 bots finish, 0 falls; minimap unchanged; no console errors. ClickUp complete: TOUCH-3, TOUCH-4, M4-SURF-1.
+M4-SURF-2 done: 512dc98 (7 commits on 726b7b7; report tmp/m4-surf-2/m4-surf-2-report.md): exact-taper walls per side, island sides =
+wall, noses = mound contact (26 deep), Split Yard test track, bots lane per seat/type, F1 mound contacts -> 0/0/0,0/0/0,0/1/0, F2-F4 done;
+shipped tracks SAME (schema-hash 15/15, Hard goldens, map-sheet 0 px); sim 840/840 + bots 128/128 twice. Opus reviewer ctx_758bdaf628ba
+(tmp/review-m4-surf-2.md). TASTE COPY :3009 = ~/orca/workspaces/scrap-rally/split-taste (detached 512dc98, SCRAP_DEV_TRACK=split-yard,
+node pid 3163, npm pid 3142): Create room -> Split Yard. ClickUp 123jpnbffz4 in review.
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
