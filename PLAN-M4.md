@@ -338,7 +338,7 @@ off-centre (or the lane-0 bot always takes them). Wave 1 (M4-BOTS + M4-LOOKS) co
   ~1%, so the types differ in feel (acceleration, grip, dirt, recovery), not raw lap time.
 
 
-## Addendum 2026-11-21: Hard bot level (M4-HARD) — PROPOSED, pending advisor review + user approval
+## Addendum 2026-11-21: Hard bot level (M4-HARD) — APPROVED by the user 2026-11-21 with the advisor changes below
 
 **Why.** User, after racing Normal bots with catch-up on (2026-11-21, popup): "Add a Hard level". Normal stays as it is, Easy is
 unchanged, and the side-by-side after a draft (review N3) is fine as it is. Section 5 listed "a Hard bot level" as out of scope;
