@@ -112,3 +112,4 @@
 - 2026-11-21 — Final puddle rule (user: "i mean the traction square"): puddles/dirt drawn organic INSIDE the declared rect; the traction area = the rect inset by one fixed margin (PUDDLE_TRACTION_INSET + tractionRect, moved into shared/track.ts by M4-SURF) and must lie fully inside the drawn puddle. Supersedes the two lines above.
 - 2026-11-21 — Puddles sheet (user, popups): "More irregular" (bigger lobes/bays, no straight sides, varying width on long patches); traction inset 12 kept; water #3a5068 OK.
 - 2026-11-21 — Lobby layout (user, live screenshot + popup): "normal is not centered in the button" -> LOBBY-FIT 123jpnbffrm: fix all three (Add-bot labels, clipped car picker text, truncated bot names).
+- 2026-11-21 — LOBBY-FIT (user, popup): bot names in the lobby list drop the " (bot)" suffix (the BOT tag says it); chat/results/race labels keep it.
