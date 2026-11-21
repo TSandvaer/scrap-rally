@@ -443,6 +443,9 @@ LOBBY-FIT done: 4140d9f (Normal 10.1/10.1 px; picker own arrow; lobby names with
 LOBBY-FIT MERGED 2026-11-21: review APPROVE; main 3c2c9e6 (check clean, sim 743/743, bots 118/118, build ok); workers released;
 workspace + branch removed. Flaky: bots 'knot lagged reconciliation' failed once in the review run (6 large, max 29.02), passed on rerun -> parked.
 TOUCH: user wants on-screen buttons now (PLAN-TOUCH.md proposed; Fable advisor review running). Push of 3c2c9e6 waits for the user's go.
+PLAN-TOUCH APPROVED (Fable: sound with changes; user: 8-way pad right, FIRE/MINE left, no auto-gas, no heal). TOUCH-1 123jpnbffvf (Opus)
+ctx_43c14e2d36e7 (~/orca/workspaces/scrap-rally/touch-1, :3006; spec tmp/spec-touch-1.md). Push lobby fix + touch together (user popup);
+the phone taste gate runs on the live site after that push.
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
