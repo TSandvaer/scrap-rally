@@ -440,6 +440,9 @@ M4-LOOKS, M4-CARS, M4-ENV, M4-DRAFT, M4-CELLS, M4-FX (+ M4-SCHEMA earlier). Not 
 in a race, a cell in view during the countdown. Lobby bot names drop '(bot)' (user popup). Puddles sheet 2: GO.
 LOBBY-FIT done: 4140d9f (Normal 10.1/10.1 px; picker own arrow; lobby names without '(bot)'; host 360 no longer 31 px over;
 743/743 + 118/118). Evidence tmp/lobby-fit/. Opus reviewer ctx_e5dd0297c233 (tmp/review-lobby-fit.md). Then merge; push needs the user's go.
+LOBBY-FIT MERGED 2026-11-21: review APPROVE; main 3c2c9e6 (check clean, sim 743/743, bots 118/118, build ok); workers released;
+workspace + branch removed. Flaky: bots 'knot lagged reconciliation' failed once in the review run (6 large, max 29.02), passed on rerun -> parked.
+TOUCH: user wants on-screen buttons now (PLAN-TOUCH.md proposed; Fable advisor review running). Push of 3c2c9e6 waits for the user's go.
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
