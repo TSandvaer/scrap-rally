@@ -408,6 +408,13 @@ const RECOVERY_HOLE_MARGIN = 16;
 const CELL_EDGE = 14;
 /** The kerb: the asphalt's outer band this wide. A ground cell sits on it or further out (in the dirt). */
 export const CELL_KERB = 8;
+/**
+ * An air cell sits at least this far off the centre line (|lat|), or every car that flies a jump
+ * down the middle (a bot on lane 0) takes it without aiming for it. One unit past the reach of a
+ * touch (CELL_TOUCH 27 in shared/catchup.ts, inclusive; no runtime import here, sim-test checks
+ * the two): a car flying straight along the centre line passes it by.
+ */
+export const CELL_AIR_OFF = 28;
 
 /** A piece of one centerline segment that is either all ground or all gap. */
 interface Piece { seg: number; s0: number; s1: number; ground: boolean; quad: Vec[]; cx: number; cy: number; rad: number }
@@ -484,8 +491,9 @@ function quadsOverlap(a: Vec[], b: Vec[]): boolean {
  *   2 * LOCAL_WINDOW + SECTION_INDEX_MARGIN segment indices apart, so queryTrackNear around a
  *   car's hint never sees the other road.
  * - Cells (M4-CELLS) lie inside the walls and outside the start zone; a ground cell on the kerb or
- *   in the dirt, not in a gap or over a hole. Whether an air cell can be reached from a jump is a
- *   simulation: validateCells in shared/weapons.ts.
+ *   in the dirt, not in a gap or over a hole; an air cell off-centre (|lat| >= CELL_AIR_OFF).
+ *   Whether an air cell can be reached from a jump is a simulation: validateCells in
+ *   shared/weapons.ts.
  * The run-up check (every jump can be made from its recovery point) is validateRunUps in
  * shared/weapons.ts.
  */
@@ -518,7 +526,10 @@ export function validateTrack(track: Track): string[] {
     const at = `${c.air ? "air" : "ground"} cell at s=${f1(c.s)}`;
     zone(at, c.s - CELL_EDGE, c.s + CELL_EDGE);
     if (Math.abs(c.lat) + CELL_EDGE > track.wall) errors.push(`${at}: reaches past the wall`);
-    if (!c.air) {
+    if (c.air) {
+      // Off-centre: a jump has to be taken on its side.
+      if (Math.abs(c.lat) < CELL_AIR_OFF) errors.push(`${at}: lat ${f1(c.lat)} is on the centre line (an air cell sits off-centre, |lat| >= ${CELL_AIR_OFF}, or a car flying down the middle takes it)`);
+    } else {
       // A little hard to reach: on the kerb (the asphalt's outer CELL_KERB units) or in the dirt.
       if (Math.abs(c.lat) < track.def.halfWidth - CELL_KERB) errors.push(`${at}: lat ${f1(c.lat)} is on the open road (a ground cell sits on the kerb, |lat| >= ${track.def.halfWidth - CELL_KERB}, or in the dirt)`);
       if (gapAt(track, c.s)) errors.push(`${at}: in a gap (no ground under it)`);

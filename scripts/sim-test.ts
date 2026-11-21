@@ -9060,8 +9060,8 @@ function cellsValidate(): void {
   const startZone = v([{ k: "cell", s: 100, lat: 60 }]);
   const wall = v([{ k: "cell", s: 2000, lat: 100 }]);
   const far = validateCells(base([{ k: "cell", s: 4500, lat: 0, air: true }]), top).join(" | ");
-  const fine = validateTrack(base([{ k: "cell", s: 2000, lat: 58 }, { k: "cell", s: 2100, lat: -80 }, { k: "cell", s: 3150, lat: 20, air: true }])).concat(
-    validateCells(base([{ k: "cell", s: 3150, lat: 20, air: true }]), top),
+  const fine = validateTrack(base([{ k: "cell", s: 2000, lat: 58 }, { k: "cell", s: 2100, lat: -80 }, { k: "cell", s: 3150, lat: 34, air: true }])).concat(
+    validateCells(base([{ k: "cell", s: 3150, lat: 34, air: true }]), top),
   );
   check(
     "cells validate: rejected: a ground cell on the open road, in a gap, over a hole, in the start zone, past the wall, and an air cell no jump reaches; accepted: kerb, dirt and an air cell over a jump",
@@ -9141,7 +9141,46 @@ function cellsBots(): void {
   );
 }
 
-for (const t of [rivets, gating, mines, wrecks, finishing, garage, armDelay, engine, readyCheck, collisions, trackFeatures, roomTrack, jumpsWired, shippedTracks, botDriver, botLaps, mineCap, chatRoom, chatClient, sound, raceSounds, surfaceSounds, audioUnlock, menuHostOnly, menuStop, menuRestart, menuKick, menuLock, menuHandover, menuClient, menuRestartClient, retireRules, retireField, retireRaceEnd, retireGarage, retireRefund, retireOthers, retireNotices, retireClient, pauseRefused, pauseFreeze, pauseResume, pauseHold, pauseAuto, pauseCooldown, pauseGrace, pauseCountdown, pauseControls, pauseClient, musicSwitch, soundMigration, soundLayers, soundServer, soundRandom, soundRoomDrag, soundSliderGrip, soundClient, songs, songPlayer, ghostRivets, minesSetting, minesStay, minesCap, minesFade, minesAtStart, minesCleared, minesPaused, minesClient, botsPointAt, botsAdd, botsKickHost, botsHandover, botsFullRoom, botsSoloStart, botsRace, botsShop, botsTick, botsCpu, botsClient, carsTypes, carsStats, carsPick, carsRejoin, carsBots, carsRunUps, carsBalance, carsCut, carsClient, envRt, envStep, envClient, draftRule, draftStraight, draftClient, draftJumps, draftBots, cellsRule, boostPhysics, cellsServer, cellsClient, cellsValidate, cellsBots]) {
+// ---- air cells off-centre (M4-CELLS follow-up: the gameplay review's N1, 2026-11-21) ----
+
+// This section's imports (hoisted like the ones at the top).
+import { CELL_AIR_OFF } from "../shared/track";
+
+function cellsOffCentre(): void {
+  // An air cell sits off the centre line (|lat| >= CELL_AIR_OFF), or every car that flies the jump
+  // down the middle (the lane-0 bot) takes it. The cells test track's jump with one air cell at s 3150.
+  const one = (lat: number) => buildTrack({ ...CELLS_DEF, id: "cells-centre", features: [...CELLS_DEF.features!.filter((f) => f.k !== "cell"), { k: "cell", s: 3150, lat, air: true }] });
+  const v = (lat: number) => validateTrack(one(lat)).join(" | ");
+  const lats = [0, CELL_AIR_OFF - 1, -(CELL_AIR_OFF - 1), CELL_AIR_OFF, -CELL_AIR_OFF, 34];
+  const [centre, near, nearL, edge, edgeL, off] = lats.map(v);
+  check(
+    `cells off-centre: validation rejects an air cell at lat 0 and at |lat| ${CELL_AIR_OFF - 1} (either side), accepts |lat| ${CELL_AIR_OFF} and 34`,
+    centre.includes("on the centre line") && near.includes("on the centre line") && nearL.includes("on the centre line") && edge === "" && edgeL === "" && off === "" &&
+      validateCells(one(34), boostTopSpeed(430)).length === 0,
+    lats.map((lat, i) => `lat ${lat}: ${[centre, near, nearL, edge, edgeL, off][i] || "ok"}`).join(" || "),
+  );
+  // Why that minimum: a car high in its jump flying straight along the centre line touches an air
+  // cell just inside a touch's reach (CELL_TOUCH, inclusive) and passes one at CELL_AIR_OFF by.
+  const t = one(34);
+  const p = pointAt(t, 3150);
+  const flight = (lat: number) =>
+    cellReach({ k: "cell", s: 3150, lat, air: true, x: p.x, y: p.y + lat, seg: p.seg }, p.x - 10, p.y, false, { x: p.x + 10, y: p.y, h: 0, vx: 400, vy: 0, seg: p.seg, wreck: 0, air: 24, fall: 0, boost: 0 });
+  const inside = CELL_TOUCH - 0.5;
+  check(
+    `cells off-centre: CELL_AIR_OFF ${CELL_AIR_OFF} = CELL_TOUCH ${CELL_TOUCH} + 1: a flight down the centre line takes an air cell at |lat| ${inside}, not one at ${CELL_AIR_OFF}`,
+    CELL_AIR_OFF === CELL_TOUCH + 1 && flight(inside) >= 0 && flight(-inside) >= 0 && flight(CELL_AIR_OFF) === -1 && flight(-CELL_AIR_OFF) === -1,
+    `touch at lat ${inside}: ${flight(inside).toFixed(3)} / ${flight(-inside).toFixed(3)}; at ${CELL_AIR_OFF}: ${flight(CELL_AIR_OFF)} / ${flight(-CELL_AIR_OFF)}`,
+  );
+  // The shipped air cells keep to it.
+  const shipped = CAR_TRACKS.flatMap((id) => trackById(id).cells.filter((c) => c.air).map((c) => ({ id, lat: c.lat })));
+  check(
+    "cells off-centre: every shipped air cell is off-centre",
+    shipped.length >= 2 && shipped.every((c) => Math.abs(c.lat) >= CELL_AIR_OFF),
+    shipped.map((c) => `${c.id} lat ${c.lat}`).join(", "),
+  );
+}
+
+for (const t of [rivets, gating, mines, wrecks, finishing, garage, armDelay, engine, readyCheck, collisions, trackFeatures, roomTrack, jumpsWired, shippedTracks, botDriver, botLaps, mineCap, chatRoom, chatClient, sound, raceSounds, surfaceSounds, audioUnlock, menuHostOnly, menuStop, menuRestart, menuKick, menuLock, menuHandover, menuClient, menuRestartClient, retireRules, retireField, retireRaceEnd, retireGarage, retireRefund, retireOthers, retireNotices, retireClient, pauseRefused, pauseFreeze, pauseResume, pauseHold, pauseAuto, pauseCooldown, pauseGrace, pauseCountdown, pauseControls, pauseClient, musicSwitch, soundMigration, soundLayers, soundServer, soundRandom, soundRoomDrag, soundSliderGrip, soundClient, songs, songPlayer, ghostRivets, minesSetting, minesStay, minesCap, minesFade, minesAtStart, minesCleared, minesPaused, minesClient, botsPointAt, botsAdd, botsKickHost, botsHandover, botsFullRoom, botsSoloStart, botsRace, botsShop, botsTick, botsCpu, botsClient, carsTypes, carsStats, carsPick, carsRejoin, carsBots, carsRunUps, carsBalance, carsCut, carsClient, envRt, envStep, envClient, draftRule, draftStraight, draftClient, draftJumps, draftBots, cellsRule, boostPhysics, cellsServer, cellsClient, cellsValidate, cellsBots, cellsOffCentre]) {
   console.log(`\n# ${t.name}`);
   try {
     t();
