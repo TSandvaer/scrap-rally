@@ -531,6 +531,8 @@ M4-SURF-2 123jpnbffz4 (Opus) in flight: ctx_9b00420cc97a (~/orca/workspaces/scra
 base main 726b7b7). Taste gate: the user drives a split on the test track (frozen copy). Then M4-MOVE, then M4-TRACKS.
 PUSHED (user popup): origin/main = b1a62a7. Expected live bundle after Manual Deploy: index-CZXDyCOY.js (gate build of 2c7b70c;
 only team/ changed since). SURF-2 asked to change client/sfx.ts:829 (gravel sound uses halfOf in a split): yes, that line only.
+DEPLOYED 2026-11-22 (user): live index-CZXDyCOY.js (curl), bundle holds steerLock:.9,steerCurve:3. QA10 live worker ctx_29619ea77ece
+(muted; spec tmp/spec-qa-live-10.md; report tmp/qa10-live-report.md): TOUCH-4 + TOUCH-3 stick, SURF-1 + MAP regression.
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
