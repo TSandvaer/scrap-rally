@@ -1,4 +1,4 @@
-# PLAN-TOUCH: on-screen touch controls for phones — PROPOSED (advisor review, then user approval)
+# PLAN-TOUCH: on-screen touch controls for phones — APPROVED 2026-11-21 (with the advisor changes and the user decisions below)
 
 **Why.** User 2026-11-21, on the live site from a phone: "How do i drive on my phone? There is no controls". Today the
 game is keyboard only (`client/input.ts`: arrows/WASD, Space/Z/J fire, X/K mine; its header says "Touch and gamepad come
@@ -90,3 +90,18 @@ Not `client/gfx/*`, `render.ts`, `preview.ts`, `shared/*`, `server/*`.
 11. **Real-phone gate checks what emulation cannot:** thumb reach and occlusion, iOS edge-swipe back from the steer side,
     double-tap zoom and the long-press callout, URL-bar / dvh changes, rotation mid-race, the chat keyboard round trip, audio,
     and frame rate.
+
+## User decisions (2026-11-21, popups; these override design 2 and advisor change 10)
+
+- **Approved** with the advisor changes.
+- **Layout like a keyboard** (user: "You have two thumbs, just place up/brake on the right and mines/shot on the left"):
+  - **Right thumb: an 8-way pad** like the arrow keys: up = gas, down = brake/reverse, left/right = steer, and the four
+    corners = gas or brake plus steer at once. One finger slides between all nine zones (centre = nothing). Digital output, the
+    same `Controls` as the keyboard.
+  - **Left thumb: FIRE (hold) and MINE (tap)**, each showing its ammo.
+  - **No auto-gas and no gas-mode switch** (so `client/menu.ts` is not needed unless the touch wording lives there).
+  - **No heal button** (the Welding rig keeps repairing on its own).
+- Placement per advisor change 3, with the clusters swapped: in landscape the 8-way pad is the right-side cluster under the
+  speaker/☰ (about 3 x 56 + 2 x 8 = 184 px square), the weapons at the bottom-left; in portrait both sit in the space below the
+  top-aligned view.
+- Push: the merged lobby fix (3c2c9e6) goes live together with touch controls, in one push the user approves.
