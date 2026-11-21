@@ -122,3 +122,4 @@
 - 2026-11-21 — TOUCH-2 (user, popup): "Approve, build it" (floating thumbstick, up = full gas, proportional steer, ?debug=1 tuning panel, knob colour shows gas/brake; Fable advisor: sound with changes, all taken in). ClickUp 123jpnbffxe.
 - 2026-11-21 — Push (user popup "Push now"): origin/main c655bd8..8c39954 (TOUCH-2 thumbstick + M4-WORLD obstacle art).
 - 2026-11-21 — Stick defaults (user, tuned on the phone with ?debug=1): { radius: 95, steerDead: 0.12, steerLock: 0.7, steerCurve: 1.4, throttleDead: 0.3, split: 0.5 } -> TOUCH-3 123jpnbffye makes them the defaults.
+- 2026-11-21 — Obstacles (user, popup "Start part 1 now"): M4-SURF-1 (water, dirt patches, belt, tyre mounds; ClickUp 123jpnbffyz) starts beside TOUCH-3; then SURF-2 (widen + islands), M4-MOVE, M4-TRACKS + M4-MAP.
