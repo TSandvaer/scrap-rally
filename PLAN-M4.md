@@ -402,3 +402,16 @@ the 2-worker cap.
 
 Adopted suggestions: report (not gate) the 3 Hard vs 3 Normal race per track; print Hard's scrap after 3 races (snowball question);
 keep `HARD_CELL_LANE` below the gap that lets lane-0 bots reach both kerbs.
+
+## Notes from implementation (2026-11-21, M4-SCHEMA / M4-WORLD) — binding for M4-SURF, M4-MOVE and M4-TRACKS
+
+- **Puddle traction (user decision):** water and dirt patches are drawn organic INSIDE the declared rect; the traction area is the
+  rect inset by `PUDDLE_TRACTION_INSET` (12) via `tractionRect()` in `client/gfx/puddle-shape.ts`. M4-SURF moves both into
+  `shared/track.ts` unchanged and uses tractionRect for grip; the bake imports them from there.
+- **Belt validation (M4-WORLD re-check finding 1):** on the inside of a bend, arrows reach past a belt's END for very short belts
+  (20-30 units long) and for wall-to-wall belts. M4-SURF's validation rejects belts shorter than 48 units and wall-to-wall belts on
+  the inside of a bend (or M4-TRACKS avoids them and a test proves none exist).
+- **Schema hash (M4-SCHEMA review F4):** before the collideWalls refactor, M4-SURF adds a wall-contact scenario to
+  `tools/debug/schema-hash.ts` (today a 1e-6 wall-bounce change only shows on one room hash).
+- **WorldFx.rt** (M4-WORLD contract, `client/render.ts:127-139`): `client/main.ts` fills it with the own car's predicted race tick
+  (M4-MOVE); absent = static picture. M4-MOVE owns the truck landing over a solid; M4-SURF owns the per-sample `isLost`.

@@ -474,6 +474,9 @@ touch-2, :3006; spec tmp/spec-touch-2.md; base 654f417). TOUCH-1 ticket keeps 'r
 M4-WORLD fix round done: 3955676 (a53c73b belt arrows within the belt, 2916-belt sweep 0 outside; verge scan 302 -> 14 segments; main merged,
 README both lines; 765/765 + 118/118; gate PASS on a53c73b). Quick Fable re-check ctx_ec7f2fc79661 (tmp/review-m4-world-recheck.md):
 belt fix, Rule 1 after the actors.ts change, census. Author idles on purpose (ctx_b0424fd8bd4b) in case of changes.
+M4-WORLD re-check APPROVE (ctx_ec7f2fc79661, released; tmp/m4-world/REVIEW-m4-world-round2.md; non-blocking: arrows past a short /
+wall-to-wall belt's END inside a bend -> M4-SURF validation rule, noted in PLAN-M4; dust after a put-back near a split). MERGED main 35f9f15;
+gate running. Leftovers for M4-SURF/MOVE/TRACKS written to PLAN-M4 'Notes from implementation (M4-SCHEMA / M4-WORLD)'.
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
