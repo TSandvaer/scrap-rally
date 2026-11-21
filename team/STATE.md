@@ -417,6 +417,17 @@ M4-SCHEMA fix round done (1a4eb17: reach = wall - half car; barrel gutter >= 1 t
 (check clean, sim 719/719, bots 114/114, build ok); ClickUp 123jpnbffqj complete; workers released; m4-schema workspace + branch removed.
 M4-HARD fix round running as ctx_e36d7bf88127; queued after it: merge main (8c67b5c), keep both appended sections, re-prove golden 7/7 +
 schema-hash 12/12. Then a quick Opus re-check, the user's taste verdict (copy on :3009), merge. Next: M4-WORLD (Fable; 16 MB cap all-in).
+M4-WORLD 123jpnbffqz in flight (Fable): ctx_b0111cbb62bb (~/orca/workspaces/scrap-rally/m4-world, :3008; spec tmp/spec-m4-world.md;
+base main bbc1fad). Contact sheet via ask FIRST -> relay to the user. Bench scene for obstacles is S6 (S5 already = recovery teleport).
+M4-HARD fix round + main merge done: f825945 (27f8006 lastMine reset on null car; apex ignores mines behind; style; merge keeps both
+sim-test sections). Golden 7/7 + schema-hash 12/12 SAME; 743/743 + 118/118; band 41.5-53.6%; rivets 78%/61%. Quick Opus re-check
+ctx_b4c667487139 (tmp/review-m4-hard-recheck.md). Taste copy :3009 is still 247a80c (differs only in the socket-bot fix and the apex
+mine-behind detail). Merge after re-check APPROVE + the user's taste verdict.
+M4-HARD MERGED 2026-11-21: re-check APPROVE (ctx_b4c667487139) + user taste APPROVE; main 5d6bc85 (check clean, sim 743/743, bots
+118/118, build ok); ClickUp 123jpnbffqh ready for qa test; workers released; m4-hard workspace + branch removed; taste copy :3009 stopped.
+M4-WORLD contact sheet: user 'Go with changes' = murky blue-grey water tone; then puddle rule (final): water/dirt drawn organic INSIDE the
+declared rect; traction area = rect inset by PUDDLE_TRACTION_INSET (tractionRect), fully inside the drawn puddle; M4-SURF moves both into
+shared/track.ts. Worker sends a follow-up puddle sheet via ask. Local main is 101 commits ahead of origin (2e9ec7f) at 736c275; push only on the user's go.
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).

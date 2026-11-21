@@ -73,6 +73,7 @@ const ui = {
   botAdd: $("bot-add"),
   botEasy: $<HTMLButtonElement>("bot-easy"),
   botNormal: $<HTMLButtonElement>("bot-normal"),
+  botHard: $<HTMLButtonElement>("bot-hard"),
   trackSelect: $<HTMLSelectElement>("track-select"),
   trackName: $("track-name"),
   songSelect: $<HTMLSelectElement>("song-select"),
@@ -228,6 +229,7 @@ ui.minesSelect.addEventListener("change", () => {
 });
 ui.botEasy.addEventListener("click", () => game.addBot("easy"));
 ui.botNormal.addEventListener("click", () => game.addBot("normal"));
+ui.botHard.addEventListener("click", () => game.addBot("hard"));
 ui.start.addEventListener("click", () => game.start());
 ui.startAnyway.addEventListener("click", () => game.start(true));
 ui.ready.addEventListener("click", () => game.setReady(!game.me()?.ready));
@@ -397,8 +399,8 @@ function updatePanels(): void {
       if (p.id === game.you) li.append(span("tag-pill", "you"));
       if (p.id === game.hostId) li.append(span("tag-pill host", "host"));
       if (!p.connected) li.append(span("tag-pill", "offline"));
-      // A bot is always ready: its BOT tag (with the level when Easy) says enough.
-      if (p.bot) li.append(span("tag-pill bot", p.bot === "easy" ? "easy bot" : "bot"));
+      // A bot is always ready: its BOT tag (with the level when Easy or Hard) says enough.
+      if (p.bot) li.append(span(`tag-pill bot${p.bot === "hard" ? " hard" : ""}`, p.bot === "normal" ? "bot" : `${p.bot} bot`));
       else if (p.ready && p.id !== game.hostId) li.append(span("tag-pill ready", "ready"));
       if (p.retired) li.append(span("tag-pill", "retired"));
       // The car they race with (M4-CARS); the host picks a bot's in the lobby, on its row.
@@ -443,9 +445,9 @@ function botCarSelect(id: string, name: string, car: CarType): HTMLSelectElement
 function renderBotAdd(on: boolean): void {
   show(ui.botAdd, on);
   const full = game.players.length >= MAX_PLAYERS;
-  for (const b of [ui.botEasy, ui.botNormal]) {
+  for (const [b, what] of [[ui.botEasy, "an Easy"], [ui.botNormal, "a Normal"], [ui.botHard, "a Hard"]] as const) {
     b.disabled = full;
-    b.title = full ? "The room is full" : `Add ${b === ui.botEasy ? "an Easy" : "a Normal"} bot`;
+    b.title = full ? "The room is full" : `Add ${what} bot`;
   }
 }
 

@@ -3,7 +3,8 @@
 //   npm run dev                       (terminal 1, then open http://localhost:3000 and create a room)
 //   npm run botplay -- ABCD 3         (terminal 2: 3 bots join room ABCD; you press Start)
 //
-// Options: --calm (bots do not shoot or drop mines), --url ws://host:port/ws.
+// Options: --level easy|normal|hard (default normal: how they drive, shoot and shop; Easy never
+// shoots), --calm (bots do not shoot or drop mines), --url ws://host:port/ws.
 // Bots race every race the host starts, spend their scrap in the garage between races,
 // report ready in the lobby once they have shopped, and leave on Ctrl+C. The host's Esc menu
 // works on them: a removed bot stops (the others play on), a stopped or restarted race is
@@ -11,6 +12,7 @@
 
 import { Game, lostMessage, type TokenStore } from "../client/game";
 import { connectWs } from "../client/net";
+import { isBotLevel, type BotLevel } from "../shared/botdrive";
 import { botShopping } from "../shared/botshop";
 import { trackName } from "../shared/tracks";
 import { BotDriver } from "./bot-ai";
@@ -25,15 +27,17 @@ const option = (name: string) => {
   const i = args.indexOf(name);
   return i >= 0 ? args[i + 1] : undefined;
 };
-const positional = args.filter((a, i) => !a.startsWith("--") && !(i > 0 && args[i - 1] === "--url"));
+const positional = args.filter((a, i) => !a.startsWith("--") && !(i > 0 && (args[i - 1] === "--url" || args[i - 1] === "--level")));
 const code = (positional[0] ?? "").toUpperCase();
 const count = Math.max(1, Math.min(5, Number(positional[1] ?? 3) || 3));
 const url = option("--url") ?? `ws://localhost:${process.env.PORT || 3000}/ws`;
+const levelArg = option("--level") ?? "normal";
 
-if (!/^[A-Z0-9]{4}$/.test(code)) {
-  console.log("Usage: npm run botplay -- <ROOM CODE> [count 1-5] [--calm] [--url ws://host:port/ws]");
+if (!/^[A-Z0-9]{4}$/.test(code) || !isBotLevel(levelArg)) {
+  console.log("Usage: npm run botplay -- <ROOM CODE> [count 1-5] [--level easy|normal|hard] [--calm] [--url ws://host:port/ws]");
   process.exit(1);
 }
+const level: BotLevel = levelArg;
 
 function memoryTokens(): TokenStore {
   const m = new Map<string, string>();
@@ -48,19 +52,19 @@ interface Bot {
   readyDue: boolean; // a room update arrived: check (once) whether to report ready
 }
 
-/** Between races: top up rivets and mines, then each affordable upgrade, cheapest first (shared/botshop.ts). */
+/** Between races: the shop rule of the bots' level (shared/botshop.ts). */
 function shop(b: Bot): void {
   const g = b.game;
   const wallet = { scrap: g.scrap, levels: { ...g.levels }, ammo: { rivets: g.serverAmmo[0], mines: g.serverAmmo[1] } };
-  for (const item of botShopping(wallet, "normal")) g.buy(item);
+  for (const item of botShopping(wallet, level)) g.buy(item);
 }
 
 const bots: Bot[] = [];
 for (let i = 0; i < count; i++) {
   const name = NAMES[i];
   const game = new Game(() => connectWs(url), memoryTokens());
-  const bot: Bot = { name, game, driver: new BotDriver(game, LANES[i]), shopped: false, readyDue: false };
-  bot.driver.weapons = !flag("--calm");
+  const bot: Bot = { name, game, driver: new BotDriver(game, LANES[i], level), shopped: false, readyDue: false };
+  bot.driver.weapons = level !== "easy" && !flag("--calm");
   game.on.error = (msg) => console.log(`${name}: ${msg}`);
   game.on.connection = (state, reason) => {
     if (state !== "lost") return;
@@ -125,7 +129,7 @@ for (let i = 0; i < count; i++) {
   bots.push(bot);
 }
 
-console.log(`${count} bot(s) joining ${code} at ${url}${flag("--calm") ? " (calm: no weapons)" : ""}. Ctrl+C to stop.`);
+console.log(`${count} ${level} bot(s) joining ${code} at ${url}${flag("--calm") ? " (calm: no weapons)" : ""}. Ctrl+C to stop.`);
 
 let last = performance.now();
 let acc = 0;

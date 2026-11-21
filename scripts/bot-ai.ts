@@ -4,7 +4,7 @@
 // server's bot seats run the same step); this is the adapter that feeds it from a Game.
 
 import { NO_CONTROLS, type Controls, type Game } from "../client/game";
-import { botControls, newBotMem, type BotMem, type BotOther } from "../shared/botdrive";
+import { botControls, newBotMem, type BotLevel, type BotMem, type BotOther } from "../shared/botdrive";
 
 export { holeLane, runUpFor, speedAfter, takeoffSpeedFor } from "../shared/botdrive";
 
@@ -16,11 +16,13 @@ export class BotDriver {
     private readonly game: Game,
     /** Racing line offset from the centerline (units, + = right of travel). */
     readonly lateral: number,
+    /** The bot level (shared/botdrive.ts): Normal unless asked (botplay's --level). */
+    readonly level: BotLevel = "normal",
   ) {
-    this.mem = newBotMem(lateral, "normal");
+    this.mem = newBotMem(lateral, level);
   }
 
-  /** Fires rivets and drops mines (Normal); false: drives only. */
+  /** Fires rivets and drops mines (Normal, Hard); false: drives only. */
   get weapons(): boolean {
     return this.mem.weapons;
   }
@@ -43,8 +45,13 @@ export class BotDriver {
     const g = this.game;
     const car = g.car;
     const raceOn = !!car && g.raceOn();
-    if (!car) this.raceSteps = 0;
-    else if (raceOn) this.raceSteps++;
+    if (!car) {
+      // Between races. The race steps start over, so Hard's last-mine step must too, or its mine
+      // gap (HARD.mineGap) would hold its mines back in the next race. Only that: resetBotMem
+      // would also clear the slipstream and stuck state, which Normal keeps across races here.
+      this.raceSteps = 0;
+      this.mem.lastMine = -Infinity;
+    } else if (raceOn) this.raceSteps++;
     const grounded = !!car && car.air === 0 && car.fall === 0 && car.wreck === 0;
     const out = botControls(
       {
