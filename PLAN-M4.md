@@ -376,3 +376,29 @@ better, with the same car, physics, upgrades and ammo rules as everyone else.
 
 **Order.** M4-HARD touches only `botdrive.ts` among the shared files, so it can run beside M4-SCHEMA (which owns `track.ts`) within
 the 2-worker cap.
+
+### M4-HARD advisor changes (binding; Fable 5.2 review 2026-11-21: "sound with changes"; override the addendum above)
+
+1. **Pace acceptance:** only bend targets gain time (`botdrive.ts:474-479`; ramps already full throttle, holes capped). Measure the
+   ceiling first with the flat-out trick (`CORNER_SCALE = 3`, `sim-test.ts:8031`); restate the target per track as "Hard closes X-Y %
+   of the Normal-to-flat-out gap". Gate falls and wall hits in traffic (draft 473, boost 537), not solo.
+2. **Level plumbing:** `botdrive.ts:161` (weapons, wake) and `botshop.ts:15` test `level === "normal"`; `bot-ai.ts:20` hardcodes
+   "normal"; `client/main.ts:401` tags only Easy. Hard must get weapons, wake and its own shopping explicitly.
+3. **Byte-identity proof:** commit golden hashes BEFORE touching `botdrive.ts`: full float64 bits of every tick's
+   throttle/steer/fire/mine and car state, plus wallets; Easy and Normal, every track, 3 bots, two races, plus one socket-bot run. If
+   M4-SCHEMA merges first, re-prove against the new main.
+4. **Apex precedence:** the bias applies only when the lane is `mem.lateral` (`:439`); hole lane, ramp, wake (incl. a running pass)
+   and cell override it. Never mutate `mem.lateral`. The bias is a per-seat offset so three bots do not converge on one inside lane.
+5. **Apex mine check** in track coordinates (`mineFree`'s straight-line frame is wrong in bends), pre-filtered by distance (<= 40 mines).
+6. **Rivets:** they fire along the heading and inherit the car's velocity (`weapons.ts:292-301`), so "lead" is a fire gate on
+   relative velocity only; Hard never steers to aim.
+7. **Mines:** arm after 24 ticks and spawn 27 behind, so trigger at about 0.4 x follower speed + 10, up to ~300 units; start after
+   the 8 s arming (`room.ts:994`), not 6 s; keep the last-mine step in `BotMem` and `resetBotMem`.
+8. **Shopping:** tyres give the bot no pace (caution uses base grip): engine, then welder, then tyres, or justify by measurement.
+9. **CPU:** gate room tick time with 5 Hard bots; print the added sim-test runtime against a budget.
+10. **Ownership:** M4-SCHEMA must not touch `client/main.ts` or `shared/protocol.ts` while M4-HARD is open; the second to merge merges
+    main first (sim-test runner list).
+11. **Lobby:** three Add-bot buttons need a 360 px screenshot; one test that a human joining a full room replaces a last-added Hard bot.
+
+Adopted suggestions: report (not gate) the 3 Hard vs 3 Normal race per track; print Hard's scrap after 3 races (snowball question);
+keep `HARD_CELL_LANE` below the gap that lets lane-0 bots reach both kerbs.
