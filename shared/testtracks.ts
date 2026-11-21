@@ -3,7 +3,9 @@
 // and islands), for the preview and debug path (client/preview.ts, tools/debug) so M4-WORLD can draw
 // against them before any track uses them. They are NOT in the lobby's track list (shared/tracks.ts
 // SHIPPED) and no client message can select them: isTrackId does not know their ids, so a room's
-// setTrack refuses them. They build and pass validateTrack.
+// setTrack refuses them, unless the server runs with the dev-only env SCRAP_DEV_TRACK set to one of
+// their ids (server/room.ts devTrackId, M4-SURF: off by default and on Render). They build and pass
+// validateTrack.
 
 import { buildTrack, type Track, type TrackDef } from "./track";
 
@@ -44,8 +46,48 @@ export const PREVIEW_YARD: TrackDef = {
   recovery: [0, 3200, 5500],
 };
 
+// The M4-SURF part 1 test track (water, dirt patches, conveyor belts and tyre mounds act; ClickUp
+// 123jpnbffyz): the Preview Yard's loop with only the features that do something today, so it can
+// be driven (the dev flag SCRAP_DEV_TRACKS, server/room.ts) and raced by bots without the barrels,
+// truck, press and split lanes that are still drawings. In order round the lap: on the top straight
+// a tyre-mound chicane, a dirt patch on the right half and a pool across the whole road (on a
+// straight: it costs little); round the right-hand side a belt drifting right, a pool on the
+// outside half of the tightest bend (it throws you wide; the inside stays dry), a mound on the
+// outside, a dirt patch on the inside of the next bend into the verge (a short cut for the truck),
+// a pit and a mound to weave between; on the bottom straight a pool on the left half of the run-up
+// to a chasm jump, and a dirt patch past the landing; round the left-hand side a mound on the inside
+// of the tightest bend, a pool on its inside half and a belt drifting left.
+export const SURF_YARD: TrackDef = {
+  id: "surf-yard",
+  name: "Surf Yard",
+  control: PREVIEW_YARD.control,
+  halfWidth: 64,
+  verge: 44,
+  features: [
+    { k: "tyres", s: 700, lat: -30, r: 24 },
+    { k: "tyres", s: 880, lat: 32, r: 26 },
+    { k: "tyres", s: 1060, lat: -20, r: 20 },
+    { k: "dirt", s0: 1240, s1: 1400, lat0: 16, lat1: 64 },
+    { k: "water", s0: 1450, s1: 1620, lat0: -64, lat1: 64 },
+    { k: "belt", s0: 2300, s1: 2520, lat0: -64, lat1: 64, vx: 70 },
+    { k: "water", s0: 2880, s1: 3160, lat0: -64, lat1: 0 },
+    { k: "tyres", s: 3560, lat: -38, r: 22 },
+    { k: "dirt", s0: 4480, s1: 4760, lat0: 20, lat1: 108 },
+    { k: "hole", s: 5000, lat: 26, r: 24 },
+    { k: "tyres", s: 5220, lat: -24, r: 22 },
+    { k: "water", s0: 5900, s1: 6100, lat0: -64, lat1: 0 },
+    { k: "ramp", s: 6300, len: 80 },
+    { k: "gap", s0: 6380, s1: 6560 },
+    { k: "dirt", s0: 6720, s1: 6900, lat0: -8, lat1: 64 },
+    { k: "tyres", s: 8000, lat: 38, r: 22 },
+    { k: "water", s0: 8380, s1: 8640, lat0: 0, lat1: 64 },
+    { k: "belt", s0: 9000, s1: 9300, lat0: -64, lat1: 64, vx: -80 },
+  ],
+  recovery: [0, 3300, 5650],
+};
+
 /** Every preview test track, in the order a preview lists them. */
-export const TEST_TRACKS: readonly TrackDef[] = [PREVIEW_YARD];
+export const TEST_TRACKS: readonly TrackDef[] = [PREVIEW_YARD, SURF_YARD];
 
 const built = new Map<string, Track>(); // built once per id; a Track is never mutated
 

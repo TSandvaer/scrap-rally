@@ -45,6 +45,7 @@ import { AMMO, buy, clampAmmo, isItem, payouts, startingWallet, statsFor, type A
 import { BUILTIN_SOUND, DEFAULT_SONG_ID, isSongChoice, isSongId, RANDOM_SONG, snapVolume, SONG_IDS, type RoomSound, type SongId } from "../shared/sound";
 import { gridSlot, type Track } from "../shared/track";
 import { DEFAULT_TRACK_ID, isTrackId, trackById } from "../shared/tracks";
+import { testTrack } from "../shared/testtracks";
 import { BTN_RIVET, CAR_HP, cellReach, DEFAULT_MINE_MODE, GHOST_TICKS, isMineMode, mineCount, NO_COMMAND, raceEnv, stepRaceCar, WEAPONS_ARM_MS, type Command, type MineMode } from "../shared/weapons";
 import { isBotLevel, type BotLevel } from "../shared/botdrive";
 import { DEFAULT_CAR, isCarType, type CarType } from "../shared/cars";
@@ -55,6 +56,25 @@ import { advance, compareStanding, newProgress, raceDistance, type Progress } fr
 export interface Conn {
   send(msg: ServerMsg): void;
   close(): void;
+}
+
+/**
+ * Dev only (M4-SURF, ClickUp 123jpnbffyz): env SCRAP_DEV_TRACK = the id of a preview test track
+ * (shared/testtracks.ts, e.g. "surf-yard" or "preview-yard") makes every new room start on that
+ * track and lets a host pick any test track by id (a {t:"track"} message; the lobby's list still
+ * shows only the shipped tracks). Unset (the default, and on Render), empty or not a test track's
+ * id: off, and the test tracks are refused as unknown, as before. Read when a room is made or a
+ * track is picked.
+ */
+export function devTrackId(): string | null {
+  const id = process.env.SCRAP_DEV_TRACK;
+  return id && testTrack(id) ? id : null;
+}
+
+/** A room's track by id: a shipped one, or with the dev flag on (devTrackId) a test track. */
+function roomTrack(id: string): Track {
+  const t = devTrackId() !== null ? testTrack(id) : null;
+  return t ?? trackById(id);
 }
 
 /** One socket's binding to a room and player, owned by the transport layer. */
@@ -227,7 +247,7 @@ export class Room {
     trackId: string = DEFAULT_TRACK_ID,
   ) {
     this._trackId = trackId;
-    this._track = trackById(trackId);
+    this._track = roomTrack(trackId);
     this._combat = this.newCombat();
     this.resolveSong();
   }
@@ -886,10 +906,10 @@ export class Room {
   setTrack(p: Player, id: unknown): string | null {
     if (p.id !== this.hostId) return "Only the host can pick the track";
     if (this.phase !== "lobby") return "The track can only be changed in the lobby";
-    if (!isTrackId(id)) return "Unknown track";
+    if (!isTrackId(id) && !(typeof id === "string" && devTrackId() !== null && testTrack(id))) return "Unknown track";
     if (id === this._trackId) return null;
     this._trackId = id;
-    this._track = trackById(id);
+    this._track = roomTrack(id);
     this._combat = this.newCombat(); // no shots or mines exist in the lobby
     for (const q of this.players.values()) q.ready = !!q.bot; // a bot is always ready
     this.broadcastRoom();
@@ -1324,7 +1344,7 @@ export class Rooms {
       case "create": {
         if (session.room) return err("Already in a room");
         if (this.rooms.size >= this.maxRooms) return err("The server is full right now, try again later", "busy");
-        const room = new Room(this.newCode(), this.laps, this.hp);
+        const room = new Room(this.newCode(), this.laps, this.hp, devTrackId() ?? DEFAULT_TRACK_ID);
         this.rooms.set(room.code, room);
         room.addPlayer(cleanName(msg.name), session, now);
         return;

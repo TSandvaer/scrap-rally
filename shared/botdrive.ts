@@ -6,6 +6,14 @@
 // behind it (backing up for a longer run-up when it is too slow to make it), and a lane
 // around the holes ahead.
 //
+// Surfaces and tyre mounds (M4-SURF, PLAN-M4 2.2-2.3): a lane-cost search (laneFor) replaces the
+// plain hole lane. Holes and tyre mounds ahead are blocked (a lane must clear them, the nearest
+// first, as the hole lane did, and the bot slows to HOLE_SPEED among them); water and dirt cost by
+// car type (laneCost: a dirt patch the type's dirtDrag - 1 per unit, so the truck barely minds it;
+// water WATER_COST scaled by the type's grip on it), so a bot leaves its racing line for the
+// cheapest lane round a pool or a patch when one is free. With none of them ahead it is exactly
+// the hole lane (the shipped tracks drive as before).
+//
 // Levels: Normal is the M3 driver. Easy caps the throttle at EASY_THROTTLE except on a ramp
 // approach (PLAN-M4 advisor change 3: 0.85 alone tops out near 365 u/s, below what the
 // Overpass Knot crossing needs), takes bends at EASY_CORNER of Normal's speed and never shoots.
@@ -33,7 +41,7 @@
 
 import { CARS, DEFAULT_CAR, type CarType } from "./cars";
 import { angleDiff, CAR_LENGTH, CAR_RADIUS, CAR_WIDTH, clamp, DT, speedOf, type CarState, type CarStats } from "./physics";
-import { LIP_ZONE, pointAt, queryTrackNear, type Ramp, type Track } from "./track";
+import { LIP_ZONE, pointAt, queryTrackNear, SURF_DIRT, SURF_WATER, type Ramp, type Track } from "./track";
 import { airTicksFor, MIN_TAKEOFF_SPEED, MINE_ARM_TICKS, RIVET_RADIUS, RIVET_RANGE, RIVET_SPEED, WEAPONS_ARM_MS } from "./weapons";
 
 export type BotLevel = "easy" | "normal" | "hard";
@@ -316,6 +324,104 @@ export function holeLane(track: Track, s: number, look: number, pref: number): {
   return { lane: best, holes: near.length };
 }
 
+/** A water pool's lane cost per unit of it ahead for the Sport (laneCost); a type with less grip on it pays more. */
+export const WATER_COST = 1.5;
+/** A lane counts as on a surface when the car's centre passes within this of its rectangle. */
+const SURFACE_MARGIN = 4;
+/** A tyre mound stays in the lane search until the car's centre is this far past its edge (half a car + 1). */
+const MOUND_BEHIND = 16;
+/** A lane round a blocker on the verge keeps this far (plus half a car) off the wall. */
+const VERGE_LANE_MARGIN = 10;
+
+/**
+ * The lane cost of a surface per unit of it ahead, by car type (M4-SURF): a dirt patch costs its
+ * drag over asphalt's (dirtDrag - 1: Sport 1.9, Racer 2.6, Truck 0.6), a pool WATER_COST times
+ * sqrt(Sport's dirt grip / the type's) (its grip on water is a third of the dirt grip: Sport 1.5,
+ * Racer 1.67, Truck 1.18). A belt costs nothing (the bot steers against its drift).
+ */
+export function laneCost(kind: number, stats: CarStats): number {
+  if (kind === SURF_DIRT) return stats.dirtDrag - 1;
+  if (kind === SURF_WATER) return WATER_COST * Math.sqrt(CARS.sport.base.dirtGrip / stats.dirtGrip);
+  return 0;
+}
+
+/** A blocked spot ahead: a hole or a tyre mound (lateral offset, radius), d = how far until it is behind the car. */
+interface Blocker {
+  lat: number;
+  r: number;
+  d: number;
+}
+
+/**
+ * The bot's lane through what lies ahead of s (M4-SURF, the lane-cost search that replaces
+ * holeLane in botControls): holes and tyre mounds within `look` are blocked, the nearest first (the
+ * lane nearest `pref` that clears as many of the nearest ones as it can, as holeLane); among the
+ * lanes that clear as many, the one whose water and dirt within `look` cost least (laneCost),
+ * then the nearest `pref`. With a blocker ahead the lanes reach onto the verge (each costs the dirt
+ * it is over the whole look), so a car pushed to the outside of a mound goes round it there. With no
+ * blocker ahead the search starts from `racing` (the racing line), stays on the asphalt and moves
+ * only when the racing line costs something (`dodge`). With neither a mound nor a surface ahead it
+ * is holeLane exactly. `holes`: how many blockers are ahead (0 = none).
+ */
+export function laneFor(track: Track, s: number, seg: number, look: number, pref: number, racing: number, stats: CarStats): { lane: number; holes: number; dodge: boolean } {
+  const tyres = track.tyres, surfaces = track.surfaces;
+  // The mounds and the surfaces ahead (from the segment's start indices; nothing on a plain track).
+  let mounds: Blocker[] | null = null;
+  for (let k = track.tyresFrom[seg] ?? tyres.length; k < tyres.length; k++) {
+    const m = tyres[k];
+    // Behind once the car's rear is past it (a hole stays in view r + 30: a fall costs more).
+    const d = ahead(track, s - m.r - MOUND_BEHIND, m.s) - m.r - MOUND_BEHIND;
+    if (d > look + 2 * m.r + 60) break; // sorted by s: the rest are further
+    if (d < look) (mounds ??= []).push({ lat: m.lat, r: m.r, d });
+  }
+  let spans: { lat0: number; lat1: number; len: number; cost: number }[] | null = null;
+  const end = s + look;
+  for (let k = track.surfFrom[seg] ?? surfaces.length; k < surfaces.length && surfaces[k].s0 < end; k++) {
+    const f = surfaces[k];
+    const len = Math.min(f.s1, end) - Math.max(f.s0, s);
+    const cost = laneCost(f.kind, stats);
+    if (len > 0 && cost > 0) (spans ??= []).push({ lat0: f.lat0 - SURFACE_MARGIN, lat1: f.lat1 + SURFACE_MARGIN, len, cost });
+  }
+  if (!mounds && !spans) return { ...holeLane(track, s, look, pref), dodge: false };
+  const near: Blocker[] = track.holes
+    .map((h) => ({ lat: h.lat, r: h.r, d: ahead(track, s - h.r - 30, h.s) - h.r - 30 }))
+    .filter((x) => x.d < look);
+  if (mounds) near.push(...mounds);
+  near.sort((a, b) => a.d - b.d);
+  // On the asphalt; with a blocker ahead the verge too (costed as the dirt it is), so a car on the
+  // outside of a mound goes round it there rather than back across it.
+  const road = track.def.halfWidth - CAR_WIDTH / 2;
+  const max = near.length ? track.wall - CAR_WIDTH / 2 - VERGE_LANE_MARGIN : road;
+  const verge = laneCost(SURF_DIRT, stats) * look;
+  const clears = (lat: number) => {
+    let n = 0;
+    while (n < near.length && Math.abs(lat - near[n].lat) > near[n].r + HOLE_CLEARANCE) n++;
+    return n;
+  };
+  const costOf = (lat: number) => {
+    let c = Math.abs(lat) > road ? verge : 0;
+    if (spans) for (const p of spans) if (lat > p.lat0 && lat < p.lat1) c += p.len * p.cost;
+    return c;
+  };
+  const from = near.length ? pref : racing;
+  let best = clamp(from, -max, max), bestN = clears(best), bestC = costOf(best);
+  if (!near.length && bestC === 0) return { lane: racing, holes: 0, dodge: false };
+  for (let k = 2; k <= 2 * max && !(bestN === near.length && bestC === 0); k += 2) {
+    for (const lat of [from - k, from + k]) {
+      if (Math.abs(lat) > max) continue;
+      const n = clears(lat);
+      if (n < bestN) continue;
+      const c = costOf(lat);
+      if (n > bestN || c < bestC) {
+        best = lat;
+        bestN = n;
+        bestC = c;
+      }
+    }
+  }
+  return { lane: best, holes: near.length, dodge: true };
+}
+
 /** The next ramp whose lip is at most `range` ahead of s (or that s is on), with its distance. */
 function rampAhead(track: Track, s: number, range: number): { ramp: Ramp; toLip: number } | null {
   let best: { ramp: Ramp; toLip: number } | null = null;
@@ -592,10 +698,11 @@ export function botControls(view: BotView, mem: BotMem): BotControls {
   const vf = c.vx * Math.cos(dir) + c.vy * Math.sin(dir); // speed along the track
   const lat = (c.x - p.x) * -Math.sin(dir) + (c.y - p.y) * Math.cos(dir); // + = right of travel
 
-  // Holes: the lane nearest the car's line that clears the next ones; slower among them.
-  // With no holes ahead the bot holds its own racing line (mem.lateral).
-  const hole = holeLane(track, q.s, 140 + v * 0.6, clamp(lat, mem.lateral - 24, mem.lateral + 24));
-  let lane = hole.holes ? hole.lane : mem.lateral;
+  // Holes and tyre mounds: the lane nearest the car's line that clears the next ones; slower
+  // among them. Water and dirt: the cheapest lane for its car type (laneFor). With none of them
+  // ahead the bot holds its own racing line (mem.lateral).
+  const hole = laneFor(track, q.s, q.seg, 140 + v * 0.6, clamp(lat, mem.lateral - 24, mem.lateral + 24), mem.lateral, view.stats);
+  let lane = hole.holes || hole.dodge ? hole.lane : mem.lateral;
   let look = hole.holes ? 40 + v * 0.25 : 55 + v * 0.3;
   if (hard) look *= HARD.aimLook;
 
@@ -610,7 +717,7 @@ export function botControls(view: BotView, mem: BotMem): BotControls {
   // The slipstream: follow a car ahead on a straight, then pass it (Normal only).
   let coast = false;
   if (mem.wakeRest > 0) mem.wakeRest--;
-  if (mem.useWake && !easy && view.raceOn && !hole.holes && !ramp && !mem.backup && mem.reversing === 0) {
+  if (mem.useWake && !easy && view.raceOn && !hole.holes && !hole.dodge && !ramp && !mem.backup && mem.reversing === 0) {
     const w = wakeLane(view, mem, c, p.x, p.y, dir, bend, track.def.halfWidth - CAR_WIDTH / 2 - 2);
     if (w) {
       lane = w.lane;
@@ -630,7 +737,7 @@ export function botControls(view: BotView, mem: BotMem): BotControls {
   }
   // Hard's apex bias: only on its own racing line (a hole lane, a ramp, the slipstream and a cell
   // come first), towards the inside of the bend ahead, never onto a mine. mem.lateral stays.
-  if (hard && HARD.apex > 0 && !hole.holes && !ramp && !mem.wake && !cell && view.raceOn && bend > HARD.apexFrom) {
+  if (hard && HARD.apex > 0 && !hole.holes && !hole.dodge && !ramp && !mem.wake && !cell && view.raceOn && bend > HARD.apexFrom) {
     const apex = apexLane(mem.lateral, turn, track.def.halfWidth);
     if (apexMineFree(view, c, q.s, mem.lateral, apex)) lane = apex;
   }

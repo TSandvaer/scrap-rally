@@ -10,7 +10,12 @@
 //             stepRaceCar with the slipstream and car-car contacts, no room: every tick's control
 //             stream (throttle, steer, buttons, mine press) and every car state;
 //   room    - a 3-lap Room race of the same three bots on the sim clock (the host retires at GO):
-//             every tick's car states, progress, shots and mines, then the results and the wallets.
+//             every tick's car states, progress, shots and mines, then the results and the wallets;
+//   walls   - wall contacts (M4-SURF, the M4-SCHEMA review's F4): at every 6th sample, cars driven
+//             from the centerline and from near each wall into the left and the right wall at a
+//             spread of angles and speeds (full throttle, steering held into the wall, and one
+//             scraping along it), 45 ticks each through stepRaceCar: every tick's car state and
+//             the client's wallHitSpeed (a 1e-6 change to the wall bounce shows here directly).
 // Each part is run twice and must hash the same (the tool's own determinism).
 //
 //   npx tsx tools/debug/schema-hash.ts            print the hashes
@@ -23,7 +28,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { CAR_TYPES } from "../../shared/cars";
 import { draftsFor } from "../../shared/catchup";
-import { collideCars, wallLimit, type CarState } from "../../shared/physics";
+import { BASE_STATS, collideCars, wallLimit, type CarState } from "../../shared/physics";
 import type { ServerMsg } from "../../shared/protocol";
 import { statsFor } from "../../shared/shop";
 import {
@@ -47,6 +52,7 @@ import { trackList } from "../../shared/tracks";
 import { CAR_HP, raceEnv, stepRaceCar, validateRunUps } from "../../shared/weapons";
 import type { BotLevel } from "../../shared/botdrive";
 import { botCar, botStep, newBotSeat, type BotSeat } from "../../server/bots";
+import { wallHitSpeed } from "../../client/game";
 import { solid, type Fighter } from "../../server/combat";
 import { Room, type Conn, type Player, type Session } from "../../server/room";
 
@@ -218,7 +224,40 @@ function hashRoom(id: string): { hash: string; ticks: number; finish: string } {
   return { hash: h.hex(), ticks: rt, finish: res ? res.rows.map((r) => `${r.name}:${r.earned}`).join(", ") : `phase ${room.phase}` };
 }
 
-type Hashes = Record<string, { built: string; queries: string; botsDirect: string; room: string }>;
+/** Wall contacts: cars driven into both walls from the centre and from near the wall, every tick. */
+function hashWalls(t: Track): { hash: string; contacts: number } {
+  const h = new Hasher();
+  const env = raceEnv(t);
+  const lim = wallLimit(t);
+  let contacts = 0;
+  for (let i = 0; i < t.pts.length; i += 6) {
+    const s = t.cum[i] + 2.9;
+    const p = pointAt(t, s);
+    for (const side of [-1, 1]) {
+      for (const [lat, angle, speed, steer] of [
+        [0, 0.35, 430, 0], [0, 0.8, 300, 0], [0, 1.3, 180, 0], [side * (lim - 20), 0.5, 380, side], [side * (lim - 2), 0.12, 420, side * 0.6],
+      ] as const) {
+        const hh = p.h + side * angle;
+        const c: CarState = {
+          x: p.x - Math.sin(p.h) * lat, y: p.y + Math.cos(p.h) * lat, h: hh, vx: Math.cos(hh) * speed, vy: Math.sin(hh) * speed,
+          seg: p.seg, wreck: 0, air: 0, fall: 0, boost: 0,
+        };
+        for (let k = 0; k < 45; k++) {
+          const before = { vx: c.vx, vy: c.vy };
+          env.rt = k + 1;
+          h.s(stepRaceCar(c, { throttle: 1, steer }, BASE_STATS, env) ?? "-");
+          car(h, c);
+          const into = c.air === 0 && c.fall === 0 ? wallHitSpeed(before, c, t) : 0;
+          if (into > 0) contacts++;
+          h.f(into);
+        }
+      }
+    }
+  }
+  return { hash: h.hex(), contacts };
+}
+
+type Hashes = Record<string, { built: string; queries: string; botsDirect: string; room: string; walls: string }>;
 
 function run(): { hashes: Hashes; notes: string[]; stable: boolean } {
   const hashes: Hashes = {};
@@ -230,11 +269,12 @@ function run(): { hashes: Hashes; notes: string[]; stable: boolean } {
     const queries = [hashQueries(t1), hashQueries(t2)];
     const direct = [hashBotsDirect(t1), hashBotsDirect(t2)];
     const room = [hashRoom(e.id), hashRoom(e.id)];
-    const diff = [built[0] !== built[1] && "built", queries[0] !== queries[1] && "queries", direct[0].hash !== direct[1].hash && "botsDirect", room[0].hash !== room[1].hash && "room"].filter(Boolean);
+    const walls = [hashWalls(t1), hashWalls(t2)];
+    const diff = [built[0] !== built[1] && "built", queries[0] !== queries[1] && "queries", direct[0].hash !== direct[1].hash && "botsDirect", room[0].hash !== room[1].hash && "room", walls[0].hash !== walls[1].hash && "walls"].filter(Boolean);
     const same = diff.length === 0;
     stable &&= same;
-    hashes[e.id] = { built: built[0], queries: queries[0], botsDirect: direct[0].hash, room: room[0].hash };
-    notes.push(`${e.id}: botsDirect ${direct[0].ticks} ticks; room race ${room[0].ticks} ticks (${room[0].finish}); rerun ${same ? "identical" : `DIFFERS (${diff.join(", ")})`}`);
+    hashes[e.id] = { built: built[0], queries: queries[0], botsDirect: direct[0].hash, room: room[0].hash, walls: walls[0].hash };
+    notes.push(`${e.id}: botsDirect ${direct[0].ticks} ticks; room race ${room[0].ticks} ticks (${room[0].finish}); walls ${walls[0].contacts} wall-hit ticks; rerun ${same ? "identical" : `DIFFERS (${diff.join(", ")})`}`);
   }
   return { hashes, notes, stable };
 }
@@ -253,7 +293,7 @@ if (process.argv.includes("--write")) {
   const golden = JSON.parse(readFileSync(GOLDEN, "utf8")) as Hashes;
   let bad = 0;
   for (const id of new Set([...Object.keys(golden), ...Object.keys(hashes)])) {
-    for (const part of ["built", "queries", "botsDirect", "room"] as const) {
+    for (const part of ["built", "queries", "botsDirect", "room", "walls"] as const) {
       const ok = golden[id]?.[part] === hashes[id]?.[part];
       if (!ok) bad++;
       console.log(`${ok ? "SAME" : "DIFF"}  ${id} ${part}`);

@@ -27,7 +27,10 @@ import {
   queryTrackNear,
   recoveryAt,
   segDir,
+  clearLaneAt,
+  tractionRect,
   type PlacedCell,
+  type PlacedTyres,
   type Track,
   type TrackQuery,
 } from "./track";
@@ -245,16 +248,22 @@ export function stepRaceCar(c: CarState, input: Input, stats: CarStats, env: Rac
   return ev;
 }
 
-/** Place a fallen car at the last recovery point at or before its s (it has not moved). */
+/**
+ * Place a fallen car at the last recovery point at or before its s (it has not moved), on the
+ * nearest clear lane there (M4-SURF: never in a tyre mound; validation keeps solids SOLID_CLEAR
+ * from recovery points, so that is the centerline).
+ */
 export function recover(c: CarState, track: Track): void {
   const q = queryTrackNear(track, c.x, c.y, c.seg);
-  place(c, track, recoveryAt(track, q.s));
+  const r = recoveryAt(track, q.s);
+  place(c, track, r, clearLaneAt(track, r));
 }
 
-function place(c: CarState, track: Track, s: number): void {
+/** Put a car `lat` units right of the centerline at s (0 = on it), facing along the track, standing still. */
+function place(c: CarState, track: Track, s: number, lat = 0): void {
   const p = pointAt(track, s);
-  c.x = p.x;
-  c.y = p.y;
+  c.x = lat === 0 ? p.x : p.x - Math.sin(p.h) * lat;
+  c.y = lat === 0 ? p.y : p.y + Math.cos(p.h) * lat;
   c.h = p.h;
   c.vx = 0;
   c.vy = 0;
@@ -264,11 +273,16 @@ function place(c: CarState, track: Track, s: number): void {
   c.boost = 0;
 }
 
+/**
+ * A wreck's respawn: on the centerline at the car's s, or on the nearest clear lane there when a
+ * tyre mound is in the way (M4-SURF); a respawn onto a hazard (a gap, a hole) goes to the recovery
+ * point instead (and its clear lane).
+ */
 export function respawn(c: CarState, track: Track): void {
   const q = queryTrackNear(track, c.x, c.y, c.seg);
   const p = pointAt(track, q.s);
-  // A respawn onto a hazard goes to the recovery point instead.
-  place(c, track, overHazard(track, p.x, p.y, q.s) ? recoveryAt(track, q.s) : q.s);
+  const s = overHazard(track, p.x, p.y, q.s) ? recoveryAt(track, q.s) : q.s;
+  place(c, track, s, clearLaneAt(track, s));
 }
 
 export function wreckCar(c: CarState): void {
@@ -304,14 +318,30 @@ export function spawnShot(c: CarState, id: number, owner: string): Shot {
   };
 }
 
-/** Move a shot one tick. Returns false when it is spent (out of range or into a wall). */
+/** Move a shot one tick. Returns false when it is spent (out of range, into a wall or into a tyre mound). */
 export function moveShot(s: Shot, track: Track): boolean {
+  const x0 = s.x, y0 = s.y;
   s.x += s.vx * DT;
   s.y += s.vy * DT;
   s.travelled += Math.hypot(s.vx, s.vy) * DT;
   const q = queryTrackNear(track, s.x, s.y, s.seg);
   s.seg = q.seg;
-  return s.travelled <= RIVET_RANGE && q.dist <= track.wall;
+  return s.travelled <= RIVET_RANGE && q.dist <= track.wall && !shotIntoTyres(track.tyresAt[q.seg], x0, y0, s.x, s.y);
+}
+
+/** Did a rivet moving from (x0, y0) to (x1, y1) this tick touch a tyre mound (M4-SURF: rivets die on solids)? */
+function shotIntoTyres(tyres: readonly PlacedTyres[] | undefined, x0: number, y0: number, x1: number, y1: number): boolean {
+  if (tyres === undefined || tyres.length === 0) return false;
+  const dx = x1 - x0, dy = y1 - y0;
+  const len2 = dx * dx + dy * dy;
+  for (const m of tyres) {
+    let t = len2 > 0 ? ((m.x - x0) * dx + (m.y - y0) * dy) / len2 : 0;
+    t = t < 0 ? 0 : t > 1 ? 1 : t;
+    const ex = x0 + dx * t - m.x, ey = y0 + dy * t - m.y;
+    const r = m.r + RIVET_RADIUS;
+    if (ex * ex + ey * ey <= r * r) return true;
+  }
+  return false;
 }
 
 /** A new mine just behind the car. */
@@ -354,14 +384,17 @@ const DODGE_REACH = 160;
 
 /**
  * The lane (lateral offset, + = right of travel) nearest the centerline that keeps a car's
- * centre clear of every hole near s. The run-up driver aims along it.
+ * centre clear of every hole near s, and of every tyre mound there (M4-SURF: the run-up driver
+ * steers round the solids as round the holes). The run-up driver aims along it.
  */
 function clearLane(track: Track, s: number): number {
   const L = track.length;
-  const near = track.holes.filter((h) => {
-    const ds = Math.abs(s - h.s) % L;
-    return Math.min(ds, L - ds) < h.r + DODGE_REACH;
-  });
+  const reach = (o: { s: number; r: number }) => {
+    const ds = Math.abs(s - o.s) % L;
+    return Math.min(ds, L - ds) < o.r + DODGE_REACH;
+  };
+  const near: { lat: number; r: number }[] = track.holes.filter(reach);
+  for (const m of track.tyres) if (reach(m)) near.push(m);
   if (!near.length) return 0;
   const max = track.def.halfWidth - CAR_WIDTH / 2;
   for (let k = 0; k <= max; k += 4) {
@@ -372,12 +405,22 @@ function clearLane(track: Track, s: number): number {
   return 0;
 }
 
-/** Full throttle, steering at a point ahead on the hole-free lane. */
-function runUpInput(track: Track, c: CarState): Input {
+/** How far before a pool the run-up driver forced through it (validateRunUps) is on its lane already. */
+const WATER_LEAD = 150;
+
+/**
+ * Full throttle, steering at a point ahead on the hole-free lane; with `through` (a pool's traction
+ * rectangle, M4-SURF), on the lane down the pool's middle from WATER_LEAD before it to its end.
+ */
+function runUpInput(track: Track, c: CarState, through?: { s0: number; s1: number; lat0: number; lat1: number }): Input {
   const q = queryTrackNear(track, c.x, c.y, c.seg);
   const s = q.s + 40 + speedOf(c) * 0.25;
   const t = pointAt(track, s);
-  const lat = clearLane(track, s);
+  let lat = clearLane(track, s);
+  if (through && q.s >= through.s0 - WATER_LEAD && q.s <= through.s1) {
+    const max = track.def.halfWidth - CAR_WIDTH / 2;
+    lat = clamp((through.lat0 + through.lat1) / 2, -max, max);
+  }
   const tx = t.x - Math.sin(t.h) * lat, ty = t.y + Math.cos(t.h) * lat;
   return { throttle: 1, steer: clamp(angleDiff(c.h, Math.atan2(ty - c.y, tx - c.x)) * 2.2, -1, 1) };
 }
@@ -406,10 +449,13 @@ function hazardsAhead(track: Track, r: number): { start: number; end: number } |
 
 /**
  * The run-up check: from every recovery point, a car with `stats` (default: no upgrades)
- * starting at rest at full throttle, steering along the centerline (around holes), must get
- * past every hazard before the next recovery point without falling, and every jump it makes
- * must land on the asphalt. Catches impossible jumps and fall loops (a fall goes back to the
- * recovery point the run started from). Empty = every run-up works.
+ * starting at rest at full throttle, steering along the centerline (around holes and tyre
+ * mounds), must get past every hazard before the next recovery point without falling, and every
+ * jump it makes must land on the asphalt. Catches impossible jumps and fall loops (a fall goes
+ * back to the recovery point the run started from). Water in a run-up (M4-SURF, PLAN-M4 2.2): the
+ * run is driven again for every pool between the recovery point and the last hazard, on a lane
+ * through the pool's middle (it costs the car speed: a pool before a jump can leave it short).
+ * Empty = every run-up works.
  */
 export function validateRunUps(track: Track, stats: CarStats = BASE_STATS): string[] {
   const errors: string[] = [];
@@ -417,44 +463,56 @@ export function validateRunUps(track: Track, stats: CarStats = BASE_STATS): stri
   for (const r of track.recovery) {
     const hz = hazardsAhead(track, r);
     if (!hz) continue;
-    const p = pointAt(track, r);
-    const c: CarState = { x: p.x, y: p.y, h: p.h, vx: 0, vy: 0, seg: p.seg, wreck: 0, air: 0, fall: 0, boost: 0 };
-    const env = raceEnv(track);
-    let sPrev = r;
-    let ahead = 0; // distance driven forward from r
-    let tookOff = -1; // speed at the last take-off, -1 = none yet
-    let problem = "";
-    let ok = false;
-    for (let i = 0; i < RUN_UP_MAX_TICKS && !problem && !ok; i++) {
-      const wasAir = (c.air ?? 0) > 0;
-      const v0 = speedOf(c);
-      env.rt = i + 1; // as if the run started at GO
-      const ev = stepRaceCar(c, runUpInput(track, c), stats, env);
-      const q = queryTrackNear(track, c.x, c.y, c.seg);
-      let d = q.s - sPrev;
-      if (d > L / 2) d -= L;
-      else if (d < -L / 2) d += L;
-      ahead += d;
-      sPrev = q.s;
-      if (ev === "takeoff") tookOff = v0;
-      const jump = tookOff >= 0 ? ` (took off at ${tookOff.toFixed(0)} u/s)` : "";
-      if (ev === "fall") {
-        const why = !gapAt(track, q.s)
-          ? wasAir ? "lands outside the walls" : "falls into a hole"
-          : wasAir ? "lands short in a gap" : `rolls into a gap at ${v0.toFixed(0)} u/s (take-off needs ${MIN_TAKEOFF_SPEED})`;
-        problem = `${why} at s=${q.s.toFixed(1)}${wasAir ? jump : ""}`;
-      } else if (wasAir && (c.air ?? 0) === 0 && q.dist > track.def.halfWidth) {
-        problem = `lands off the asphalt at s=${q.s.toFixed(1)} (${q.dist.toFixed(1)} from the centerline)${jump}`;
-      } else if (ahead > hz.end + CAR_LENGTH && (c.air ?? 0) === 0) {
-        ok = true;
-      }
-    }
-    if (!ok) {
-      const what = `run-up from recovery point s=${r.toFixed(1)} (hazard at s=${((r + hz.start) % L).toFixed(1)})`;
-      errors.push(`${what}: ${problem || "never gets past it"}`);
+    const what = `run-up from recovery point s=${r.toFixed(1)} (hazard at s=${((r + hz.start) % L).toFixed(1)})`;
+    const problem = runUp(track, r, hz.end, stats);
+    if (problem) errors.push(`${what}: ${problem}`);
+    for (const w of track.water) {
+      const a = (((w.s0 - r) % L) + L) % L;
+      if (a >= hz.end) continue; // not in this run-up
+      const pool = tractionRect(w);
+      if (!(pool.s1 > pool.s0 && pool.lat1 > pool.lat0)) continue; // no area a car feels
+      const wet = runUp(track, r, hz.end, stats, pool);
+      if (wet) errors.push(`${what}, driven through the water ${w.s0.toFixed(1)}..${w.s1.toFixed(1)} at lat ${((pool.lat0 + pool.lat1) / 2).toFixed(1)}: ${wet}`);
     }
   }
   return errors;
+}
+
+/** One run-up from recovery point r past `end` (ahead of r): "" = gets past, else what goes wrong. */
+function runUp(track: Track, r: number, end: number, stats: CarStats, through?: { s0: number; s1: number; lat0: number; lat1: number }): string {
+  const L = track.length;
+  const p = pointAt(track, r);
+  const c: CarState = { x: p.x, y: p.y, h: p.h, vx: 0, vy: 0, seg: p.seg, wreck: 0, air: 0, fall: 0, boost: 0 };
+  const env = raceEnv(track);
+  let sPrev = r;
+  let ahead = 0; // distance driven forward from r
+  let tookOff = -1; // speed at the last take-off, -1 = none yet
+  let problem = "";
+  for (let i = 0; i < RUN_UP_MAX_TICKS && !problem; i++) {
+    const wasAir = (c.air ?? 0) > 0;
+    const v0 = speedOf(c);
+    env.rt = i + 1; // as if the run started at GO
+    const ev = stepRaceCar(c, runUpInput(track, c, through), stats, env);
+    const q = queryTrackNear(track, c.x, c.y, c.seg);
+    let d = q.s - sPrev;
+    if (d > L / 2) d -= L;
+    else if (d < -L / 2) d += L;
+    ahead += d;
+    sPrev = q.s;
+    if (ev === "takeoff") tookOff = v0;
+    const jump = tookOff >= 0 ? ` (took off at ${tookOff.toFixed(0)} u/s)` : "";
+    if (ev === "fall") {
+      const why = !gapAt(track, q.s)
+        ? wasAir ? "lands outside the walls" : "falls into a hole"
+        : wasAir ? "lands short in a gap" : `rolls into a gap at ${v0.toFixed(0)} u/s (take-off needs ${MIN_TAKEOFF_SPEED})`;
+      problem = `${why} at s=${q.s.toFixed(1)}${wasAir ? jump : ""}`;
+    } else if (wasAir && (c.air ?? 0) === 0 && q.dist > track.def.halfWidth) {
+      problem = `lands off the asphalt at s=${q.s.toFixed(1)} (${q.dist.toFixed(1)} from the centerline)${jump}`;
+    } else if (ahead > end + CAR_LENGTH && (c.air ?? 0) === 0) {
+      return "";
+    }
+  }
+  return problem || "never gets past it";
 }
 
 // ---- jumps at overspeed (M4-DRAFT/M4-CELLS, PLAN-M4 advisor change 7) -------------------

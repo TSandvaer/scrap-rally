@@ -3,7 +3,7 @@
 // reconciliation absorbs tiny floating-point differences between JS engines.
 
 import { BOOST_ACCEL, BOOST_TOP, DRAFT_DRAG_CUT } from "./catchup";
-import { queryTrackNear, type Track } from "./track";
+import { queryTrackNear, segDir, SURF_BELT, SURF_DIRT, SURF_WATER, surfaceAt, type PlacedTyres, type Track } from "./track";
 
 export const TICK_HZ = 60;
 export const DT = 1 / TICK_HZ;
@@ -68,6 +68,28 @@ const FULL_TURN_SPEED = 140; // below this speed steering is scaled down
 const WALL_BOUNCE = 0.35;
 const WALL_SCRAPE = 0.97;
 
+// Surfaces (M4-SURF, PLAN-M4.md 2.2, 2.4 and advisor change 4). A car is on one when its centre is
+// strictly inside the surface's rectangle (shared/track.ts Surface: a pool's or a dirt patch's
+// traction rectangle, a belt's declared one).
+// - Water (aquaplaning, one consistent model): every force along the car (throttle, brake, the
+//   coasting roll and the drag) times WATER_FORCE, so the car keeps the speed it came in with (the
+//   top speed is unchanged: a pool on a straight costs little); the sideways grip times the type's
+//   dirtGrip x WATER_GRIP_OF_DIRT (Sport 0.123, Racer 0.100, Truck 0.200: the car slides on along
+//   the way it came in) and the steering times WATER_TURN (a pool in a bend throws you wide).
+// - Dirt patch: the dirt verge's drag and grip, by car type (CarStats.dirtDrag, dirtGrip).
+// - Belt: grounded cars are moved its drift (vx, + = right of travel) each tick, beside the road
+//   direction at the car; velocity is not changed (the ground moves, not the car).
+export const WATER_FORCE = 0.35;
+export const WATER_GRIP_OF_DIRT = 1 / 3;
+export const WATER_TURN = 0.5;
+
+// Tyre mounds (M4-SURF, PLAN-M4.md 2.3): a static circle the car capsule bounces off. Full push-out;
+// the speed into it comes back out times TYRES_RESTITUTION and at least TYRES_MIN_OUT; the speed
+// along it times TYRES_TANGENT. Airborne cars pass over (only a driving step collides), no damage.
+export const TYRES_RESTITUTION = 0.8;
+export const TYRES_MIN_OUT = 90;
+export const TYRES_TANGENT = 0.9;
+
 export function cloneCar(c: CarState): CarState {
   return { x: c.x, y: c.y, h: c.h, vx: c.vx, vy: c.vy, seg: c.seg, wreck: c.wreck, air: c.air, fall: c.fall, boost: c.boost };
 }
@@ -93,19 +115,23 @@ export function stepCar(c: CarState, input: Input, stats: CarStats, track: Track
 
   const q = queryTrackNear(track, c.x, c.y, c.seg);
   c.seg = q.seg;
-  const onRoad = q.dist <= track.def.halfWidth;
+  // The surface under the car's centre (M4-SURF; null on a track without any: exactly as before).
+  const surf = surfaceAt(track, q.seg, q.s, q.lat);
+  const wet = surf !== null && surf.kind === SURF_WATER;
+  const onRoad = q.dist <= track.def.halfWidth && !(surf !== null && surf.kind === SURF_DIRT);
   const boosted = c.boost > 0;
   const accel = boosted ? stats.accel * BOOST_ACCEL : stats.accel;
-  let drag = (accel / (boosted ? stats.topSpeed * BOOST_TOP : stats.topSpeed)) * (onRoad ? 1 : stats.dirtDrag);
+  let drag = (accel / (boosted ? stats.topSpeed * BOOST_TOP : stats.topSpeed)) * (wet ? WATER_FORCE : onRoad ? 1 : stats.dirtDrag);
   if (draft > 0 && !boosted) drag *= 1 - DRAFT_DRAG_CUT * draft;
-  const grip = stats.grip * (onRoad ? 1 : stats.dirtGrip);
+  const grip = stats.grip * (wet ? stats.dirtGrip * WATER_GRIP_OF_DIRT : onRoad ? 1 : stats.dirtGrip);
+  const force = wet ? WATER_FORCE : 1; // x 1 is exact: dry steps are the same arithmetic as before
 
   if (throttle > 0) {
-    vf += (vf < 0 ? BRAKE : accel) * throttle * DT;
+    vf += (vf < 0 ? BRAKE : accel) * force * throttle * DT;
   } else if (throttle < 0) {
-    vf -= (vf > 0 ? BRAKE : accel * REVERSE_FACTOR) * -throttle * DT;
+    vf -= (vf > 0 ? BRAKE : accel * REVERSE_FACTOR) * force * -throttle * DT;
   } else {
-    const roll = ROLL * DT;
+    const roll = ROLL * force * DT;
     vf = Math.abs(vf) <= roll ? 0 : vf - Math.sign(vf) * roll;
   }
   vf -= vf * drag * DT;
@@ -116,12 +142,62 @@ export function stepCar(c: CarState, input: Input, stats: CarStats, track: Track
   c.vx = vf * cos - vl * sin;
   c.vy = vf * sin + vl * cos;
   const turnScale = clamp(vf / FULL_TURN_SPEED, -1, 1);
-  c.h = wrapAngle(c.h + steer * stats.turn * turnScale * DT);
+  c.h = wrapAngle(c.h + steer * (wet ? stats.turn * WATER_TURN : stats.turn) * turnScale * DT);
 
   c.x += c.vx * DT;
   c.y += c.vy * DT;
+  if (surf !== null && surf.kind === SURF_BELT) {
+    // The belt's drift, toward the right of travel at the car (a fixed move each tick).
+    const d = segDir(track, q.seg);
+    c.x -= d.y * surf.vx * DT;
+    c.y += d.x * surf.vx * DT;
+  }
+  const tyres = track.tyresAt[q.seg];
+  if (tyres !== undefined && tyres.length > 0) collideTyres(c, tyres);
 
   collideWalls(c, track);
+}
+
+/**
+ * Bounce a driving car's capsule off the tyre mounds it overlaps (M4-SURF): pushed straight out of
+ * each (the closest point of its axis to the mound's centre, the normal from the centre to it); a
+ * car moving into it, or out of it slower than TYRES_MIN_OUT, leaves along the normal at
+ * TYRES_RESTITUTION x the speed it came in with, at least TYRES_MIN_OUT, and keeps TYRES_TANGENT of
+ * its speed along it. Returns the fastest speed into a mound this tick (0 = no contact).
+ */
+export function collideTyres(c: CarState, tyres: readonly PlacedTyres[]): number {
+  let hit = 0;
+  for (let i = 0; i < tyres.length; i++) {
+    const m = tyres[i];
+    const ux = Math.cos(c.h), uy = Math.sin(c.h);
+    const dx = m.x - c.x, dy = m.y - c.y;
+    const reach = m.r + CAPSULE_R;
+    if (dx * dx + dy * dy >= (reach + CAPSULE_HALF) * (reach + CAPSULE_HALF)) continue;
+    const t = clamp(dx * ux + dy * uy, -CAPSULE_HALF, CAPSULE_HALF);
+    let nx = c.x + ux * t - m.x, ny = c.y + uy * t - m.y; // from the mound to the car's axis
+    const d = Math.hypot(nx, ny);
+    if (d >= reach) continue;
+    if (d > 1e-6) {
+      nx /= d;
+      ny /= d;
+    } else {
+      // The mound's centre on the car's axis: out from the centre, or sideways (left) on it.
+      const dc = Math.hypot(dx, dy);
+      nx = dc > 1e-6 ? -dx / dc : uy;
+      ny = dc > 1e-6 ? -dy / dc : -ux;
+    }
+    c.x += nx * (reach - d);
+    c.y += ny * (reach - d);
+    const vn = c.vx * nx + c.vy * ny;
+    if (vn < TYRES_MIN_OUT) {
+      const out = Math.max(-TYRES_RESTITUTION * vn, TYRES_MIN_OUT);
+      const tx = c.vx - vn * nx, ty = c.vy - vn * ny;
+      c.vx = tx * TYRES_TANGENT + nx * out;
+      c.vy = ty * TYRES_TANGENT + ny * out;
+      if (-vn > hit) hit = -vn;
+    }
+  }
+  return hit;
 }
 
 /** How far from the centerline a car's centre may go: its side touches the wall there. */

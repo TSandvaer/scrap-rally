@@ -26,6 +26,7 @@ import { statsFor, type Levels } from "../shared/shop";
 import { BUILTIN_SOUND, DEFAULT_SONG_ID, isSongChoice, type RoomSound } from "../shared/sound";
 import { queryTrackNear, type Track } from "../shared/track";
 import { DEFAULT_TRACK_ID, findTrack, trackById } from "../shared/tracks";
+import { testTrack } from "../shared/testtracks";
 import {
   airHeight,
   BTN_RIVET,
@@ -533,12 +534,14 @@ export class Game {
   /**
    * Race on the room's track from now on. Only changes in the lobby (no cars), but a car
    * predicted on the old track is dropped anyway: the next snapshot seeds it again. An id
-   * this build does not know (client older than the server) falls back to the default.
+   * this build does not know (client older than the server) falls back to the default. A preview
+   * test track's id (shared/testtracks.ts) is one the server sends only with its dev flag on
+   * (server/room.ts devTrackId, M4-SURF): the client builds it as any other.
    */
   private useTrack(id: string): void {
     if (id === this.trackId) return;
     this.trackId = id;
-    this.track = findTrack(id) ?? trackById(DEFAULT_TRACK_ID);
+    this.track = findTrack(id) ?? testTrack(id) ?? trackById(DEFAULT_TRACK_ID);
     this.resetOwnCar();
   }
 
