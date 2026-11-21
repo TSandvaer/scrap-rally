@@ -15,7 +15,8 @@
 // the other (a quick look: later cells then run on warm caches; the runner loads one cell
 // per page). &scene=S6 is a cell of its own, on the Preview Yard test track whatever &track
 // says (M4-WORLD: the road's furniture; it is not among the cells a page runs without &scene,
-// and the gate does not judge it: tools/debug/world-bench.ts holds it against S2). &frames=<n> &warm=<n> &over=<ms> &canvas=sw|default|gpu &readback=0|1
+// and the gate does not judge it: tools/debug/world-bench.ts holds it against S2). &track may
+// also name a test track (shared/testtracks.ts) for S4 under metric A: the lap needs no spots. &frames=<n> &warm=<n> &over=<ms> &canvas=sw|default|gpu &readback=0|1
 // &panel=<element id> (metric B: show that DOM panel over the canvas). &hold=<frame> draws
 // that one frame of the cell and stops (no timing): what a bench scene looks like.
 // Results: window.scrapBench and the panel on screen.
@@ -752,7 +753,8 @@ export async function runBench(view: HTMLCanvasElement, params: URLSearchParams)
     const yard = one === YARD_SCENE;
     if (one && !yard && !(SCENES as readonly string[]).includes(one)) throw new Error(`unknown scene ${one}`);
     const scenes: SceneId[] = one ? [one] : metric === "A" ? [...SCENES] : [metric === "B" ? "S4" : "S3"];
-    const tracks = yard ? [testTrack(YARD_TRACK)!] : params.has("track") ? [trackById(params.get("track")!)] : trackList().map((e) => trackById(e.id));
+    const named = params.get("track");
+    const tracks = yard ? [testTrack(YARD_TRACK)!] : named ? [testTrack(named) ?? trackById(named)] : trackList().map((e) => trackById(e.id));
     const hold = num("hold");
     if (hold !== null) {
       const frames = framesFor(scenes[0], tracks[0], opts);
@@ -771,7 +773,7 @@ export async function runBench(view: HTMLCanvasElement, params: URLSearchParams)
       return;
     }
     for (const track of tracks) {
-      if (!yard && !SPOTS[track.def.id]) throw new Error(`no bench spots for track ${track.def.id}`);
+      if (!yard && !SPOTS[track.def.id] && !(one === "S4" && metric === "A")) throw new Error(`no bench spots for track ${track.def.id}`);
       for (const scene of scenes) {
         show();
         await yieldToPage();

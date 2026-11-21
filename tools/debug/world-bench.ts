@@ -17,6 +17,9 @@
 //   per-run ratios (the rule of the gate, PLAN-GFX.md "The gate").
 // - The budget: S6 at or below 1.10 times S2. S2 is three cells; the verdict is given against
 //   each, and the headline against the cheapest of them (the strictest reading).
+// - As information (no budget is set for it): S4, the lap at 430 u/s, on Preview Yard beside
+//   the three shipped tracks. A lap is where tiles are baked, so it shows what baking the
+//   furniture costs a frame at its worst (the p95, the p99 and the frames over 4 ms).
 // It takes the benchmark's machine-wide lock (scrap-rally-bench.lock in the temp directory), so
 // it never runs beside `npm run bench`, and waits while a live benchmark holds it.
 // Exit code 0 within the budget, 1 over it, 2 without a verdict (--quick, or fewer than 5 runs).
@@ -142,6 +145,7 @@ interface CellA {
   scene: string;
   track: string;
   n: number;
+  mean: number;
   p50: number;
   p95: number;
   p99: number;
@@ -187,11 +191,15 @@ async function main(): Promise<number> {
     { scene: "S2", track: "crusher-run" },
     { scene: "S2", track: "overpass-knot" },
     { scene: "S6", track: "preview-yard" },
+    { scene: "S4", track: "rust-bowl" },
+    { scene: "S4", track: "crusher-run" },
+    { scene: "S4", track: "overpass-knot" },
+    { scene: "S4", track: "preview-yard" },
   ];
   const got: CellA[][] = cells.map(() => []);
   let isolated = true, ua = "";
   for (let r = 0; r < RUNS; r++) {
-    const order = r % 2 ? [3, 2, 1, 0] : [0, 1, 2, 3];
+    const order = r % 2 ? [3, 2, 1, 0, 7, 6, 5, 4] : [0, 1, 2, 3, 4, 5, 6, 7];
     for (const k of order) {
       const o = await load(url, cells[k].scene, cells[k].track);
       got[k].push(o.cell);
@@ -203,21 +211,22 @@ async function main(): Promise<number> {
   const f = (x: number) => x.toFixed(3);
   console.log(`# S6 against S2 (${new Date().toISOString().slice(0, 16).replace("T", " ")} UTC)\n`);
   console.log(`Metric A at 1280x720 (CPU raster: every frame once, a 1x1 read-back after each, 300 warm-up frames), ${RUNS} run${RUNS > 1 ? "s" : ""}, one cell a page load, the order turned round from run to run. ms a frame.${isolated ? "" : " WARNING: the page was not cross-origin isolated (a 100 us timer)."}\n`);
-  console.log("| cell | frames | median (of the runs' medians) | spread (max - min) | p95 | p99 | frames over 4 ms | checksums |");
-  console.log("|---|---:|---:|---:|---:|---:|---:|---|");
+  console.log("| cell | frames | median (of the runs' medians) | spread (max - min) | mean | p95 | p99 | frames over 4 ms | new Renderer() | first frame, cold | checksums |");
+  console.log("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|");
   cells.forEach((c, k) => {
+    if (k === 4) console.log("| *as information: the lap* | | | | | | | | | | |");
     const p50 = got[k].map((x) => x.p50);
-    console.log(`| ${c.scene} ${c.track} | ${got[k][0].n} | ${f(median(p50))} | ${f(Math.max(...p50) - Math.min(...p50))} | ${f(median(got[k].map((x) => x.p95)))} | ${f(median(got[k].map((x) => x.p99)))} | ${median(got[k].map((x) => x.over))} | ${[...new Set(got[k].map((x) => x.checksum))].join(" ")} |`);
+    console.log(`| ${c.scene} ${c.track} | ${got[k][0].n} | ${f(median(p50))} | ${f(Math.max(...p50) - Math.min(...p50))} | ${f(median(got[k].map((x) => x.mean)))} | ${f(median(got[k].map((x) => x.p95)))} | ${f(median(got[k].map((x) => x.p99)))} | ${median(got[k].map((x) => x.over))} | ${f(median(got[k].map((x) => x.ctorMs)))} | ${f(median(got[k].map((x) => x.firstMs)))} | ${[...new Set(got[k].map((x) => x.checksum))].join(" ")} |`);
   });
-  console.log(`\nS6's first frame on a cold page: ${f(median(got[3].map((x) => x.firstMs)))} ms; new Renderer() of Preview Yard: ${f(median(got[3].map((x) => x.ctorMs)))} ms (the obstacle sheet is painted there).\n`);
-  console.log("| S6 against | ratio of the medians, run by run | median ratio | budget 1.10 |");
-  console.log("|---|---|---:|---|");
+  console.log("\nA median is a whole number of the timer's steps (5 us): a ratio of two of them moves in jumps of about 0.08 here. The mean of a cell's frames is finer and its ratio is given beside the median's, as information: S6 cuts between its three views at frames 200 and 400, and the views together need more tiles than the pool of 24 holds, so each cut bakes what the pool gave away at once (the frame over 4 ms); S2 never moves its camera.\n");
+  console.log("| S6 against | ratio of the medians, run by run | median ratio | budget 1.10 | ratio of the means, run by run | median |");
+  console.log("|---|---|---:|---|---|---:|");
   let worst = 0;
   for (let k = 0; k < 3; k++) {
-    const ratios = got[3].map((x, r) => x.p50 / got[k][r].p50);
+    const ratios = got[3].map((x, r) => x.p50 / got[k][r].p50), means = got[3].map((x, r) => x.mean / got[k][r].mean);
     const m = median(ratios);
     worst = Math.max(worst, m);
-    console.log(`| S2 ${cells[k].track} | ${ratios.map(f).join(" ")} | ${f(m)} | ${m <= BUDGET ? "within" : "OVER"} |`);
+    console.log(`| S2 ${cells[k].track} | ${ratios.map(f).join(" ")} | ${f(m)} | ${m <= BUDGET ? "within" : "OVER"} | ${means.map(f).join(" ")} | ${f(median(means))} |`);
   }
   console.log(`\n${ua}`);
   if (RUNS < 5) {
