@@ -5,6 +5,8 @@
 // 1 pixel). Nothing on it is drawn by this page but the headings. See the runner.
 
 import { P } from "../../../client/gfx/palette";
+import { PUDDLE_TRACTION_INSET, tractionRect, type PuddleRect } from "../../../client/gfx/puddle-shape";
+import { ZOOM } from "../../../client/gfx/world";
 import { Renderer, VIEW_H, VIEW_W, type CarView, type CellView, type WorldFx } from "../../../client/render";
 import { testTrack } from "../../../shared/testtracks";
 import { barrelLat, pointAt, type Track } from "../../../shared/track";
@@ -30,6 +32,11 @@ interface Shot {
   zoom?: number;
   /** No tile at the game's scale beside it (a whole frame has one of its own). */
   alone?: boolean;
+  /**
+   * A third tile, enlarged again, with these puddles' rectangles drawn over it by this page:
+   * the declared one dotted, the traction one (tractionRect) as a line.
+   */
+  rects?: PuddleRect[];
 }
 
 const yard = sheetYard(), preview = testTrack("preview-yard")!;
@@ -163,16 +170,70 @@ function sections(): { title: string; note: string; shots: Shot[] }[] {
   ];
 }
 
+/** The follow-up sheet (?only=puddles): the pools and the dirt patches alone, on straights and in bends, each with its traction rectangle. */
+function puddles(): { title: string; note: string; shots: Shot[] }[] {
+  const of = (track: Track, kind: "water" | "dirt", s0: number): PuddleRect => {
+    const f = (kind === "water" ? track.water : track.dirt).find((w) => w.s0 === s0);
+    if (!f) throw new Error(`no ${kind} at ${s0}`);
+    return f;
+  };
+  const shot = (label: string, track: Track, kind: "water" | "dirt", s0: number, w: number, h: number, cars: CarView[] = []): Shot => {
+    const f = of(track, kind, s0);
+    const size = `${f.s1 - f.s0} x ${f.lat1 - f.lat0}`;
+    return { label: `${label} (${size})`, track, cam: spot(track, (f.s0 + f.s1) / 2, (f.lat0 + f.lat1) / 2), w, h, cars, rects: [f] };
+  };
+  return [
+    {
+      title: "WATER, ON A STRAIGHT",
+      note: `A pool is drawn as a puddle inside its declared rectangle (dotted): round corners, an edge in lobes, a murky blue-grey that nothing else has. What a car feels is the rectangle ${PUDDLE_TRACTION_INSET} units in on every side (the line): all of it is under water. Third tile: the same, with the two rectangles drawn over it.`,
+      shots: [
+        shot("on asphalt", yard, "water", 1170, 150, 110),
+        shot("right across the road, Preview Yard", preview, "water", 1450, 180, 150, [car(preview, 0, 1500, -20)]),
+        shot("over the kerb onto the verge", yard, "water", 1310, 150, 110),
+        shot("a flooded lane, Preview Yard", preview, "water", 6000, 430, 110, [car(preview, 1, 6300, -80)]),
+      ],
+    },
+    {
+      title: "WATER, IN A BEND",
+      note: "",
+      shots: [
+        shot("the inside of a bend, Preview Yard", preview, "water", 3800, 150, 270),
+        shot("the inside of a tight bend", yard, "water", 2760, 170, 150),
+        shot("right across a tight bend", yard, "water", 4540, 190, 180, [car(yard, 3, 4600, 20)]),
+      ],
+    },
+    {
+      title: "DIRT, ON A STRAIGHT",
+      note: `A dirt patch is a puddle of the yard's earth, drawn the same way; inside the line the ground is loose.`,
+      shots: [
+        shot("right across the road (a tyre mound on it)", yard, "dirt", 640, 160, 150),
+        shot("half the road (a row of barrels crosses it)", yard, "dirt", 1010, 150, 110),
+        shot("a dirt lane, Preview Yard", preview, "dirt", 6000, 640, 110, [car(preview, 2, 6400, 76, { car: "truck" })]),
+      ],
+    },
+    {
+      title: "DIRT, IN A BEND",
+      note: "",
+      shots: [
+        shot("the outside of a tight bend", yard, "dirt", 2960, 180, 170),
+        shot("right across a tight bend", yard, "dirt", 4780, 190, 200, [car(yard, 4, 4860, -20, { car: "racer" })]),
+        shot("in a bend (the ramp truck on it)", yard, "dirt", 3380, 150, 200),
+      ],
+    },
+  ];
+}
+
 function main(): void {
   const view = document.createElement("canvas");
   const renderers = new Map<Track, Renderer>();
-  const list = sections();
+  const only = new URLSearchParams(location.search).get("only") === "puddles";
+  const list = only ? puddles() : sections();
   // Lay the tiles out: a heading a section, the tiles left to right, a new row when one does not fit.
   const places: { shot: Shot; x: number; y: number }[] = [];
   const heads: { title: string; lines: string[]; y: number }[] = [];
   const size = (shot: Shot) => {
     const z = shot.zoom ?? 2;
-    return { z, w: shot.w * z + (shot.alone ? 0 : GAP / 2 + shot.w), h: shot.h * z };
+    return { z, w: shot.w * z + (shot.alone ? 0 : GAP / 2 + shot.w) + (shot.rects ? GAP / 2 + shot.w * z : 0), h: shot.h * z };
   };
   // A note is broken into lines that fit the sheet.
   const wrap = (note: string): string[] => {
@@ -212,10 +273,10 @@ function main(): void {
   g.textBaseline = "alphabetic";
   g.font = `bold 18px ${MONO}`;
   g.fillStyle = P.bone2;
-  g.fillText("SCRAP RALLY  M4-WORLD: the road's furniture", 20, 28);
+  g.fillText(only ? "SCRAP RALLY  M4-WORLD: puddles (follow-up sheet)" : "SCRAP RALLY  M4-WORLD: the road's furniture", 20, 28);
   g.font = `12px ${MONO}`;
   g.fillStyle = P.bone0;
-  g.fillText("every tile: a piece of a frame the game's renderer drew, enlarged (2x; a barrel's turn 4x), and beside it at the game's own scale", 470, 27);
+  g.fillText(only ? "every tile: a piece of a frame the game's renderer drew: 2x, the game's own scale, and 2x with the rectangles over it" : "every tile: a piece of a frame the game's renderer drew, enlarged (2x; a barrel's turn 4x), and beside it at the game's own scale", only ? 530 : 470, 27);
   for (const h of heads) {
     g.font = `bold 14px ${MONO}`;
     g.fillStyle = P.rust3;
@@ -237,6 +298,26 @@ function main(): void {
     const sx = Math.round(VIEW_W / 2 - shot.w / 2), sy = Math.round(VIEW_H / 2 - shot.h / 2);
     g.drawImage(view, sx, sy, shot.w, shot.h, x, top, shot.w * z, shot.h * z);
     if (!shot.alone) g.drawImage(view, sx, sy, shot.w, shot.h, x + shot.w * z + GAP / 2, top, shot.w, shot.h);
+    if (shot.rects) {
+      // The third tile, and over it the rectangles: this page's own drawing, nothing of the game's.
+      const left = x + shot.w * z + GAP + shot.w, ox = Math.round(shot.cam.x * ZOOM) - VIEW_W / 2 + sx, oy = Math.round(shot.cam.y * ZOOM) - VIEW_H / 2 + sy;
+      g.drawImage(view, sx, sy, shot.w, shot.h, left, top, shot.w * z, shot.h * z);
+      const dot = (s: number, lat: number, colour: string, size: number) => {
+        const q = spot(shot.track, s, lat);
+        const px = q.x * ZOOM - ox, py = q.y * ZOOM - oy;
+        if (px < 0 || py < 0 || px >= shot.w || py >= shot.h) return;
+        g.fillStyle = colour;
+        g.fillRect(Math.round(left + px * z - size / 2), Math.round(top + py * z - size / 2), size, size);
+      };
+      const outline = (r: PuddleRect, colour: string, step: number, size: number) => {
+        for (let s = r.s0; s <= r.s1; s += step) for (const lat of [r.lat0, r.lat1]) dot(s, lat, colour, size);
+        for (let lat = r.lat0; lat <= r.lat1; lat += step) for (const s of [r.s0, r.s1]) dot(s, lat, colour, size);
+      };
+      for (const r of shot.rects) {
+        outline(r, P.bone2, 5, 2);
+        outline(tractionRect(r), P.red, 0.5, 2);
+      }
+    }
     g.font = `12px ${MONO}`;
     g.fillStyle = P.bone1;
     g.fillText(shot.label, x, top + shot.h * z + 13);

@@ -3,6 +3,8 @@
 //
 //   npx tsx tools/debug/world-sheet.ts                 the contact sheet -> tmp/m4-world/contact-sheet.png
 //   npx tsx tools/debug/world-sheet.ts --out file.png  ... somewhere else
+//   npx tsx tools/debug/world-sheet.ts --puddles       the pools and the dirt patches alone, each with its declared and its
+//                                                      traction rectangle drawn over a copy -> tmp/m4-world/puddles-sheet.png
 //   npx tsx tools/debug/world-sheet.ts --sprites       the obstacle sheet alone, large -> tmp/m4-world/sprites.png
 //   npx tsx tools/debug/world-sheet.ts --check         no picture: the checks below, exit code 1 if one fails
 //
@@ -230,7 +232,7 @@ async function ab(more: string[]): Promise<string> {
   return stdout.trim();
 }
 
-async function contact(out: string): Promise<void> {
+async function contact(out: string, query = ""): Promise<void> {
   const dist = mkdtempSync(path.join(tmpdir(), "world-sheet-dist-"));
   cleanups.push(() => rmSync(dist, { recursive: true, force: true }));
   console.error("building the sheet's page ...");
@@ -238,7 +240,7 @@ async function contact(out: string): Promise<void> {
   const url = await serve(dist);
   cleanups.push(() => ab(["close"]));
   await ab(["--args", CHROME_ARGS, "open", "about:blank"]);
-  await ab(["open", `${url}/`]);
+  await ab(["open", `${url}/${query}`]);
   const deadline = Date.now() + 120_000;
   while ((await ab(["eval", "window.worldSheet && window.worldSheet.done ? 1 : 0"])) !== "1") {
     if (Date.now() > deadline) throw new Error("the sheet's page did not finish");
@@ -258,7 +260,8 @@ if (args.includes("--check")) {
 } else {
   for (const sig of ["SIGINT", "SIGTERM"] as const) process.on(sig, () => void cleanup().then(() => process.exit(130)));
   try {
-    await contact(arg("--out") ?? path.join(ROOT, "tmp", "m4-world", "contact-sheet.png"));
+    if (args.includes("--puddles")) await contact(arg("--out") ?? path.join(ROOT, "tmp", "m4-world", "puddles-sheet.png"), "?only=puddles");
+    else await contact(arg("--out") ?? path.join(ROOT, "tmp", "m4-world", "contact-sheet.png"));
   } finally {
     await cleanup();
   }

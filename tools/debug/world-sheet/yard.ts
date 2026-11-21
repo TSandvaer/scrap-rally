@@ -28,6 +28,9 @@ export const SHEET_YARD: TrackDef = {
     // A belt on the asphalt; the truck on the asphalt.
     { k: "belt", s0: 1470, s1: 1600, lat0: -64, lat1: 64, vx: 60 },
     { k: "truck", s: 1660, lat: -26, len: 110 },
+    // The top right corner (a tight bend): a pool on its inside and a dirt patch on its outside.
+    { k: "water", s0: 2760, s1: 2900, lat0: -10, lat1: 64 },
+    { k: "dirt", s0: 2960, s1: 3120, lat0: -64, lat1: 24 },
     // The right-hand side (a bend, heading down): the truck on dirt and across the kerb, a belt
     // over the kerb, a press right across the road.
     { k: "dirt", s0: 3380, s1: 3570, lat0: -16, lat1: 64 },
@@ -35,6 +38,9 @@ export const SHEET_YARD: TrackDef = {
     { k: "truck", s: 3720, lat: 52, len: 90 },
     { k: "belt", s0: 3950, s1: 4080, lat0: -10, lat1: 104, vx: -60 },
     { k: "press", s: 4300, lat0: -64, lat1: 64, period: 180, down: 60 },
+    // The bottom right corner (a tight bend): a pool and a dirt patch right across the road.
+    { k: "water", s0: 4540, s1: 4700, lat0: -64, lat1: 64 },
+    { k: "dirt", s0: 4780, s1: 4960, lat0: -64, lat1: 64 },
     // The bottom straight (heading left): a split round an island, a flooded lane and a dirt
     // lane; a press on the dirt, and one that reaches over the kerb.
     { k: "widen", s0: 5750, s1: 7050, left: 60, right: 60 },
