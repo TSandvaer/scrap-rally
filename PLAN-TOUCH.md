@@ -160,3 +160,45 @@ the phone, live, using the tuning panel; then the chosen values become the defau
    `scripts/sim-test.ts:10027`; assert a fractional steer together with throttle 1 from one finger.
 Adopted suggestions: a touch landing within R of a screen edge shifts the centre inward so full lock stays reachable; the knob shows
 the throttle state (gas / brake / neutral colour) since the thumb hides the car. Later: left-handed swap. No haptics (absent on iOS).
+
+## Addendum 2026-11-22 (after the TOUCH-4 phone test): TOUCH-5, point to steer — PENDING (Fable review, then the user's approval)
+
+**Why.** User 2026-11-22, live b1a62a7 (stick v2: lock 0.9, curve 3): "It's still to hard on the phone I constantly oversteer".
+Two rounds of numbers (TOUCH-3 radius, TOUCH-4 lock/curve) did not fix it. Cause in the code: the stick's sideways offset is a
+turn RATE (`shared/physics.ts:144-145`: `c.h += steer * turn * turnScale * DT`, turn 3.1-3.45 rad/s, about 180°/s at full lock),
+and the camera never rotates (`client/render.ts` only translates). Any off-centre thumb keeps the car rotating, and with the car
+heading down the screen, stick-right turns it to the screen's left. User choice (popup): **point to steer**, with an A/B switch
+in the `?debug=1` panel.
+
+**Design.**
+1. **Point mode.** The stick's direction on screen is the direction the car should face (camera north-up, so screen axes = world
+   axes; the worker verifies the mapping incl. ZOOM and y-down against `Math.cos/sin(c.h)` in `shared/physics.ts:110`). Past a dead
+   zone (`pointDead` x R) the stick gives a target angle θ = atan2(dy, dx); inside it: steer 0 and throttle 0 (coast).
+2. **Steer = a heading hold:** `err = wrapAngle(θ - h)` with h the own predicted car's heading before the step (`game.car`, read at
+   `client/main.ts:883` where the controls are sampled once per 60 Hz step); `steer = clamp(err / aimFull, -1, 1)`, aimFull = the
+   error at which steer saturates (default ~35°); hundredths as today. As the car comes round, steer falls to 0, so it settles
+   without the overshoot of a held rate (per tick the error shrinks by turn·turnScale·DT/aimFull ≈ 0.1 of itself: no discrete
+   overshoot).
+3. **Throttle:** pushed past the dead zone = gas 1. If |err| > `brakeAngle` (default ~110°) and the forward speed vf > a brake
+   speed (~150 u/s): brake (-1) so the car slows into the tight turn. If |err| > brakeAngle and the car is nearly stopped (nose in a
+   wall): reverse (-1) with the steer sign flipped (turnScale is negative in reverse) so the nose still swings toward θ. Thumb up =
+   coast, as today. At rest `turnScale = vf/140` gives no turning, so from rest point mode gives gas in any direction.
+4. **A/B.** `StickParams` gains `mode` ("point" | "rate"), `pointDead`, `aimFull`, `brakeAngle`. Default mode = **point** for every
+   touch player (rate is the known-bad one); the TUNE panel gets a Mode switch and sliders for the new values; values saved before
+   keep working (missing keys = defaults; stored values apply only under ?debug=1, TOUCH-2 advisor change 6). Rate mode stays
+   exactly as TOUCH-4 (its tests stay).
+5. **Stick centre near an edge:** in point mode every direction must reach past the dead zone, so the centre keeps
+   pointDead·R + EDGE_PX from each edge.
+6. **Knob:** drawn as today; its gas/brake/neutral colour follows the point-mode throttle.
+7. **Unchanged:** keyboard, bots, server, protocol, netcode (the steer is computed once per step on the client, stored in the cmd,
+   sent and replayed as stored like any steer value), FIRE/MINE, the show/hide rules.
+
+**Ticket TOUCH-5 (Opus)** owns `client/input.ts`, `client/touchtune.ts`, `client/main.ts` (only to hand the pad the own predicted
+car's heading and forward speed at the step), an appended sim-test section and `tools/debug/touch-drive.ts`. NOT `client/game.ts`,
+`shared/*`, `server/*` (M4-SURF-2 runs in parallel there). Accept: pure-function tests (aligned -> 0, saturates at aimFull,
+symmetric, wraps at ±π, dead-zone coast, brake and reverse rules); a closed-loop sim per car type (targets 90° and 170° off: the
+heading settles within a stated number of ticks with overshoot < 5°; a scripted pointer that follows the track direction drives a
+lap of Rust Bowl with wall hits under a stated bound); touch-drive drives in point mode at 390x844 and 844x390; rate mode
+unchanged (TOUCH-4 tests pass); the panel switch and persistence; check, test twice, build. Taste gate: the user on the phone,
+live (push + Manual Deploy), A/B with the panel switch; the chosen values become the defaults; then the user decides whether rate
+mode stays as an option.
