@@ -29,10 +29,15 @@
 // - The catch-up visuals (PLAN-M4.md 2.5, 2.8; M4-FX), each drawn only when the frame names it:
 //   the lightning cells (WorldFx.cells), the flames of a boosting car (CarView.boost) and the
 //   streaks of air past a car in a slipstream (CarView.draft). See "Catch-up" below.
+// - What moves on a road (M4-WORLD: rolling barrels, a crusher press, a belt's arrows) is drawn
+//   by gfx/obstacles.ts at the race tick the frame names (WorldFx.rt), here in the order of
+//   things: on the road under the cars, and a press's slab that is down over the cars on the
+//   ground and under those in the air. Without a tick none of it is drawn.
 
 import type { Track } from "../../shared/track";
 import { MINE_BLINK_FAST_TICKS } from "../../shared/weapons";
 import type { CarView, DrawPose, WorldFx } from "../render";
+import { Obstacles } from "./obstacles";
 import { P } from "./palette";
 import { BLAST_FRAMES, BURNT, carSheet, catchSheet, CELL, CELL_FRAMES, CX_AIR, CX_AIR_GONE, CX_GONE, CX_GROUND, CX_SHADE, DENTED, FLAME, FLAME_AT, FLAME_COLS, FLAME_FRAMES, FLAME_HEADINGS, FLAME_LOW, FX_BLAST, FX_COLS, FX_MINE, FX_PUFF, FX_SPARK, HEADING_STEP, HEADINGS, lookOf, RACER, SHADOW_ALPHA, shadeSheet, sharedSheets, SPARK_FRAMES, SPARK_KINDS, spriteFrame, spritesFor, WHOLE, type SharedSheets } from "./sprites";
 import { MARK, marksCleared, scorch, skid, VIEW_H, VIEW_W, ZOOM } from "./world";
@@ -249,6 +254,21 @@ function nearTrack(track: Track, from: number, count: number): number {
   return seg;
 }
 
+/**
+ * On a widened road (a split's): F[QDIST], the distance of (F[QX], F[QY]) from the centreline
+ * at segment `seg`, less how much wider the road is there on the point's side. What lies
+ * halfWidth out is then the road's edge again, as on a road that is not widened.
+ */
+function widened(track: Track, seg: number): void {
+  const pts = track.pts, n = pts.length, next = seg + 1 < n ? seg + 1 : 0;
+  const a = pts[seg], b = pts[next];
+  const ex = b.x - a.x, ey = b.y - a.y;
+  let t = ((F[QX] - a.x) * ex + (F[QY] - a.y) * ey) / (ex * ex + ey * ey || 1);
+  t = t < 0 ? 0 : t > 1 ? 1 : t;
+  const half = ex * (F[QY] - a.y) - ey * (F[QX] - a.x) < 0 ? track.halfL : track.halfR; // left of travel, or right
+  F[QDIST] -= half[seg] + (half[next] - half[seg]) * t - track.def.halfWidth;
+}
+
 export class Actors {
   private sheets: SharedSheets | null = null;
   private frameNo = 0;
@@ -306,6 +326,8 @@ export class Actors {
   private dustNext = 0;
   private dustLive = 0; // a count that is never too low: 0 = nothing to step or draw
   private readonly rng = new Uint32Array(1);
+  private readonly moving: Obstacles; // what moves on the road (barrels, presses, a belt's arrows)
+  private readonly wide: boolean; // the road is widened somewhere: its edge is not everywhere halfWidth out
 
   constructor(
     private readonly ctx: CanvasRenderingContext2D,
@@ -313,6 +335,8 @@ export class Actors {
   ) {
     spritesFor(ctx);
     this.rng[0] = 0x9e3779b9;
+    this.moving = new Obstacles(ctx, track);
+    this.wide = track.widens.length > 0;
   }
 
   /**
@@ -386,6 +410,11 @@ export class Actors {
     // The lightning cells on the ground lie there too.
     const cells = fx.cells;
     if (cells) this.cells(cells, fx.nCells ?? cells.length, ox, oy, 0);
+    // What moves on the road, at the frame's race tick (a whole number of ticks): a belt's
+    // arrows, a press's shadow, the barrels.
+    const rt = fx.rt;
+    const tick = rt === undefined ? -1 : Math.floor(rt) | 0;
+    if (rt !== undefined) this.moving.under(tick, ox, oy);
     // Falling cars sink below the road (drawn first, no shadow); airborne cars fly above
     // everything (drawn last, lowest first) and their shadows do land on other cars.
     for (let i = 0; i < n; i++) if (kind[i] === FALLING) this.car(cars[i], i);
@@ -399,6 +428,8 @@ export class Actors {
     if (this.boosting) for (let i = 0; i < n; i++) if (kind[i] === GROUND) this.flames(cars[i], i);
     for (let i = 0; i < n; i++) if (kind[i] === GROUND) this.car(cars[i], i);
     for (let i = 0; i < n; i++) if (cars[i].wreck) this.smoke(cars[i], ox, oy);
+    // A press that is down: over the cars on the ground (those in the air are drawn after it).
+    if (rt !== undefined) this.moving.over(tick, ox, oy);
     this.shots(fx, ox, oy);
     // The marks were cleared since the frame before: the blasts remembered are forgotten, and
     // those of the race before, still burning or about to be shown, will leave nothing (QUIET).
@@ -604,8 +635,15 @@ export class Actors {
           F[QX] = c.x;
           F[QY] = c.y;
           let seg = this.seg[s] < 0 ? nearTrack(track, 0, track.pts.length) : nearTrack(track, this.seg[s] - 6, 13);
+          // A widened road: the distance from where its edge would be without the widening. Before
+          // the test below: the outer verge of a widened road lies further from the centreline than
+          // a plain road's wall, and a car there is where it was (tools/debug/verge-scan.ts).
+          if (this.wide) widened(track, seg);
           // Not where it was (put back on the track elsewhere): look everywhere, once.
-          if (F[QDIST] > track.wall + 30) seg = nearTrack(track, 0, track.pts.length);
+          if (F[QDIST] > track.wall + 30) {
+            seg = nearTrack(track, 0, track.pts.length);
+            if (this.wide) widened(track, seg);
+          }
           this.seg[s] = seg;
           if (F[QDIST] > track.def.halfWidth + 2 && F[QDIST] < track.wall + 30) {
             this.owed[s] += moved;

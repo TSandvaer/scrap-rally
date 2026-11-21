@@ -13,16 +13,20 @@
 //   C  JS heap growth over the frames of S3 (informational; Chrome only).
 // &scene=S1..S5 &track=<id>: one cell. Without them every cell runs in this page, one after
 // the other (a quick look: later cells then run on warm caches; the runner loads one cell
-// per page). &frames=<n> &warm=<n> &over=<ms> &canvas=sw|default|gpu &readback=0|1
+// per page). &scene=S6 is a cell of its own, on the Preview Yard test track whatever &track
+// says (M4-WORLD: the road's furniture; it is not among the cells a page runs without &scene,
+// and the gate does not judge it: tools/debug/world-bench.ts holds it against S2). &track may
+// also name a test track (shared/testtracks.ts) for S4 under metric A: the lap needs no spots. &frames=<n> &warm=<n> &over=<ms> &canvas=sw|default|gpu &readback=0|1
 // &panel=<element id> (metric B: show that DOM panel over the canvas). &hold=<frame> draws
 // that one frame of the cell and stops (no timing): what a bench scene looks like.
 // Results: window.scrapBench and the panel on screen.
 
 import { BASE_STATS } from "../shared/physics";
+import { testTrack } from "../shared/testtracks";
 import { gridSlot, pointAt, recoveryAt, type Track } from "../shared/track";
 import { trackById, trackList } from "../shared/tracks";
 import { airTicksFor, FALL_TICKS, GHOST_TICKS, RIVET_RANGE, RIVET_SPEED } from "../shared/weapons";
-import { Renderer, type CarView, type HudView, type WorldFx } from "./render";
+import { Renderer, type CarView, type CellView, type HudView, type WorldFx } from "./render";
 
 const FPS = 60;
 const FRAME_MS = 1000 / FPS;
@@ -42,13 +46,17 @@ const COLORS = ["#e8552d", "#33a3e8", "#f2c230", "#5cc46b", "#c46ad6", "#e8e2d4"
 const NAMES = ["You", "Rustbucket", "Åse Ørn", "Bolt", "SkidMarks 12", "Иван"];
 
 export const SCENES = ["S1", "S2", "S3", "S4", "S5"] as const;
-export type SceneId = (typeof SCENES)[number];
+/** The scene of the Preview Yard test track: asked for by name, never part of a run of all cells. */
+export const YARD_SCENE = "S6";
+export const YARD_TRACK = "preview-yard";
+export type SceneId = (typeof SCENES)[number] | typeof YARD_SCENE;
 const TITLES: Record<SceneId, string> = {
   S1: "grid: 6 cars, countdown",
   S2: "features: jump, fall, ghost",
   S3: "firefight: 12 shots, 6 mines, 6 sparks, 2 wrecks",
   S4: "lap at 430 u/s, 6 cars",
   S5: "recovery teleport, 3 leader cuts",
+  S6: "Preview Yard: 6 cars, barrels, press, truck, pools, 3 cells",
 };
 
 /** One scripted frame: everything Renderer.follow / shake / frame is given. */
@@ -305,6 +313,46 @@ function teleportScene(track: Track, n: number, rnd: () => number): Frame[] {
   return out;
 }
 
+/**
+ * S6 (PLAN-M4.md section 3 calls it "S5"): the road's furniture on the Preview Yard test track.
+ * Three fixed views, a third of the frames each, six cars and three lightning cells in every
+ * one, the race tick running a tick a frame (so the barrels roll and the press goes through its
+ * cycle, three seconds long, in each view's 200 frames): the last tyre mound, the row of
+ * barrels and the pool right across the road; the ramp truck (one car up its ramp and over
+ * the cab) and the pool on the inside of the bend; the split with the press on its dirt lane,
+ * the island and the flooded lane. The cars are scripted: nothing pushes them.
+ */
+function yardScene(track: Track, n: number, rnd: () => number): Frame[] {
+  const each = Math.max(1, Math.floor(n / 3));
+  const truck = track.trucks[0];
+  const v = 380, flight = (v * airTicksFor(v)) / FPS;
+  const cell = (s: number, lat: number, air: boolean): CellView => {
+    const p = pointAt(track, s);
+    return { x: p.x - Math.sin(p.h) * lat, y: p.y + Math.cos(p.h) * lat, air, state: 0 };
+  };
+  const views = [
+    { cam: 1350, from: 1000, dist: 720, lanes: [-56, 14, 36, 56, -50, 24], cells: [cell(1180, -58, false), cell(1390, 58, false), cell(1530, 20, false)] },
+    { cam: 3650, from: 3300, dist: 720, lanes: [truck.lat, -40, -24, -48, -30, -16], cells: [cell(truck.lip + flight / 2, truck.lat + 28, true), cell(3900, -30, false), cell(3760, 58, false)] },
+    { cam: 6640, from: 6260, dist: 680, lanes: [76, -76, 84, -70, 68, -84], cells: [cell(6450, -112, false), cell(6700, 118, false), cell(6300, 118, false)] },
+  ].map((w) => ({ ...w, at: pointAt(track, w.cam), lanes: w.lanes.map((lat, k) => (k ? lat + (rnd() - 0.5) * 6 : lat)), pace: [300, 280, 320, 260, 340, 290] }));
+  const out: Frame[] = [];
+  for (let i = 0; i < n; i++) {
+    const k = Math.min(2, Math.floor(i / each)), w = views[k];
+    const cars = w.lanes.map((lat, c) => {
+      const s = w.from + ((i * (w.pace[c] / FPS) + (c * w.dist) / 6) % w.dist);
+      // The first car of the second view takes the truck's ramp, and flies from its lip.
+      if (k === 1 && c === 0) {
+        const at = w.from + ((i * (v / FPS)) % w.dist);
+        const u = (at - truck.lip) / flight;
+        return carAt(track, c, at, lat, { height: u > 0 && u < 1 ? 4 * u * (1 - u) : 0 });
+      }
+      return carAt(track, c, s, lat, { car: (["sport", "racer", "truck"] as const)[c % 3] });
+    });
+    out.push({ cx: w.at.x, cy: w.at.y, snap: i % each === 0 && i < 3 * each, shake: 0, cars, fx: { shots: [], mines: [], sparks: [], cells: w.cells, rt: i }, hud: raceHud(i) });
+  }
+  return out;
+}
+
 /** The scripted frames of a scene on a track (the same on every call: fixed seed). */
 function script(scene: SceneId, track: Track, n: number): Frame[] {
   const rnd = mulberry32(SEED);
@@ -319,6 +367,8 @@ function script(scene: SceneId, track: Track, n: number): Frame[] {
       return lapScene(track, n, rnd);
     case "S5":
       return teleportScene(track, n, rnd);
+    case "S6":
+      return yardScene(track, n, rnd);
   }
 }
 
@@ -642,7 +692,7 @@ function report(out: BenchOut): string {
     else if (!c.supported) lines.push(`${id}  performance.memory is not available in this browser`);
     else lines.push(`${id}  ${String(Math.round((c.allocBytes - c.probeBytes) / c.n)).padStart(11)}  ${(c.allocBytes / 1024).toFixed(0).padStart(8)}  ${(c.deltaBytes / 1024).toFixed(0).padStart(8)}  ${String(c.gcDrops).padStart(3)}`);
   }
-  lines.push("", ...SCENES.map((s) => `${s}  ${TITLES[s]}`));
+  lines.push("", ...[...SCENES, YARD_SCENE].map((s) => `${s}  ${TITLES[s as SceneId]}`));
   return lines.join("\n");
 }
 
@@ -700,9 +750,11 @@ export async function runBench(view: HTMLCanvasElement, params: URLSearchParams)
   try {
     if (!["A", "B", "C"].includes(metric)) throw new Error(`unknown metric ${metric}`);
     const one = params.get("scene")?.toUpperCase() as SceneId | undefined;
-    if (one && !SCENES.includes(one)) throw new Error(`unknown scene ${one}`);
+    const yard = one === YARD_SCENE;
+    if (one && !yard && !(SCENES as readonly string[]).includes(one)) throw new Error(`unknown scene ${one}`);
     const scenes: SceneId[] = one ? [one] : metric === "A" ? [...SCENES] : [metric === "B" ? "S4" : "S3"];
-    const tracks = params.has("track") ? [trackById(params.get("track")!)] : trackList().map((e) => trackById(e.id));
+    const named = params.get("track");
+    const tracks = yard ? [testTrack(YARD_TRACK)!] : named ? [testTrack(named) ?? trackById(named)] : trackList().map((e) => trackById(e.id));
     const hold = num("hold");
     if (hold !== null) {
       const frames = framesFor(scenes[0], tracks[0], opts);
@@ -721,7 +773,7 @@ export async function runBench(view: HTMLCanvasElement, params: URLSearchParams)
       return;
     }
     for (const track of tracks) {
-      if (!SPOTS[track.def.id]) throw new Error(`no bench spots for track ${track.def.id}`);
+      if (!yard && !SPOTS[track.def.id] && !(one === "S4" && metric === "A")) throw new Error(`no bench spots for track ${track.def.id}`);
       for (const scene of scenes) {
         show();
         await yieldToPage();
