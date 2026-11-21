@@ -7,13 +7,16 @@
 // fixture scenes after them (fx, wreck, damage, mine, spectator, pause, countdown: the states
 // no feature scene shows; no test reads the renderer's output, so these frames are the
 // regression net of the graphics work), then the scenes added since (blast: a mine's blast,
-// a landing's puff and dust from the verge; looks: the three car looks driving a bend; and the
-// catch-up visuals of M4-FX: cells, boost, draft, catchup).
+// a landing's puff and dust from the verge; looks: the three car looks driving a bend; the
+// catch-up visuals of M4-FX: cells, boost, draft, catchup; and the road's furniture of
+// M4-WORLD on the Preview Yard test track, shared/testtracks.ts: yard-chicane, yard-truck,
+// yard-split, yard-bend, yard-belt).
 // URL: &scene=<name> to start on one, &freeze=1 to hold
 // the scene's key moment, &t=<seconds> to hold any moment, &hud=0 to hide the caption.
 // &cues=0 leaves the catch-up fields out of what the renderer is handed (CarView.draft and
 // .boost, WorldFx.cells, HudView.draft and .boost): the same scene as a caller that does not
-// fill them gets it, which is the picture before M4-FX.
+// fill them gets it, which is the picture before M4-FX. &rt=0 leaves the race tick out
+// (WorldFx.rt): nothing that moves on the road is drawn, as for a caller that does not fill it.
 // A held moment pins performance.now() too while it draws (smoke and the mine blink read it),
 // so the same URL gives the same pixels on every load.
 //
@@ -22,7 +25,8 @@
 // &scene=mock     one piece of track baked with the palette (&mock=today: the same view as
 //                 the game draws it now)
 
-import { buildTrack, gridSlot, pointAt, queryTrack, queryTrackNear, type Track, type TrackDef } from "../shared/track";
+import { testTrack } from "../shared/testtracks";
+import { buildTrack, gridSlot, pointAt, queryTrack, queryTrackNear, widenAt, type Track, type TrackDef } from "../shared/track";
 import { trackById } from "../shared/tracks";
 import { airTicksFor, FALL_TICKS, GHOST_TICKS } from "../shared/weapons";
 import { BAYER4, CAR_COLORS, CAR_NEUTRALS, carTones, CSS_MIRROR, LIT, P, PALETTE, RAMPS, rgbOf, SHADE, type PaletteName } from "./gfx/palette";
@@ -72,6 +76,7 @@ interface Scene {
   name: string;
   title: string;
   rust?: boolean; // drawn on Rust Bowl instead of the preview track
+  yard?: boolean; // drawn on the Preview Yard test track (shared/testtracks.ts)
   cam: () => { x: number; y: number };
   cars: (t: number) => CarView[];
   key: number; // seconds: the moment &freeze=1 holds
@@ -374,6 +379,129 @@ function fixtures(track: Track, rust: Track): Scene[] {
       key: 1,
     },
     ...catchUp(track, rust),
+    ...furniture(),
+  ];
+}
+
+/**
+ * The road's furniture (M4-WORLD; PLAN-M4.md 2.2-2.4, 2.6 B) on the Preview Yard test track:
+ * tyre mounds, rolling barrels, pools, the ramp truck, split lanes with their islands, a dirt
+ * lane, the crusher press and the conveyor belt, with the race tick running (WorldFx.rt = 60 a
+ * second), so what moves is seen moving. The cars are scripted, as everywhere here: they
+ * steer round what is solid and are timed to what moves, and nothing pushes them.
+ */
+function furniture(): Scene[] {
+  const yard = testTrack("preview-yard")!;
+  const at = (s: number) => () => pointAt(yard, s);
+  const tick = (t: number): WorldFx => ({ ...NO_FX, rt: Math.round(t * 60) });
+  const cell = (s: number, lat: number, air: boolean): CellView => {
+    const p = pointAt(yard, s);
+    return { x: p.x - Math.sin(p.h) * lat, y: p.y + Math.cos(p.h) * lat, air, state: 0 };
+  };
+  /** A car on the line lat(s) at distance s, its nose turned along the line. */
+  const on = (i: number, s: number, lat: (s: number) => number, more: Partial<CarView> = {}): CarView => {
+    const c = car(yard, i, s, lat(s), more);
+    c.h += Math.atan((lat(s + 4) - lat(s - 4)) / 8);
+    return c;
+  };
+  const ease = (u: number) => (u <= 0 ? 0 : u >= 1 ? 1 : u * u * (3 - 2 * u));
+
+  // yard-chicane: three mounds to weave through, then the barrels' lane, then a pool right
+  // across the road. A lap of the loop takes 4 s, as the barrels' cycle does: each car crosses
+  // their lane between two of them, every time.
+  const row = yard.barrels[0];
+  const weave = (s: number) => -34 + 68 * ease((s - 925) / 90) - 30 * ease((s - 1120) / 110); // left of the second mound, right of the third
+  const LOOP = 800, PACE = LOOP / 4;
+  const chicane = (i: number, lat: (s: number) => number, more: Partial<CarView> = {}) => (t: number): CarView => {
+    // When a barrel is not in the way at this lane: a third of the way between two of them.
+    const clear = (lat(row.s) - row.lat0) / Math.abs(row.speed) + (row.period / row.n / 60) * (0.55 + (i % row.n));
+    const from = 800, start = clear - (row.s - from) / PACE;
+    const s = from + ((((t - start) * PACE) % LOOP) + LOOP) % LOOP;
+    return on(i, s, lat, more);
+  };
+  const weavers = [chicane(0, weave), chicane(1, (s) => weave(s) + 22 * ease((s - 1130) / 120), { car: "racer" }), chicane(2, () => -56, { car: "truck" }), chicane(3, (s) => 56 - 20 * ease((1100 - s) / 200))];
+
+  // yard-truck: a car takes the ramp truck's ramp and flies over its cab; others pass beside
+  // it and through the pool on the inside of the bend.
+  const truck = yard.trucks[0];
+  const v = 380, flight = (v * airTicksFor(v)) / 60;
+  const jumper = (t: number): CarView => {
+    const s = 3200 + ((t * v) % 900);
+    const u = (s - truck.lip) / flight;
+    return car(yard, 0, s, truck.lat, { height: u > 0 && u < 1 ? 4 * u * (1 - u) : 0 });
+  };
+  const passer = (i: number, lat: number, pace: number, from: number, more: Partial<CarView> = {}) => (t: number): CarView => car(yard, i, 3250 + ((t * pace + from) % 900), lat, more);
+
+  // yard-split, yard-bend: both lanes of a split. The cars keep to the middle of their lane as
+  // the road widens and narrows; in the first split the dirt lane's cars pass the press while
+  // it is up (its cycle is 3 s, and so is their lap).
+  const lane = (side: number, wide: number) => (s: number) => side * (30 + ((wide - 30) * widenAt(yard, s, side)) / 60); // the first split widens by 60 either side
+  const press = yard.presses[0];
+  const split = (i: number, side: number, from: number, more: Partial<CarView> = {}) => (t: number): CarView => on(i, 6150 + ((t * 300 + from) % 900), lane(side, 76), more);
+  const bendLane = (side: number) => (s: number) => side * (30 + 0.85 * widenAt(yard, s, side));
+  const bend = (i: number, side: number, from: number, pace: number, more: Partial<CarView> = {}) => (t: number): CarView => on(i, 7700 + ((t * pace + from) % 800), bendLane(side), more);
+
+  // yard-belt: the belt carries the cars to the left of travel as they cross it.
+  const belt = yard.belts[0];
+  const carried = (i: number, lat0: number, pace: number, from: number, more: Partial<CarView> = {}) => (t: number): CarView => {
+    const s = 8650 + ((t * pace + from) % 600);
+    const onBelt = Math.max(0, Math.min(s, belt.s1) - belt.s0) / pace; // seconds on the belt so far
+    return on(i, s, () => lat0 + belt.vx * onBelt, more);
+  };
+
+  return [
+    {
+      name: "yard-chicane",
+      title: "Yard: tyre mounds, rolling barrels, a pool",
+      yard: true,
+      cam: at(1210),
+      cars: (t) => weavers.map((w) => w(t)),
+      fx: (t) => ({ ...tick(t), cells: [cell(1180, -58, false), cell(1390, 58, false), cell(1530, 20, false)] }),
+      key: 1.1,
+    },
+    {
+      name: "yard-truck",
+      title: "Yard: up the ramp truck and over its cab",
+      yard: true,
+      cam: at(3650),
+      cars: (t) => [jumper(t), passer(1, -34, 300, 0, { car: "racer" })(t), passer(2, -22, 260, 450, { car: "truck" })(t), passer(3, -40, 320, 700)(t)],
+      fx: (t) => ({ ...tick(t), cells: [cell(truck.lip + flight / 2, truck.lat + 28, true)] }),
+      key: (truck.lip + 36 - 3200) / v, // over the cab
+    },
+    {
+      name: "yard-split",
+      title: "Yard: split lanes, the press on the dirt lane",
+      yard: true,
+      cam: at(6640),
+      // The dirt lane's cars reach the press 0.4 s and 1.1 s into its cycle (it is down for the last second of three).
+      cars: (t) => [
+        split(0, 1, press.s - 6150 - 0.4 * 300)(t),
+        split(1, 1, press.s - 6150 - 1.1 * 300 + 900, { car: "truck" })(t),
+        split(2, -1, 150, { car: "racer" })(t),
+        split(3, -1, 520)(t),
+        split(4, -1, 760, { car: "truck" })(t),
+      ],
+      fx: (t) => ({ ...tick(t), cells: [cell(6450, -112, false), cell(6700, 118, false)] }),
+      key: (press.period - press.down - 8) / 60, // the press's shadow closing in
+    },
+    {
+      name: "yard-bend",
+      title: "Yard: a split in a bend",
+      yard: true,
+      cam: at(8100),
+      cars: (t) => [bend(0, 1, 0, 300)(t), bend(1, 1, 420, 300, { car: "racer" })(t), bend(2, -1, 150, 330, { car: "truck" })(t), bend(3, -1, 560, 330)(t)],
+      fx: tick,
+      key: 0.9,
+    },
+    {
+      name: "yard-belt",
+      title: "Yard: the belt carries cars across the road",
+      yard: true,
+      cam: at(8950),
+      cars: (t) => [carried(0, 40, 300, 0)(t), carried(1, 20, 260, 250, { car: "truck" })(t), carried(2, 50, 340, 430, { car: "racer" })(t)],
+      fx: tick,
+      key: 1.5,
+    },
   ];
 }
 
@@ -520,12 +648,13 @@ export function runPreview(canvas: HTMLCanvasElement, params: URLSearchParams): 
   if (params.get("scene") === "palette") return showPalette(canvas);
   if (params.get("scene") === "mock") return showMock(canvas, params.get("mock") === "today");
   const list = scenes();
-  const renderers = new Map<boolean, Renderer>();
-  const rendererFor = (rust: boolean) => {
-    let r = renderers.get(rust);
+  const renderers = new Map<string, Renderer>();
+  const rendererFor = (scene: Scene) => {
+    const on = scene.yard ? "yard" : scene.rust ? "rust" : "eight";
+    let r = renderers.get(on);
     if (!r) {
-      r = new Renderer(canvas, rust ? trackById("rust-bowl") : previewTrack().track);
-      renderers.set(rust, r);
+      r = new Renderer(canvas, scene.yard ? testTrack("preview-yard")! : scene.rust ? trackById("rust-bowl") : previewTrack().track);
+      renderers.set(on, r);
     }
     return r;
   };
@@ -533,6 +662,7 @@ export function runPreview(canvas: HTMLCanvasElement, params: URLSearchParams): 
   const fixedT = params.has("t") ? Number(params.get("t")) : params.get("freeze") === "1" ? null : undefined;
   const hud = params.get("hud") !== "0";
   const cues = params.get("cues") !== "0";
+  const ticks = params.get("rt") !== "0";
   const start = performance.now();
   let led: Scene | null = null; // the held scene whose lead-up has been drawn
 
@@ -548,7 +678,7 @@ export function runPreview(canvas: HTMLCanvasElement, params: URLSearchParams): 
     // Held moments draw at a fixed clock too, so blinks are the same on every reload.
     const held = fixedT !== undefined;
     const t = fixedT === undefined ? (now - start) / 1000 : (fixedT ?? scene.key);
-    const r = rendererFor(!!scene.rust);
+    const r = rendererFor(scene);
     const cam = scene.cam();
     r.follow(cam.x, cam.y, 16, true);
     const caption = !hud
@@ -574,6 +704,7 @@ export function runPreview(canvas: HTMLCanvasElement, params: URLSearchParams): 
           for (const c of cars) delete c.draft, delete c.boost;
           delete fx.cells, delete fx.nCells;
         }
+        if (!ticks) delete fx.rt;
         r.frame(cars, fx, view, held ? u * 1000 : now);
       } finally {
         if (held) delete (performance as { now?: unknown }).now;
