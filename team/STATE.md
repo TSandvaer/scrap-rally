@@ -358,6 +358,8 @@ m4-catchup, TSandvaer/m4-catchup, :3006; spec tmp/spec-m4-catchup.md) and M4-FX 
 m4-fx, TSandvaer/m4-fx, :3008; spec tmp/spec-m4-fx.md; contact sheet via ask). Bot difficulty: judge again after catch-up.
 Catch-up worker Q (answered): A4 'passes' = centre ahead within 4 s (measured 2.65 s; the bend finishes the pass; plan constants kept);
 Normal bots get wake-tucking + pull-out-to-pass in botdrive (option a, deterministic, Easy unchanged) because fixed lanes 48 apart never draft.
+M4-FX contact sheet: user GO (popup); contract confirmed (CarView.draft/boost, WorldFx.cells CellView[]+nCells state 0/share left,
+HudView.draft/boost). Catch-up at d8e34e3 (666/666, 114/114) told to worker_done now; main.ts mapping as a follow-up after M4-FX merges.
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
