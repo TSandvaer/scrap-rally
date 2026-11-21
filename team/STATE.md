@@ -391,6 +391,11 @@ isolation on the router (hypothesis). Mac IP now 192.168.50.247. Open: user's No
 Bot verdict (user popup): ADD A HARD LEVEL; N3 side-by-side fine. Taste copy :3009 stopped (PIDs 44733/44712) and worktree removed.
 M4-HARD proposed as an addendum at the end of PLAN-M4.md; Fable advisor review running (Agent, read-only); then user approval, then
 a ClickUp ticket + Opus worker (can run beside M4-SCHEMA).
+M4-HARD APPROVED (user popup, with the 11 Fable advisor changes; PLAN-M4 addendum). WAVE 4 in flight (both Opus, base main a7fa942):
+- M4-HARD 123jpnbffqh ctx_ab92893722c2 (~/orca/workspaces/scrap-rally/m4-hard, :3006; spec tmp/spec-m4-hard.md). It will `ask` to confirm
+  the pace band (share of the Normal-to-flat-out gap) before locking constants. Taste gate: 3 Hard bots.
+- M4-SCHEMA 123jpnbffqj ctx_293724109f66 (~/orca/workspaces/scrap-rally/m4-schema, :3008; spec tmp/spec-m4-schema.md). Data only, no taste.
+Whichever merges second merges main first and re-proves its hashes. Then M4-WORLD (Fable) needs the 12 MB canvas cap decision first.
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
