@@ -450,6 +450,10 @@ M4-WORLD done: ccd0cf1 (0 px diff on 22 scenes; S6 within S2 x1.10; census 13.99
 PASS x2, FAIL x1 on one metric-B cell that main also shows 8/30). Evidence tmp/m4-world/. Fable reviewer ctx_a549b6c3d252
 (tmp/review-m4-world.md). User judges the Preview Yard screenshots (tmp/m4-world/shots/). Leftovers: main.ts fills WorldFx.rt (M4-MOVE);
 M4-SURF moves PUDDLE_TRACTION_INSET + tractionRect into shared/track.ts.
+M4-WORLD: user approved the look (screenshots). Fable review REQUEST_CHANGES (ctx_a549b6c3d252, released; tmp/m4-world/REVIEW-m4-world.md):
+belt arrows drawn past a narrow belt's far edge (obstacles.ts:170,361-372). Fix round sent to ctx_b0111cbb62bb (+ sprites.ts:498 comment,
+measure actors.ts:639 verge scan; keep the press's leaving shadow). One round; a second REQUEST_CHANGES goes to the user. Reviewer's
+own gate run PASS; Rule 1 holds (the 5.2 B/frame is on main too); census 13.99/16 MB.
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
