@@ -32,7 +32,8 @@
 // - the sheets painted against the state changes in the measured frames (one each: a change
 //   repaints the car's own sheet and no other);
 // - the sprite canvases made since the start and their bytes (sprites.ts spriteBytes()) against
-//   the cap (SPRITE_BYTES_MAX), and with the world's tile pool against PLAN-GFX's 12 MB.
+//   the cap (SPRITE_BYTES_MAX), and with the world's tile pool and the most the HUD's canvases
+//   hold against the all-in cap of 16 MB (canvas-cap.ts; tools/debug/canvas-census.ts counts all).
 //
 // Each build runs in a process of its own (the script starts itself again).
 
@@ -42,6 +43,7 @@ import { Session } from "node:inspector/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { CANVAS_CAP, HUD_BYTES_MAX } from "./canvas-cap";
 
 const args = process.argv.slice(2);
 const option = (name: string, fallback: number) => (args.includes(name) ? Number(args[args.indexOf(name) + 1]) : fallback);
@@ -60,7 +62,7 @@ const DT = 1000 / 60;
 const COLORS = ["#e8552d", "#33a3e8", "#f2c230", "#5cc46b", "#c46ad6", "#e8e2d4"];
 const LOOKS = ["sport", "racer", "truck"];
 const TILE_POOL = 24 * 256 * 256 * 4; // world.ts: 24 tiles of 256 x 256
-const CAP = 12_000_000; // PLAN-GFX: total canvas memory added
+const CAP = CANVAS_CAP; // all in: the sprites, the tile pool, the HUD's canvases (canvas-cap.ts)
 
 interface ProfileNode {
   callFrame: { functionName: string; url: string; lineNumber: number };
@@ -242,8 +244,8 @@ async function measure(root: string, label: string): Promise<void> {
   }
   session.disconnect();
   const bytes = sprites.spriteBytes(), max = sprites.SPRITE_BYTES_MAX;
-  console.log(`\nSprite canvases after all of it: ${bytes} B held, the cap (SPRITE_BYTES_MAX) ${max} B: ${bytes <= max ? "ok" : "OVER"}. With the tile pool (${TILE_POOL} B): ${bytes + TILE_POOL} B held, ${max + TILE_POOL} B at most, against ${CAP}: ${max + TILE_POOL <= CAP ? "ok" : "OVER"}.`);
-  if (bytes > max || max + TILE_POOL > CAP) process.exitCode = 1;
+  console.log(`\nSprite canvases after all of it: ${bytes} B held, the cap (SPRITE_BYTES_MAX) ${max} B: ${bytes <= max ? "ok" : "OVER"}. With the tile pool (${TILE_POOL} B) and the most the HUD's canvases hold (${HUD_BYTES_MAX} B): ${max + TILE_POOL + HUD_BYTES_MAX} B at most, against the all-in cap of ${CAP}: ${max + TILE_POOL + HUD_BYTES_MAX <= CAP ? "ok" : "OVER"}.`);
+  if (bytes > max || max + TILE_POOL + HUD_BYTES_MAX > CAP) process.exitCode = 1;
 }
 
 // ---- main --------------------------------------------------------------------------------

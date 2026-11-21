@@ -28,7 +28,8 @@
 // - every pixel of the catch-up sheet is a palette colour, or the cast shadow's black;
 // - no flame pixel lies on its picture's border (the picture is big enough at every heading);
 // - no cell pixel lies on its picture's border;
-// - the sheet's bytes, and the sprites' cap with the world's tile pool against PLAN-GFX's 12 MB.
+// - the sheet's bytes, and the sprites' cap with the world's tile pool and the most the HUD's
+//   canvases hold against the all-in cap of 16 MB (canvas-cap.ts; canvas-census.ts counts all).
 
 import { execFile } from "node:child_process";
 import { createReadStream, existsSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
@@ -41,13 +42,14 @@ import { promisify } from "node:util";
 import { crc32, deflateSync } from "node:zlib";
 import { FONT_LETTERS, SMALL } from "../../client/gfx/font";
 import { CAR_COLORS, P, PALETTE, rgbOf } from "../../client/gfx/palette";
+import { CANVAS_CAP, HUD_BYTES_MAX } from "./canvas-cap";
 import { carPixels, CATCH_H, CATCH_W, catchPixels, CELL, CX_AIR, CX_AIR_GONE, CX_GONE, CX_GROUND, CX_SHADE, FLAME, FLAME_AT, FLAME_COLS, FLAME_FRAMES, FLAME_HEADINGS, LOOKS, SHEET_W, SPRITE_BYTES_MAX } from "../../client/gfx/sprites";
 
 const args = process.argv.slice(2);
 const arg = (name: string) => (args.includes(name) ? args[args.indexOf(name) + 1] : undefined);
 const ROOT = path.resolve(fileURLToPath(new URL("../..", import.meta.url)));
 const TILE_POOL = 24 * 256 * 256 * 4; // world.ts: 24 tiles of 256 x 256
-const CAP = 12_000_000; // PLAN-GFX: total canvas memory added
+const CAP = CANVAS_CAP; // all in: the sprites, the tile pool, the HUD's canvases (canvas-cap.ts)
 
 // ---- a picture ---------------------------------------------------------------------------
 
@@ -255,7 +257,7 @@ function check(): boolean {
   say(flameEdge === 0, `no flame picture reaches its border (${flameEdge} pixels on one; ${cells} pictures, ${(flamePixels / cells).toFixed(1)} pixels each on average, the smallest ${least})`);
   say(least > 0, "every flame picture has a flame in it");
   const bytes = CATCH_W * CATCH_H * 4;
-  say(SPRITE_BYTES_MAX + TILE_POOL <= CAP, `canvas memory: the catch-up sheet ${bytes} B; the sprites' cap ${SPRITE_BYTES_MAX} B + the tile pool ${TILE_POOL} B = ${SPRITE_BYTES_MAX + TILE_POOL} B, against ${CAP}`);
+  say(SPRITE_BYTES_MAX + TILE_POOL + HUD_BYTES_MAX <= CAP, `canvas memory: the catch-up sheet ${bytes} B; the sprites' cap ${SPRITE_BYTES_MAX} B + the tile pool ${TILE_POOL} B + the most the HUD's canvases hold ${HUD_BYTES_MAX} B = ${SPRITE_BYTES_MAX + TILE_POOL + HUD_BYTES_MAX} B, against the all-in cap of ${CAP}`);
   return ok;
 }
 

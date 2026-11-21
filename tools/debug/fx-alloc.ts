@@ -36,7 +36,8 @@
 // - the canvases made while the measured frames ran (none: all are made before);
 // - every canvas the process made and its bytes; the sprite canvases' bytes (sprites.ts
 //   spriteBytes()) against their cap (SPRITE_BYTES_MAX), and the cap with the world's tile
-//   pool and the HUD's cue art against PLAN-GFX's 12 MB (exit code 1 if over).
+//   pool and the most the HUD's canvases hold against the all-in cap of 16 MB (canvas-cap.ts:
+//   user decision 2026-11-21; tools/debug/canvas-census.ts counts every canvas; exit code 1 if over).
 //
 // Each build and each mode runs in a process of its own (the script starts itself again).
 
@@ -46,6 +47,7 @@ import { Session } from "node:inspector/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { CANVAS_CAP, HUD_BYTES_MAX } from "./canvas-cap";
 
 const args = process.argv.slice(2);
 const option = (name: string, fallback: number) => (args.includes(name) ? Number(args[args.indexOf(name) + 1]) : fallback);
@@ -63,7 +65,7 @@ const DT = 1000 / 60;
 const COLORS = ["#e8552d", "#33a3e8", "#f2c230", "#5cc46b", "#c46ad6", "#e8e2d4"];
 const LOOKS = ["sport", "racer", "truck"];
 const TILE_POOL = 24 * 256 * 256 * 4; // world.ts: 24 tiles of 256 x 256
-const CAP = 12_000_000; // PLAN-GFX: total canvas memory added
+const CAP = CANVAS_CAP; // all in: the sprites, the tile pool, the HUD's canvases (canvas-cap.ts)
 
 interface ProfileNode {
   callFrame: { functionName: string; url: string; lineNumber: number };
@@ -73,7 +75,6 @@ interface ProfileNode {
 
 const made = { canvases: 0, images: 0, rects: 0 };
 const all: { width: number; height: number }[] = []; // every canvas made
-const CUE_ART = 118 * 107 * 4; // hud.ts: the cues' baked pieces (TL_W x CUE_ART_H)
 
 /** A canvas that draws nothing and allocates nothing when drawn on; it counts what it is asked to draw. */
 function fakeCanvas(): { width: number; height: number; getContext: () => unknown } {
@@ -247,8 +248,8 @@ async function measure(root: string, label: string, on: boolean): Promise<void> 
   const bytes = sprites.spriteBytes(), max = sprites.SPRITE_BYTES_MAX;
   const total = all.reduce((sum, c) => sum + c.width * c.height * 4, 0);
   console.log(`\nEvery canvas this process made (view, tiles, sprites, HUD labels and art, minimaps of ${TRACKS.length} tracks): ${all.length}, ${total} B.`);
-  console.log(`Sprite canvases after all of it: ${bytes} B held, the cap (SPRITE_BYTES_MAX) ${max} B: ${bytes <= max ? "ok" : "OVER"}. With the tile pool (${TILE_POOL} B) and the HUD's cue art (${CUE_ART} B): ${max + TILE_POOL + CUE_ART} B at most, against ${CAP}: ${max + TILE_POOL + CUE_ART <= CAP ? "ok" : "OVER"}.`);
-  if (bytes > max || max + TILE_POOL + CUE_ART > CAP) process.exitCode = 1;
+  console.log(`Sprite canvases after all of it: ${bytes} B held, the cap (SPRITE_BYTES_MAX) ${max} B: ${bytes <= max ? "ok" : "OVER"}. With the tile pool (${TILE_POOL} B) and the most the HUD's canvases hold (${HUD_BYTES_MAX} B, the catch-up cue art among them): ${max + TILE_POOL + HUD_BYTES_MAX} B at most, against the all-in cap of ${CAP}: ${max + TILE_POOL + HUD_BYTES_MAX <= CAP ? "ok" : "OVER"}.`);
+  if (bytes > max || max + TILE_POOL + HUD_BYTES_MAX > CAP) process.exitCode = 1;
 }
 
 // ---- main --------------------------------------------------------------------------------

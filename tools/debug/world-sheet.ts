@@ -21,13 +21,11 @@
 // --check (Node):
 // - every pixel of the obstacle sheet is a palette colour or the cast shadow's black, for
 //   Preview Yard and for the sheet's yard;
-// - no barrel and no slab reaches the border of its picture;
+// - no barrel reaches the border of its picture;
 // - the eight frames of a barrel's turn are eight different pictures, each with the label or
 //   the seam in sight;
-// - what moves on every shipped track and every test track has room on the sheet (obstacleFit);
-// - every pixel of the baked tiles under Preview Yard's features is a palette colour (by
-//   construction: a tile is palette indices), and the tiles of the shipped tracks have no pixel
-//   of a furniture class (water, belt, island): nothing of this ticket is on them.
+// - what moves on every shipped track and every test track has room on the sheet (obstacleFit).
+// (That nothing of this lies on a shipped track, and what the puddles promise: puddle-probe.ts.)
 
 import { execFile } from "node:child_process";
 import { createReadStream, existsSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";

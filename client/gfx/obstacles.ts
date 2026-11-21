@@ -398,7 +398,11 @@ export class Obstacles {
         shade = phase < 3 ? 2 : phase < 6 ? 1 : 0;
       }
       if (high >= 0) {
-        ctx.globalAlpha = shade === 0 ? 0.2 : shade === 1 ? 0.27 : shade === 2 ? 0.34 : 0.42;
+        // A store per tone: each is a constant then (picked first and stored once, the fraction would be boxed).
+        if (shade === 0) ctx.globalAlpha = 0.2;
+        else if (shade === 1) ctx.globalAlpha = 0.27;
+        else if (shade === 2) ctx.globalAlpha = 0.34;
+        else ctx.globalAlpha = 0.42;
         ctx.drawImage(sheet, g.ax + g.w, g.ay, g.w, g.h, x - (g.w >> 1) + 2 + (((high * FAR_X + 15) / 30) | 0), y - (g.h >> 1) + 3 + (((high * FAR_Y + 15) / 30) | 0), g.w, g.h);
         ctx.globalAlpha = 1;
       }
