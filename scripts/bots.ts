@@ -199,9 +199,10 @@ class Bot {
     lateral: number,
     sim?: LagSim,
     readonly tokens: TokenStore = memoryTokens(), // shared store = same "tab"
+    level: BotLevel = "normal", // the driver's bot level (M4-HARD: botplay --level)
   ) {
     this.game = new Game(() => connectWs(url, sim), tokens);
-    this.driver = new BotDriver(this.game, lateral);
+    this.driver = new BotDriver(this.game, lateral, level);
     this.game.on.welcome = () => this.welcomes++;
     this.game.on.garage = () => this.garages++;
     this.game.on.event = (ev) => {
@@ -391,6 +392,7 @@ async function run(ctx: Ctx, bots: Bot[]): Promise<void> {
   await runRaceTick(ctx, bots);
   await runDraft(ctx, bots);
   await runCells(ctx, bots);
+  await runHard(ctx, bots);
 }
 
 const lost = new Map<string, (ConnReason | undefined)[]>();
@@ -1858,5 +1860,57 @@ async function runCells(ctx: Ctx, bots: Bot[]): Promise<void> {
     if (room && tick) room.tick = tick;
     K.afterStep = null;
     for (const b of [H, K]) b.game.leave();
+  }
+}
+
+// ---- Hard bot level (M4-HARD, PLAN-M4.md addendum 2026-11-21, ClickUp 123jpnbffqh) ----------------
+
+// This section's imports (hoisted like the ones at the top).
+import type { BotLevel } from "../shared/botdrive";
+import { botShopping } from "../shared/botshop";
+
+/**
+ * A lagged (80±10 ms) Hard socket bot (BotDriver level "hard", shopping by the Hard rule as
+ * `npm run botplay -- CODE 3 --level hard` does) hosts a room with two Hard server bots, one lap
+ * of Crusher Run (ramps, gaps, holes) with weapons: it finishes, its prediction holds (median
+ * reconciliation error below 0.5, no error > 50, at most 4 air/fall state mismatches), and the
+ * three use their weapons (printed: rivets and mines used, hits).
+ */
+async function runHard(ctx: Ctx, bots: Bot[]): Promise<void> {
+  const H = new Bot("Hotel", ctx.url, -12, { lag: 80, jitter: 10 }, undefined, "hard");
+  bots.push(H);
+  try {
+    H.game.create(H.name);
+    await waitFor("hard: H welcome", () => !!H.game.you && H.game.scrap > 0, 3000);
+    H.game.pickTrack("crusher-run");
+    H.game.addBot("hard");
+    H.game.addBot("hard");
+    await waitFor("hard: two Hard bots in", () => H.game.players.filter((p) => p.bot === "hard").length === 2 && H.game.trackId === "crusher-run", 3000);
+    const wallet = { scrap: H.game.scrap, levels: { ...H.game.levels }, ammo: { rivets: H.game.serverAmmo[0], mines: H.game.serverAmmo[1] } };
+    const buys = botShopping(wallet, "hard");
+    for (const item of buys) H.game.buy(item);
+    await waitFor("hard: H shopped", () => H.game.serverAmmo[0] === 20 && H.game.serverAmmo[1] === 3, 3000);
+    const hits = H.events.length;
+    const e0 = H.game.recErrors.length, st0 = H.game.recStateErrors;
+    H.game.start();
+    await waitFor("hard: racing", () => H.game.phase === "racing" && !!H.game.car, 6000);
+    await waitFor("hard: the race is over", () => H.game.phase === "results" || H.game.phase === "lobby", 90000);
+    const evs = H.events.slice(hits);
+    const rivetHits = evs.filter((e) => e.k === "hit" && e.w === "rivet").length, mineHits = evs.filter((e) => e.k === "hit" && e.w === "mine").length;
+    const rows = H.results ?? [];
+    const s = stats(H.game.recErrors.slice(e0));
+    const st = H.game.recStateErrors - st0;
+    console.log(
+      `      Hotel (Hard, 80±10 ms, bought ${buys.join("+")}): finish ${rows.map((r) => `${r.name} ${(r.timeMs / 1000).toFixed(2)}s`).join(", ")}; rivet hits ${rivetHits}, mine hits ${mineHits}; ` +
+        `rec err n=${s.n} median=${s.median.toFixed(3)} p95=${s.p95.toFixed(3)} max=${s.max.toFixed(2)}; state mismatches ${st}; rtt=${H.game.rtt.toFixed(1)}ms`,
+    );
+    check(
+      "hard over sockets: a lagged Hard socket bot (botplay's driver at --level hard) races two Hard server bots on Crusher Run: all three finish, it keeps a median reconciliation error below 0.5, no error > 50, at most 4 state mismatches",
+      rows.length === 3 && rows.every((r) => r.timeMs > 0) && s.n > 500 && s.median < 0.5 && s.max <= 50 && st <= 4 && H.errors.length === 0,
+      `median ${s.median.toFixed(3)}, max ${s.max.toFixed(2)}, state mismatches ${st}; errors ${H.errors.join("; ") || "none"}`,
+    );
+    check("hard over sockets: the Hard bots use their weapons (rivets hit someone)", rivetHits > 0, `${rivetHits} rivet hits, ${mineHits} mine hits`);
+  } finally {
+    H.game.leave();
   }
 }
