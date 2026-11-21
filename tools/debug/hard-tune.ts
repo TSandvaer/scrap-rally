@@ -65,6 +65,7 @@ const quietConn = { send(): void {}, close(): void {} };
 
 export interface GoldenRun {
   hash: string;
+  stateErrs?: number; // client runs: air/fall state mismatches between the prediction and the server
   finish: number[][]; // per race, per bot: finish time (ms after GO, 0 = did not finish)
   wallets: string[]; // per race: the bots' wallets after the payout and shopping
 }
@@ -150,7 +151,7 @@ function wired(rooms: Rooms, clock: { now: number }): { game: Game; open(): void
  * scripts/bots.ts drive): three bots on lanes -24, 0, 24 with weapons on, one race of `laps` laps
  * on `track` on the sim clock. Hash of every tick's controls, the predicted and the server's car.
  */
-export function goldenClient(track = "crusher-run", laps = 3): GoldenRun {
+export function goldenClient(track = "crusher-run", laps = 3, level: BotLevel = "normal"): GoldenRun {
   const h = createHash("sha256");
   const realNow = performance.now.bind(performance);
   const clock = { now: 1_000_000 };
@@ -176,7 +177,7 @@ export function goldenClient(track = "crusher-run", laps = 3): GoldenRun {
     }
     ws[0].game.start();
     ws[0].flush();
-    const drivers = ws.map((w, i) => new BotDriver(w.game, lanes[i]));
+    const drivers = ws.map((w, i) => new BotDriver(w.game, lanes[i], level));
     const out: GoldenRun = { hash: "", finish: [[]], wallets: [] };
     for (let i = 0; i < 60 * 400 && (room.phase === "countdown" || room.phase === "racing"); i++) {
       clock.now += 1000 / 60;
@@ -194,6 +195,7 @@ export function goldenClient(track = "crusher-run", laps = 3): GoldenRun {
     out.wallets.push(JSON.stringify(ws.map((w) => room.players.get(w.game.you)?.wallet)));
     h.update(out.wallets[0]);
     out.hash = h.digest("hex");
+    out.stateErrs = ws.reduce((a, w) => a + w.game.recStateErrors, 0);
     return out;
   } finally {
     performance.now = realNow;
@@ -222,6 +224,7 @@ export interface CarRow {
   place: number[]; // per race: 1.. (results order)
   earned: number[]; // per race: scrap earned
   falls: number;
+  hitFalls: number; // ... of them within 3 s of the car being hit (rivet or mine)
   walls: number; // wall contacts begun (not within 2 s of a mine spin)
   mineWalls: number;
   dirt: number; // ticks on the dirt (grounded, off the road)
@@ -275,7 +278,7 @@ export function runRaces(o: RaceOpts): CarRow[] {
   const field = o.hostBot ? [...bots, host] : bots;
   const rows: CarRow[] = field.map((p) => ({
     name: p.name, level: p.bot?.level ?? o.hostBot!, car: p.carType, lapTicks: [], finish: [], place: [], earned: [],
-    falls: 0, walls: 0, mineWalls: 0, dirt: 0, wrecks: 0, rivets: 0, rivetHits: 0, mines: 0, mineHits: 0, wallet: "",
+    falls: 0, hitFalls: 0, walls: 0, mineWalls: 0, dirt: 0, wrecks: 0, rivets: 0, rivetHits: 0, mines: 0, mineHits: 0, wallet: "",
   }));
   const idx = new Map(field.map((p, k) => [p.id, k]));
   const wall = wallLimit(room.track);
@@ -296,6 +299,7 @@ export function runRaces(o: RaceOpts): CarRow[] {
     if (!o.hostBot && room.retire(host)) throw new Error("retire");
     const prev = field.map(() => ({ fall: 0, wreck: 0, lap: 0, lapAt: 0, wall: false }));
     const spun = new Map<string, number>();
+    const hitAt = new Map<string, number>();
     const ammo = field.map((p) => ({ ...p.wallet.ammo }));
     let rt = 0;
     events.length = 0;
@@ -307,6 +311,7 @@ export function runRaces(o: RaceOpts): CarRow[] {
           const by = idx.get(ev.by);
           if (by !== undefined && ev.by !== ev.id) ev.w === "rivet" ? rows[by].rivetHits++ : rows[by].mineHits++;
           if (ev.w === "mine") spun.set(ev.id, rt);
+          hitAt.set(ev.id, rt);
         }
       }
       // Fired and dropped: the ammo used (a rivet at close range can hit within the tick it is fired);
@@ -319,7 +324,10 @@ export function runRaces(o: RaceOpts): CarRow[] {
       field.forEach((p, k) => {
         const c = p.car, pr = p.progress, was = prev[k];
         if (!c || !pr) return;
-        if (c.fall > 0 && was.fall === 0) rows[k].falls++;
+        if (c.fall > 0 && was.fall === 0) {
+          rows[k].falls++;
+          if (rt - (hitAt.get(p.id) ?? -Infinity) <= 180) rows[k].hitFalls++;
+        }
         if (c.wreck > 0 && was.wreck === 0) rows[k].wrecks++;
         was.fall = c.fall;
         was.wreck = c.wreck;
@@ -492,7 +500,7 @@ function main(): void {
         console.log(`${x.key.padEnd(20)} N: ${line(xr)}\n${"".padEnd(20)} H: ${line(y)}`);
       });
       const all = (xs: { rows: CarRow[] }[], f: (r: CarRow) => number) => xs.reduce((a, x) => a + sum(x.rows, f), 0);
-      console.log(`TOTAL falls N ${all(n, (r) => r.falls)} H ${all(h, (r) => r.falls)}; walls N ${all(n, (r) => r.walls)} H ${all(h, (r) => r.walls)}; mine walls N ${all(n, (r) => r.mineWalls)} H ${all(h, (r) => r.mineWalls)}; wrecks N ${all(n, (r) => r.wrecks)} H ${all(h, (r) => r.wrecks)}`);
+      console.log(`TOTAL falls N ${all(n, (r) => r.falls)} (${all(n, (r) => r.hitFalls)} after a hit) H ${all(h, (r) => r.falls)} (${all(h, (r) => r.hitFalls)} after a hit); walls N ${all(n, (r) => r.walls)} H ${all(h, (r) => r.walls)}; mine walls N ${all(n, (r) => r.mineWalls)} H ${all(h, (r) => r.mineWalls)}; wrecks N ${all(n, (r) => r.wrecks)} H ${all(h, (r) => r.wrecks)}`);
     });
     return;
   }
@@ -506,7 +514,7 @@ function main(): void {
           const byLevel = (l: BotLevel) => rows.filter((r) => r.level === l);
           const pts = (l: BotLevel) => byLevel(l).reduce((a, r) => a + r.place.reduce((x, y) => x + y, 0), 0);
           console.log(`\n${track}, Hard on ${hardFirst ? "the first three seats" : "the last three seats"}: races won Hard ${sum(byLevel("hard"), (r) => r.place.filter((p) => p === 1).length)}, Normal ${sum(byLevel("normal"), (r) => r.place.filter((p) => p === 1).length)}; sum of places Hard ${pts("hard")}, Normal ${pts("normal")} (lower is better)`);
-          rows.forEach((r, k) => console.log(`  ${r.name.padEnd(14)} ${r.level.padEnd(6)} ${r.car.padEnd(5)} places ${r.place.join(",")} won ${wins[k]} earned ${r.earned.join("+") || "?"}; wrecks ${r.wrecks} falls ${r.falls} rivets ${r.rivetHits}/${r.rivets} mines ${r.mineHits}/${r.mines}; ${r.wallet}`));
+          rows.forEach((r, k) => console.log(`  ${r.name.padEnd(14)} ${r.level.padEnd(6)} ${r.car.padEnd(5)} places ${r.place.join(",")} won ${wins[k]} earned ${r.earned.join("+") || "?"}; wrecks ${r.wrecks} falls ${r.falls} (${r.hitFalls} after a hit) rivets ${r.rivetHits}/${r.rivets} mines ${r.mineHits}/${r.mines}; ${r.wallet}`));
         }
       }
     });

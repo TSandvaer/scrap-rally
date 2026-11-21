@@ -48,20 +48,23 @@ export const EASY_THROTTLE = 0.85;
 export const EASY_CORNER = 0.9;
 
 /**
- * Hard (see the top of this file). Measured with tools/debug/hard-tune.ts; an object so the
- * tuner can sweep them (the game never changes them).
+ * Hard (see the top of this file). Tuned with tools/debug/hard-tune.ts (2026-11-21) to the band
+ * the user picked: on every shipped track and car type, alone and weapons off, Hard's lap closes
+ * 40-55 % of the gap between Normal's lap and the flat-out ceiling (the Normal driver never
+ * braking for a bend: CORNER_SCALE = 3). Measured 41.5-53.6 %, with no fall, wall contact or dirt
+ * (sim-test "hard pace"). An object so the tuner can sweep them; the game never changes them.
  */
 export const HARD = {
   /** Bend targets (200/260/330 u/s by sharpness) times this. */
-  corner: 1.12,
-  /** Brake above target + this (Normal: 25), coast above the target. */
-  brakeBand: 25,
+  corner: 1.05,
+  /** Brake above target + this (Normal: 25), coast between the target and it: braking tighter. */
+  brakeBand: 15,
   /** The bend lookahead (Normal: max(120, 0.9 v) past 20 ahead) times this: braking starts later. */
-  bendLook: 1,
-  /** The aim point's lookahead (Normal: 55 + 0.3 v) times this. */
+  bendLook: 0.84,
+  /** The aim point's lookahead (Normal: 55 + 0.3 v) times this (1 measured best with the apex bias). */
   aimLook: 1,
   /** Apex bias: the racing line moves this far towards the inside of the bend ahead ... */
-  apex: 0,
+  apex: 20,
   /** ... once the bend ahead turns more than this (radians), fully from apexFull on. */
   apexFrom: 0.3,
   apexFull: 0.9,
@@ -69,8 +72,12 @@ export const HARD = {
   apexMineClear: 26,
   /** Cells within this of its lane (Normal CELL_LANE 30); below 58, the kerb cells' distance from lane 0. */
   cellLane: 45,
-  /** Rivets: fire when the shot's path passes the target's centre within CAR_RADIUS + RIVET_RADIUS less this. */
-  rivetMargin: 3,
+  /**
+   * Rivets: fire when the shot's path passes the target's centre within CAR_RADIUS + RIVET_RADIUS
+   * (a hit) plus this: a little wider than a hit, so some shots miss (the user, 2026-11-21: "add a
+   * little miss"; about 3 in 4 hit in bot traffic, Normal's cone about 3 in 5).
+   */
+  rivetSlack: 2.5,
   /** Mines: a follower at least 0.4 x its speed + mineNear behind (it arrives as the mine arms) ... */
   mineNear: 10,
   /** ... at most this far behind ... */
@@ -442,6 +449,20 @@ function cellLane(view: BotView, s: number, lane: number, toLip: number, max: nu
   return best;
 }
 
+/**
+ * Hard's apex lane: its racing line `lateral` moved towards the inside of the bend ahead (`turn`:
+ * the heading change over the bend lookahead, + = right), by HARD.apex once it turns HARD.apexFull,
+ * from nothing at HARD.apexFrom; kept 6 units inside the asphalt edge. Per seat: every bot moves
+ * its own line by the same amount, so three bots do not converge on one inside lane.
+ */
+export function apexLane(lateral: number, turn: number, halfWidth: number): number {
+  const bend = Math.abs(turn);
+  if (bend <= HARD.apexFrom) return lateral;
+  const k = Math.min(1, (bend - HARD.apexFrom) / (HARD.apexFull - HARD.apexFrom));
+  const max = halfWidth - CAR_WIDTH / 2 - 6;
+  return clamp(lateral + Math.sign(turn) * HARD.apex * k, -max, max);
+}
+
 /** Track coordinates of a point near the track `de` (about) ahead of s: its s and lateral offset (+ = right of travel). */
 function trackCoords(track: Track, s: number, de: number, x: number, y: number): { s: number; lat: number; h: number; dist: number } {
   const q = queryTrackNear(track, x, y, pointAt(track, s + de).seg);
@@ -468,8 +489,9 @@ function apexMineFree(view: BotView, c: CarState, s: number, a: number, b: numbe
 
 /**
  * Hard's rivet gate: would a rivet fired now (from the nose, along the heading, with the car's
- * velocity: weapons.ts spawnShot) pass through a solid car ahead, it holding its velocity, within
- * the rivet's range and over the road (a wall stops a rivet)? A gate on relative velocity only.
+ * velocity: weapons.ts spawnShot) pass a solid car ahead within a hit plus HARD.rivetSlack, the
+ * car holding its velocity, within the rivet's range and over the road (a wall stops a rivet)?
+ * A gate on relative velocity only: the bot never steers to aim.
  */
 function rivetWouldHit(track: Track, s: number, c: CarState): (o: BotOther) => boolean {
   const cos = Math.cos(c.h), sin = Math.sin(c.h);
@@ -477,7 +499,7 @@ function rivetWouldHit(track: Track, s: number, c: CarState): (o: BotOther) => b
   const sx = c.x + cos * nose, sy = c.y + sin * nose;
   const wx = c.vx + cos * RIVET_SPEED, wy = c.vy + sin * RIVET_SPEED; // the rivet's velocity
   const tMax = RIVET_RANGE / Math.hypot(wx, wy);
-  const r = CAR_RADIUS + RIVET_RADIUS - HARD.rivetMargin;
+  const r = CAR_RADIUS + RIVET_RADIUS + HARD.rivetSlack;
   return (o) => {
     if (!o.solid) return false;
     const rx = o.x - sx, ry = o.y - sy;
@@ -600,9 +622,7 @@ export function botControls(view: BotView, mem: BotMem): BotControls {
   // Hard's apex bias: only on its own racing line (a hole lane, a ramp, the slipstream and a cell
   // come first), towards the inside of the bend ahead, never onto a mine. mem.lateral stays.
   if (hard && HARD.apex > 0 && !hole.holes && !ramp && !mem.wake && !cell && view.raceOn && bend > HARD.apexFrom) {
-    const k = Math.min(1, (bend - HARD.apexFrom) / (HARD.apexFull - HARD.apexFrom));
-    const max = track.def.halfWidth - CAR_WIDTH / 2 - 6;
-    const apex = clamp(mem.lateral + Math.sign(turn) * HARD.apex * k, -max, max);
+    const apex = apexLane(mem.lateral, turn, track.def.halfWidth);
     if (apexMineFree(view, c, q.s, mem.lateral, apex)) lane = apex;
   }
   let aim = q.s + look;
