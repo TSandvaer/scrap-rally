@@ -465,6 +465,8 @@ merge main (README conflict with touch) before its merge.
 TOUCH-1 gate on main: check clean, sim 765/765, bots 118/118, build ok; ClickUp 123jpnbffvf ready for qa test; workspace removed.
 PUSHED 2026-11-21 (user popup): origin/main e409e09..c655bd8 (touch + lobby fix). Waiting for the user's Manual Deploy; local build of
 c655bd8 gives index-DnnpZQ-5.js -> verify live, then the user's real-phone touch test (PLAN-TOUCH advisor change 11 checklist).
+Phone test: user REJECTED the 8-way pad (no gas+steer at once). TOUCH-2 (floating thumbstick right half, up = full gas, proportional
+steer, tuning panel behind ?debug=1) proposed in PLAN-TOUCH.md; Fable advisor review running. Then the user approves, then an Opus worker.
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
