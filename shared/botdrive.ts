@@ -14,6 +14,13 @@
 // cheapest lane round a pool or a patch when one is free. With none of them ahead it is exactly
 // the hole lane (the shipped tracks drive as before).
 //
+// Split lanes (M4-SURF part 2, PLAN-M4 2.6 B and advisor change 2): an island ahead or beside the bot
+// (splitFor) makes it take one lane round it, the cheaper one for its car type (lane length plus the
+// water or dirt filling it: the truck takes the dirt lane), the side of its seat's racing line on a tie
+// (never the random id), and hold that lane, inside the asphalt, until it is past the island. Tyre
+// mounds lock the side the bot is passing them on (MOUNDS, the M4-SURF-1 review's F1), and the lane
+// search looks round the lap past the finish line (F2).
+//
 // Levels: Normal is the M3 driver. Easy caps the throttle at EASY_THROTTLE except on a ramp
 // approach (PLAN-M4 advisor change 3: 0.85 alone tops out near 365 u/s, below what the
 // Overpass Knot crossing needs), takes bends at EASY_CORNER of Normal's speed and never shoots.
@@ -41,7 +48,7 @@
 
 import { CARS, DEFAULT_CAR, type CarType } from "./cars";
 import { angleDiff, CAR_LENGTH, CAR_RADIUS, CAR_WIDTH, clamp, DT, speedOf, type CarState, type CarStats } from "./physics";
-import { LIP_ZONE, pointAt, queryTrackNear, SURF_DIRT, SURF_WATER, type Ramp, type Track } from "./track";
+import { halfOf, halfOn, islandAt, LIP_ZONE, pointAt, queryTrackNear, SURF_DIRT, SURF_WATER, wallOf, type PlacedIsland, type Ramp, type Surface, type Track } from "./track";
 import { airTicksFor, MIN_TAKEOFF_SPEED, MINE_ARM_TICKS, RIVET_RADIUS, RIVET_RANGE, RIVET_SPEED, WEAPONS_ARM_MS } from "./weapons";
 
 export type BotLevel = "easy" | "normal" | "hard";
@@ -328,8 +335,19 @@ export function holeLane(track: Track, s: number, look: number, pref: number): {
 export const WATER_COST = 1.5;
 /** A lane counts as on a surface when the car's centre passes within this of its rectangle. */
 const SURFACE_MARGIN = 4;
-/** A tyre mound stays in the lane search until the car's centre is this far past its edge (half a car + 1). */
+/** A tyre mound is a blocker in the lane search until the car's centre is this far past its edge (half a car + 1). */
 const MOUND_BEHIND = 16;
+/**
+ * Side locks (M4-SURF part 2, the M4-SURF-1 review's F1). The search used to drop every later mound
+ * for a while after passing one, which by chance kept a bot on its side; seeing them at once, it
+ * crossed in front of the next mound for a cheaper lane (one on the asphalt rather than the verge)
+ * with too little road left, or turned its rear into the one just passed. Now a mound from
+ * MOUNDS.commit ahead of the car's centre until that centre is MOUNDS.hold past its edge holds the
+ * lane on the side of it the car is on: the bot keeps its side until it is clear, and the mounds
+ * after it are in the search all the while. Tuned on the Surf Yard (tools/debug/split-tune.ts
+ * --mounds). An object so the tuner can sweep it; the game never changes it.
+ */
+export const MOUNDS = { commit: 160, hold: 32 };
 /** A lane round a blocker on the verge keeps this far (plus half a car) off the wall. */
 const VERGE_LANE_MARGIN = 10;
 
@@ -363,35 +381,75 @@ interface Blocker {
  * only when the racing line costs something (`dodge`). With neither a mound nor a surface ahead it
  * is holeLane exactly. `holes`: how many blockers are ahead (0 = none).
  */
-export function laneFor(track: Track, s: number, seg: number, look: number, pref: number, racing: number, stats: CarStats): { lane: number; holes: number; dodge: boolean } {
+export function laneFor(
+  track: Track, s: number, seg: number, look: number, pref: number, racing: number, stats: CarStats, span: SplitSpan | null = null, lat = pref,
+): { lane: number; holes: number; dodge: boolean } {
   const tyres = track.tyres, surfaces = track.surfaces;
-  // The mounds and the surfaces ahead (from the segment's start indices; nothing on a plain track).
+  const L = track.length;
+  // The mounds and the surfaces ahead (from the segment's start indices, on round the lap past the
+  // finish line: M4-SURF part 2, the review's F2; nothing on a plain track).
   let mounds: Blocker[] | null = null;
-  for (let k = track.tyresFrom[seg] ?? tyres.length; k < tyres.length; k++) {
-    const m = tyres[k];
-    // Behind once the car's rear is past it (a hole stays in view r + 30: a fall costs more).
-    const d = ahead(track, s - m.r - MOUND_BEHIND, m.s) - m.r - MOUND_BEHIND;
-    if (d > look + 2 * m.r + 60) break; // sorted by s: the rest are further
-    if (d < look) (mounds ??= []).push({ lat: m.lat, r: m.r, d });
+  // The side locks (MOUNDS), nearest first: each keeps the lane on the car's side of its mound
+  // unless that leaves no lane with the nearer ones.
+  let holdLo = -Infinity, holdHi = Infinity;
+  const lock = (m: { lat: number; r: number }) => {
+    const lo = lat < m.lat ? holdLo : Math.max(holdLo, m.lat + m.r + HOLE_CLEARANCE);
+    const hi = lat < m.lat ? Math.min(holdHi, m.lat - m.r - HOLE_CLEARANCE) : holdHi;
+    if (lo <= hi) {
+      holdLo = lo;
+      holdHi = hi;
+    }
+  };
+  const nT = tyres.length;
+  if (nT > 0) {
+    const k0 = track.tyresFrom[seg] ?? nT;
+    for (let j = 0; j < nT; j++) {
+      const m = tyres[(k0 + j) % nT];
+      let d = m.s - s; // how far ahead of the car (the nearer way round the lap)
+      if (d < -L / 2) d += L;
+      else if (d >= L / 2) d -= L;
+      // Behind once the car's rear is past it (a hole stays in view r + 30: a fall costs more); held a while longer.
+      if (d < -(m.r + MOUND_BEHIND)) {
+        if (d >= -(m.r + MOUNDS.hold)) lock(m);
+        continue;
+      }
+      if (d > look + 2 * m.r + 60) break; // in order round the lap: the rest are further
+      if (d < MOUNDS.commit) lock(m);
+      if (d < look) (mounds ??= []).push({ lat: m.lat, r: m.r, d });
+    }
   }
+  const held = holdLo > -Infinity || holdHi < Infinity;
   let spans: { lat0: number; lat1: number; len: number; cost: number }[] | null = null;
   const end = s + look;
-  for (let k = track.surfFrom[seg] ?? surfaces.length; k < surfaces.length && surfaces[k].s0 < end; k++) {
-    const f = surfaces[k];
-    const len = Math.min(f.s1, end) - Math.max(f.s0, s);
-    const cost = laneCost(f.kind, stats);
-    if (len > 0 && cost > 0) (spans ??= []).push({ lat0: f.lat0 - SURFACE_MARGIN, lat1: f.lat1 + SURFACE_MARGIN, len, cost });
+  const nS = surfaces.length;
+  if (nS > 0) {
+    const k0 = track.surfFrom[seg] ?? nS;
+    for (let j = 0; j < nS; j++) {
+      const k = k0 + j;
+      const f = surfaces[k % nS];
+      const lap = k >= nS ? L : 0; // the ones past the finish line, a lap on
+      if (f.s0 + lap >= end) break; // sorted by s0 round the lap from surfFrom
+      const len = Math.min(f.s1 + lap, end) - Math.max(f.s0 + lap, s);
+      const cost = laneCost(f.kind, stats);
+      if (len > 0 && cost > 0) (spans ??= []).push({ lat0: f.lat0 - SURFACE_MARGIN, lat1: f.lat1 + SURFACE_MARGIN, len, cost });
+    }
   }
-  if (!mounds && !spans) return { ...holeLane(track, s, look, pref), dodge: false };
+  if (!mounds && !spans && !span && !held) return { ...holeLane(track, s, look, pref), dodge: false };
   const near: Blocker[] = track.holes
     .map((h) => ({ lat: h.lat, r: h.r, d: ahead(track, s - h.r - 30, h.s) - h.r - 30 }))
     .filter((x) => x.d < look);
   if (mounds) near.push(...mounds);
   near.sort((a, b) => a.d - b.d);
   // On the asphalt; with a blocker ahead the verge too (costed as the dirt it is), so a car on the
-  // outside of a mound goes round it there rather than back across it.
-  const road = track.def.halfWidth - CAR_WIDTH / 2;
-  const max = near.length ? track.wall - CAR_WIDTH / 2 - VERGE_LANE_MARGIN : road;
+  // outside of a mound goes round it there rather than back across it. In a split (span): inside
+  // the lane it takes round the island (all asphalt).
+  const road = span ? Infinity : track.def.halfWidth - CAR_WIDTH / 2;
+  const max = near.length ? track.wall - CAR_WIDTH / 2 - VERGE_LANE_MARGIN : track.def.halfWidth - CAR_WIDTH / 2;
+  let lo = span ? span.lo : -max, hi = span ? span.hi : max;
+  if (held && Math.max(lo, holdLo) <= Math.min(hi, holdHi)) {
+    lo = Math.max(lo, holdLo);
+    hi = Math.min(hi, holdHi);
+  }
   const verge = laneCost(SURF_DIRT, stats) * look;
   const clears = (lat: number) => {
     let n = 0;
@@ -403,12 +461,12 @@ export function laneFor(track: Track, s: number, seg: number, look: number, pref
     if (spans) for (const p of spans) if (lat > p.lat0 && lat < p.lat1) c += p.len * p.cost;
     return c;
   };
-  const from = near.length ? pref : racing;
-  let best = clamp(from, -max, max), bestN = clears(best), bestC = costOf(best);
-  if (!near.length && bestC === 0) return { lane: racing, holes: 0, dodge: false };
-  for (let k = 2; k <= 2 * max && !(bestN === near.length && bestC === 0); k += 2) {
+  const from = span ? clamp(near.length ? pref : span.racing, lo, hi) : near.length ? pref : racing;
+  let best = clamp(from, lo, hi), bestN = clears(best), bestC = costOf(best);
+  if (!near.length && bestC === 0) return span || held ? { lane: best, holes: 0, dodge: true } : { lane: racing, holes: 0, dodge: false };
+  for (let k = 2; k <= hi - lo && !(bestN === near.length && bestC === 0); k += 2) {
     for (const lat of [from - k, from + k]) {
-      if (Math.abs(lat) > max) continue;
+      if (lat < lo || lat > hi) continue;
       const n = clears(lat);
       if (n < bestN) continue;
       const c = costOf(lat);
@@ -420,6 +478,87 @@ export function laneFor(track: Track, s: number, seg: number, look: number, pref
     }
   }
   return { lane: best, holes: near.length, dodge: true };
+}
+
+// ---- split lanes (M4-SURF part 2, PLAN-M4.md 2.6 B and advisor change 2) -------------------
+// An island ahead (within the lane search's look) or beside the bot: it takes one lane round it,
+// chosen per seat and car type and never by the random id (splitSide), and keeps inside that lane
+// until it is past the island (SplitSpan: laneFor searches only there, and botControls holds the
+// final lane inside it and inside the asphalt at the aim point, so the bot follows the road's edge
+// out into the lane and back in). From SPLIT.commit before the island's head on it keeps the
+// side it is on (a bumped bot never cuts across a nose).
+
+/** The lane a bot takes round an island: its lateral range (lo..hi, + = right of travel), its racing line there, the side. */
+export interface SplitSpan {
+  lo: number;
+  hi: number;
+  racing: number;
+  side: number; // -1 the left lane, +1 the right one
+  isle: PlacedIsland;
+}
+
+/** Split lanes (see above). An object so the tuner can sweep it; the game never changes it. */
+export const SPLIT = {
+  /** The car's centre keeps this far off the island's side (half a car + 8, as a hole's HOLE_CLEARANCE) ... */
+  clear: CAR_WIDTH / 2 + 8,
+  /** ... and this far inside the asphalt's edge. */
+  edge: CAR_WIDTH / 2 + 6,
+  /** Lanes whose costs (units) differ by less than this are a tie: the seat decides. */
+  tie: 40,
+  /** From this far before the island's head the bot keeps the side it is on. */
+  commit: 60,
+  /** The island stays in view until the car's centre is this far past its tail (its rear clear of the nose). */
+  past: 24,
+};
+
+/**
+ * Which lane round `isle` (-1 the left, +1 the right) a bot of car type `stats` with racing line
+ * `lateral` (its seat's) takes: the cheaper one, a lane costing the length of its middle
+ * (PlacedIsland.lenL, lenR: the shorter lane is faster) plus the surfaces in it as laneFor costs
+ * them (length x laneCost) when they leave it no dry line for the car's centre; within SPLIT.tie of
+ * each other the seat's side (its racing line's; right for the centre line, as the slipstream's
+ * pass side). So on a split with water in one lane and dirt in the other the truck takes the dirt.
+ */
+export function splitSide(isle: PlacedIsland, stats: CarStats, lateral: number): number {
+  const cost = (side: number, surfs: readonly Surface[]) => {
+    let c = side < 0 ? isle.lenL : isle.lenR;
+    const lo = side < 0 ? -isle.outL + SPLIT.edge : isle.lat1 + SPLIT.clear, hi = side < 0 ? isle.lat0 - SPLIT.clear : isle.outR - SPLIT.edge;
+    for (const f of surfs) {
+      if (f.lat0 - SURFACE_MARGIN > lo || f.lat1 + SURFACE_MARGIN < hi) continue; // a dry line beside it
+      c += Math.max(0, Math.min(f.s1, isle.s1) - Math.max(f.s0, isle.s0)) * laneCost(f.kind, stats);
+    }
+    return c;
+  };
+  const l = cost(-1, isle.surfL), r = cost(1, isle.surfR);
+  if (Math.abs(l - r) < SPLIT.tie) return lateral >= 0 ? 1 : -1;
+  return l < r ? -1 : 1;
+}
+
+/**
+ * The split lane a bot at (s, lat) on segment seg is in or heading for: the first island round the
+ * lap from the segment's start index whose head is at most `look` ahead and that the car is not yet
+ * SPLIT.past beyond; null if none (a plain track: no island, nothing to do).
+ */
+export function splitFor(track: Track, s: number, seg: number, lat: number, look: number, lateral: number, stats: CarStats): SplitSpan | null {
+  const isles = track.islands, n = isles.length;
+  if (n === 0) return null;
+  const L = track.length;
+  const k0 = track.islandsFrom[seg] ?? n;
+  for (let j = 0; j < n; j++) {
+    const isle = isles[(k0 + j) % n];
+    let d0 = isle.s0 - s; // how far ahead its head is (the nearer way round the lap)
+    if (d0 < -L / 2) d0 += L;
+    else if (d0 >= L / 2) d0 -= L;
+    if (d0 + (isle.s1 - isle.s0) < -SPLIT.past) continue; // past it
+    if (d0 > look) break; // in order round the lap: the rest are further
+    const side = d0 > SPLIT.commit ? splitSide(isle, stats, lateral) : lat < isle.mid ? -1 : 1;
+    const lo = side < 0 ? -isle.outL + SPLIT.edge : isle.lat1 + SPLIT.clear;
+    const hi = side < 0 ? isle.lat0 - SPLIT.clear : isle.outR - SPLIT.edge;
+    // The seat's racing line, scaled from the road into the lane.
+    const racing = clamp((lo + hi) / 2 + (lateral * (hi - lo)) / 2 / (track.def.halfWidth - CAR_WIDTH / 2), lo, hi);
+    return { lo, hi, racing, side, isle };
+  }
+  return null;
 }
 
 /** The next ramp whose lip is at most `range` ahead of s (or that s is on), with its distance. */
@@ -628,7 +767,8 @@ function rivetWouldHit(track: Track, s: number, c: CarState): (o: BotOther) => b
     for (const f of [0.5, 1]) {
       const px = sx + wx * t * f, py = sy + wy * t * f;
       const q = queryTrackNear(track, px, py, pointAt(track, s + Math.hypot(px - c.x, py - c.y)).seg);
-      if (q.dist > track.wall - RIVET_RADIUS) return false;
+      if (q.dist > wallOf(track, q) - RIVET_RADIUS) return false;
+      if (islandAt(track, q.seg, q.s, q.lat, RIVET_RADIUS)) return false; // an island in the way (M4-SURF part 2)
     }
     return true;
   };
@@ -701,7 +841,10 @@ export function botControls(view: BotView, mem: BotMem): BotControls {
   // Holes and tyre mounds: the lane nearest the car's line that clears the next ones; slower
   // among them. Water and dirt: the cheapest lane for its car type (laneFor). With none of them
   // ahead the bot holds its own racing line (mem.lateral).
-  const hole = laneFor(track, q.s, q.seg, 140 + v * 0.6, clamp(lat, mem.lateral - 24, mem.lateral + 24), mem.lateral, view.stats);
+  // Split lanes (M4-SURF part 2): an island ahead or beside it: the lane it takes round it (null on a plain track).
+  const split = splitFor(track, q.s, q.seg, lat, 140 + v * 0.6, mem.lateral, view.stats);
+  const pref = split ? clamp(lat, split.racing - 24, split.racing + 24) : clamp(lat, mem.lateral - 24, mem.lateral + 24);
+  const hole = laneFor(track, q.s, q.seg, 140 + v * 0.6, pref, mem.lateral, view.stats, split, lat);
   let lane = hole.holes || hole.dodge ? hole.lane : mem.lateral;
   let look = hole.holes ? 40 + v * 0.25 : 55 + v * 0.3;
   if (hard) look *= HARD.aimLook;
@@ -744,6 +887,12 @@ export function botControls(view: BotView, mem: BotMem): BotControls {
   let aim = q.s + look;
   if (ramp && ramp.toLip < RAMP_STRAIGHTEN) aim = q.s + ramp.toLip + 180;
   const t = pointAt(track, aim);
+  if (split) {
+    // In its lane round the island, and inside the asphalt at the aim point (a taper is narrower):
+    // a cell or anything else never takes it across the island.
+    const lo = Math.max(split.lo, -halfOn(track, t.seg, aim, -1) + SPLIT.edge), hi = Math.min(split.hi, halfOn(track, t.seg, aim, 1) - SPLIT.edge);
+    lane = clamp(lane, lo, Math.max(lo, hi));
+  }
   const tx = t.x - Math.sin(t.h) * lane;
   const ty = t.y + Math.cos(t.h) * lane;
   let steer = clamp(angleDiff(c.h, Math.atan2(ty - c.y, tx - c.x)) * 2.2, -1, 1);
@@ -765,7 +914,7 @@ export function botControls(view: BotView, mem: BotMem): BotControls {
   // longer run-up, when the car is on the asphalt, pointing along the track and has room to
   // stop before the lip. A back-up that does not get there still ends in a recovery.
   const lip = ramp ? ramp.ramp.s + ramp.ramp.len : -1;
-  if (ramp && !mem.backup && mem.backedUpFor !== lip && view.raceOn && q.dist <= track.def.halfWidth &&
+  if (ramp && !mem.backup && mem.backedUpFor !== lip && view.raceOn && q.dist <= halfOf(track, q) &&
       Math.abs(angleDiff(c.h, dir)) < 0.6) {
     const need = takeoffSpeedFor(track, ramp.ramp);
     const stop = (Math.max(0, vf) ** 2) / (2 * 900) + 20; // braking distance (stepCar's BRAKE) + margin
