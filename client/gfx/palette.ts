@@ -3,6 +3,11 @@
 // in style.css :root. Cars are the exception: each car colour has three tones of its own
 // (carTones), because the six server colours have no ramp here.
 //
+// One tone stands outside the 32: `water`, the body of a pool (M4-WORLD; user decision
+// 2026-11-21, "a murky blue-grey": the 32 have no blue, and a pool in steel grey read as a
+// metal plate). It is the last entry of P and of PALETTE, index SCRAPYARD, and water alone
+// takes it: it is in no ramp, nothing is snapped to it (nearest), and the DOM does not mirror it.
+//
 // Our own palette, not a published one: each entry is taken or derived from a colour the game
 // already draws (render.ts PAL and its literals, style.css :root); the comment says which.
 // Ramps run dark to light. The sun is top-left: SHADE is the tone a colour takes in a cast
@@ -51,11 +56,16 @@ export const P = {
   blast: "#ff9a33", // new: the one blast orange, between rust3 and haz1 and brighter than both
   red: "#e8452d", // the hp bar's red; the armed mine's lamp #ff3b2f
   green: "#7bc95a", // the hp bar's green
+  // Not one of the 32: water, and nothing but water (see the top of the file).
+  water: "#3a5068", // new: a murky blue-grey, darker than steel1 and bluer than any steel
 } as const;
 
 export type PaletteName = keyof typeof P;
 
-/** The 32 entries in order (the index a baked tile stores). */
+/** How many of the entries are the palette proper: the 32. The one after them is `water`. */
+export const SCRAPYARD = 32;
+
+/** The 32 entries in order, then `water` (the index a baked tile stores). */
 export const PALETTE: readonly { name: PaletteName; hex: string }[] = (Object.keys(P) as PaletteName[]).map((name) => ({ name, hex: P[name] }));
 
 /** The ramps, dark to light. bone0 closes the gravel ramp and opens the bone ramp. */
@@ -82,6 +92,7 @@ export const SHADE: Readonly<Record<PaletteName, PaletteName>> = {
   bone0: "gravel0", bone1: "bone0", bone2: "bone0",
   haz0: "dirt1", haz1: "haz0", haz2: "bone0",
   blast: "rust2", red: "rust1", green: "steel1",
+  water: "steel0",
 };
 
 /** The 1 px sunlit (top-left) edge of a shape in that colour. */
@@ -95,6 +106,7 @@ export const LIT: Readonly<Record<PaletteName, PaletteName>> = {
   bone0: "bone1", bone1: "bone2", bone2: "bone2",
   haz0: "haz1", haz1: "haz2", haz2: "haz2", // haz2 is the lightest of the 32: its lit tone is itself
   blast: "haz2", red: "blast", green: "haz2",
+  water: "steel1",
 };
 
 /**
@@ -161,7 +173,7 @@ export function nearest(r: number, g: number, b: number): number {
       // The cell's centre, back in 8 bits.
       const cr = (((i >> 10) & 31) << 3) | 4, cg = (((i >> 5) & 31) << 3) | 4, cb = ((i & 31) << 3) | 4;
       let best = 0, bestD = Infinity;
-      for (let k = 0; k < RGB.length; k++) {
+      for (let k = 0; k < SCRAPYARD; k++) {
         const dr = cr - RGB[k][0], dg = cg - RGB[k][1], db = cb - RGB[k][2];
         // "Redmean" weights: closer to the eye than plain RGB distance, and cheap.
         const rm = (cr + RGB[k][0]) / 2;

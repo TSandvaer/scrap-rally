@@ -44,7 +44,8 @@
 import { MAX_PLAYERS } from "../../shared/protocol";
 import { BARREL_R, gapAt, gridSlot, holeAt, pointAt, PRESS_DEPTH, queryTrack, TRUCK_BAND, TRUCK_CAB, TRUCK_HALF, wallAt, widenAt, type Track, type Vec } from "../../shared/track";
 import type { CarView } from "../render";
-import { BAYER4, LIT, P, PALETTE, palette32, SHADE, type PaletteName } from "./palette";
+import { BAYER4, LIT, P, PALETTE, palette32, SCRAPYARD, SHADE, type PaletteName } from "./palette";
+import { PUDDLE_TRACTION_INSET } from "./puddle-shape";
 
 export const VIEW_W = 640;
 export const VIEW_H = 360;
@@ -100,6 +101,7 @@ const {
   bone0: BONE0, bone1: BONE1, bone2: BONE2,
   haz0: HAZ0, haz1: HAZ1, haz2: HAZ2,
   blast: BLAST,
+  water: WATER, // not one of the 32 (index SCRAPYARD): the body of a pool, and a pixel of it takes no marks
 } = IDX;
 
 // What a pixel is, for the passes that look at their neighbours (shadows, bevels, clips).
@@ -274,6 +276,11 @@ interface Flat {
   x1: number;
   y1: number;
   flip: boolean; // F_ROW: the barrels roll from right to left
+  // F_WATER, F_DIRT: the puddle's outline (puddleEdge). Its seed, the radius of each of its four
+  // corners (by nearer end along, then nearer side across), and how much of the wobble it has.
+  seed: number;
+  round: Float64Array;
+  swell: number;
 }
 
 const T_TYRES = 0, T_TRUCK = 1, T_JUNK = 2;
@@ -306,7 +313,22 @@ interface TruckArt {
 const TYRE = 6.5; // a tyre's radius
 const NOSE = 26; // an island's nose: two rows of tyre stacks
 const GORE = 46; // the painted wedge on the road before a nose
-const POOL_ROUND = 12; // a pool's and a dirt patch's corners are rounded this much
+// A puddle (a pool, a dirt patch) is drawn inside its declared rectangle, which is its bounds
+// (puddleEdge): its corners round, each by a radius of its own up to PUDDLE_ROUND, its edge
+// between PUDDLE_NEAR and PUDDLE_FAR inside the rectangle's sides, in lobes. What a car feels
+// is the rectangle less PUDDLE_TRACTION_INSET (gfx/puddle-shape.ts): that lies inside the
+// puddle wherever one is drawn. Along a side the edge is at most PUDDLE_FAR in; in a corner
+// the lobes are held back (PUDDLE_HOLD) to what the round corner leaves of the way to the
+// traction rectangle's corner; and whatever the outline does, the traction rectangle and
+// PUDDLE_KEEP round it are part of the puddle (puddleEdge's last lines).
+const PUDDLE_ROUND = 3.3 * PUDDLE_TRACTION_INSET; // a corner's radius at most (under 3.41 insets the traction rectangle's corner is inside the round one)
+const PUDDLE_NEAR = 1.2;
+const PUDDLE_LOBE = 0.62 * PUDDLE_TRACTION_INSET; // the wide lobes go this much further in at most ...
+const PUDDLE_WOBBLE = 2; // ... and the finer wobble this much
+const PUDDLE_FAR = PUDDLE_NEAR + PUDDLE_LOBE + PUDDLE_WOBBLE;
+const PUDDLE_HOLD = 0.92; // on a corner's diagonal this share of the lobes is held back
+const PUDDLE_KEEP = 1; // the traction rectangle and this much round it are always puddle
+if (!(PUDDLE_FAR < PUDDLE_TRACTION_INSET - PUDDLE_KEEP)) throw new Error("gfx/world.ts: a puddle's lobes reach its traction rectangle");
 const ROW_JAMB = 2.5; // the frame of the hatch a row of barrels comes out of
 
 const arts = new WeakMap<Track, Art>();
@@ -608,7 +630,12 @@ function furnish(art: Art): void {
         y1 = Math.max(y1, q.y * ZOOM);
       }
     }
-    art.flats.push({ kind, s0, s1, l0, l1, x0: Math.floor(x0) - 2, y0: Math.floor(y0) - 2, x1: Math.ceil(x1) + 3, y1: Math.ceil(y1) + 3, flip });
+    // A puddle's outline is its own, by the four numbers of its rectangle: the same on every client and in every bake.
+    const seed = Math.imul(Math.round(s0 * 4), 73856093) ^ Math.imul(Math.round(s1 * 4), 19349663) ^ Math.imul(Math.round(l0 * 4), 83492791) ^ Math.imul(Math.round(l1 * 4), 265443576);
+    const short = Math.min(s1 - s0, l1 - l0);
+    const rnd = mulberry32(seed);
+    const round = Float64Array.from([0, 0, 0, 0], () => Math.min(short / 2, PUDDLE_ROUND * (0.7 + 0.3 * rnd())));
+    art.flats.push({ kind, s0, s1, l0, l1, x0: Math.floor(x0) - 2, y0: Math.floor(y0) - 2, x1: Math.ceil(x1) + 3, y1: Math.ceil(y1) + 3, flip, seed, round, swell: Math.min(1, short / 48) });
   };
   // A thing's box, from the view-pixel box of what is drawn: room for its shadow down-right.
   const thing = (kind: number, x0: number, y0: number, x1: number, y1: number, more: Partial<Thing>): void => {
@@ -631,7 +658,7 @@ function furnish(art: Art): void {
 
   // Painted flat, in this order: the surfaces first (they never overlap each other), then what
   // may lie on one (the lane of a row of barrels, a press's bed), the islands last.
-  for (const d of track.dirt) flat(F_DIRT, d.s0, d.s1, d.lat0, d.lat1, 4);
+  for (const d of track.dirt) flat(F_DIRT, d.s0, d.s1, d.lat0, d.lat1, 0);
   for (const w of track.water) flat(F_WATER, w.s0, w.s1, w.lat0, w.lat1, 0);
   for (const b of track.belts) flat(F_BELT, b.s0, b.s1, b.lat0, b.lat1, 0);
   for (const b of track.barrels) flat(F_ROW, b.s - BARREL_R - ROW_JAMB, b.s + BARREL_R + ROW_JAMB, b.lat0 - BARREL_R - BARRIER, b.lat1 + BARREL_R + BARRIER, 0, b.speed < 0);
@@ -1476,7 +1503,7 @@ function finish(): void {
           if (i + j === 0) continue; // under the post itself
           const p = (y + 2 + j) * S + x + 2 + i;
           const v = idx[p];
-          idx[p] = SHADE_I[v & 31] | (v & OFF);
+          idx[p] = SHADE_I[v & 63] | (v & OFF);
         }
       }
       for (let j = 0; j < 3; j++) for (let i = 0; i < 3; i++) idx[(y + j) * S + x + i] = (i === 0 || j === 0 ? STEEL3 : i === 2 || j === 2 ? STEEL0 : STEEL1) | OFF;
@@ -1526,10 +1553,12 @@ function finish(): void {
 // drawn as the junk is, a shape in the sun with its cast shadow. What can be driven on is flat
 // and casts nothing; what is solid has the lit and the dark edge, a shadow, and either the
 // barrier's steel or tyres in the kerb's two paints.
-// - Water: flat steel grey with no speckle (the only flat ground there is), a dark edge, the
-//   ground wet round it, short ripples of light and darker deeps. A kerb and the road's paint
-//   show through, so the road can still be read under it.
-// - Dirt: the yard's earth on the road, ragged, thrown a little past its edge, wheel ruts along it.
+// - Water: a puddle (see puddleEdge: round, its edge in a few lobes, inside the pool's
+//   rectangle). A murky blue-grey that nothing else in the world has (palette.ts `water`), flat,
+//   with no speckle; a dark edge, the ground wet round it, short ripples of light and of dark.
+//   A kerb and the road's paint show through, so the road can still be read under it.
+// - Dirt: a puddle of the yard's earth on the road, a little of it thrown past its edge, wheel
+//   ruts along it.
 // - A conveyor belt: slats of rusted steel between two rollers (it runs across the road), a
 //   steel skirt along its two sides. The arrows that run on it are drawn a frame at a time.
 // - A row of rolling barrels leaves its lane: worn ground from wall to wall, the kerbs striped
@@ -1542,6 +1571,69 @@ function finish(): void {
 // - A tyre mound: tyres heaped in rings, the outer ring painted.
 // - The ramp truck: a ramp plate and a deck striped and lit as every ramp is, with the same
 //   hazard lip where a car takes off; side boards, and beyond the lip the cab it flies over.
+
+// The point puddleEdge() is asked about, and its answer: [0] = s, [1] = l (track coordinates,
+// world units), [2] = how far inside the puddle's outline the point is (0 or less: outside it).
+// Through an array: fractions handed over in a call are boxed (see "The bake allocates nothing").
+const EDGE = new Float64Array(3);
+
+/**
+ * The outline of a puddle (a pool, a dirt patch) at the point in EDGE: the feature's rectangle
+ * with its four corners rounded, each by its own radius, less a way in that wanders over the
+ * track's plane: PUDDLE_NEAR, wide lobes of up to PUDDLE_LOBE more and a finer wobble of up to
+ * PUDDLE_WOBBLE (two waves of smooth noise, seeded by the feature). So the edge lies between
+ * PUDDLE_NEAR and PUDDLE_FAR inside the rectangle's sides, is nowhere straight, and is the same
+ * wherever it is worked out: whole-number hashes, + - * / and a square root, nothing an engine
+ * may round its own way. And the traction rectangle (the declared one less
+ * PUDDLE_TRACTION_INSET) with PUDDLE_KEEP round it is inside the outline, come what may.
+ */
+function puddleEdge(f: Flat): void {
+  const s = EDGE[0], l = EDGE[1];
+  const a = s - f.s0, b = f.s1 - s, c = l - f.l0, d = f.l1 - l;
+  const ds = a < b ? a : b, dl = c < d ? c : d;
+  const r = f.round[(a < b ? 0 : 1) | (c < d ? 0 : 2)]; // the nearest corner's radius
+  let e = ds < dl ? ds : dl, lobes = f.swell;
+  if (ds < r && dl < r) {
+    const u = r - ds, v = r - dl;
+    e = r - Math.sqrt(u * u + v * v);
+    // In a corner the lobes are held back, most on its diagonal: there the traction rectangle's corner is nearest the edge.
+    const q = 1 - (u > v ? u - v : v - u) / r;
+    lobes *= 1 - PUDDLE_HOLD * q * q;
+  }
+  let way = 0;
+  for (let wave = 0; wave < 2; wave++) {
+    const cell = wave ? 13 : 38, seed = wave ? f.seed ^ 0x5bd1e995 : f.seed;
+    const x = s / cell, y = l / cell;
+    const xi = Math.floor(x), yi = Math.floor(y);
+    const fx = x - xi, fy = y - yi;
+    const sx = fx * fx * (3 - 2 * fx), sy = fy * fy * (3 - 2 * fy);
+    const hx0 = Math.imul(xi, 374761393), hx1 = Math.imul(xi + 1, 374761393);
+    const hy0 = Math.imul(yi, 668265263) ^ seed, hy1 = Math.imul(yi + 1, 668265263) ^ seed;
+    let h = Math.imul(hx0 ^ hy0 ^ ((hx0 ^ hy0) >>> 13), 1274126177);
+    const p00 = ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+    h = Math.imul(hx1 ^ hy0 ^ ((hx1 ^ hy0) >>> 13), 1274126177);
+    const p10 = ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+    h = Math.imul(hx0 ^ hy1 ^ ((hx0 ^ hy1) >>> 13), 1274126177);
+    const p01 = ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+    h = Math.imul(hx1 ^ hy1 ^ ((hx1 ^ hy1) >>> 13), 1274126177);
+    const p11 = ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+    let n = p00 + (p10 - p00) * sx + (p01 - p00) * sy + (p00 - p10 - p01 + p11) * sx * sy;
+    if (!wave) {
+      // The wide lobes use most of their room: the noise's middle part stretched toward 0..1.
+      n = (n - 0.12) / 0.76;
+      n = n < 0 ? 0 : n > 1 ? 1 : n;
+    }
+    way += (wave ? PUDDLE_WOBBLE : PUDDLE_LOBE) * n;
+  }
+  let edge = e - PUDDLE_NEAR - lobes * way;
+  // The traction rectangle and PUDDLE_KEEP round it, whatever the outline did: how far inside that the point is.
+  if (f.s1 - f.s0 >= 2 * PUDDLE_TRACTION_INSET && f.l1 - f.l0 >= 2 * PUDDLE_TRACTION_INSET) {
+    const ts = ds - PUDDLE_TRACTION_INSET, tl = dl - PUDDLE_TRACTION_INSET;
+    const keep = ts < 0 && tl < 0 ? PUDDLE_KEEP - Math.sqrt(ts * ts + tl * tl) : PUDDLE_KEEP + (ts < tl ? ts : tl);
+    if (keep > edge) edge = keep;
+  }
+  EDGE[2] = edge;
+}
 
 /** The furniture step: what is near the tile, then the flats a slice of rows at a time, then the things a few at a time. */
 function furniture(): void {
@@ -1601,18 +1693,15 @@ function flats(): void {
         // How far inside the rectangle, along and across.
         const es = s - f.s0 < f.s1 - s ? s - f.s0 : f.s1 - s, el = l - f.l0 < f.l1 - l ? l - f.l0 : f.l1 - l;
         if (kind === F_DIRT) {
-          if (d > hw + KERB || (k !== C_TARMAC && k !== C_KERB) || es < -4 || el < -4) continue;
-          let e = es < el ? es : el;
-          if (es < POOL_ROUND && el < POOL_ROUND) {
-            const u = POOL_ROUND - es, v = POOL_ROUND - el;
-            e = POOL_ROUND - Math.sqrt(u * u + v * v);
-          }
-          stainNoise(X, Y);
-          const rag = 4.5 * NOISE_OUT[0] - 1.5;
-          if (e <= rag - 3.5) continue;
-          if (e <= rag) {
-            // Loose earth thrown past the patch's edge.
-            if (n < 76 && k === C_TARMAC) idx[p] = n & 1 ? DIRT2 : DIRT1;
+          if (d > hw + KERB || (k !== C_TARMAC && k !== C_KERB) || es <= 0 || el <= 0) continue;
+          EDGE[0] = s;
+          EDGE[1] = l;
+          puddleEdge(f);
+          const e = EDGE[2];
+          if (e <= -1.5) continue;
+          if (e <= 0) {
+            // A little loose earth thrown past the patch's edge.
+            if (n < 64 && k === C_TARMAC) idx[p] = n & 1 ? DIRT2 : DIRT1;
             continue;
           }
           let c = DIRT2;
@@ -1632,21 +1721,17 @@ function flats(): void {
           cls[p] = C_DIRT;
         } else if (kind === F_WATER) {
           if (d > wall || (k !== C_TARMAC && k !== C_KERB && k !== C_VERGE) || es <= 0 || el <= 0) continue;
-          let e = es < el ? es : el;
-          if (es < POOL_ROUND && el < POOL_ROUND) {
-            const u = POOL_ROUND - es, v = POOL_ROUND - el;
-            e = POOL_ROUND - Math.sqrt(u * u + v * v);
-          }
-          stainNoise(X, Y);
-          const rag = 0.4 + 3.4 * NOISE_OUT[0];
-          if (e <= rag - 2.4) continue;
+          EDGE[0] = s;
+          EDGE[1] = l;
+          puddleEdge(f);
+          const depth = EDGE[2];
+          if (depth <= -2.2) continue;
           const was = idx[p];
-          if (e <= rag) {
+          if (depth <= 0) {
             idx[p] = SHADE_I[was]; // the ground is wet round the pool
             continue;
           }
-          const depth = e - rag;
-          let c = STEEL1;
+          let c = WATER;
           if (depth < 1.4) c = STEEL0; // the water's edge
           else if (k === C_KERB) c = SHADE_I[was]; // a kerb shows through ...
           else if (was === TAR3) c = STEEL2; // ... and so does the paint on the road
@@ -2408,7 +2493,7 @@ const MARKED = (() => {
   const lum = Float64Array.from(PAL32, (v) => 0.299 * (v & 255) + 0.587 * ((v >> 8) & 255) + 0.114 * ((v >> 16) & 255));
   const darker = (a: number, b: number): number => (lum[b] < lum[a] ? b : a);
   const out = new Uint8Array(128);
-  for (let c = 0; c < PAL32.length; c++) {
+  for (let c = 0; c < SCRAPYARD; c++) {
     const l = lum[c];
     const soot = SHADE_I[c];
     // Burnt: by how light the colour is, so that paint and kerb stripes still show through.
@@ -2421,6 +2506,11 @@ const MARKED = (() => {
   }
   return out;
 })();
+// What a tile's byte shows, by the whole byte: as a palette index (SHOWN_I) and as a pixel
+// (SHOWN). Under OFF nothing is marked, and bit 5 is then not a mark's level but part of the
+// colour: index SCRAPYARD, `water`, the one colour that is not among the 32.
+const SHOWN_I = Uint8Array.from({ length: 256 }, (_, v) => (v & OFF ? v & 63 : MARKED[v]));
+const SHOWN = Uint32Array.from(SHOWN_I, (c) => PAL32[c] ?? 0);
 
 // A scorch: one of SCORCH_KINDS shapes, SCORCH x SCORCH view pixels, a level per pixel.
 const SCORCH = 32;
@@ -2587,7 +2677,8 @@ function owe(t: Tile): void {
 /** A tile showing marks of an older epoch: they are wiped, today's marks put on, the whole tile owed. */
 function wipe(t: Tile, tx: number, ty: number): void {
   const base = t.base;
-  for (let o = 0; o < base.length; o++) base[o] &= ~LEVEL;
+  // What keeps marks off has none to lose (and its bit 5 is colour, not a mark's level: SHOWN_I).
+  for (let o = 0; o < base.length; o++) if (!(base[o] & OFF)) base[o] &= ~LEVEL;
   sx0 = sy0 = TILE;
   sx1 = sy1 = 0;
   const live = t.home === (markArt ? markArt.tiles : null) && stampAll(base, tx, ty) > 0;
@@ -2733,7 +2824,7 @@ function sendMarks(): void {
     const base = t.base;
     if (t.ready) {
       for (let y = t.y0; y < t.y1; y++) {
-        for (let o = y * TILE + t.x0, end = y * TILE + t.x1; o < end; o++) out[o] = PAL32[MARKED[base[o] & 127]];
+        for (let o = y * TILE + t.x0, end = y * TILE + t.x1; o < end; o++) out[o] = SHOWN[base[o]];
       }
       if (markOut) t.ctx.putImageData(markOut, 0, 0, t.x0, t.y0, t.x1 - t.x0, t.y1 - t.y0);
       markStats.uploads++;
@@ -2755,7 +2846,7 @@ function marksBack(t: Tile, tx: number, ty: number, out32: Uint32Array): void {
   if (sx1 > sx0) {
     const base = t.base;
     for (let y = sy0; y < sy1; y++) {
-      for (let o = y * TILE + sx0, end = y * TILE + sx1; o < end; o++) out32[o] = PAL32[MARKED[base[o] & 127]];
+      for (let o = y * TILE + sx0, end = y * TILE + sx1; o < end; o++) out32[o] = SHOWN[base[o]];
     }
     t.marked = true;
     markStats.putBack += hit;
@@ -3081,7 +3172,22 @@ export function bakeTileIndices(track: Track, tx: number, ty: number, trace?: (s
   }
   const { idx } = buffers();
   const out = new Uint8Array(TILE * TILE);
-  for (let y = 0; y < TILE; y++) for (let x = 0; x < TILE; x++) out[y * TILE + x] = idx[(y + PAD) * S + PAD + x] & 31;
+  for (let y = 0; y < TILE; y++) for (let x = 0; x < TILE; x++) out[y * TILE + x] = idx[(y + PAD) * S + PAD + x] & 63;
+  return out;
+}
+
+/** What a pixel of a baked tile is, as bakeTileKinds() tells it. */
+export const KIND = { tarmac: C_TARMAC, kerb: C_KERB, verge: C_VERGE, barrier: C_BARRIER, rail: C_RAIL, dirt: C_DIRT, bed: C_BED, water: C_WATER, belt: C_BELT, isle: C_ISLE, solid: C_SOLID } as const;
+
+/**
+ * For tests and checks: bake one tile of a track to the end and return what each of its pixels
+ * is (KIND; 0 = none of the track's: the yard), TILE x TILE.
+ */
+export function bakeTileKinds(track: Track, tx: number, ty: number): Uint8Array {
+  bakeTileIndices(track, tx, ty);
+  const { cls } = buffers();
+  const out = new Uint8Array(TILE * TILE);
+  for (let y = 0; y < TILE; y++) out.set(cls.subarray((y + PAD) * S + PAD, (y + PAD) * S + PAD + TILE), y * TILE);
   return out;
 }
 
@@ -3096,7 +3202,7 @@ export function bakeTileMarked(track: Track, tx: number, ty: number, keepOff = f
   sx0 = sy0 = TILE;
   sx1 = sy1 = 0;
   const out = new Uint8Array(TILE * TILE);
-  for (let o = 0; o < out.length; o++) out[o] = keepOff && base[o] & OFF ? 255 : MARKED[base[o] & 127];
+  for (let o = 0; o < out.length; o++) out[o] = keepOff && base[o] & OFF ? 255 : SHOWN_I[base[o]];
   return out;
 }
 
@@ -3104,7 +3210,7 @@ export function bakeTileMarked(track: Track, tx: number, ty: number, keepOff = f
 export function poolTileIndices(track: Track, tx: number, ty: number): Uint8Array | null {
   const t = tileAt(artOf(track), tx, ty);
   if (!t || !t.ready) return null;
-  return Uint8Array.from(t.base, (v) => MARKED[v & 127]);
+  return Uint8Array.from(t.base, (v) => SHOWN_I[v]);
 }
 
 /**
