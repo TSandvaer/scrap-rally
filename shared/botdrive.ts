@@ -477,10 +477,19 @@ function apexMineFree(view: BotView, c: CarState, s: number, a: number, b: numbe
   if (!mines || !mines.length) return true;
   const lo = Math.min(a, b) - HARD.apexMineClear, hi = Math.max(a, b) + HARD.apexMineClear;
   const far2 = (APEX_MINE_LOOK + 40) ** 2;
+  const cos = Math.cos(c.h), sin = Math.sin(c.h);
   for (const m of mines) {
     const d2 = (m.x - c.x) ** 2 + (m.y - c.y) ** 2;
     if (d2 > far2) continue; // pre-filter: only the mines near the car are put in track coordinates
-    const t = trackCoords(view.track, s, Math.sqrt(d2), m.x, m.y);
+    // Searched from about d ahead along the track; a mine behind the car's heading also from d
+    // behind, the nearer of the two kept (searched only ahead, a mine some 280+ behind could be
+    // put on the road ahead; ahead in a hairpin, a mine can lie behind the heading).
+    const d = Math.sqrt(d2);
+    let t = trackCoords(view.track, s, d, m.x, m.y);
+    if ((m.x - c.x) * cos + (m.y - c.y) * sin < 0) {
+      const back = trackCoords(view.track, s, -d, m.x, m.y);
+      if (back.dist < t.dist) t = back;
+    }
     const along = ahead(view.track, s, t.s);
     if ((along < APEX_MINE_LOOK || along > view.track.length - 10) && t.lat > lo && t.lat < hi) return false;
   }
@@ -594,7 +603,7 @@ export function botControls(view: BotView, mem: BotMem): BotControls {
   const ramp = rampAhead(track, q.s, RAMP_APPROACH);
   if (!ramp) mem.backedUpFor = -1;
   const near = pointAt(track, q.s + 20).h;
-  const far = pointAt(track, hard ? q.s + 20 + Math.max(120, v * 0.9) * HARD.bendLook : q.s + 20 + Math.max(120, v * 0.9)).h;
+  const far = pointAt(track, q.s + 20 + Math.max(120, v * 0.9) * (hard ? HARD.bendLook : 1)).h; // x 1: Normal's exact value
   const turn = angleDiff(near, far);
   const bend = Math.abs(turn);
 
@@ -691,19 +700,18 @@ export function botControls(view: BotView, mem: BotMem): BotControls {
   if (armed && hard) {
     // Only when the rivet would hit (see rivetWouldHit); the weapons arm first (no rivet wasted).
     fire = view.raceSteps > ARM_STEPS && view.others.some(rivetWouldHit(track, q.s, c));
-  } else if (armed) {
+    // A mine when a car follows in its wake at the distance it arrives as the mine arms.
+    const mine = mineWouldCatch(view, mem, c, q.s, lat);
+    if (mine) mem.lastMine = view.raceSteps;
+    return { throttle, steer, fire, mine };
+  }
+  if (armed) {
     // Not at cars the server ignores: ghosted, wrecked, airborne or falling.
     fire = view.others.some((o) => {
       if (!o.solid) return false;
       const d = Math.hypot(o.x - c.x, o.y - c.y);
       return d > 1 && d < 500 && Math.abs(angleDiff(c.h, Math.atan2(o.y - c.y, o.x - c.x))) < Math.PI / 12;
     });
-  }
-  if (armed && hard) {
-    // A mine when a car follows in its wake at the distance it arrives as the mine arms.
-    const mine = mineWouldCatch(view, mem, c, q.s, lat);
-    if (mine) mem.lastMine = view.raceSteps;
-    return { throttle, steer, fire, mine };
   }
   // No mines in the first 6 s (no start-line minefield), then one every 8 s, staggered by seat.
   const mine = armed && view.raceSteps > 360 && view.raceSteps % 480 === mem.mineOffset;

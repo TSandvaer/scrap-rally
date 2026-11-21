@@ -45,8 +45,13 @@ export class BotDriver {
     const g = this.game;
     const car = g.car;
     const raceOn = !!car && g.raceOn();
-    if (!car) this.raceSteps = 0;
-    else if (raceOn) this.raceSteps++;
+    if (!car) {
+      // Between races. The race steps start over, so Hard's last-mine step must too, or its mine
+      // gap (HARD.mineGap) would hold its mines back in the next race. Only that: resetBotMem
+      // would also clear the slipstream and stuck state, which Normal keeps across races here.
+      this.raceSteps = 0;
+      this.mem.lastMine = -Infinity;
+    } else if (raceOn) this.raceSteps++;
     const grounded = !!car && car.air === 0 && car.fall === 0 && car.wreck === 0;
     const out = botControls(
       {

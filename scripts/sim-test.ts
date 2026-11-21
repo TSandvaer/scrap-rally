@@ -9421,10 +9421,17 @@ function hardApex(): void {
   };
   const a0 = steer(0), a20 = steer(20), blocked = steer(20, { mines: mineAt(inside * 12) }), blocked0 = steer(0, { mines: mineAt(inside * 12) });
   const outside = steer(20, { mines: mineAt(-inside * 40) }), pass20 = steer(20, { pass: true }), pass0 = steer(0, { pass: true });
+  // A mine behind (review 2026-11-21): put in track coordinates from behind the car too, so one on
+  // the apex lane 200-355 behind (the bot's own fresh mine, say) never switches the apex off.
+  const behind = (d: number) => {
+    const q = pointAt(t, s0 - d);
+    return steer(20, { mines: [{ x: q.x - Math.sin(q.h) * inside * 12, y: q.y + Math.cos(q.h) * inside * 12 }] }).steer;
+  };
+  const behindOk = [200, 280, 300, 320, 340, 355].every((d) => behind(d) === a20.steer);
   check(
-    "hard apex: in a Rust Bowl bend the bias steers the bot further to the inside without changing mem.lateral; a mine on the apex path or a running pass keeps it on its own line; a mine on the far side does not",
-    s0 >= 0 && Math.sign(a20.steer - a0.steer) === inside && a20.lateral === 0 && blocked.steer === blocked0.steer && outside.steer === a20.steer && pass20.steer === pass0.steer,
-    `bend at s ${s0} (turn ${turn.toFixed(2)}): steer apex 0 ${a0.steer.toFixed(3)}, apex 20 ${a20.steer.toFixed(3)}; mine on the path ${blocked.steer.toFixed(3)} (vs ${blocked0.steer.toFixed(3)}); mine outside ${outside.steer.toFixed(3)}; pass ${pass20.steer.toFixed(3)} vs ${pass0.steer.toFixed(3)}`,
+    "hard apex: in a Rust Bowl bend the bias steers the bot further to the inside without changing mem.lateral; a mine on the apex path or a running pass keeps it on its own line; a mine on the far side or behind the car does not",
+    s0 >= 0 && Math.sign(a20.steer - a0.steer) === inside && a20.lateral === 0 && blocked.steer === blocked0.steer && outside.steer === a20.steer && pass20.steer === pass0.steer && behindOk,
+    `bend at s ${s0} (turn ${turn.toFixed(2)}): steer apex 0 ${a0.steer.toFixed(3)}, apex 20 ${a20.steer.toFixed(3)}; mine on the path ${blocked.steer.toFixed(3)} (vs ${blocked0.steer.toFixed(3)}); mine outside ${outside.steer.toFixed(3)}; pass ${pass20.steer.toFixed(3)} vs ${pass0.steer.toFixed(3)}; mines 200-355 behind on the apex lane ${behindOk ? "ignored" : "SWITCH IT OFF"}`,
   );
   // Cells: within HARD.cellLane (45) of its lane, below 58 (lane 0 never reaches both kerbs).
   const cs = (level: BotLevel, lane: number) => {
@@ -9512,6 +9519,17 @@ function hardClient(): void {
     "hard client: three Hard client bots (BotDriver over the Game) finish 2 laps of Crusher Run and Overpass Knot, no air/fall state mismatch, identically on a rerun",
     rows.every((r) => r.a.finish[0].every((f) => f > 0) && r.a.stateErrs === 0 && r.a.hash === r.b.hash),
     rows.map((r) => `${r.id}: finish ${r.a.finish[0].map((f) => (f / 1000).toFixed(2)).join("/")} s, state mismatches ${r.a.stateErrs}`).join("; "),
+  );
+  // Race after race (review 2026-11-21): the driver's race steps start over between races and so
+  // must its last-mine step, or the mine gap holds every mine back after race 1. Three 1-lap races
+  // of Crusher Run, each bot shopping by the Hard rule before each (as botplay --level hard does);
+  // before the fix: 0/3/3 mines in race 1, then 0/0/0.
+  const m = goldenClient("crusher-run", 1, "hard", 3, true);
+  const per = (xs: number[][] | undefined) => (xs ?? []).map((r) => r.reduce((a, b) => a + b, 0));
+  check(
+    "hard client: Hard client bots drop mines in every race, not only the first (3 races in one room, botplay's driver and shop rule)",
+    m.dropped!.length === 3 && per(m.dropped).every((x) => x > 0) && per(m.presses).every((x) => x > 0) && m.finish.every((f) => f.every((x) => x > 0)),
+    `mines dropped per race (bots on lanes -24/0/24): ${m.dropped!.map((r) => r.join("/")).join(", ")}; presses ${m.presses!.map((r) => r.join("/")).join(", ")}`,
   );
 }
 

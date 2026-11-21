@@ -1866,51 +1866,120 @@ async function runCells(ctx: Ctx, bots: Bot[]): Promise<void> {
 // ---- Hard bot level (M4-HARD, PLAN-M4.md addendum 2026-11-21, ClickUp 123jpnbffqh) ----------------
 
 // This section's imports (hoisted like the ones at the top).
-import type { BotLevel } from "../shared/botdrive";
+import type { BotLevel, BotMem } from "../shared/botdrive";
 import { botShopping } from "../shared/botshop";
 
 /**
  * A lagged (80±10 ms) Hard socket bot (BotDriver level "hard", shopping by the Hard rule as
- * `npm run botplay -- CODE 3 --level hard` does) hosts a room with two Hard server bots, one lap
- * of Crusher Run (ramps, gaps, holes) with weapons: it finishes, its prediction holds (median
- * reconciliation error below 0.5, no error > 50, at most 4 air/fall state mismatches), and the
- * three use their weapons (printed: rivets and mines used, hits).
+ * `npm run botplay -- CODE 3 --level hard` does) hosts a room with two Normal server bots: two
+ * races of one lap of Crusher Run (ramps, gaps, holes) with weapons, shopping before each. Each
+ * race: all finish, its prediction holds (median reconciliation error below 0.5, no error > 50, at
+ * most 4 air/fall state mismatches). Race 2 (review 2026-11-21: the driver kept race 1's last-mine
+ * step, so its mine gap held every mine back after race 1): its mine gate is clear as the race
+ * starts. Race 1 always ends with a last-mine step (a real one, else one set at its last step, as a
+ * mine there would), so the check never passes by default. Whether it drops a mine depends on a
+ * car following it on its line in that real-time race: printed with the steps that had one (the
+ * deterministic proof that Hard mines race after race is sim-test "hard client"). It races on
+ * Lugnut's lane (24), where a Normal bot can follow it on its line.
  */
 async function runHard(ctx: Ctx, bots: Bot[]): Promise<void> {
-  const H = new Bot("Hotel", ctx.url, -12, { lag: 80, jitter: 10 }, undefined, "hard");
+  const H = new Bot("Hotel", ctx.url, 24, { lag: 80, jitter: 10 }, undefined, "hard");
   bots.push(H);
+  let race = 0;
+  const presses = [0, 0], dropped = [0, 0];
+  const mem = (H.driver as unknown as { mem: BotMem }).mem; // the driver's own memory (private)
+  const gateAtGo = [NaN, NaN], lastAtEnd = [NaN, NaN], steps = [0, 0], followed = [0, 0], inWindow = [0, 0];
+  let wasRacing = false, ends = 0;
+  H.script = () => {
+    const g = H.game, racing = g.phase === "racing";
+    if (racing && Number.isNaN(gateAtGo[race])) gateAtGo[race] = mem.lastMine;
+    if (racing) {
+      steps[race]++;
+      // Diagnostic, as its view shows them: a car on its line (within 14 across its heading) 300 or
+      // less behind it, and one of those in the mine gate's window (0.4 x its speed + 10 behind or more).
+      const c = g.car;
+      let on = false, win = false;
+      if (c) {
+        const ux = Math.cos(c.h), uy = Math.sin(c.h);
+        for (const o of g.otherPoses()) {
+          const dx = o.x - c.x, dy = o.y - c.y, a = dx * ux + dy * uy;
+          if (!(a < 0 && a > -300 && Math.abs(-dx * uy + dy * ux) <= 14)) continue;
+          on = true;
+          const sn = g.latest?.cars.get(o.id), vf = sn ? sn.vx * ux + sn.vy * uy : 0;
+          if (vf >= 100 && -a >= 0.4 * vf + 10) win = true;
+        }
+      }
+      if (on) followed[race]++;
+      if (win) inWindow[race]++;
+    }
+    // Race 1 just over (results, the car still there): no mine dropped -> as if one was, at its last step.
+    if (wasRacing && !racing && ++ends === 1) {
+      if (mem.lastMine === -Infinity) mem.lastMine = steps[0];
+      lastAtEnd[0] = mem.lastMine;
+    }
+    wasRacing = racing;
+    const c = H.driver.controls();
+    if (c.mine && racing) presses[race]++;
+    return c;
+  };
+  let room: ReturnType<typeof ctx.server.rooms.rooms.get> | undefined;
+  let tick: ((t: number, now: number) => void) | null = null;
   try {
     H.game.create(H.name);
     await waitFor("hard: H welcome", () => !!H.game.you && H.game.scrap > 0, 3000);
     H.game.pickTrack("crusher-run");
-    H.game.addBot("hard");
-    H.game.addBot("hard");
-    await waitFor("hard: two Hard bots in", () => H.game.players.filter((p) => p.bot === "hard").length === 2 && H.game.trackId === "crusher-run", 3000);
-    const wallet = { scrap: H.game.scrap, levels: { ...H.game.levels }, ammo: { rivets: H.game.serverAmmo[0], mines: H.game.serverAmmo[1] } };
-    const buys = botShopping(wallet, "hard");
-    for (const item of buys) H.game.buy(item);
-    await waitFor("hard: H shopped", () => H.game.serverAmmo[0] === 20 && H.game.serverAmmo[1] === 3, 3000);
-    const hits = H.events.length;
-    const e0 = H.game.recErrors.length, st0 = H.game.recStateErrors;
-    H.game.start();
-    await waitFor("hard: racing", () => H.game.phase === "racing" && !!H.game.car, 6000);
-    await waitFor("hard: the race is over", () => H.game.phase === "results" || H.game.phase === "lobby", 90000);
-    const evs = H.events.slice(hits);
-    const rivetHits = evs.filter((e) => e.k === "hit" && e.w === "rivet").length, mineHits = evs.filter((e) => e.k === "hit" && e.w === "mine").length;
-    const rows = H.results ?? [];
-    const s = stats(H.game.recErrors.slice(e0));
-    const st = H.game.recStateErrors - st0;
-    console.log(
-      `      Hotel (Hard, 80±10 ms, bought ${buys.join("+")}): finish ${rows.map((r) => `${r.name} ${(r.timeMs / 1000).toFixed(2)}s`).join(", ")}; rivet hits ${rivetHits}, mine hits ${mineHits}; ` +
-        `rec err n=${s.n} median=${s.median.toFixed(3)} p95=${s.p95.toFixed(3)} max=${s.max.toFixed(2)}; state mismatches ${st}; rtt=${H.game.rtt.toFixed(1)}ms`,
-    );
+    H.game.addBot("normal");
+    H.game.addBot("normal");
+    await waitFor("hard: two Normal bots in", () => H.game.players.filter((p) => p.bot === "normal").length === 2 && H.game.trackId === "crusher-run", 3000);
+    room = ctx.server.rooms.rooms.get(H.game.code)!;
+    const r = room;
+    tick = r.tick.bind(r);
+    let mines = -1;
+    r.tick = (t: number, now: number) => {
+      tick!(t, now);
+      const m = r.players.get(H.game.you)?.wallet.ammo.mines ?? 0;
+      if (r.phase === "racing" && mines > m) dropped[race] += mines - m;
+      mines = m;
+    };
+    for (race = 0; race < 2; race++) {
+      if (race > 0) await waitFor("hard: back in the lobby", () => H.game.phase === "lobby", 15000);
+      const wallet = { scrap: H.game.scrap, levels: { ...H.game.levels }, ammo: { rivets: H.game.serverAmmo[0], mines: H.game.serverAmmo[1] } };
+      const buys = botShopping(wallet, "hard");
+      const scrap0 = H.game.scrap;
+      for (const item of buys) H.game.buy(item);
+      await waitFor("hard: H shopped", () => !buys.length || H.game.scrap < scrap0, 3000);
+      const hits = H.events.length;
+      const e0 = H.game.recErrors.length, st0 = H.game.recStateErrors;
+      H.results = null;
+      H.game.start();
+      await waitFor("hard: racing", () => H.game.phase === "racing" && !!H.game.car, 6000);
+      await waitFor("hard: the race is over", () => H.results !== null, 90000);
+      const evs = H.events.slice(hits);
+      const mine = (e: GameEvent, w: string) => e.k === "hit" && e.w === w && e.by === H.game.you;
+      const rivetHits = evs.filter((e) => mine(e, "rivet")).length, mineHits = evs.filter((e) => mine(e, "mine")).length;
+      const rows: ResultRow[] = (H.results as ResultRow[] | null) ?? []; // set by the results message (not narrowed)
+      const s = stats(H.game.recErrors.slice(e0));
+      const st = H.game.recStateErrors - st0;
+      console.log(
+        `      Hotel race ${race + 1} (Hard, 80±10 ms, bought ${buys.join("+") || "nothing"}): finish ${rows.map((x) => `${x.name} ${(x.timeMs / 1000).toFixed(2)}s`).join(", ")}; ` +
+          `its mine presses ${presses[race]}, mines dropped ${dropped[race]} (of its ${steps[race]} steps: a car on its line within 300 behind on ${followed[race]}, in the mine window on ${inWindow[race]}); its rivet hits ${rivetHits}, mine hits ${mineHits}; ` +
+          `rec err n=${s.n} median=${s.median.toFixed(3)} p95=${s.p95.toFixed(3)} max=${s.max.toFixed(2)}; state mismatches ${st}; rtt=${H.game.rtt.toFixed(1)}ms`,
+      );
+      check(
+        `hard over sockets, race ${race + 1}: a lagged Hard socket bot (botplay's driver at --level hard) races two Normal server bots on Crusher Run: all three finish, it keeps a median reconciliation error below 0.5, no error > 50, at most 4 state mismatches`,
+        rows.length === 3 && rows.every((x) => x.timeMs > 0) && s.n > 500 && s.median < 0.5 && s.max <= 50 && st <= 4 && H.errors.length === 0,
+        `median ${s.median.toFixed(3)}, max ${s.max.toFixed(2)}, state mismatches ${st}; errors ${H.errors.join("; ") || "none"}`,
+      );
+      if (race === 0) check("hard over sockets: the Hard socket bot uses its weapons (its rivets hit someone)", rivetHits > 0, `${rivetHits} rivet hits, ${mineHits} mine hits`);
+    }
     check(
-      "hard over sockets: a lagged Hard socket bot (botplay's driver at --level hard) races two Hard server bots on Crusher Run: all three finish, it keeps a median reconciliation error below 0.5, no error > 50, at most 4 state mismatches",
-      rows.length === 3 && rows.every((r) => r.timeMs > 0) && s.n > 500 && s.median < 0.5 && s.max <= 50 && st <= 4 && H.errors.length === 0,
-      `median ${s.median.toFixed(3)}, max ${s.max.toFixed(2)}, state mismatches ${st}; errors ${H.errors.join("; ") || "none"}`,
+      "hard over sockets: the Hard socket bot's mine gate is clear as race 2 starts: race 1 ended with a last-mine step, and its driver starts it over between races (as its race steps)",
+      Number.isFinite(lastAtEnd[0]) && gateAtGo[0] === -Infinity && gateAtGo[1] === -Infinity,
+      `last-mine step at the end of race 1 ${lastAtEnd[0]}, at GO of race 1 ${gateAtGo[0]}, of race 2 ${gateAtGo[1]}; mines dropped race 1 ${dropped[0]}, race 2 ${dropped[1]} (presses ${presses.join("/")})`,
     );
-    check("hard over sockets: the Hard bots use their weapons (rivets hit someone)", rivetHits > 0, `${rivetHits} rivet hits, ${mineHits} mine hits`);
   } finally {
+    if (room && tick) room.tick = tick;
+    H.script = null;
     H.game.leave();
   }
 }

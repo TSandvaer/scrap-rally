@@ -42,6 +42,7 @@ import { wallLimit, type CarState } from "../../shared/physics";
 import { decode, encode, type ClientMsg, type GameEvent, type ServerMsg } from "../../shared/protocol";
 import { queryTrackNear } from "../../shared/track";
 import { CAR_HP } from "../../shared/weapons";
+import { botShopping } from "../../shared/botshop";
 import { BotDriver } from "../../scripts/bot-ai";
 
 /** The shipped tracks. */
@@ -66,6 +67,8 @@ const quietConn = { send(): void {}, close(): void {} };
 export interface GoldenRun {
   hash: string;
   stateErrs?: number; // client runs: air/fall state mismatches between the prediction and the server
+  presses?: number[][]; // client runs: per race, per bot, mine presses by its driver while racing
+  dropped?: number[][]; // ... and mines the server took from its ammo
   finish: number[][]; // per race, per bot: finish time (ms after GO, 0 = did not finish)
   wallets: string[]; // per race: the bots' wallets after the payout and shopping
 }
@@ -125,7 +128,7 @@ export function goldenServer(track: string, levels: BotLevel[], races = 2, laps 
 }
 
 /** A client Game wired to a Rooms server in-process (encode/decode both ways, no sockets). */
-function wired(rooms: Rooms, clock: { now: number }): { game: Game; open(): void; flush(): void } {
+export function wired(rooms: Rooms, clock: { now: number }): { game: Game; open(): void; flush(): void } {
   const inbox: ServerMsg[] = [];
   const session: Session = { conn: { send: (m) => inbox.push(decode<ServerMsg>(encode(m))!), close() {} }, room: null, player: null };
   const tr: Transport = {
@@ -148,10 +151,15 @@ function wired(rooms: Rooms, clock: { now: number }): { game: Game; open(): void
 
 /**
  * The socket bots' path (scripts/bot-ai.ts over the client Game, as `npm run botplay` and
- * scripts/bots.ts drive): three bots on lanes -24, 0, 24 with weapons on, one race of `laps` laps
- * on `track` on the sim clock. Hash of every tick's controls, the predicted and the server's car.
+ * scripts/bots.ts drive): three bots on lanes -24, 0, 24 with weapons on, `races` races of `laps`
+ * laps on `track` on the sim clock. Hash of every race tick's controls, the predicted and the
+ * server's car, and the wallets after each race. Between races every bot keeps stepping with its
+ * driver while its car is gone (as botplay does). shop: each bot buys by the shop rule of its
+ * level before every race (as botplay does; off for the golden hash, whose bots race unarmed).
+ * presses / dropped: per race, per bot, the mine presses its driver made and the mines the server
+ * took from its ammo.
  */
-export function goldenClient(track = "crusher-run", laps = 3, level: BotLevel = "normal"): GoldenRun {
+export function goldenClient(track = "crusher-run", laps = 3, level: BotLevel = "normal", races = 1, shop = false): GoldenRun {
   const h = createHash("sha256");
   const realNow = performance.now.bind(performance);
   const clock = { now: 1_000_000 };
@@ -171,29 +179,56 @@ export function goldenClient(track = "crusher-run", laps = 3, level: BotLevel = 
       w.open();
     });
     for (const w of ws) w.flush();
-    for (const w of ws.slice(1)) {
-      w.game.setReady(true);
-      w.flush();
-    }
-    ws[0].game.start();
-    ws[0].flush();
     const drivers = ws.map((w, i) => new BotDriver(w.game, lanes[i], level));
-    const out: GoldenRun = { hash: "", finish: [[]], wallets: [] };
-    for (let i = 0; i < 60 * 400 && (room.phase === "countdown" || room.phase === "racing"); i++) {
-      clock.now += 1000 / 60;
-      rooms.step(clock.now);
-      for (const w of ws) w.flush();
-      ws.forEach((w, k) => {
-        const ctl = drivers[k].controls();
-        feed(h, [k, ctl.throttle, ctl.steer, ctl.fire ? 1 : 0, ctl.mine ? 1 : 0]);
-        w.game.step(ctl, 1000 / 60);
-        feed(h, carVals(w.game.car));
-        feed(h, carVals(room.players.get(w.game.you)?.car));
-      });
+    const server = (k: number) => room.players.get(ws[k].game.you);
+    const shopAll = () => {
+      for (const w of ws) {
+        const g = w.game;
+        for (const item of botShopping({ scrap: g.scrap, levels: { ...g.levels }, ammo: { rivets: g.serverAmmo[0], mines: g.serverAmmo[1] } }, level)) g.buy(item);
+        w.flush();
+      }
+    };
+    const out: GoldenRun = { hash: "", finish: [], wallets: [], presses: [], dropped: [] };
+    for (let r = 0; r < races; r++) {
+      if (r > 0) {
+        // Results, then the lobby: the bots step on with their cars gone (their drivers see that).
+        for (let i = 0; i < 60 * 60 && room.phase !== "lobby"; i++) {
+          clock.now += 1000 / 60;
+          rooms.step(clock.now);
+          for (const w of ws) w.flush();
+          ws.forEach((w, k) => w.game.step(drivers[k].controls(), 1000 / 60));
+        }
+        if ((room.phase as string) !== "lobby") throw new Error(`race ${r + 1}: no lobby after the results`);
+      }
+      if (shop) shopAll();
+      for (const w of ws.slice(1)) {
+        w.game.setReady(true);
+        w.flush();
+      }
+      ws[0].game.start();
+      ws[0].flush();
+      const presses = ws.map(() => 0), dropped = ws.map(() => 0);
+      for (let i = 0; i < 60 * 400 && (room.phase === "countdown" || room.phase === "racing"); i++) {
+        clock.now += 1000 / 60;
+        const mines0 = ws.map((_, k) => server(k)?.wallet.ammo.mines ?? 0);
+        rooms.step(clock.now);
+        if (room.phase === "racing") ws.forEach((_, k) => (dropped[k] += Math.max(0, mines0[k] - (server(k)?.wallet.ammo.mines ?? 0))));
+        for (const w of ws) w.flush();
+        ws.forEach((w, k) => {
+          const ctl = drivers[k].controls();
+          if (ctl.mine && room.phase === "racing") presses[k]++;
+          feed(h, [k, ctl.throttle, ctl.steer, ctl.fire ? 1 : 0, ctl.mine ? 1 : 0]);
+          w.game.step(ctl, 1000 / 60);
+          feed(h, carVals(w.game.car));
+          feed(h, carVals(server(k)?.car));
+        });
+      }
+      out.finish.push(ws.map((_, k) => server(k)?.progress?.fin ?? 0));
+      out.wallets.push(JSON.stringify(ws.map((_, k) => server(k)?.wallet)));
+      out.presses!.push(presses);
+      out.dropped!.push(dropped);
+      h.update(out.wallets[r]);
     }
-    out.finish[0] = ws.map((w) => room.players.get(w.game.you)?.progress?.fin ?? 0);
-    out.wallets.push(JSON.stringify(ws.map((w) => room.players.get(w.game.you)?.wallet)));
-    h.update(out.wallets[0]);
     out.hash = h.digest("hex");
     out.stateErrs = ws.reduce((a, w) => a + w.game.recStateErrors, 0);
     return out;
