@@ -6,8 +6,9 @@
 // a small canvas of its own, a label, with its panel, and a frame copies the label. A label
 // is filled again only when its text changes (the race time ten times a second). A text the
 // font does not cover (a name in another script) is written into its label with the system
-// font, that label only. The minimap's box, frame, track line and start tick are baked once
-// per track. All of it in palette colours, hard pixels, no alpha.
+// font, that label only. The minimap's box, frame, track line (two lines, a lane each, where an
+// island splits the road) and start tick are baked once per track. All of it in palette
+// colours, hard pixels, no alpha.
 //
 // A frame allocates nothing here: labels, tags and the countdown's texts are fixed pools.
 //
@@ -15,7 +16,7 @@
 // panel, as wide as it, there only while one of them is on. See "the catch-up cues" below.
 
 import { TICK_HZ } from "../../shared/physics";
-import { pointAt, type Track, type Vec } from "../../shared/track";
+import { halfAt, pointAt, WIDEN_TAPER, type Track, type Vec } from "../../shared/track";
 import type { CarView, HudView } from "../render";
 import { artCanvas, BOLD, covers, print, SMALL, TALL, widthOf, type Strike } from "./font";
 import { P, rgbOf } from "./palette";
@@ -75,6 +76,12 @@ const BAR_W = 104, BAR_H = 5, BAR_TICK = 13; // the bar's inside; a tick every e
 
 // The minimap: its box (fixed) and the 96 px square the track is fitted into.
 const MAP = 108, MAP_X = VIEW_W - 112, MAP_Y = 4, MAP_FIT = 96;
+// Split lanes on it (M4-MAP; shared/track.ts Island, Widen): see miniOf.
+const MAP_ROAD = P.bone0, MAP_CASING = P.dirt0;
+const MAP_ISLE = P.dirt0; // an island, between its two lanes
+const MAP_ISLE_MIN = 2; // ... and how wide it is drawn at least, px
+const MAP_FORK = WIDEN_TAPER; // the two lanes run together over this much road before and after an island (units): a widen's taper ...
+const MAP_FORK_MIN = 4; // ... and over this much of the map at least, px: a fork shorter than that is a blunt end
 
 // The catch-up cues: a panel of two rows under the lap panel, CUE_GAP below it. DRAFT with a
 // meter of CUE_PIPS pips (the slipstream's strength), BOOST with the time left in seconds and
@@ -444,6 +451,16 @@ function word(hex: string): number {
  * The minimap of a track, baked once: the box with its frame, the track as a 2 px line in a
  * dark casing (broken where the road has a gap, for the gap's whole length), and the start
  * line as a tick across it. Hard pixels: the line is stamped along the centreline, not stroked.
+ *
+ * Split lanes (M4-MAP). The map shows lanes, not widths: a road is one line however wide it is,
+ * and where an island (shared/track.ts Island) splits it, it is two lines, a lane each, with the
+ * island between them in a tone of its own (MAP_ISLE), at least MAP_ISLE_MIN px wide. A lane's
+ * line lies on the middle of its lane (from the island's side to the asphalt's edge, widen
+ * included: halfAt), where the cars' dots are drawn, or further out when the map is too small
+ * for that to leave the island its width. Before and after the island the two lines run
+ * together into the one, over MAP_FORK of road (where the road widens and narrows again), or
+ * over MAP_FORK_MIN px of the map when that is longer. A track without an island is stamped as
+ * it always was, pixel for pixel.
  */
 function miniOf(k: Kit, track: Track): Mini {
   let m = k.minis.get(track);
@@ -501,9 +518,42 @@ function miniOf(k: Kit, track: Track): Mini {
   const REACH = 4; // a casing stamp is 4 px wide: further from an end than this, nothing can cross it
   const runs = groundRuns(track);
   const closed = !track.gaps.length;
-  for (const casing of [true, false]) {
-    const colour = word(casing ? P.dirt0 : P.bone0);
-    for (const run of runs) {
+  // Split lanes. At a distance s along the track: the middles of the two lanes (l, r) and the
+  // island's two sides (il, ir), in map pixels across the road (+ = right of travel); `apart`,
+  // 0..1, is how far the lanes have parted there (1 beside the island, less in a fork);
+  // `isle`: beside the island.
+  const isles = track.islands;
+  const fork = Math.max(MAP_FORK, MAP_FORK_MIN / scale); // units of road
+  const lane = { l: 0, r: 0, il: 0, ir: 0, apart: 0, isle: false };
+  /** Fill `lane` for the distance s along the track; false = no island near, the road is one line there. */
+  const lanesAt = (s: number): boolean => {
+    lane.apart = 0;
+    for (let i = 0; i < isles.length; i++) {
+      const isle = isles[i], long = isle.s1 - isle.s0;
+      const past = (((s - isle.s0) % track.length) + track.length) % track.length; // of the island's start, going round
+      const before = track.length - past, after = past - long;
+      const d = past <= long ? 0 : Math.min(before, after); // how far outside the island
+      const apart = 1 - d / fork;
+      if (apart <= lane.apart) continue;
+      const at = d === 0 ? s : before < after ? isle.s0 : isle.s1; // a fork leads to the lanes at the island's end
+      const mid = ((isle.lat0 + isle.lat1) / 2) * scale, wide = Math.max(MAP_ISLE_MIN, (isle.lat1 - isle.lat0) * scale);
+      lane.l = ((isle.lat0 - halfAt(track, at, -1)) / 2) * scale;
+      lane.r = ((isle.lat1 + halfAt(track, at, 1)) / 2) * scale;
+      lane.il = mid - wide / 2;
+      lane.ir = mid + wide / 2;
+      lane.apart = apart;
+      lane.isle = d === 0;
+    }
+    return lane.apart > 0;
+  };
+  // Three passes, so that nothing lies over a line: the casing, then what is between two lanes
+  // (the island, and the casing's tone in a fork), then the line.
+  for (let pass = 0; pass < 3; pass++) {
+    if (pass === 1 && !isles.length) continue;
+    const casing = pass === 0;
+    const colour = word(casing ? MAP_CASING : MAP_ROAD), between = word(MAP_CASING), island = word(MAP_ISLE);
+    for (let ri = 0; ri < runs.length; ri++) {
+      const run = runs[ri];
       const n = closed ? run.length : run.length - 1;
       let total = 0;
       for (let i = 0; i < n; i++) {
@@ -523,6 +573,7 @@ function miniOf(k: Kit, track: Track): Mini {
         tail.y = my + last.y * scale;
         end(tail, run[j], last);
       }
+      const from = closed ? 0 : track.gaps[ri].s1; // where the run starts, along the track (groundRuns: a run a gap, from its end)
       let done = 0;
       for (let i = 0; i < n; i++) {
         const a = run[i], b = run[(i + 1) % run.length];
@@ -531,7 +582,30 @@ function miniOf(k: Kit, track: Track): Mini {
         const steps = Math.max(1, Math.ceil(len * 2));
         for (let k = 0; k <= steps; k++) {
           const along = done + (len * k) / steps;
-          dot(ax + ((bx - ax) * k) / steps, ay + ((by - ay) * k) / steps, casing, colour, !closed && along < REACH, !closed && total - along < REACH);
+          const x = ax + ((bx - ax) * k) / steps, y = ay + ((by - ay) * k) / steps;
+          const atHead = !closed && along < REACH, atTail = !closed && total - along < REACH;
+          if (!isles.length || len === 0 || !lanesAt(from + along / scale)) {
+            if (pass !== 1) dot(x, y, casing, colour, atHead, atTail);
+            continue;
+          }
+          // Two lanes. (nx, ny) is a pixel to the right of travel; a stamped line reaches `half`
+          // either side of its middle across the road (1 px along an axis, more on a slant).
+          // Each line on its lane's middle, or further out where that would leave the island
+          // less than its width.
+          const nx = -(by - ay) / len, ny = (bx - ax) / len, half = Math.abs(nx) + Math.abs(ny);
+          const l = lane.apart * Math.min(lane.l, lane.il - half), r = lane.apart * Math.max(lane.r, lane.ir + half);
+          if (pass === 1) {
+            // Between the two lines' inner edges, a dot a pixel at most from the next.
+            const o0 = l + 2 * half, o1 = r - 2 * half;
+            const m = o1 <= o0 ? 0 : Math.ceil(o1 - o0);
+            for (let q = 0; q <= m; q++) {
+              const o = m ? o0 + ((o1 - o0) * q) / m : (l + r) / 2;
+              dot(x + nx * o, y + ny * o, false, lane.isle ? island : between, atHead, atTail);
+            }
+          } else {
+            dot(x + nx * l, y + ny * l, casing, colour, atHead, atTail);
+            dot(x + nx * r, y + ny * r, casing, colour, atHead, atTail);
+          }
         }
         done += len;
       }

@@ -10,7 +10,8 @@
 // a landing's puff and dust from the verge; looks: the three car looks driving a bend; the
 // catch-up visuals of M4-FX: cells, boost, draft, catchup; and the road's furniture of
 // M4-WORLD on the Preview Yard test track, shared/testtracks.ts: yard-chicane, yard-truck,
-// yard-split, yard-bend, yard-belt).
+// yard-split, yard-bend, yard-belt; and yard-map, M4-MAP: the minimap of that track, its two
+// splits each drawn as two lanes round an island, a car's dot in every lane).
 // URL: &scene=<name> to start on one, &freeze=1 to hold
 // the scene's key moment, &t=<seconds> to hold any moment, &hud=0 to hide the caption.
 // &cues=0 leaves the catch-up fields out of what the renderer is handed (CarView.draft and
@@ -501,6 +502,27 @@ function furniture(): Scene[] {
       cars: (t) => [carried(0, 40, 300, 0)(t), carried(1, 20, 260, 250, { car: "truck" })(t), carried(2, 50, 340, 430, { car: "racer" })(t)],
       fx: tick,
       key: 1.5,
+    },
+    {
+      // M4-MAP: what the minimap makes of the track's two splits, with the HUD of a race. A car
+      // in each lane of both (the own one on the first split's dirt lane, timed to the press as
+      // in yard-split), and two on plain road. At the key moment the pairs are a little apart
+      // along their splits, so no dot lies on another.
+      name: "yard-map",
+      title: "Yard: the minimap of split lanes, a car in each lane",
+      yard: true,
+      cam: at(6400),
+      cars: (t) => [
+        split(0, 1, press.s - 6150 - 0.4 * 300)(t),
+        split(1, -1, 700, { car: "racer" })(t),
+        bend(2, 1, 600, 300, { car: "truck" })(t),
+        bend(3, -1, 645, 330)(t),
+        car(yard, 4, 1800 + ((t * 300 + 350) % 700), 20, { car: "racer" }),
+        car(yard, 5, 4400 + ((t * 300 + 750) % 1000), -30, { car: "truck" }),
+      ],
+      fx: tick,
+      hud: () => ({ topLeft: ["LAP 2/3", "POS 3/6", "RIV  42 MINE 2"], time: "1:23.4", corner: "23 ms", hp: 0.62 }),
+      key: (6350 - 6150 + 900 - (press.s - 6150 - 0.4 * 300)) / 300, // the own car 200 into its loop: s 6350
     },
   ];
 }
