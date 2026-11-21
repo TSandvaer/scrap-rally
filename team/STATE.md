@@ -526,6 +526,9 @@ resolved keeping both; gate running). SURF-1 review F1 (laneFor mound look-ahead
 F2 (look-ahead no lap wrap), F3/F4 nits -> folded into the M4-SURF-2 spec (tmp/spec-m4-surf-2.md). Authors + reviewers released,
 workspaces touch-4, m4-map, m4-surf-1, surf1-taste removed; :3009 taste copy stopped (pid 62645 + npm 62594).
 Next: SURF-2 dispatch on a green gate; then ask the user to push (v2 stick to the phone).
+SURF-1 gate green on 2c7b70c: 811/811 + 123/123, build ok; ClickUp 123jpnbffyz ready for qa test.
+M4-SURF-2 123jpnbffz4 (Opus) in flight: ctx_9b00420cc97a (~/orca/workspaces/scrap-rally/m4-surf-2, :3008; spec tmp/spec-m4-surf-2.md;
+base main 726b7b7). Taste gate: the user drives a split on the test track (frozen copy). Then M4-MOVE, then M4-TRACKS.
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
