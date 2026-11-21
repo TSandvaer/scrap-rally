@@ -135,3 +135,28 @@ curve, throttle sign, quantization, release, merge with keys) and `tools/debug/t
 tests; touch-drive drives a lap with the stick (gas + steer at once, diagonals, brake/reverse) at 390x844 and 844x390 with the
 pad gone; the tuning panel changes the feel live and persists; keyboard tests identical; check/test/build. Taste gate: the user on
 the phone, live, using the tuning panel; then the chosen values become the defaults.
+
+### TOUCH-2 advisor changes (binding; Fable 5.2 review 2026-11-21: "sound with changes"; override the addendum above)
+
+1. **No own quantization:** `client/game.ts:974-975` already rounds throttle and steer to 2 decimals before predicting, stores that
+   cmd in `pending` (`:1021`) and sends it (`:1028`); the server only clamps (`server/room.ts:960-961`). Quantize the stick to 0.01
+   or not at all; a sim-test shows stick output survives `round(v, 2)` and a JSON round-trip unchanged.
+2. **No physics/server change:** throttle is used by sign and as a multiplier (`shared/physics.ts:103-106`), steer linearly
+   (`:119`), the engine sound uses `Math.abs` (`client/soundlogic.ts:815`), skid marks come from motion (`gfx/actors.ts:569`), bots
+   already send fractional values (`shared/botdrive.ts:642,653`). The worker checks the reconcile replay and `client/contact.ts`.
+3. **Fairness:** steer is capped at 1 (the keyboard's value); dead zone and curve live client-side in `client/input.ts`; full lock
+   is reachable well inside R.
+4. **The stick zone is an element:** a child of `.touch-ctl` (z-index under the speaker and ☰, `style.css:1472-1477`) to the right of
+   the split line, from below `--touch-top` (`style.css:1468`) to the bottom, INCLUDING the view in both orientations; it carries
+   `touch-action: none` and the callout rules (`style.css:1479-1489`). Redo the portrait chat offset (`style.css:1634-1638`, uses
+   `--pad`, which goes away) and show the Chat button stays tappable; check the ping label.
+5. **Reducer:** keep `PadEvent`, `release`/`clear`, the mine latch, `readPad`, `mergeControls`, `show()`, `setTouch`, `padWanted`
+   (`main.ts:931-935`); replace `pad: {id, zone}[]` by one stick `{id, cx, cy, x, y}` (the first finger in the zone owns it, later
+   ones are ignored); remove `padZone`, `zoneControls`, `caps` and the lit bits 0-8 (`input.ts:108-118,217,301-309`); `clear()` also
+   hides the knob; the knob moves by `transform` only, written on pointermove (amends design rule 7).
+6. **Tuning panel lazy-loaded** like `main.ts:1043-1049`, gated on `debug` (`main.ts:29`); only the parameter object and its
+   defaults live in `input.ts`; localStorage wrapped in try/catch as `client/audio.ts:87-95`; stored values apply only under ?debug=1.
+7. **Tests:** rewrite the zone parts of `tools/debug/touch-drive.ts` (`:244-246,299-308,401,420`) and the sim-test section at
+   `scripts/sim-test.ts:10027`; assert a fractional steer together with throttle 1 from one finger.
+Adopted suggestions: a touch landing within R of a screen edge shifts the centre inward so full lock stays reachable; the knob shows
+the throttle state (gas / brake / neutral colour) since the thumb hides the car. Later: left-handed swap. No haptics (absent on iOS).
