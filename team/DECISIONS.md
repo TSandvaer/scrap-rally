@@ -124,3 +124,4 @@
 - 2026-11-21 — Stick defaults (user, tuned on the phone with ?debug=1): { radius: 95, steerDead: 0.12, steerLock: 0.7, steerCurve: 1.4, throttleDead: 0.3, split: 0.5 } -> TOUCH-3 123jpnbffye makes them the defaults.
 - 2026-11-21 — Obstacles (user, popup "Start part 1 now"): M4-SURF-1 (water, dirt patches, belt, tyre mounds; ClickUp 123jpnbffyz) starts beside TOUCH-3; then SURF-2 (widen + islands), M4-MOVE, M4-TRACKS + M4-MAP.
 - 2026-11-21 — Push (user popup "Push now"): origin/main 8c39954..7defc76 (TOUCH-3 stick radius 95 default).
+- 2026-11-21 — Stick defaults v2 (user, tuned again on the phone): { radius: 95, steerDead: 0.12, steerLock: 0.9, steerCurve: 3, throttleDead: 0.3, split: 0.5 } -> TOUCH-4 123jpnbffzn; user popup: start now as a one-off 3rd worker (2-worker rule otherwise unchanged).
