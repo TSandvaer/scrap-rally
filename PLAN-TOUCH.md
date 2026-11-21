@@ -161,7 +161,7 @@ the phone, live, using the tuning panel; then the chosen values become the defau
 Adopted suggestions: a touch landing within R of a screen edge shifts the centre inward so full lock stays reachable; the knob shows
 the throttle state (gas / brake / neutral colour) since the thumb hides the car. Later: left-handed swap. No haptics (absent on iOS).
 
-## Addendum 2026-11-22 (after the TOUCH-4 phone test): TOUCH-5, point to steer — PENDING (Fable review, then the user's approval)
+## Addendum 2026-11-22 (after the TOUCH-4 phone test): TOUCH-5, point to steer — APPROVED by the user 2026-11-22 (with the advisor changes below)
 
 **Why.** User 2026-11-22, live b1a62a7 (stick v2: lock 0.9, curve 3): "It's still to hard on the phone I constantly oversteer".
 Two rounds of numbers (TOUCH-3 radius, TOUCH-4 lock/curve) did not fix it. Cause in the code: the stick's sideways offset is a
