@@ -29,8 +29,10 @@
 // sparks, the mines and the smoke puffs, all in the palette's 32 colours.
 //
 // The sheets are module-level: built on first use, they outlive a Renderer. Canvas memory is
-// capped at what it was with one look (spriteBytes(), SPRITE_BYTES_MAX): MAX_CAR_SHEETS car
-// sheets, a silhouette for each of the three looks, the effect sheet.
+// capped (spriteBytes(), SPRITE_BYTES_MAX): MAX_CAR_SHEETS car sheets, a silhouette for each
+// of the three looks, the effect sheet, and the catch-up sheet (the lightning cells and the
+// boost flames, PLAN-M4.md 2.5 and 2.8: at the end of this file), which is not made before a
+// frame has a cell or a boosting car to draw.
 
 import { MAX_PLAYERS } from "../../shared/protocol";
 import { BAYER4, carTones, P, PALETTE, rgbOf, type PaletteName } from "./palette";
@@ -637,10 +639,226 @@ export function fxIndexSheet(): Uint8Array {
 
 /** The effect sheet as pixels (0xAABBGGRR), FX_W x FX_H. */
 export function fxPixels(out: Uint32Array = new Uint32Array(FX_W * FX_H)): Uint32Array {
+  return pixels(fxIndexSheet(), fxPalette(), out);
+}
+
+/** The colours of an effect sheet's indices: nothing, the palette's 32, the cast shadow. */
+function fxPalette(): Uint32Array {
   const pal = new Uint32Array(FX_SHADOW + 1);
   PALETTE.forEach((e, i) => (pal[i + 1] = word(e.hex)));
   pal[FX_SHADOW] = word(P.soot0, Math.round(SHADOW_ALPHA * 255)) & 0xff000000; // black, the shadow's alpha
-  return pixels(fxIndexSheet(), pal, out);
+  return pal;
+}
+
+// ---- catch-up: lightning cells and boost flames ---------------------------------------
+//
+// One more sheet (PLAN-M4.md 2.5, 2.8), all of it in the palette's 32 colours. Its top row is
+// the lightning cell, CELL x CELL a picture: a canister seen from above, a yellow rim round a
+// dark well, the bolt in it. On the ground it lies in its own cast shadow and crackles (small
+// arcs jump off its rim); the floating one is bigger (nearer the eye, as a car in the air)
+// and has a ring of light turning round it; its shadow is a picture of its own, drawn away on
+// the ground. A cell that was taken is a broken outline of itself, which lights up when it is
+// about to be back.
+// Under that row the flame of a boosting car: FLAME x FLAME a picture, FLAME_HEADINGS
+// headings of each of its frames (three that flicker, one short: the boost is about to end).
+// A flame is worked out in the car's own frame (u forward, v to its right, view pixels from
+// its middle) and sampled pixel centre by pixel centre, as the cars are, for a cell that lies
+// FLAME_AT (whole pixels) from the car's middle: so it sits on the car's tail at every heading.
+
+export const FLAME = 20;
+export const FLAME_HEADINGS = 64;
+/** The flames that flicker; the frame after them (FLAME_LOW) is the short one. */
+export const FLAME_FRAMES = 3;
+export const FLAME_LOW = FLAME_FRAMES;
+export const FLAME_COLS = 32;
+export const CATCH_W = FLAME_COLS * FLAME;
+export const CATCH_H = CELL + (((FLAME_FRAMES + 1) * FLAME_HEADINGS) / FLAME_COLS) * FLAME;
+// Pictures of the top row.
+export const CELL_FRAMES = 4;
+export const CX_GROUND = 0; // CELL_FRAMES frames
+export const CX_AIR = 4; // CELL_FRAMES frames
+export const CX_GONE = 8; // the ground cell taken; + 1: about to be back
+export const CX_AIR_GONE = 10; // the floating cell taken; + 1: about to be back
+export const CX_SHADE = 12; // a floating cell's shadow: the cell low in its bob; + 1: high; + 2: of a taken cell
+
+const FLAME_BACK = 19.5; // a flame's picture is centred this far behind the car's middle (view pixels)
+const FLAME_ROOT = -11; // where the flame starts, in the car's frame: under its tail
+/** A whole number of pixels, rounded the same way either side of zero (so a left and a right offset mirror each other). */
+function whole(v: number): number {
+  return v < 0 ? -Math.floor(0.5 - v) : Math.floor(v + 0.5);
+}
+/** Per flame heading: from the car's middle to the middle of the flame's picture, whole view pixels (x, y). */
+export const FLAME_AT = new Int8Array(FLAME_HEADINGS * 2);
+for (let f = 0; f < FLAME_HEADINGS; f++) {
+  const a = (f * Math.PI * 2) / FLAME_HEADINGS;
+  FLAME_AT[f * 2] = whole(-Math.cos(a) * FLAME_BACK);
+  FLAME_AT[f * 2 + 1] = whole(-Math.sin(a) * FLAME_BACK);
+}
+
+// The bolt: a polygon, in pixels from the cell's middle (x right, y down), at size 1.
+const BOLT: readonly (readonly [number, number])[] = [[0.2, -6], [3.2, -6], [0.6, -1], [3.2, -1], [-2.2, 6.4], [-0.6, 0.6], [-3.2, 0.6]];
+
+function inBolt(x: number, y: number, size: number): boolean {
+  let inside = false;
+  for (let i = 0, j = BOLT.length - 1; i < BOLT.length; j = i++) {
+    const xi = BOLT[i][0] * size, yi = BOLT[i][1] * size, xj = BOLT[j][0] * size, yj = BOLT[j][1] * size;
+    if (yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) inside = !inside;
+  }
+  return inside;
+}
+
+/** Is the pixel whose middle is (dx, dy) from the cell's middle part of the bolt: most of its 16 samples are. */
+function boltPixel(dx: number, dy: number, size: number): boolean {
+  let n = 0;
+  for (let j = 0; j < 4; j++) for (let i = 0; i < 4; i++) if (inBolt(dx + (i - 1.5) / 4, dy + (j - 1.5) / 4, size)) n++;
+  return n >= 8;
+}
+
+/** The tone of a flame at (u, v) of the car's frame, in frame j, at pixel (x, y) of its picture (the dither); null = nothing. */
+function flameTone(u: number, v: number, j: number, x: number, y: number): PaletteName | null {
+  const low = j === FLAME_LOW;
+  const len = low ? 7 : [15.5, 13, 17][j], wide = low ? 1.8 : [2.45, 2.2, 2.35][j];
+  const t = (FLAME_ROOT - u) / len; // 0 at the root, 1 at the tip
+  if (t < 0 || t > 1) return null;
+  // The tail wags, more the further out; the flame is widest a little behind its root.
+  const a = Math.abs(v - Math.sin(t * 4.4 + j * 2.1) * 0.85 * t);
+  const w = wide * Math.min(1, 0.8 + t) * Math.pow(1 - t, 0.62);
+  if (a > w) return null;
+  const r = a / (w || 1);
+  if (t < (low ? 0.3 : 0.42) && r < 0.5) return "haz2";
+  if (t < (low ? 0.6 : 0.7) && r < 0.85) return "blast";
+  // The tip breaks up.
+  if (t > 0.8 && (BAYER4[y & 3][x & 3] + 0.5) / 16 > 0.6) return null;
+  return t > 0.86 ? "rust2" : "rust3";
+}
+
+/** The catch-up sheet as indices (0 = nothing, 1..32 = palette entry + 1, 33 = cast shadow), CATCH_W x CATCH_H. */
+export function catchIndexSheet(): Uint8Array {
+  const sheet = new Uint8Array(CATCH_W * CATCH_H);
+  let ox = 0;
+  const put = (x: number, y: number, name: PaletteName) => {
+    if (x >= 0 && y >= 0 && x < CELL && y < CELL) sheet[y * CATCH_W + ox + x] = IDX[name];
+  };
+  const shade = (x: number, y: number) => {
+    if (x >= 0 && y >= 0 && x < CELL && y < CELL) sheet[y * CATCH_W + ox + x] = FX_SHADOW;
+  };
+  /** A dash of a broken ring: every other one of `n` arcs round the middle. */
+  const dash = (dx: number, dy: number, n: number) => (Math.floor(((Math.atan2(dy, dx) + Math.PI) / (Math.PI * 2)) * n + 0.25) & 1) === 0;
+
+  // The cell, whole: R = the canister's radius, `size` = the bolt's, f = the frame.
+  const cell = (R: number, size: number, f: number, air: boolean) => {
+    const dim = f === 2; // the bolt's glow dips once a round
+    for (let y = 0; y < CELL; y++) {
+      for (let x = 0; x < CELL; x++) {
+        const dx = x + 0.5 - HALF, dy = y + 0.5 - HALF;
+        const d = Math.hypot(dx, dy);
+        if (d > R) {
+          // The floating cell's ring of light: dots that turn with the frames.
+          if (air && d > R + 1.3 && d <= R + 2.5 && ((Math.floor(((Math.atan2(dy, dx) + Math.PI) / (Math.PI * 2)) * 24 + 0.5) + f) & 3) === 0) put(x, y, f & 1 ? "haz1" : "haz2");
+          continue;
+        }
+        const sun = (dx + dy) / R; // under -0.5: the side the sun is on; over 0.5: the far side
+        if (d > R - 1) put(x, y, "soot1");
+        else if (d > R - 3) put(x, y, sun < -0.5 ? "haz2" : sun > 0.55 ? "haz0" : "haz1");
+        // The well: sunk, so its near wall is in the dark and its far wall catches a little light.
+        else put(x, y, d > R - 4 ? (sun < -0.2 ? "soot0" : sun > 0.5 ? "soot3" : "soot1") : "soot1");
+      }
+    }
+    // The bolt, its own dark edge round it where it runs over the rim, its lower right side a tone down.
+    const bolt = (x: number, y: number) => boltPixel(x + 0.5 - HALF, y + 0.5 - HALF, size);
+    for (let y = 1; y < CELL - 1; y++) {
+      for (let x = 1; x < CELL - 1; x++) {
+        if (bolt(x, y)) continue;
+        if ((bolt(x - 1, y) || bolt(x + 1, y) || bolt(x, y - 1) || bolt(x, y + 1)) && Math.hypot(x + 0.5 - HALF, y + 0.5 - HALF) <= R - 1) put(x, y, "soot1");
+      }
+    }
+    for (let y = 0; y < CELL; y++) {
+      for (let x = 0; x < CELL; x++) {
+        if (!bolt(x, y)) continue;
+        const edge = !bolt(x + 1, y) && !bolt(x, y + 1);
+        put(x, y, dim ? (edge ? "blast" : "haz1") : edge ? "haz1" : "haz2");
+      }
+    }
+    // Arcs off the rim of the one on the ground: two a frame, a few pixels each, never in the same place twice running.
+    if (!air) {
+      for (let k = 0; k < 2; k++) {
+        const a = f * 2.4 + k * 2.9 + 0.6;
+        for (let n = 0; n < 3; n++) {
+          const r = R + 0.8 + n * 1.05, b = a + (n === 1 ? 0.2 : n === 2 ? -0.08 : 0);
+          put(Math.floor(HALF + Math.cos(b) * r), Math.floor(HALF + Math.sin(b) * r), n === 2 ? "blast" : "haz2");
+        }
+      }
+    }
+  };
+  // The cell taken: a broken outline of the canister and of the bolt; `lit`: about to be back.
+  const gone = (R: number, size: number, lit: boolean) => {
+    const bolt = (x: number, y: number) => boltPixel(x + 0.5 - HALF, y + 0.5 - HALF, size);
+    for (let y = 1; y < CELL - 1; y++) {
+      for (let x = 1; x < CELL - 1; x++) {
+        const dx = x + 0.5 - HALF, dy = y + 0.5 - HALF;
+        const d = Math.hypot(dx, dy);
+        if (d <= R && d > R - 1.15) {
+          if (dash(dx, dy, 16)) put(x, y, lit ? "haz1" : "bone0");
+          else if (lit) put(x, y, "haz0");
+        } else if (bolt(x, y) && !(bolt(x - 1, y) && bolt(x + 1, y) && bolt(x, y - 1) && bolt(x, y + 1))) {
+          if (lit || ((x + y) & 1) === 0) put(x, y, lit ? "haz1" : "bone0");
+        }
+      }
+    }
+  };
+  // A floating cell's shadow on the ground, in the middle of its own picture.
+  const shadow = (R: number, broken: boolean) => {
+    for (let y = 0; y < CELL; y++) {
+      for (let x = 0; x < CELL; x++) {
+        if (Math.hypot(x + 0.5 - HALF, y + 0.5 - HALF) <= R && !(broken && (x + y) & 1)) shade(x, y);
+      }
+    }
+  };
+
+  const GROUND_R = 8.5, AIR_R = 10.5, GROUND_BOLT = 0.92, AIR_BOLT = 1.16;
+  for (let f = 0; f < CELL_FRAMES; f++) {
+    ox = (CX_GROUND + f) * CELL;
+    // On the ground it lies in its own shadow, as a mine does.
+    for (let y = 0; y < CELL; y++) for (let x = 0; x < CELL; x++) if (Math.hypot(x + 0.5 - HALF - 1.5, y + 0.5 - HALF - 2.5) <= GROUND_R) shade(x, y);
+    cell(GROUND_R, GROUND_BOLT, f, false);
+    ox = (CX_AIR + f) * CELL;
+    cell(AIR_R, AIR_BOLT, f, true);
+  }
+  for (let lit = 0; lit < 2; lit++) {
+    ox = (CX_GONE + lit) * CELL;
+    gone(GROUND_R, GROUND_BOLT, lit === 1);
+    ox = (CX_AIR_GONE + lit) * CELL;
+    gone(AIR_R, AIR_BOLT, lit === 1);
+  }
+  ox = CX_SHADE * CELL;
+  shadow(AIR_R - 1.5, false);
+  ox = (CX_SHADE + 1) * CELL;
+  shadow(AIR_R - 2.5, false);
+  ox = (CX_SHADE + 2) * CELL;
+  shadow(AIR_R - 2, true);
+
+  // The flames.
+  for (let j = 0; j <= FLAME_FRAMES; j++) {
+    for (let f = 0; f < FLAME_HEADINGS; f++) {
+      const a = (f * Math.PI * 2) / FLAME_HEADINGS, cos = Math.cos(a), sin = Math.sin(a);
+      const n = j * FLAME_HEADINGS + f;
+      const px = (n % FLAME_COLS) * FLAME, py = CELL + Math.floor(n / FLAME_COLS) * FLAME;
+      for (let y = 0; y < FLAME; y++) {
+        for (let x = 0; x < FLAME; x++) {
+          // The pixel's middle, from the car's middle; then in the car's frame.
+          const dx = FLAME_AT[f * 2] + x + 0.5 - FLAME / 2, dy = FLAME_AT[f * 2 + 1] + y + 0.5 - FLAME / 2;
+          const tone = flameTone(dx * cos + dy * sin, dy * cos - dx * sin, j, x, y);
+          if (tone) sheet[(py + y) * CATCH_W + px + x] = IDX[tone];
+        }
+      }
+    }
+  }
+  return sheet;
+}
+
+/** The catch-up sheet as pixels (0xAABBGGRR), CATCH_W x CATCH_H. */
+export function catchPixels(out: Uint32Array = new Uint32Array(CATCH_W * CATCH_H)): Uint32Array {
+  return pixels(catchIndexSheet(), fxPalette(), out);
 }
 
 // ---- canvases -------------------------------------------------------------------------
@@ -783,10 +1001,26 @@ export function sharedSheets(): SharedSheets {
   return shared;
 }
 
+let catchUp: HTMLCanvasElement | null = null;
+
+/** The catch-up sheet (lightning cells, boost flames), built the first time a frame draws from it. */
+export function catchSheet(): HTMLCanvasElement {
+  if (!catchUp) {
+    const s = sheetCanvas(CATCH_W, CATCH_H);
+    if (typeof ImageData !== "undefined") {
+      const img = new ImageData(CATCH_W, CATCH_H);
+      catchPixels(new Uint32Array(img.data.buffer));
+      s.ctx.putImageData(img, 0, 0);
+    }
+    catchUp = s.canvas;
+  }
+  return catchUp;
+}
+
 /** Canvas memory the sprite sheets hold right now, in bytes. */
 export function spriteBytes(): number {
   return bytes;
 }
 
-/** The most the sprite sheets can ever hold: every car sheet, a silhouette a look, the effects. As it was with one look. */
-export const SPRITE_BYTES_MAX = (MAX_CAR_SHEETS + LOOKS.length) * SHEET_W * SHEET_H * 4 + FX_W * FX_H * 4;
+/** The most the sprite sheets can ever hold: every car sheet, a silhouette a look, the effects, the catch-up sheet. */
+export const SPRITE_BYTES_MAX = (MAX_CAR_SHEETS + LOOKS.length) * SHEET_W * SHEET_H * 4 + FX_W * FX_H * 4 + CATCH_W * CATCH_H * 4;
