@@ -97,7 +97,8 @@ export interface StickParams {
   split: number;
 }
 
-export const STICK_DEFAULTS: Readonly<StickParams> = { radius: 60, steerDead: 0.12, steerLock: 0.7, steerCurve: 1.4, throttleDead: 0.3, split: 0.5 };
+/** The user's values, tuned on a phone with the panel (TOUCH-3: R 60 was too sensitive). */
+export const STICK_DEFAULTS: Readonly<StickParams> = { radius: 95, steerDead: 0.12, steerLock: 0.7, steerCurve: 1.4, throttleDead: 0.3, split: 0.5 };
 
 /** Where things are on screen: cached by TouchPad, measured again after a resize. */
 export interface PadGeometry {

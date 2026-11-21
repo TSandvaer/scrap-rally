@@ -1568,14 +1568,16 @@ h2 {
     3px 3px 0 var(--cast);
 }
 
-/* The countdown's hint: where the stick is, until GO or a thumb lands. */
+/* The countdown's hint: where the stick is, until GO or a thumb lands. A 2R square, capped to the
+   zone's width (less 2 px a side) where the zone is narrower: a 360 px wide phone's zone is 180 px. */
 .touch-stick.hint:not(.held)::before {
   content: "DRIVE";
   position: absolute;
   left: 50%;
   top: 62%;
-  width: calc(2 * var(--stick-r));
-  height: calc(2 * var(--stick-r));
+  box-sizing: border-box; /* the 2R is the dashed box itself (the * rule does not reach ::before) */
+  width: min(calc(2 * var(--stick-r)), calc(100% - 4px));
+  aspect-ratio: 1;
   transform: translate(-50%, -50%);
   display: grid;
   place-items: center;
@@ -1693,6 +1695,22 @@ h2 {
 
   #stage.pad-on .chat.overlay {
     left: max(calc(var(--view-left, 0px) + 8px), calc(10px + var(--fire) + var(--cap-gap) + var(--mine) + 12px));
+  }
+
+  /* The DRIVE hint stands on the weapons' bottom line (30 of 360 view pixels up: clear of the
+     banner strip and the ping) and stays under the minimap (its bottom is 112 of 360 down) and in
+     the zone: between the two lines are 218 of 360 view pixels, less an 8 px gap; a screen too
+     short for 2R caps it (844x390 is not: 228 px for 190). */
+  .touch-stick.hint:not(.held)::before {
+    top: auto;
+    bottom: calc((var(--app-h, 100dvh) - var(--tv-h)) / 2 + var(--tv-h) * 30 / 360);
+    width: min(
+      calc(2 * var(--stick-r)),
+      calc(100% - 4px),
+      calc(var(--tv-h) * 218 / 360 - 8px),
+      calc(var(--app-h, 100dvh) - var(--touch-top) - (var(--app-h, 100dvh) - var(--tv-h)) / 2 - var(--tv-h) * 30 / 360 - 4px)
+    );
+    transform: translateX(-50%);
   }
 }
 
