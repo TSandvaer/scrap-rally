@@ -107,3 +107,4 @@
 - 2026-11-21 — Canvas memory cap (user, popup, before M4-WORLD): "16 MB, count everything" — the total now includes HUD label/font canvases (~1.1 MB; today ~12.8 MB in all), leaving ~3 MB for obstacle art. Replaces the PLAN-GFX 12 MB "added" cap; the speed gate still applies to every art ticket.
 - 2026-11-21 — M4-HARD taste gate (user, popup, frozen copy 247a80c on :3009): "Approve, merge" -> merge after the quick re-check approves.
 - 2026-11-21 — M4-WORLD contact sheet (user, popups): "Go with changes": water gets one muted dark blue-grey tone (palette addition, water only); the press, barrel and truck choices stand.
+- 2026-11-21 — M4-WORLD (user): "dirt and water puddles should not be square, it should read as a puddle" -> organic deterministic outline inside the feature rect, defined by one pure function that M4-SURF moves into shared/track.ts and uses for grip (drawn shape = physics shape).
