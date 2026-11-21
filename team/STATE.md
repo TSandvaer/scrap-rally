@@ -486,6 +486,9 @@ tmp/touch-2/shots/. Opus reviewer ctx_d85a4b2e953b (tmp/review-touch-2.md). Then
 TOUCH-2 review APPROVE (ctx_d85a4b2e953b, released). Notes for the phone gate: a landing within ~43 px of the right edge starts with steer
 on (EDGE_PX has no slider); debug nit: moving the split slider while a thumb holds the stick draws the gate offset (output fine). MERGED
 main 59f7d55; gate running. Then ask the user to push (touch-2 + obstacle art + team notes).
+TOUCH-2 gate on main: check clean, sim 776/776, bots 118/118, build ok; ClickUp 123jpnbffxe ready for qa test; workspace removed.
+PUSHED 2026-11-21 (user popup): origin/main c655bd8..8c39954. Waiting for the user's Manual Deploy; local build gives index-B8dHVCS9.js ->
+verify live, then the user tunes the stick on the phone with ?debug=1 and sends the values; they become the defaults (small follow-up).
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).

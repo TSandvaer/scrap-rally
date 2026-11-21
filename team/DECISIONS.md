@@ -120,3 +120,4 @@
 - 2026-11-21 — Push (user popup "Push now"): origin/main e409e09..c655bd8 (touch controls + lobby fix); obstacle art follows later.
 - 2026-11-21 — Phone test of TOUCH-1 (user): "the controls on the phone is bad ... how can you hold down speed and turn at the same time ... should be like the knob on a controller" -> TOUCH-2: floating thumbstick in the right half (user popup), any push up = full gas, down = brake, steering proportional; FIRE/MINE left unchanged; a ?debug=1 tuning panel so the user tunes the feel on the phone (attempt 2 on touch; the panel replaces a third guessed round).
 - 2026-11-21 — TOUCH-2 (user, popup): "Approve, build it" (floating thumbstick, up = full gas, proportional steer, ?debug=1 tuning panel, knob colour shows gas/brake; Fable advisor: sound with changes, all taken in). ClickUp 123jpnbffxe.
+- 2026-11-21 — Push (user popup "Push now"): origin/main c655bd8..8c39954 (TOUCH-2 thumbstick + M4-WORLD obstacle art).
