@@ -9180,7 +9180,38 @@ function cellsOffCentre(): void {
   );
 }
 
-for (const t of [rivets, gating, mines, wrecks, finishing, garage, armDelay, engine, readyCheck, collisions, trackFeatures, roomTrack, jumpsWired, shippedTracks, botDriver, botLaps, mineCap, chatRoom, chatClient, sound, raceSounds, surfaceSounds, audioUnlock, menuHostOnly, menuStop, menuRestart, menuKick, menuLock, menuHandover, menuClient, menuRestartClient, retireRules, retireField, retireRaceEnd, retireGarage, retireRefund, retireOthers, retireNotices, retireClient, pauseRefused, pauseFreeze, pauseResume, pauseHold, pauseAuto, pauseCooldown, pauseGrace, pauseCountdown, pauseControls, pauseClient, musicSwitch, soundMigration, soundLayers, soundServer, soundRandom, soundRoomDrag, soundSliderGrip, soundClient, songs, songPlayer, ghostRivets, minesSetting, minesStay, minesCap, minesFade, minesAtStart, minesCleared, minesPaused, minesClient, botsPointAt, botsAdd, botsKickHost, botsHandover, botsFullRoom, botsSoloStart, botsRace, botsShop, botsTick, botsCpu, botsClient, carsTypes, carsStats, carsPick, carsRejoin, carsBots, carsRunUps, carsBalance, carsCut, carsClient, envRt, envStep, envClient, draftRule, draftStraight, draftClient, draftJumps, draftBots, cellsRule, boostPhysics, cellsServer, cellsClient, cellsValidate, cellsBots, cellsOffCentre]) {
+// ---- Hard bot level (M4-HARD, PLAN-M4.md addendum 2026-11-21, ClickUp 123jpnbffqh, 2026-11-21) ----
+
+// This section's imports (hoisted like the ones at the top).
+import { goldenAll } from "../tools/debug/hard-tune";
+
+/**
+ * Easy and Normal byte-identity (M4-HARD advisor change 3): the hashes tools/debug/hard-tune.ts
+ * --golden printed on main at a7fa942, BEFORE shared/botdrive.ts was touched: every tick's
+ * throttle/steer/fire/mine and car state (full float64 bits) and the wallets; server bots, every
+ * shipped track, 3 bots, two 3-lap races; and one client (socket-bot path) race.
+ */
+const HARD_GOLDEN: Record<string, string> = {
+  "rust-bowl easy": "18c705b27b88a5f7ac751b4ec55fc1ac596e2cf87b981997abb375625641e38c",
+  "rust-bowl normal": "66296aa9e346580c4856ab4d4a64e9ae9306e4a4d5dabc2bf6d37ff146f6e471",
+  "crusher-run easy": "962a1ab5523d30431f391cabf4d0cb1baff389febe48c4c5c7ee8261287bf8eb",
+  "crusher-run normal": "2292d28aad4e16ffd00c18fc281812c0834406964eedafdbd28b2c40a3d4e9f2",
+  "overpass-knot easy": "030246f58700d25177ae43ab8a9bb87ebaecd7600fef2f8a764f215fa33620e4",
+  "overpass-knot normal": "4841eb7a9aff30cd4cd3ac02fdecbe8e82f035567bcebfbe0eedc060ade1370d",
+  "client crusher-run": "af5b555839a4d32c11a32179850e7319179dc0bedc22a8a219d39e12e2244f4c",
+};
+
+function hardGolden(): void {
+  const all = goldenAll();
+  const bad = Object.keys(HARD_GOLDEN).filter((k) => all[k]?.hash !== HARD_GOLDEN[k]);
+  check(
+    "hard golden: Easy and Normal bots drive, shoot and shop byte-identically to before M4-HARD (server bots on every shipped track, two races; the client bot path)",
+    bad.length === 0 && Object.keys(all).length === Object.keys(HARD_GOLDEN).length,
+    bad.map((k) => `${k}: ${all[k]?.hash.slice(0, 12)} != ${HARD_GOLDEN[k].slice(0, 12)}`).join("; ") || `${Object.keys(all).length} hashes match`,
+  );
+}
+
+for (const t of [rivets, gating, mines, wrecks, finishing, garage, armDelay, engine, readyCheck, collisions, trackFeatures, roomTrack, jumpsWired, shippedTracks, botDriver, botLaps, mineCap, chatRoom, chatClient, sound, raceSounds, surfaceSounds, audioUnlock, menuHostOnly, menuStop, menuRestart, menuKick, menuLock, menuHandover, menuClient, menuRestartClient, retireRules, retireField, retireRaceEnd, retireGarage, retireRefund, retireOthers, retireNotices, retireClient, pauseRefused, pauseFreeze, pauseResume, pauseHold, pauseAuto, pauseCooldown, pauseGrace, pauseCountdown, pauseControls, pauseClient, musicSwitch, soundMigration, soundLayers, soundServer, soundRandom, soundRoomDrag, soundSliderGrip, soundClient, songs, songPlayer, ghostRivets, minesSetting, minesStay, minesCap, minesFade, minesAtStart, minesCleared, minesPaused, minesClient, botsPointAt, botsAdd, botsKickHost, botsHandover, botsFullRoom, botsSoloStart, botsRace, botsShop, botsTick, botsCpu, botsClient, carsTypes, carsStats, carsPick, carsRejoin, carsBots, carsRunUps, carsBalance, carsCut, carsClient, envRt, envStep, envClient, draftRule, draftStraight, draftClient, draftJumps, draftBots, cellsRule, boostPhysics, cellsServer, cellsClient, cellsValidate, cellsBots, cellsOffCentre, hardGolden]) {
   console.log(`\n# ${t.name}`);
   try {
     t();
