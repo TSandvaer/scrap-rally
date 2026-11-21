@@ -20,11 +20,15 @@
 //                    panel (it keeps the stick's zone free), a slider dragged by a second finger while
 //                    the thumb holds the stick changes the step's Controls at once (screenshots of the
 //                    panel open); portrait also: the values are stored and back after a reload, bad
-//                    stored values are ignored, Defaults resets them; without ?debug=1 no panel and
-//                    the stored values are not used.
+//                    stored values are ignored, values saved with other defaults (the old R 60) are
+//                    kept, Defaults resets them; without ?debug=1 no panel and the stored values are
+//                    not used.
 //   look-portrait / look-landscape / look-small (360x740): no debug (production layout): the
-//                    lobby (no controls), the countdown's DRIVE hint, the race with the stick held at
-//                    gas+right (green), brake (red) and steer only (grey) with FIRE held (screenshots),
+//                    lobby (no controls), the countdown's DRIVE hint (its real box, 2R or capped,
+//                    inside the zone and clear of the HUD, the weapons and the Chat button), the race
+//                    with the stick held at gas+right (green), brake (red) and steer only (grey) with
+//                    FIRE held (screenshots), the gate and the knob at the shipped R, full lock both
+//                    ways, gas and brake reached from a landing at each corner of the zone,
 //                    the stick's zone (right of the split, under the speaker and ☰ to the bottom, over
 //                    the view, drawing nothing), the weapons and the Chat button against the HUD,
 //                    minimap, banner/ping, speaker and ☰; the Chat button tappable (no zone over it);
@@ -519,9 +523,10 @@ async function stickChecks(d: PageDriver, tag: string): Promise<void> {
     `landed ${rx},${ry}; gate centre ${v0.cx.toFixed(1)},${v0.cy.toFixed(1)}, knob ${v0.kx},${v0.ky} ${v0.colour}; ${JSON.stringify(l0)}`,
   );
   // Round the gate: up (gas), up-right, right, down-right, down (brake), down-left, left, up-left,
-  // far up-right (past R, still on screen: the knob stops on R), and back to the centre.
+  // far up-right (past R, still on screen: the knob stops on R; 0.7 R across keeps it on a 390 px
+  // screen from the zone's middle at R 95), and back to the centre.
   const k = Math.round(R * 0.6);
-  const stops: [string, number, number][] = [["up", 0, -k], ["up-right", Math.round(R * 0.4), -k], ["right", k, 0], ["down-right", Math.round(R * 0.4), k], ["down", 0, k], ["down-left", -Math.round(R * 0.4), k], ["left", -k, 0], ["up-left", -Math.round(R * 0.4), -k], ["far up-right", Math.round(R * 1.2), -Math.round(R * 1.5)], ["centre", 0, 0]];
+  const stops: [string, number, number][] = [["up", 0, -k], ["up-right", Math.round(R * 0.4), -k], ["right", k, 0], ["down-right", Math.round(R * 0.4), k], ["down", 0, k], ["down-left", -Math.round(R * 0.4), k], ["left", -k, 0], ["up-left", -Math.round(R * 0.4), -k], ["far up-right", Math.round(R * 0.7), -Math.round(R * 1.3)], ["centre", 0, 0]];
   const got: string[] = [];
   let ok = true;
   let fractionalWithGas = false;
@@ -761,7 +766,7 @@ async function tune(d: PageDriver, w: number, h: number): Promise<void> {
     const smallest = await d.cdp.eval<number>(`Math.min(...[...document.querySelectorAll('.tune-range')].map((e) => e.getBoundingClientRect().height))`);
     check(
       `${tag}: TUNE opens the panel: six big sliders (R, steer dead zone, full lock, curve, throttle dead zone, split), the values as text; it stays left of the stick's zone, whose split line shows`,
-      !!L.panel && L.ranges === 6 && smallest >= 36 && L.panel.left + L.panel.width <= L.zone.left + 1 && L.tuning && L.text.includes("radius: 60") && L.text.includes("split: 0.5"),
+      !!L.panel && L.ranges === 6 && smallest >= 36 && L.panel.left + L.panel.width <= L.zone.left + 1 && L.tuning && L.text.includes(`radius: ${STICK_DEFAULTS.radius}`) && L.text.includes(`split: ${STICK_DEFAULTS.split}`),
       `panel ${L.panel ? boxText(L.panel) : "none"}, zone ${boxText(L.zone)}, sliders ${L.ranges} (smallest ${smallest} px), text ${L.text}`,
     );
     // Live while driving: the thumb holds gas + a little right; a second finger drags "Full lock at"
@@ -799,6 +804,22 @@ async function tune(d: PageDriver, w: number, h: number): Promise<void> {
     await sleep(300);
     const reloaded = await d.cdp.eval<StickParams>("scrapDebug.touchPad.stickParams()");
     check("tune: after a reload with ?debug=1 the stored values are applied (R 80, lock 0.2, split 0.4)", reloaded.radius === 80 && reloaded.steerLock === 0.2 && reloaded.split === 0.4, JSON.stringify(reloaded));
+    // A player who saved under the old defaults (TOUCH-2: R 60; the panel stores the whole set) keeps
+    // them under ?debug=1: the new default R does not replace a saved R (the gate drawn at 2 x 60).
+    const old: StickParams = { radius: 60, steerDead: 0.12, steerLock: 0.7, steerCurve: 1.4, throttleDead: 0.3, split: 0.5 };
+    await d.cdp.eval(`localStorage.setItem('scrap-rally:stick', ${JSON.stringify(JSON.stringify(old))}), true`);
+    await d.load("?debug=1");
+    await d.race();
+    await d.until("the controls", "!document.getElementById('touch').classList.contains('hidden')", 5000);
+    await d.thumbDown(...(await d.rest()));
+    await sleep(120);
+    const kept = await d.cdp.eval<{ p: StickParams; gate: number }>(`({ p: scrapDebug.touchPad.stickParams(), gate: document.getElementById('touch-base').getBoundingClientRect().width })`);
+    await d.thumbUp();
+    check(
+      `tune: values saved under ?debug=1 with the old defaults (R 60) are kept after the reload, not replaced by the new default R ${STICK_DEFAULTS.radius} (gate 2 x 60)`,
+      JSON.stringify(kept.p) === JSON.stringify(old) && Math.abs(kept.gate - 120) < 0.5 && STICK_DEFAULTS.radius !== 60,
+      JSON.stringify(kept),
+    );
     // Bad stored data (out of range, not a number) is ignored value by value.
     await d.cdp.eval(`localStorage.setItem('scrap-rally:stick', JSON.stringify({ radius: 999, steerDead: 'x', steerLock: 0.5 })), true`);
     await d.load("?debug=1");
@@ -853,6 +874,17 @@ const LAYOUT = `(() => {
     touchTop: parseFloat(getComputedStyle(q('#stage')).getPropertyValue('--touch-top')) };
 })()`;
 
+/** The countdown's DRIVE hint (the stick zone's ::before) as laid out: its border box on screen. */
+const HINT = `(() => {
+  const z = document.getElementById('touch-stick'), s = getComputedStyle(z, '::before'), r = z.getBoundingClientRect();
+  const m = new DOMMatrixReadOnly(s.transform === 'none' ? undefined : s.transform);
+  const px = (v) => parseFloat(v) || 0;
+  const extra = s.boxSizing === 'border-box' ? 0 : px(s.borderLeftWidth) + px(s.borderRightWidth) + px(s.paddingLeft) + px(s.paddingRight);
+  const extraY = s.boxSizing === 'border-box' ? 0 : px(s.borderTopWidth) + px(s.borderBottomWidth) + px(s.paddingTop) + px(s.paddingBottom);
+  return { content: s.content, sizing: s.boxSizing + ' ' + s.width + ' x ' + s.height + ' left ' + s.left + ' top ' + s.top + ' ' + s.transform,
+    box: { left: r.left + px(s.left) + m.m41, top: r.top + px(s.top) + m.m42, width: px(s.width) + extra, height: px(s.height) + extraY } };
+})()`;
+
 /** The HUD's boxes on screen, from the view's box (gfx/hud.ts, in 640x360 view pixels). */
 function hudBoxes(view: Box): Record<string, Box> {
   const k = view.width / 640;
@@ -883,14 +915,21 @@ async function look(d: PageDriver, tag: string, w: number, h: number): Promise<v
   await d.until("the countdown", "document.getElementById('lobby').classList.contains('hidden')");
   await d.until("the controls", "!document.getElementById('touch').classList.contains('hidden')", 5000);
   await sleep(300);
-  // The countdown's DRIVE hint: where it is (a 2R box at 50% / 62% of the zone) against the HUD.
+  // The countdown's DRIVE hint: its real box (the zone's ::before, as laid out: a 2R square, capped
+  // where the zone or the space between the minimap and the banner is smaller) against the HUD.
   const Lc = await d.cdp.eval<Layout>(LAYOUT);
   const R = STICK_DEFAULTS.radius;
-  const hint: Box = { left: Lc.zone.left + Lc.zone.width / 2 - R, top: Lc.zone.top + Lc.zone.height * 0.62 - R, width: 2 * R, height: 2 * R };
-  const hintHits = Object.entries({ ...hudBoxes(Lc.view), speaker: Lc.sound, "☰ menu": Lc.menu }).filter(([, b]) => b && overlap(hint, b)).map(([n]) => n);
-  const hinted = await d.cdp.eval<string>(`getComputedStyle(document.getElementById('touch-stick'), '::before').content`);
+  const H = await d.cdp.eval<{ content: string; box: Box; sizing: string }>(HINT);
+  const hint = H.box;
+  const hintHits = Object.entries({ ...hudBoxes(Lc.view), speaker: Lc.sound, "☰ menu": Lc.menu, "Chat button": Lc.chatOpen, weapons: Lc.weapons }).filter(([, b]) => b && overlap(hint, b)).map(([n]) => n);
+  const within = (a: Box, b: Box) => a.left >= b.left - 0.01 && a.top >= b.top - 0.01 && a.left + a.width <= b.left + b.width + 0.01 && a.top + a.height <= b.top + b.height + 0.01;
+  const capped = hint.width < 2 * R - 0.5;
   await d.shot(`countdown-${orient}-${size}`);
-  check(`${tag}: the countdown shows the DRIVE hint in the stick's zone, clear of the HUD, minimap, banner/ping, speaker and ☰`, hinted.includes("DRIVE") && hintHits.length === 0, `${hinted}; hint ${boxText(hint)}${hintHits.length ? `; over ${hintHits.join(", ")}` : ""}`);
+  check(
+    `${tag}: the countdown shows the DRIVE hint, a square of 2R (${2 * R} px) or capped to fit, inside the stick's zone and the screen, clear of the HUD, minimap, banner/ping, speaker, ☰, the Chat button and the weapons`,
+    H.content.includes("DRIVE") && hintHits.length === 0 && Math.abs(hint.width - hint.height) < 0.5 && hint.width <= 2 * R + 0.01 && hint.width >= 100 && within(hint, Lc.zone) && within(hint, Lc.stage),
+    `${H.content} (${H.sizing}); hint ${boxText(hint)}${capped ? ` CAPPED from ${2 * R}` : " (full 2R)"}, zone ${boxText(Lc.zone)}${hintHits.length ? `; over ${hintHits.join(", ")}` : ""}`,
+  );
   await sleep(3400); // the countdown is over
   const L0 = await d.cdp.eval<Layout>(LAYOUT);
   const [rx, ry] = await d.rest();
@@ -920,6 +959,44 @@ async function look(d: PageDriver, tag: string, w: number, h: number): Promise<v
   const L = await d.cdp.eval<Layout>(LAYOUT);
   await d.fingers.liftAll();
   d.stick = null;
+  // The stick at the shipped R: the gate 2R, the knob 0.8R; from a landing at each corner of the
+  // zone (2 px in) the thumb slid R away, or to the screen's last pixel, reaches full lock both ways
+  // (the knob at least 0.7 R sideways: steerLock), gas and brake (the knob's colour); the gate's
+  // centre is where stickCentre puts it (shifted in at the right and bottom edges).
+  const lockPx = R * STICK_DEFAULTS.steerLock;
+  const clampTo = (v: number, hi: number) => Math.max(0, Math.min(hi, Math.round(v)));
+  const Z = L.zone;
+  const corners: [string, number, number][] = [["top-left", Z.left + 2, Z.top + 2], ["top-right", Z.left + Z.width - 2, Z.top + 2], ["bottom-left", Z.left + 2, Z.top + Z.height - 2], ["bottom-right", Z.left + Z.width - 2, Z.top + Z.height - 2]];
+  const reach: string[] = [];
+  let reachOk = true;
+  let drawn = { gate: 0, knob: 0 };
+  for (const [name, x, y] of corners) {
+    await d.thumbDown(x, y);
+    await sleep(80);
+    const v0 = await d.view();
+    if (!drawn.gate) drawn = await d.cdp.eval<{ gate: number; knob: number }>(`({ gate: document.getElementById('touch-base').getBoundingClientRect().width, knob: document.getElementById('touch-knob').getBoundingClientRect().width })`);
+    const { cx, cy } = d.stick!;
+    const slide = async (tx: number, ty: number) => {
+      await d.fingers.at(RIGHT, clampTo(tx, w - 1), clampTo(ty, h - 1));
+      await sleep(70);
+      return d.view();
+    };
+    const l = await slide(cx - R, cy);
+    const r = await slide(cx + R, cy);
+    if (name === "bottom-right") await d.shot(`reach-${orient}-${size}`); // the centre shifted in, the thumb at the last pixel: full lock
+    const g = await slide(cx, cy - R);
+    const b = await slide(cx, cy + R);
+    await d.thumbUp();
+    await sleep(60);
+    const ok = Math.abs(v0.cx - cx) < 0.6 && Math.abs(v0.cy - cy) < 0.6 && l.kx <= -lockPx + 0.05 && r.kx >= lockPx - 0.05 && g.colour === "gas" && b.colour === "brake";
+    reachOk &&= ok;
+    reach.push(`${name} ${Math.round(x)},${Math.round(y)} -> centre ${v0.cx.toFixed(1)},${v0.cy.toFixed(1)}: knob left ${l.kx}, right ${r.kx}, up ${g.colour}, down ${b.colour}${ok ? "" : " (FAIL)"}`);
+  }
+  check(
+    `${tag}: the gate is drawn at 2R (${2 * R} px) and the knob at 0.8R (${0.8 * R} px); from a landing at each corner of the stick's zone full lock both ways (knob >= ${lockPx} px sideways), gas and brake are reached on screen`,
+    Math.abs(drawn.gate - 2 * R) < 0.5 && Math.abs(drawn.knob - 0.8 * R) < 0.5 && reachOk,
+    `gate ${drawn.gate}, knob ${drawn.knob}; ${reach.join(" | ")}`,
+  );
   // Sizes and places.
   const small = L.caps.filter((c) => c.width < 56 || c.height < 56);
   check(`${tag}: FIRE and MINE are at least 56 CSS px`, L.caps.length === 2 && small.length === 0, `${L.caps.length} caps, smallest ${Math.min(...L.caps.map((c) => Math.min(c.width, c.height)))} px`);
