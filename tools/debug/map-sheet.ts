@@ -6,6 +6,7 @@
 //   npx tsx tools/debug/map-sheet.ts --ref main --sheet    ... and the contact sheet (headless Chrome)
 //   --out <dir>            where the pictures go (default tmp/m4-map)
 //   --also <label>=<dir>   on the sheet, another tree's minimap of the test track (a folder with client/ and shared/)
+//   --label <label>        on the sheet, what the working tree's look is called beside those
 // Exit code 1 if a check fails.
 //
 // No browser, by default. The game's own HUD (client/gfx/hud.ts) is run in Node on a stand-in
@@ -509,8 +510,9 @@ async function sheet(OUT: string, now: Baked[], before: Baked[] | null, refLabel
     const Z = 6, GAP = 16, LINE = 22;
     const rows: { title: string; cells: { label: string; pic: Picture }[] }[] = [];
     const grown = (p: Picture, k: number) => resized(p, p.w * k, p.h * k);
+    const label = arg("--label"); // what to call the working tree's look, when others stand beside it
     rows.push({
-      title: `As the game shows it: the preview scene ${SCENE} in headless Chrome, the minimap cut out of the window, the window's own pixels and those three times enlarged`,
+      title: `${label ? `${label}. ` : ""}As the game shows it: the preview scene ${SCENE} in headless Chrome, the minimap cut out of the window, the window's own pixels and those three times enlarged`,
       cells: windows.flatMap((w) => [
         { label: `${w.size.name}  (${w.per.toFixed(2)} window px a game px)`, pic: w.crop },
         { label: `${w.size.name}  x 3`, pic: grown(w.crop, 3) },
@@ -518,7 +520,7 @@ async function sheet(OUT: string, now: Baked[], before: Baked[] | null, refLabel
     });
     const old = before?.find((b) => b.id === yard.id);
     rows.push({
-      title: `The baked minimap of ${yard.name}, the game's pixels ${Z} times enlarged`,
+      title: `${label ? `${label}. ` : ""}The baked minimap of ${yard.name}, the game's pixels ${Z} times enlarged`,
       cells: [
         ...(old ? [{ label: `before: ${refLabel}`, pic: grown(picture(old.bare), Z) }] : []),
         { label: "now", pic: grown(picture(yard.bare), Z) },
@@ -528,7 +530,7 @@ async function sheet(OUT: string, now: Baked[], before: Baked[] | null, refLabel
     for (const o of others) {
       // Another tree's look, as the two windows would show it: the window's scaling done here.
       rows.push({
-        title: `Another look: ${o.label}`,
+        title: `${o.label}. Another look, not built: as the two windows would show it, and ${Z} times enlarged`,
         cells: [
           ...windows.map((w) => ({ label: `as at ${w.size.name}`, pic: resized(picture(o.baked.dots), Math.round(MAP * w.per), Math.round(MAP * w.per)) })),
           { label: `x ${Z}`, pic: grown(picture(o.baked.bare), Z) },
