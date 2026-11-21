@@ -471,6 +471,9 @@ Orca restarted ~16:19: run re-bound; M4-WORLD fix-round worker ctx_15e23180e27f 
 the TOUCH-2 advisor review was cut off and has been resumed. Live = c655bd8 (index-DnnpZQ-5.js).
 TOUCH-2 APPROVED (Fable: sound with changes; user popup). ClickUp 123jpnbffxe (Opus) ctx_e4caf0e87fbe (~/orca/workspaces/scrap-rally/
 touch-2, :3006; spec tmp/spec-touch-2.md; base 654f417). TOUCH-1 ticket keeps 'ready for qa test' with a comment: pad rejected, superseded.
+M4-WORLD fix round done: 3955676 (a53c73b belt arrows within the belt, 2916-belt sweep 0 outside; verge scan 302 -> 14 segments; main merged,
+README both lines; 765/765 + 118/118; gate PASS on a53c73b). Quick Fable re-check ctx_ec7f2fc79661 (tmp/review-m4-world-recheck.md):
+belt fix, Rule 1 after the actors.ts change, census. Author idles on purpose (ctx_b0424fd8bd4b) in case of changes.
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
