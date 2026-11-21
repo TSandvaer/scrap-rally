@@ -1,8 +1,9 @@
 // Browser entry: menu / lobby / results panels, HUD text, camera and the fixed-step loop.
 
 import { CAR_TYPES, carName, CARS, type CarType } from "../shared/cars";
+import { CELL_RESPAWN, draftsFor, type DraftEntry } from "../shared/catchup";
 import { pointAt } from "../shared/track";
-import { MAX_PLAYERS, PAUSE_MAX_MS, type GameEvent, type ResultRow } from "../shared/protocol";
+import { MAX_PLAYERS, PAUSE_MAX_MS, type CarSnap, type GameEvent, type ResultRow } from "../shared/protocol";
 import { AMMO, AMMO_IDS, priceOf, UPGRADE_IDS, UPGRADES, type ItemId, type Wallet } from "../shared/shop";
 import { DEFAULT_SONG_ID, isSongChoice, RANDOM_SONG } from "../shared/sound";
 import { trackList, trackName } from "../shared/tracks";
@@ -18,7 +19,7 @@ import { JerkMeter } from "./jerk";
 import { GameMenu } from "./menu";
 import { MusicPlayer, songById } from "./music";
 import { connectWs } from "./net";
-import { Renderer, type CarView, type DrawPose, type HudView } from "./render";
+import { Renderer, type CarView, type CellView, type DrawPose, type HudView } from "./render";
 import { RaceSounds } from "./sfx";
 
 const STEP_MS = 1000 / 60;
@@ -662,7 +663,7 @@ function median(xs: number[]): number {
 
 function hudView(): HudView | null {
   if (!game.you) return null;
-  const hud: HudView = { topLeft: [], time: "", notice: "", center: "", centerSub: "", banner: "", corner: "", debug: [], hp: null };
+  const hud: HudView = { topLeft: [], time: "", notice: "", center: "", centerSub: "", banner: "", corner: "", debug: [], hp: null, draft: 0, boost: 0 };
   // Race time (clock, countdown, GO!, weapons armed, race closes): stands still while paused.
   const now = game.raceNow();
   const standings = game.standings();
@@ -675,6 +676,7 @@ function hudView(): HudView | null {
     const [rivets, mines] = game.predictedAmmo();
     hud.topLeft.push(`RIV ${String(rivets).padStart(3)} MINE ${mines}`);
     hud.hp = mine.maxHp ? mine.hp / mine.maxHp : null;
+    if (game.car) catchHud(hud);
   }
   if ((game.phase === "racing" || game.phase === "results") && game.raceStart) {
     hud.time = formatTime(mine?.fin || Math.max(0, now - game.raceStart));
@@ -749,6 +751,94 @@ function pauseView(): { center: string; sub: string; banner: string } | null {
     banner: game.isHost() ? `Race paused — Esc, then Resume race (resumes by itself in ${autoText})` : `Race paused by ${by} — resumes by itself in ${autoText}`,
   };
 }
+
+// ---- catch-up cues ----------------------------------------------------------------
+// The M4-FX fields (render.ts: CarView.draft and .boost, WorldFx.cells and .nCells, HudView.draft
+// and .boost) filled from the M4-DRAFT / M4-CELLS state with nothing made a frame: one array of
+// cells whose entries are kept and changed in place, the other cars' drafts worked out once per
+// snapshot into kept arrays, and the fields written into the views draw() and hudView() make.
+// tools/debug/catch-alloc.ts loads this block by itself (from the line above to its end marker)
+// and measures it, so it uses only `game`, shared/catchup.ts and the types main.ts imports.
+
+/** A taken cell's state stays above 0 until it is back (render.ts CellView: 0 = there to be taken). */
+const CELL_TAKEN_MIN = 1e-3;
+/** Game.cellViews' entries (it fills them in place), and the renderer's: one each per cell of the track. */
+const cellSrc: { x: number; y: number; air: boolean; open: boolean; backIn: number }[] = [];
+const cellOut: CellView[] = [];
+
+/**
+ * This frame's cells into cellOut; returns how many count. None before the countdown: the
+ * catch-up sprite sheet is made in the first frame that has a cell (some 20 ms, once a page
+ * load: gfx/sprites.ts catchSheet), so that lands in the countdown's first frame, never at GO or
+ * mid-race (only a page that joins a race already running makes it then, in its first frame).
+ */
+function catchCells(): number {
+  if (game.phase !== "countdown" && game.phase !== "racing" && game.phase !== "results") return 0;
+  const src = game.cellViews(cellSrc);
+  for (let i = 0; i < src.length; i++) {
+    const s = src[i];
+    const v = (cellOut[i] ??= { x: 0, y: 0, air: false, state: 0 });
+    v.x = s.x;
+    v.y = s.y;
+    v.air = s.air === true;
+    // Taken: the share of its wait (CELL_RESPAWN) still to go, 1 just taken, toward 0 (back any moment).
+    v.state = s.open ? 0 : Math.min(1, Math.max(CELL_TAKEN_MIN, s.backIn / CELL_RESPAWN));
+  }
+  return src.length;
+}
+
+// The other cars' slipstream: snapshots carry no draft, so the server's own rule (shared/catchup.ts
+// draftsFor, on the start-of-tick poses: the latest snapshot's are those of the next tick) runs on
+// the latest snapshot's cars, once per snapshot. The own car's is its prediction (Game.draft).
+const draftField: DraftEntry[] = [];
+const draftIds: string[] = [];
+const draftOut: number[] = [];
+let draftN = 0;
+let draftSnap: object | null = null;
+
+function draftCar(s: CarSnap): void {
+  const e = (draftField[draftN] ??= { car: s, ghost: false, finished: false });
+  e.car = s;
+  e.ghost = s.ghost;
+  e.finished = s.fin > 0;
+  draftIds[draftN++] = s.id;
+}
+
+/** Work out every car's draft afresh when a new snapshot is in (draw() calls it once a frame). */
+function syncDrafts(): void {
+  const snap = game.latest;
+  if (snap === draftSnap) return;
+  draftSnap = snap;
+  draftN = 0;
+  if (snap) snap.cars.forEach(draftCar);
+  draftField.length = draftN;
+  draftsFor(draftField, draftOut);
+}
+
+/** A car's catch-up fields: the own car's predicted slipstream and boost; another's by the latest snapshot (s). */
+function catchCar(v: CarView, s: CarSnap | undefined): void {
+  if (v.me) {
+    v.draft = game.draft;
+    v.boost = game.boostLeft();
+    return;
+  }
+  let w = 0;
+  for (let i = 0; i < draftN; i++) {
+    if (draftIds[i] === v.id) {
+      w = draftOut[i];
+      break;
+    }
+  }
+  v.draft = w;
+  v.boost = s ? s.boost : 0;
+}
+
+/** The HUD's cues: the own car's (as its CarView). */
+function catchHud(h: HudView): void {
+  h.draft = game.draft;
+  h.boost = game.boostLeft();
+}
+// ---- end of the catch-up cues
 
 // ---- loop -------------------------------------------------------------------------
 
@@ -825,6 +915,7 @@ function draw(alpha: number, elapsed: number): void {
     clearMarks();
   }
   const cars: CarView[] = [];
+  syncDrafts();
   // `at` places the car; `st` carries its airborne / fall / ghost state (game.ts poses).
   const view = (at: DrawPose, st: DrawPose, me: boolean): CarView => {
     const id = at.id;
@@ -836,7 +927,9 @@ function draw(alpha: number, elapsed: number): void {
     const hp = s && s.maxHp > 0 ? s.hp / s.maxHp : 1;
     // The car's look (M4-CARS): the type the room message names; absent or unknown = the Sport.
     const car = game.carOf(id);
-    return { id, x, y, h, me, color: p?.color ?? "#888", name: p?.name ?? "?", wreck, ghost, height: st.height, falling: st.falling, hp, car };
+    const v: CarView = { id, x, y, h, me, color: p?.color ?? "#888", name: p?.name ?? "?", wreck, ghost, height: st.height, falling: st.falling, hp, car, draft: 0, boost: 0 };
+    catchCar(v, s);
+    return v;
   };
   // Other cars at the interpolation time; near ones are drawn at their predicted pose,
   // where the own car bumps into them (client/contact.ts). The state stays the pose's, except
@@ -897,6 +990,8 @@ function draw(alpha: number, elapsed: number): void {
     sounds.bump(im.speed, im.x, im.y, renderer.cam);
   }
   const fx = effects.frame(now, game.otherShots(), game.localShots, game.visibleMines(), game.you, own, others);
+  fx.cells = cellOut;
+  fx.nCells = catchCells();
   driving(game.car, game.smooth, game.contact, others); // tyre marks: by the cars' driving, not by what the prediction does to them on screen
   renderer.frame(cars, fx, hudView());
 }
