@@ -363,6 +363,10 @@ HudView.draft/boost). Catch-up at d8e34e3 (666/666, 114/114) told to worker_done
 Catch-up done: d8e34e3 (draft fe2fa9f,8ffe40e,a45aac4; cells c2dcb3e,48ed900,d8e34e3). A4 centre ahead 2.60 s; bots lead changes 0,1,3/lap
 (was 0,0,0); autopilot lead over a Normal bot shrank (Rust Bowl 1106 -> 508 units; Overpass bot ahead); wrecks 2 -> 7 (closer racing).
 Opus reviewer ctx_141516b6d00f (tmp/review-m4-catchup.md). Mapping follow-up after M4-FX merges.
+Catch-up review APPROVE (non-blocking: N1 no validation rule for air cells off-centre -> add in the follow-up; N2 lead-change check
+averaged -> accepted; N3 bot passes mostly time out after 4 s side by side -> user judges at the taste gate; N4 server/bots.ts glue ->
+accepted). NOT merged yet: after M4-FX merges, the catch-up worker merges main, maps the fields + adds N1 rule, quick re-check, then the
+user's taste gate on that branch head, then merge.
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
