@@ -438,6 +438,8 @@ overflows its button (style.css:685), car picker text clipped, bot names truncat
 QA8 PASS (ctx_aeab51f0ac4f, released; tmp/qa8-m4-live-report.md): all M4 tickets live, no bugs. COMPLETE in ClickUp: M4-BOTS, M4-HARD,
 M4-LOOKS, M4-CARS, M4-ENV, M4-DRAFT, M4-CELLS, M4-FX (+ M4-SCHEMA earlier). Not checked live: Remove click, Hard vs Normal live, cards locked
 in a race, a cell in view during the countdown. Lobby bot names drop '(bot)' (user popup). Puddles sheet 2: GO.
+LOBBY-FIT done: 4140d9f (Normal 10.1/10.1 px; picker own arrow; lobby names without '(bot)'; host 360 no longer 31 px over;
+743/743 + 118/118). Evidence tmp/lobby-fit/. Opus reviewer ctx_e5dd0297c233 (tmp/review-lobby-fit.md). Then merge; push needs the user's go.
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
