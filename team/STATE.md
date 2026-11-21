@@ -533,6 +533,9 @@ PUSHED (user popup): origin/main = b1a62a7. Expected live bundle after Manual De
 only team/ changed since). SURF-2 asked to change client/sfx.ts:829 (gravel sound uses halfOf in a split): yes, that line only.
 DEPLOYED 2026-11-22 (user): live index-CZXDyCOY.js (curl), bundle holds steerLock:.9,steerCurve:3. QA10 live worker ctx_29619ea77ece
 (muted; spec tmp/spec-qa-live-10.md; report tmp/qa10-live-report.md): TOUCH-4 + TOUCH-3 stick, SURF-1 + MAP regression.
+User on the phone (v2 live): "still to hard ... I constantly oversteer" -> point to steer (popups; PLAN-TOUCH.md TOUCH-5 addendum,
+Fable "sound with changes", approved). TOUCH-5 123jpnbfgbc (Opus) in flight: ctx_ef45d3475cfa (~/orca/workspaces/scrap-rally/touch-5,
+:3006; spec tmp/spec-touch-5.md; base main f2ca592). Taste gate: the user on the phone, live (push + deploy), A/B via the TUNE switch.
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
