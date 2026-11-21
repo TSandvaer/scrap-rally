@@ -446,6 +446,10 @@ TOUCH: user wants on-screen buttons now (PLAN-TOUCH.md proposed; Fable advisor r
 PLAN-TOUCH APPROVED (Fable: sound with changes; user: 8-way pad right, FIRE/MINE left, no auto-gas, no heal). TOUCH-1 123jpnbffvf (Opus)
 ctx_43c14e2d36e7 (~/orca/workspaces/scrap-rally/touch-1, :3006; spec tmp/spec-touch-1.md). Push lobby fix + touch together (user popup);
 the phone taste gate runs on the live site after that push.
+M4-WORLD done: ccd0cf1 (0 px diff on 22 scenes; S6 within S2 x1.10; census 13.99/16 MB; puddle-probe 0 misses; 743/743 + 118/118; gate
+PASS x2, FAIL x1 on one metric-B cell that main also shows 8/30). Evidence tmp/m4-world/. Fable reviewer ctx_a549b6c3d252
+(tmp/review-m4-world.md). User judges the Preview Yard screenshots (tmp/m4-world/shots/). Leftovers: main.ts fills WorldFx.rt (M4-MOVE);
+M4-SURF moves PUDDLE_TRACTION_INSET + tractionRect into shared/track.ts.
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
