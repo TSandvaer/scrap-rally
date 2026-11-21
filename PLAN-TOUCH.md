@@ -202,3 +202,35 @@ lap of Rust Bowl with wall hits under a stated bound); touch-drive drives in poi
 unchanged (TOUCH-4 tests pass); the panel switch and persistence; check, test twice, build. Taste gate: the user on the phone,
 live (push + Manual Deploy), A/B with the panel switch; the chosen values become the defaults; then the user decides whether rate
 mode stays as an option.
+
+### TOUCH-5 advisor changes (binding; Fable 5.2 review 2026-11-22: "sound with changes"; override the addendum above)
+
+Confirmed: the heading loop is first-order (`shared/physics.ts:144-145`; worst per-tick gain ~0.105 at aimFull 35° for the Racer
+with tyres 3, `shared/shop.ts:67`; water halves it, `WATER_TURN = 0.5`); wreck/fall/air ignore input (`shared/weapons.ts:199-215,
+237-248`) and the countdown zeroes the cmd (`client/game.ts:975-981`); the camera never rotates (`client/render.ts:276,282`,
+`client/gfx/actors.ts:367-368`), so θ = atan2(dy, dx) needs no flip; `game.car` at `client/main.ts:883` is what the step predicts
+from and replay uses the stored `p.cmd` (`client/game.ts:861`).
+1. **Read `game.car` fresh every catch-up iteration** (reconcile replaces the object, `game.ts:867`); `car === null` -> throttle 0,
+   steer 0.
+2. **Throttle = one total function of (err, signed vf)** with signed thresholds: when |err| > brakeAngle -> brake above brakeSpeed,
+   reverse at vf <= a small positive speed (incl. all negative vf), gas in between; angle hysteresis on leaving reverse (no
+   reverse/gas chatter: gas at vf < 0 brakes at `BRAKE = 900`, `physics.ts:64,130`).
+3. **Stuck rule (nose in a wall):** head-on with the thumb along the track gives err ~90° < brakeAngle, gas forever at vf ~0. Reverse
+   after gas has been commanded with |vf| under a small speed for N ticks and |err| > ~aimFull; the counter lives in `TouchPad`.
+4. **Flip the steer sign by vf with a margin** (vf < -~20 u/s; keep flipping while still rolling backward under gas), not by
+   "reverse commanded" (`turnScale` uses the post-throttle vf, `physics.ts:130-144`; `WALL_BOUNCE = 0.35`).
+5. **Knob colour and panel readout refresh per step:** `read()` takes and stores `{h, vf}` and calls the change-only `setGas`
+   (today `drawKnob` runs only on pointer move, `client/input.ts:425`; `peek()` has no car, `:366-368`).
+6. **`client/touchtune.ts` handles the non-numeric `mode`** separately in load, save and the copy text (`:11-19,50-53,74,78` assume
+   numbers); the aimFull slider minimum >= 10° (below ~3.7° it chatters).
+7. **Existing tests are edited, not "unchanged":** `scripts/sim-test.ts:10463` (the six-key defaults literal),
+   `tools/debug/touch-drive.ts:643,789` (`L.ranges === 6`) and `:830`; the rate-only `expected()` (`:356`) and `steerOffset`
+   (`:395-399`) scenarios store `mode: "rate"` under ?debug=1.
+8. **The sim-test section goes after `scripts/sim-test.ts:10467`** (end of the touch section), not at the file's end (M4-SURF-2 adds
+   768 lines there).
+9. **Lap test pointer = look-ahead aim** at a centre-line point ahead of the car (a tangent pointer runs wide), with a human-like lag
+   (~150 ms, 10 Hz updates); 90°/170° tests from rest, 140 u/s and top speed; a head-on-wall escape test and a water case.
+Ownership confirmed: no `client/game.ts`, `shared/*` or `server/*` (`car` is public; h, vx, vy suffice, vf computed in `main.ts`).
+The Mode switch reuses the `btn small` classes (or `client/style.css` joins the ticket). Optional, adopted: the revert to rate is a
+one-line default change; in touch-drive record `g.car.h` in the `g.step` wrapper (`:363-378`). After the phone test, ask the user
+whether point mode needs a straight-line brake (today only pointing behind brakes, and it also turns).
