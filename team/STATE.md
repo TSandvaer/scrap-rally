@@ -423,6 +423,11 @@ M4-HARD fix round + main merge done: f825945 (27f8006 lastMine reset on null car
 sim-test sections). Golden 7/7 + schema-hash 12/12 SAME; 743/743 + 118/118; band 41.5-53.6%; rivets 78%/61%. Quick Opus re-check
 ctx_b4c667487139 (tmp/review-m4-hard-recheck.md). Taste copy :3009 is still 247a80c (differs only in the socket-bot fix and the apex
 mine-behind detail). Merge after re-check APPROVE + the user's taste verdict.
+M4-HARD MERGED 2026-11-21: re-check APPROVE (ctx_b4c667487139) + user taste APPROVE; main 5d6bc85 (check clean, sim 743/743, bots
+118/118, build ok); ClickUp 123jpnbffqh ready for qa test; workers released; m4-hard workspace + branch removed; taste copy :3009 stopped.
+M4-WORLD contact sheet: user 'Go with changes' = murky blue-grey water tone; then puddle rule (final): water/dirt drawn organic INSIDE the
+declared rect; traction area = rect inset by PUDDLE_TRACTION_INSET (tractionRect), fully inside the drawn puddle; M4-SURF moves both into
+shared/track.ts. Worker sends a follow-up puddle sheet via ask. Local main is 18+ commits ahead of origin (2e9ec7f); push only on the user's go.
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
