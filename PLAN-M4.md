@@ -415,3 +415,11 @@ keep `HARD_CELL_LANE` below the gap that lets lane-0 bots reach both kerbs.
   `tools/debug/schema-hash.ts` (today a 1e-6 wall-bounce change only shows on one room hash).
 - **WorldFx.rt** (M4-WORLD contract, `client/render.ts:127-139`): `client/main.ts` fills it with the own car's predicted race tick
   (M4-MOVE); absent = static picture. M4-MOVE owns the truck landing over a solid; M4-SURF owns the per-sample `isLost`.
+
+## User feedback for M4-TRACKS (2026-11-21, after driving the Surf Yard test track)
+
+"I like the obstacles but the surf yard have way to many to closely packed." The feel of water, dirt patches, the belt and tyre
+mounds is approved. The new long tracks (Slag Harbour, Breaker's Mile) must NOT be packed like the test track: obstacles come in
+spaced groups with clear road between them, never two obstacle kinds back to back without a breather, and stretches of plain racing
+(straights and bends with nothing on them) between the feature sections. M4-TRACKS reports, per track, the share of the lap that is
+plain road and the shortest gap between two obstacle groups, and the user judges the density at the taste gate.
