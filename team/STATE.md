@@ -367,6 +367,8 @@ Catch-up review APPROVE (non-blocking: N1 no validation rule for air cells off-c
 averaged -> accepted; N3 bot passes mostly time out after 4 s side by side -> user judges at the taste gate; N4 server/bots.ts glue ->
 accepted). NOT merged yet: after M4-FX merges, the catch-up worker merges main, maps the fields + adds N1 rule, quick re-check, then the
 user's taste gate on that branch head, then merge.
+M4-FX done: 3b32b11 (gate PASS, noise 0.004, 30 A ratios 0.021-0.719; canvas 11,715,912 B of 12,000,000; 0 px diff 18 scenes; +0.04/0.07 ms
+per frame with everything on). Merges cleanly with main and with m4-catchup. Fable reviewer ctx_c90a75a666fd (tmp/review-m4-fx.md).
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
