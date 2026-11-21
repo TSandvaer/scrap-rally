@@ -396,6 +396,9 @@ M4-HARD APPROVED (user popup, with the 11 Fable advisor changes; PLAN-M4 addendu
   the pace band (share of the Normal-to-flat-out gap) before locking constants. Taste gate: 3 Hard bots.
 - M4-SCHEMA 123jpnbffqj ctx_293724109f66 (~/orca/workspaces/scrap-rally/m4-schema, :3008; spec tmp/spec-m4-schema.md). Data only, no taste.
 Whichever merges second merges main first and re-proves its hashes. Then M4-WORLD (Fable) needs the 12 MB canvas cap decision first.
+M4-HARD pace band answered (user popups): 40-55% of the Normal-to-flat-out gap; rivet hit rate ~70-80% ('add a little miss').
+M4-SCHEMA done: acee696 (golden hashes 07d6ed0 first; schema-hash SAME x12; 717/717 + 114/114 twice; Preview Yard test track hidden).
+Evidence tmp/m4-schema/. Opus reviewer ctx_59d389e53131 (tmp/review-m4-schema.md). No taste gate (data only): merge on APPROVE + gate.
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
