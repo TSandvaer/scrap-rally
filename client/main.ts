@@ -395,7 +395,10 @@ function updatePanels(): void {
     ...game.players.map((p) => {
       const li = document.createElement("li");
       if (!p.connected) li.classList.add("offline");
-      li.append(swatch(p.color), span("name", p.name));
+      // LOBBY-FIT: a bot's row drops the " (bot)" of its name (its BOT tag says it), so the name
+      // fits beside the tag, car picker and Remove; chat, results and the race keep the full name.
+      li.append(swatch(p.color), span("name", p.bot ? p.name.replace(/ \(bot\)$/, "") : p.name));
+      if (p.bot && hostLobby) li.classList.add("bot-row");
       if (p.id === game.you) li.append(span("tag-pill", "you"));
       if (p.id === game.hostId) li.append(span("tag-pill host", "host"));
       if (!p.connected) li.append(span("tag-pill", "offline"));
