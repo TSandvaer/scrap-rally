@@ -10076,9 +10076,9 @@ function touchStickCentre(): void {
     st.id === 1 && st.cx === 290 && st.cy === 560 && st.x === 290 && st.y === 560 && ctlText(s) === "t0 s0" && stickKnob(st, SP).join(",") === "0,0",
     JSON.stringify(st),
   );
-  // Near the right and the bottom edge the centre moves in just as far as full lock (0.7 R + 8 px)
+  // Near the right and the bottom edge the centre moves in just as far as full lock (0.9 R + 8 px)
   // and the gas/brake dead zone (0.3 R + 8 px) need: from there both are still reachable on screen.
-  const lockIn = SP.radius * SP.steerLock + 8; // R 95: 74.5 px
+  const lockIn = SP.radius * SP.steerLock + 8; // R 95: 93.5 px
   const gasIn = SP.radius * SP.throttleDead + 8; // R 95: 36.5 px
   const right = touchRun([stickDown(2, 385, 560)]).stick!;
   const bottom = touchRun([stickDown(3, 290, 842)]).stick!;
@@ -10141,21 +10141,32 @@ function touchStickClamp(): void {
   );
   // A thumb far up keeps its steer (sideways offset, capped at R), as a thumb holding gas drifts up.
   const R = SP.radius;
-  const highRight = at(R / 2, -2.5 * R);
-  check("touch stick: a thumb pushed far up still steers by its sideways offset (gas held, the thumb drifting up)", highRight.throttle === 1 && highRight.steer === at(R / 2, -R / 2).steer && highRight.steer > 0.5, JSON.stringify(highRight));
+  const sideways = Math.round(0.75 * R); // R 95: 71 px, about 0.52 steer on curve 3
+  const highRight = at(sideways, -2.5 * R);
+  check(
+    "touch stick: a thumb pushed far up still steers by its sideways offset (gas held, the thumb drifting up)",
+    highRight.throttle === 1 && highRight.steer === at(sideways, -R / 2).steer && highRight.steer > 0.4 && highRight.steer < 1,
+    JSON.stringify(highRight),
+  );
 }
 
 // The tests below put the thumb at shares of R (the stick's feel is in shares of R), so they hold
 // for any shipped R; the labels name the pixels at the shipped one.
 function touchStickDead(): void {
-  // Steer dead zone: 0.12 R each way; just past it (0.14 R) a little steer.
+  // Steer dead zone: 0.12 R each way. The curve (3) is so flat at its start that just past the dead
+  // zone the steer still rounds to 0; on a linear curve 0.14 R gives a little, so the dead zone
+  // itself ends at 0.12 R. On the shipped curve the first steer (0.01) comes further out.
   const R = SP.radius;
   const dz = R * SP.steerDead;
-  const steers = [0, dz / 2, dz - 0.2, dz, 0.14 * R, -(dz - 0.2), -0.14 * R].map((dx) => at(dx, 0).steer);
+  const linear = { ...SP, steerCurve: 1 };
+  const steers = [0, dz / 2, dz - 0.2, dz, -(dz - 0.2), -dz].map((dx) => at(dx, 0).steer);
+  const lin = [dz, 0.14 * R, -0.14 * R].map((dx) => at(dx, 0, linear).steer);
+  let first = 0;
+  for (let dx = 0; dx <= R && first === 0; dx += 0.5) if (at(dx, 0).steer !== 0) first = dx;
   check(
-    `touch stick: steer dead zone: nothing within 0.12 R (${dz} px) either way, a little just past it`,
-    steers.slice(0, 4).every((v) => v === 0) && steers[4] > 0 && steers[4] < 0.05 && steers[5] === 0 && steers[6] === -steers[4],
-    steers.join(", "),
+    `touch stick: steer dead zone: nothing within 0.12 R (${dz} px) either way; past it a little (linear: at 0.14 R); on curve 3 the first steer, 0.01, at ${first} px`,
+    steers.every((v) => v === 0) && lin[0] === 0 && lin[1] > 0 && lin[1] < 0.05 && lin[2] === -lin[1] && first > dz && at(first, 0).steer === 0.01 && at(-first, 0).steer === -0.01,
+    `${steers.join(", ")}; linear ${lin.join(", ")}; first ${first} px`,
   );
   // Throttle dead zone: 0.3 R up or down; past it full gas or brake, nothing in between.
   const td = R * SP.throttleDead;
@@ -10167,7 +10178,7 @@ function touchStickDead(): void {
 }
 
 function touchStickCurve(): void {
-  // Between the dead zone (0.12 R) and full lock (0.7 R): ((d / R - 0.12) / 0.58) ^ 1.4, rising.
+  // Between the dead zone (0.12 R) and full lock (0.9 R): ((d / R - 0.12) / 0.78) ^ 3, rising.
   const R = SP.radius;
   const dz = R * SP.steerDead;
   const lock = R * SP.steerLock;
@@ -10176,14 +10187,15 @@ function touchStickCurve(): void {
   for (let dx = Math.ceil(dz) + 0.5; dx <= R; dx += 0.5) xs.push(dx); // halves: 290 +- dx is exact
   const ys = xs.map((dx) => at(dx, 0).steer);
   const rising = ys.every((v, i) => i === 0 || v >= ys[i - 1]);
-  const mid = at(dz + span / 2, 0).steer; // halfway: 0.5 ^ 1.4 = 0.379
+  const quarter = at(dz + span / 4, 0).steer; // a quarter of the way: 0.25 ^ 3 = 0.016
+  const threeQ = at(dz + (3 * span) / 4, 0).steer; // three quarters: 0.75 ^ 3 = 0.42
   const lockAt = at(lock, 0).steer;
   const past = at(lock + 8, 0).steer;
   const symmetric = xs.every((dx) => at(-dx, 0).steer === -at(dx, 0).steer);
   check(
-    `touch stick: steer rises with the sideways offset up the curve (halfway 0.5^1.4 = 0.38), full lock (1, the keyboard's) at 0.7 R = ${lock} px, well inside R; left mirrors right`,
-    rising && mid === 0.38 && lockAt === 1 && past === 1 && symmetric,
-    `halfway ${mid}, at ${lock} px ${lockAt}, at ${lock + 8} px ${past}; rising ${rising}, symmetric ${symmetric}`,
+    `touch stick: steer rises with the sideways offset up the curve (a quarter of the way 0.25^3 = 0.02, three quarters 0.75^3 = 0.42), full lock (1, the keyboard's) at 0.9 R = ${lock} px, inside R; left mirrors right`,
+    rising && quarter === 0.02 && threeQ === 0.42 && lockAt === 1 && past === 1 && lock + 8 < R && symmetric,
+    `quarter ${quarter}, three quarters ${threeQ}, at ${lock} px ${lockAt}, at ${lock + 8} px ${past}; rising ${rising}, symmetric ${symmetric}`,
   );
   // The curve and the lock are parameters: linear halfway is 0.5; a lock at 0.5 R gives 1 at 0.5 R.
   const linear = { ...SP, steerCurve: 1 };
@@ -10288,15 +10300,15 @@ function touchStickOwner(): void {
     ctlText(twoUp),
   );
   const firstUp = touchRun([stickDown(2, 340, 700), { t: "up", id: 1 }, stickMove(2, 380, 650)], one);
-  const fresh = touchRun([stickDown(3, 300, 600)], firstUp);
+  const fresh = touchRun([stickDown(3, 280, 600)], firstUp); // clear of the right edge's shift (from 296.5)
   check(
     "touch stick owner: when the first finger lifts the stick is gone; a finger that landed while it was owned stays ignored; a new finger takes the stick at its own point",
-    firstUp.stick === null && ctlText(firstUp) === "t0 s0" && fresh.stick?.id === 3 && fresh.stick.cx === 300 && fresh.stick.cy === 600,
+    firstUp.stick === null && ctlText(firstUp) === "t0 s0" && fresh.stick?.id === 3 && fresh.stick.cx === 280 && fresh.stick.cy === 600,
     `${ctlText(firstUp)}; then ${JSON.stringify(fresh.stick)}`,
   );
   // A pointer id that goes down again (reused) starts afresh at its new point.
-  const reused = touchRun([stickDown(6, 290, 560), stickMove(6, 290, 500), stickDown(6, 310, 700)]);
-  check("touch stick owner: a pointer id that goes down again sets a new centre where it lands (nothing held)", reused.stick?.cx === 310 && reused.stick.cy === 700 && ctlText(reused) === "t0 s0", JSON.stringify(reused.stick));
+  const reused = touchRun([stickDown(6, 290, 560), stickMove(6, 290, 500), stickDown(6, 270, 700)]);
+  check("touch stick owner: a pointer id that goes down again sets a new centre where it lands (nothing held)", reused.stick?.cx === 270 && reused.stick.cy === 700 && ctlText(reused) === "t0 s0", JSON.stringify(reused.stick));
 }
 
 function touchMulti(): void {
@@ -10388,7 +10400,7 @@ function touchMine(): void {
     `fire ${fires.join(",")}; gap y743 -> ${ctlText(nearMine)}, y746 -> ${ctlText(nearFire)}`,
   );
   // The read takes the latch and nothing else (a state without a latch is returned as is), and reads the stick.
-  const plain = touchRun([stickDown(8, 290, 560), stickMove(8, 310, 520)]);
+  const plain = touchRun([stickDown(8, 290, 560), stickMove(8, 330, 520)]);
   const [pc, ps] = readPad(plain, SP);
   check("touch mine: a read with no mine pending returns the same state, with the stick's controls", ps === plain && pc.throttle === 1 && pc.steer > 0, JSON.stringify(pc));
 }
@@ -10440,12 +10452,13 @@ function touchMerge(): void {
       delete g.HTMLTextAreaElement;
     }
   }
-  // The defaults keep full lock well inside R and the stick's direct function agrees with the reducer.
-  const direct = stickControls(25, -30, SP);
-  const viaPad = at(25, -30);
+  // The defaults are the user's (TOUCH-4), keep full lock inside R, and the stick's direct function agrees with the reducer.
+  const direct = stickControls(40, -30, SP);
+  const viaPad = at(40, -30);
   check(
-    "touch merge: the defaults put full lock well inside R (0.7 R) past a small dead zone; stickControls is what the reducer reads",
-    STICK_DEFAULTS.steerLock <= 0.8 && STICK_DEFAULTS.steerDead < STICK_DEFAULTS.steerLock && direct[0] === viaPad.throttle && direct[1] === viaPad.steer,
+    "touch merge: the defaults are the user's TOUCH-4 values and put full lock inside R (0.9 R) past a small dead zone; stickControls is what the reducer reads",
+    JSON.stringify(STICK_DEFAULTS) === '{"radius":95,"steerDead":0.12,"steerLock":0.9,"steerCurve":3,"throttleDead":0.3,"split":0.5}' &&
+      STICK_DEFAULTS.steerLock < 1 && STICK_DEFAULTS.steerDead < STICK_DEFAULTS.steerLock && direct[0] === viaPad.throttle && direct[1] === viaPad.steer && direct[1] > 0,
     JSON.stringify(STICK_DEFAULTS),
   );
 }

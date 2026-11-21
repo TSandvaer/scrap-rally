@@ -793,7 +793,7 @@ async function tune(d: PageDriver, w: number, h: number): Promise<void> {
     // all the way left (0.2 R): the same thumb now gives full lock.
     await d.until("the race", "window.scrapDebug.game.phase === 'racing'", 10_000);
     await d.thumbDown(...(await d.rest()));
-    await d.thumbAt(Math.round(d.params.radius * 0.35), -Math.round(d.params.radius * 0.6));
+    await d.thumbAt(Math.round(d.params.radius * 0.5), -Math.round(d.params.radius * 0.6)); // 0.5 R: on curve 3 about 0.12 steer
     await sleep(120);
     const before = (await d.cdp.eval<Pose>(POSE)).last;
     const sl = (await d.box('.tune-range[data-key="steerLock"]'))!;
@@ -824,8 +824,9 @@ async function tune(d: PageDriver, w: number, h: number): Promise<void> {
     await sleep(300);
     const reloaded = await d.cdp.eval<StickParams>("scrapDebug.touchPad.stickParams()");
     check("tune: after a reload with ?debug=1 the stored values are applied (R 80, lock 0.2, split 0.4)", reloaded.radius === 80 && reloaded.steerLock === 0.2 && reloaded.split === 0.4, JSON.stringify(reloaded));
-    // A player who saved under the old defaults (TOUCH-2: R 60; the panel stores the whole set) keeps
-    // them under ?debug=1: the new default R does not replace a saved R (the gate drawn at 2 x 60).
+    // A player who saved under the old defaults (TOUCH-2: R 60, lock 0.7, curve 1.4; the panel stores
+    // the whole set) keeps them under ?debug=1: the new defaults (R 95, TOUCH-3; lock 0.9 and curve
+    // 3, TOUCH-4) do not replace saved values (the gate drawn at 2 x 60).
     const old: StickParams = { radius: 60, steerDead: 0.12, steerLock: 0.7, steerCurve: 1.4, throttleDead: 0.3, split: 0.5 };
     await d.cdp.eval(`localStorage.setItem('scrap-rally:stick', ${JSON.stringify(JSON.stringify(old))}), true`);
     await d.load("?debug=1");
@@ -836,8 +837,8 @@ async function tune(d: PageDriver, w: number, h: number): Promise<void> {
     const kept = await d.cdp.eval<{ p: StickParams; gate: number }>(`({ p: scrapDebug.touchPad.stickParams(), gate: document.getElementById('touch-base').getBoundingClientRect().width })`);
     await d.thumbUp();
     check(
-      `tune: values saved under ?debug=1 with the old defaults (R 60) are kept after the reload, not replaced by the new default R ${STICK_DEFAULTS.radius} (gate 2 x 60)`,
-      JSON.stringify(kept.p) === JSON.stringify(old) && Math.abs(kept.gate - 120) < 0.5 && STICK_DEFAULTS.radius !== 60,
+      `tune: values saved under ?debug=1 with the old defaults (R 60, lock 0.7, curve 1.4) are kept after the reload, not replaced by the new defaults R ${STICK_DEFAULTS.radius}, lock ${STICK_DEFAULTS.steerLock}, curve ${STICK_DEFAULTS.steerCurve} (gate 2 x 60)`,
+      JSON.stringify(kept.p) === JSON.stringify(old) && Math.abs(kept.gate - 120) < 0.5 && STICK_DEFAULTS.radius !== 60 && STICK_DEFAULTS.steerLock !== 0.7 && STICK_DEFAULTS.steerCurve !== 1.4,
       JSON.stringify(kept),
     );
     // Bad stored data (out of range, not a number) is ignored value by value.
@@ -981,7 +982,7 @@ async function look(d: PageDriver, tag: string, w: number, h: number): Promise<v
   d.stick = null;
   // The stick at the shipped R: the gate 2R, the knob 0.8R; from a landing at each corner of the
   // zone (2 px in) the thumb slid R away, or to the screen's last pixel, reaches full lock both ways
-  // (the knob at least 0.7 R sideways: steerLock), gas and brake (the knob's colour); the gate's
+  // (the knob at least steerLock R sideways: 0.9 R), gas and brake (the knob's colour); the gate's
   // centre is where stickCentre puts it (shifted in at the right and bottom edges).
   const lockPx = R * STICK_DEFAULTS.steerLock;
   const clampTo = (v: number, hi: number) => Math.max(0, Math.min(hi, Math.round(v)));
