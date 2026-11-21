@@ -377,6 +377,8 @@ Catch-up FOLLOW-UP (Opus) ctx_1153e3b15f09 in the m4-catchup workspace (tmp/spec
 WorldFx fields, bake in the countdown, N1 off-centre rule, browser check. Then quick re-check, taste copy, user taste gate, merge.
 MINES-1 DEPLOYED 2026-11-21 (user: "deployed"; live bundle index-pWtsH_4Y.js = origin 2e9ec7f, checked with curl). Muted live QA7 (Opus)
 ctx_58124cb2ffa5 in the main checkout (tmp/spec-qa-live-7.md -> tmp/qa7-mines-live-report.md); on PASS close ClickUp 123jpnbfdq6.
+QA7 PASS (no bugs; cap 40 not checked live, sim covers it; screenshots tmp/qa7/). MINES-1 123jpnbfdq6 COMPLETE; QA worker released.
+Live = origin 2e9ec7f. Local main has M4-BOTS/LOOKS/CARS/ENV/FX on top, not pushed.
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
