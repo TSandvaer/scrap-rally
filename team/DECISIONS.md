@@ -116,3 +116,4 @@
 - 2026-11-21 — Puddles sheet 2 (user, popup): GO (irregular puddles; long lanes stay bands; inset 12).
 - 2026-11-21 — Touch controls (user, from a phone: "How do i drive on my phone? There is no controls"; popups): on-screen buttons (not joystick/tilt), built now in parallel with M4-WORLD. PLAN-TOUCH.md drafted; Fable advisor review running.
 - 2026-11-21 — PLAN-TOUCH (user, popups): approved with the advisor changes; layout like a keyboard: right thumb 8-way pad (up gas, down brake, left/right steer, corners combine), left thumb FIRE + MINE; no auto-gas; no heal button; push the lobby fix together with touch.
+- 2026-11-21 — M4-WORLD taste gate (user, popup, Preview Yard screenshots ccd0cf1): "Approve" -> merge after the Fable review approves.
