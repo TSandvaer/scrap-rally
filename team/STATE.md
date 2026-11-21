@@ -454,6 +454,10 @@ M4-WORLD: user approved the look (screenshots). Fable review REQUEST_CHANGES (ct
 belt arrows drawn past a narrow belt's far edge (obstacles.ts:170,361-372). Fix round sent to ctx_b0111cbb62bb (+ sprites.ts:498 comment,
 measure actors.ts:639 verge scan; keep the press's leaving shadow). One round; a second REQUEST_CHANGES goes to the user. Reviewer's
 own gate run PASS; Rule 1 holds (the 5.2 B/frame is on main too); census 13.99/16 MB.
+TOUCH-1 done: c72a574 (touch-drive 54/54 incl. real two-finger touch over DevTools; 3-lap race by touch, 1366/1366 step Controls;
+hidden in every non-driving phase; 765/765 + 118/118 on runs 2-3, run 1 had a bots contact flake 55<60). Evidence tmp/touch-1/.
+Opus reviewer ctx_5e8bb5d9979b (tmp/review-touch-1.md). Conflicts with m4-world only in tools/debug/README.md (second to merge resolves).
+Known: a second-finger tap on Menu/Chat while a thumb holds the pad makes no click in Chrome (reviewer judges).
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
