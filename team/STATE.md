@@ -469,6 +469,8 @@ Phone test: user REJECTED the 8-way pad (no gas+steer at once). TOUCH-2 (floatin
 steer, tuning panel behind ?debug=1) proposed in PLAN-TOUCH.md; Fable advisor review running. Then the user approves, then an Opus worker.
 Orca restarted ~16:19: run re-bound; M4-WORLD fix-round worker ctx_15e23180e27f alive (rate-limit retries; branch a53c73b, not reported);
 the TOUCH-2 advisor review was cut off and has been resumed. Live = c655bd8 (index-DnnpZQ-5.js).
+TOUCH-2 APPROVED (Fable: sound with changes; user popup). ClickUp 123jpnbffxe (Opus) ctx_e4caf0e87fbe (~/orca/workspaces/scrap-rally/
+touch-2, :3006; spec tmp/spec-touch-2.md; base 654f417). TOUCH-1 ticket keeps 'ready for qa test' with a comment: pad rejected, superseded.
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
