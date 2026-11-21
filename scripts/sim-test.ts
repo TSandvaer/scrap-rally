@@ -11247,6 +11247,19 @@ function splitWalls(): void {
     Object.is(onWide.vx, onCentre.vx) && Object.is(onWide.vy, onCentre.vy) && onVerge.v < onCentre.v - 20,
     `after 1 s: ${onWide.v.toFixed(2)} vs ${onCentre.v.toFixed(2)} u/s; verge ${onVerge.v.toFixed(2)}`,
   );
+  // The gravel sound (client/sfx.ts updateGravel: onGravel with the per-sample asphalt, halfOf): no
+  // gravel on the widened asphalt beside island A, gravel at the same offset on the bare loop's verge;
+  // on the shipped tracks halfOf is def.halfWidth exactly (above), so their sound is unchanged.
+  const sfxSrc = splitRead("client/sfx.ts", "utf8");
+  const gravel = (t: Track, lat: number) => {
+    const q = splitQuery(t, 1000, lat);
+    return onGravel(q.dist, splitTrack.halfOf(t, q));
+  };
+  check(
+    "split walls: the gravel sound reads the per-sample asphalt (client/sfx.ts: onGravel(q.dist, halfOf(g.track, q))): none at lat -95 beside island A (widened asphalt), gravel at -95 on the bare loop and at -120 beside the island (its verge)",
+    sfxSrc.includes("onGravel(q.dist, halfOf(g.track, q))") && !sfxSrc.includes("g.track.def.halfWidth") && !gravel(yard, -95) && gravel(bare, -95) && gravel(yard, -120),
+    `yard -95: ${gravel(yard, -95)}, bare -95: ${gravel(bare, -95)}, yard -120: ${gravel(yard, -120)}`,
+  );
   // isLost, a landing and a rivet read the widened wall on their side.
   const lost = (t: Track, lat: number) => splitTrack.isLost(t, splitQuery(t, 1000, lat));
   const land = (t: Track) => {
