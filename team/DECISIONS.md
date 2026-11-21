@@ -108,3 +108,4 @@
 - 2026-11-21 — M4-HARD taste gate (user, popup, frozen copy 247a80c on :3009): "Approve, merge" -> merge after the quick re-check approves.
 - 2026-11-21 — M4-WORLD contact sheet (user, popups): "Go with changes": water gets one muted dark blue-grey tone (palette addition, water only); the press, barrel and truck choices stand.
 - 2026-11-21 — M4-WORLD (user): "dirt and water puddles should not be square, it should read as a puddle" -> organic deterministic outline inside the feature rect, defined by one pure function that M4-SURF moves into shared/track.ts and uses for grip (drawn shape = physics shape).
+- 2026-11-21 — Correction (user): "then make the square smaller so it fits inside the puddle" -> the water/dirt rectangle stays the physics area; the drawn puddle outline wraps AROUND it (rect fully inside, modest organic margin, never over walls/lips/holes); no shared shape function. Supersedes the previous line.
