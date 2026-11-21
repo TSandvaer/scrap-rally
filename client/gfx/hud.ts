@@ -10,7 +10,11 @@
 // per track. All of it in palette colours, hard pixels, no alpha.
 //
 // A frame allocates nothing here: labels, tags and the countdown's texts are fixed pools.
+//
+// The catch-up cues (M4-FX; HudView.draft, HudView.boost): a panel of two lamps under the lap
+// panel, as wide as it, there only while one of them is on. See "the catch-up cues" below.
 
+import { TICK_HZ } from "../../shared/physics";
 import { pointAt, type Track, type Vec } from "../../shared/track";
 import type { CarView, HudView } from "../render";
 import { artCanvas, BOLD, covers, print, SMALL, TALL, widthOf, type Strike } from "./font";
@@ -71,6 +75,27 @@ const BAR_W = 104, BAR_H = 5, BAR_TICK = 13; // the bar's inside; a tick every e
 
 // The minimap: its box (fixed) and the 96 px square the track is fitted into.
 const MAP = 108, MAP_X = VIEW_W - 112, MAP_Y = 4, MAP_FIT = 96;
+
+// The catch-up cues: a panel of two rows under the lap panel, CUE_GAP below it. DRAFT with a
+// meter of CUE_PIPS pips (the slipstream's strength), BOOST with the time left in seconds and
+// tenths. The row that is on is lit, the other one dark, as a lamp that is off; with both off
+// there is no panel. Baked once, on first use (bakeCues): the panel with both rows dark, each
+// row lit, the pips lit, the digits. A frame copies pieces of that: no label is written. The
+// words are printed in the HUD's own text colour and tinted at the bake, so the font keeps no
+// sheet of letters in another colour for them.
+const CUE_ROW = 14, CUE_H = 2 * CUE_ROW + 3, CUE_GAP = 3;
+const CUE_PIPS = 8, PIP_W = 4, PIP_PITCH = 5, PIP_H = 7;
+const CUE_TEXT_X = 14; // a row's word; its sign stands left of it, at CUE_PAD
+const CUE_PAD = 6;
+const CUE_PIPS_X = TL_W - CUE_PAD - (CUE_PIPS * PIP_PITCH - 1), CUE_PIPS_Y = 4; // in its row
+const CUE_DIGITS = "0123456789.";
+const CUE_TIME_X = TL_W - CUE_PAD - (3 * TALL.cw - 1); // "1.2", right-aligned
+const BOOST_MAX = 99; // tenths of a second shown at most: "9.9"
+// Where the baked pieces lie in the cue canvas (rows of pixels): the panel, the two rows lit, the pips lit, the digits, the two rows dark.
+const CUE_DRAFT_Y = CUE_H, CUE_BOOST_Y = CUE_DRAFT_Y + CUE_ROW, CUE_LIT_Y = CUE_BOOST_Y + CUE_ROW, CUE_DIGIT_Y = CUE_LIT_Y + PIP_H, CUE_DARK_Y = CUE_DIGIT_Y + TALL.ch, CUE_ART_H = CUE_DARK_Y + 2 * CUE_ROW;
+// The rows' signs, 5 wide: lines of air, a bolt.
+const SIGN_DRAFT = [".####", ".....", "###..", ".....", ".####", ".....", "###.."];
+const SIGN_BOOST = ["...##", "..##.", "..##.", ".##..", "#####", "..##.", ".##..", ".##..", "##..."];
 
 class Label {
   readonly g: CanvasRenderingContext2D;
@@ -286,6 +311,7 @@ interface Kit {
   corner: Label;
   debug: Label[];
   minis: WeakMap<Track, Mini>;
+  cues: HTMLCanvasElement | null; // the catch-up cues' pieces, baked on first use
 }
 
 const kits: (Kit | null)[] = [null, null];
@@ -306,6 +332,7 @@ function kitOf(soft: boolean): Kit {
     corner: new Label(96, CORNER.h, soft),
     debug: [],
     minis: new WeakMap(),
+    cues: null,
   });
 }
 
@@ -347,6 +374,63 @@ function writeTopLeft(k: Kit, n: number, bar: boolean): void {
     for (let t = BAR_TICK; t < BAR_W; t += BAR_TICK) barTick(g, t, x + 1, y + 1);
   }
   k.tlKey = n * 2 + (bar ? 1 : 0);
+}
+
+// ---- the catch-up cues ----------------------------------------------------------------
+
+/** A sign of a cue's row: its rows of pixels, top-left at (x, y). */
+function sign(g: CanvasRenderingContext2D, rows: readonly string[], x: number, y: number, color: string): void {
+  g.fillStyle = color;
+  for (let j = 0; j < rows.length; j++) for (let i = 0; i < rows[j].length; i++) if (rows[j][i] === "#") g.fillRect(x + i, y + j, 1, 1);
+}
+
+/**
+ * One row of the cue panel at row `y` of the art, which is empty there: its sign, its word
+ * (printed in the HUD's text colour, then tinted), for DRAFT the meter's empty wells, and the
+ * panel's face behind it all.
+ */
+function cueRow(g: CanvasRenderingContext2D, soft: boolean, y: number, draft: boolean, color: string, signColor: string): void {
+  const top = y + Math.round((CUE_ROW - TALL.cap) / 2); // where the capitals start
+  print(g, soft, draft ? "DRAFT" : "BOOST", CUE_TEXT_X, top - TALL.capTop, TALL, TEXT);
+  if (color !== TEXT) {
+    g.globalCompositeOperation = "source-atop"; // only where the letters are
+    g.fillStyle = color;
+    g.fillRect(CUE_TEXT_X, y, widthOf("DRAFT", TALL), CUE_ROW);
+    g.globalCompositeOperation = "source-over";
+  }
+  if (draft) sign(g, SIGN_DRAFT, CUE_PAD, top + 1, signColor);
+  else sign(g, SIGN_BOOST, CUE_PAD, top, signColor);
+  if (draft) {
+    g.fillStyle = DARK;
+    for (let k = 0; k < CUE_PIPS; k++) g.fillRect(CUE_PIPS_X + k * PIP_PITCH, y + CUE_PIPS_Y, PIP_W, PIP_H);
+  }
+  g.globalCompositeOperation = "destination-over"; // behind what is there
+  g.fillStyle = FACE;
+  g.fillRect(0, y, TL_W, CUE_ROW);
+  g.globalCompositeOperation = "source-over";
+}
+
+/** The cues' pieces: the panel with both rows dark, the two rows lit, the meter's pips lit, the digits. */
+function bakeCues(soft: boolean): HTMLCanvasElement {
+  const g = artCanvas(TL_W, CUE_ART_H, soft);
+  const UNLIT = P.soot3;
+  cueRow(g, soft, CUE_DRAFT_Y, true, TEXT, P.steel3);
+  cueRow(g, soft, CUE_BOOST_Y, false, P.haz1, P.haz2);
+  cueRow(g, soft, CUE_DARK_Y, true, UNLIT, UNLIT);
+  cueRow(g, soft, CUE_DARK_Y + CUE_ROW, false, UNLIT, UNLIT);
+  // The panel: its frame, the two dark rows in it (the panel's two edge pixels left alone).
+  panel(g, 0, 0, TL_W, CUE_H);
+  g.drawImage(g.canvas, 1, CUE_DARK_Y, TL_W - 2, 2 * CUE_ROW, 1, 2, TL_W - 2, 2 * CUE_ROW);
+  // The pips: light on a cool ramp, the strongest ones warm (the draft at its full strength).
+  for (let k = 0; k < CUE_PIPS; k++) {
+    const x = k * PIP_PITCH;
+    g.fillStyle = k >= CUE_PIPS - 2 ? P.haz2 : P.steel3;
+    g.fillRect(x, CUE_LIT_Y, PIP_W, PIP_H);
+    g.fillStyle = k >= CUE_PIPS - 2 ? P.haz1 : P.steel2;
+    g.fillRect(x, CUE_LIT_Y + PIP_H - 2, PIP_W, 2);
+  }
+  print(g, soft, CUE_DIGITS, 0, CUE_DIGIT_Y, TALL, TEXT);
+  return g.canvas;
 }
 
 // ---- the minimap ----------------------------------------------------------------------
@@ -520,6 +604,27 @@ export class Hud {
     }
   }
 
+  /** The catch-up cues' panel, its top at row y: DRAFT lit with `pips` of its meter, BOOST lit with `tenths` of a second left (0 = that row dark). */
+  private cues(y: number, pips: number, tenths: number): void {
+    const ctx = this.ctx, k = this.kit;
+    const art = k.cues ?? (k.cues = bakeCues(k.soft));
+    ctx.drawImage(art, 0, 0, TL_W, CUE_H, TL_X, y, TL_W, CUE_H);
+    if (pips) {
+      ctx.drawImage(art, 1, CUE_DRAFT_Y, TL_W - 2, CUE_ROW, TL_X + 1, y + 2, TL_W - 2, CUE_ROW);
+      ctx.drawImage(art, 0, CUE_LIT_Y, pips * PIP_PITCH - 1, PIP_H, TL_X + CUE_PIPS_X, y + 2 + CUE_PIPS_Y, pips * PIP_PITCH - 1, PIP_H);
+    }
+    if (tenths) {
+      const row = y + 2 + CUE_ROW;
+      ctx.drawImage(art, 1, CUE_BOOST_Y, TL_W - 2, CUE_ROW, TL_X + 1, row, TL_W - 2, CUE_ROW);
+      // "1.2": the digits out of their strip.
+      const cw = TALL.cw, top = row + Math.round((CUE_ROW - TALL.cap) / 2) - TALL.capTop;
+      const x = TL_X + CUE_TIME_X;
+      ctx.drawImage(art, ((tenths / 10) | 0) * cw, CUE_DIGIT_Y, cw, TALL.ch, x, top, cw, TALL.ch);
+      ctx.drawImage(art, 10 * cw, CUE_DIGIT_Y, cw, TALL.ch, x + cw, top, cw, TALL.ch);
+      ctx.drawImage(art, (tenths % 10) * cw, CUE_DIGIT_Y, cw, TALL.ch, x + 2 * cw, top, cw, TALL.ch);
+    }
+  }
+
   hud(h: HudView): void {
     const ctx = this.ctx;
     const k = this.kit;
@@ -543,6 +648,12 @@ export class Hud {
         if (w > 0) ctx.drawImage(k.bars, 0, zone * BAR_H, w, BAR_H, 13, 13 + lines * TL_PITCH, w, BAR_H);
       }
     }
+    // The catch-up cues, as whole numbers: the meter's pips lit (a draft however weak lights
+    // one) and the boost's time left in tenths of a second, rounded up. Absent, 0, NaN: off.
+    const draft = h.draft, boost = h.boost;
+    const pips = draft !== undefined && draft > 0 ? Math.max(1, Math.min(CUE_PIPS, Math.round(draft * CUE_PIPS))) : 0;
+    const tenths = boost !== undefined && boost > 0 ? Math.min(BOOST_MAX, Math.ceil((boost * 10) / TICK_HZ)) : 0;
+    if (pips || tenths) this.cues(lines ? TL_Y + 10 + lines * TL_PITCH + (h.hp !== null ? 12 : 0) + CUE_GAP : TL_Y, pips, tenths);
     if (h.time) {
       const l = k.time;
       if (l.text !== h.time) write(l, h.time, TIME);

@@ -72,6 +72,28 @@ export interface CarView {
   hp?: number;
   /** The car's look (gfx/sprites.ts LOOKS). Absent = the sport. */
   car?: "sport" | "racer" | "truck";
+  /**
+   * 0..1: how strong a slipstream the car is in (the follower's strength w, PLAN-M4 2.8).
+   * Streaks of air run past it, more and longer the stronger. Absent or 0 = none.
+   */
+  draft?: number;
+  /** Ticks of boost left (CarState.boost): flames at its tail, sputtering over the last few. Absent or 0 = none. */
+  boost?: number;
+}
+
+/**
+ * A lightning cell (PLAN-M4 2.5), as the frame's WorldFx hands it over.
+ * - `air`: it floats (bobbing, its shadow away on the ground) and is taken in flight; else it
+ *   lies on the ground.
+ * - `state`: 0 = there to be taken. Above 0 = taken, and drawn as an outline: the share of its
+ *   wait that is left, 1 (just taken) down toward 0 (back any moment; under CELL_RETURNING,
+ *   gfx/actors.ts, the outline blinks). A caller that only knows "taken" passes 1.
+ */
+export interface CellView {
+  x: number;
+  y: number;
+  air: boolean;
+  state: number;
 }
 
 /**
@@ -95,6 +117,13 @@ export interface WorldFx {
   /** For a caller that keeps its arrays from frame to frame (main.ts): how many entries count. Absent = all of them. */
   nShots?: number;
   nSparks?: number;
+  /**
+   * The track's lightning cells, each in its state. The caller keeps the array and its entries
+   * from frame to frame and changes them in place (no array a frame); `nCells` = how many
+   * entries count (absent = all of them). Absent = no cells: nothing is drawn.
+   */
+  cells?: CellView[];
+  nCells?: number;
 }
 
 export interface HudView {
@@ -107,6 +136,12 @@ export interface HudView {
   corner: string; // bottom-left small text (RTT)
   debug: string[];
   hp: number | null; // own car health 0..1, null = no car
+  // The catch-up cues, a small panel under the lap lines, shown while either is on (absent or
+  // 0 = off; both off or absent = no panel, the HUD as it was):
+  /** 0..1: the slipstream the own car is in (CarView.draft): DRAFT lit, a meter of its strength. */
+  draft?: number;
+  /** Ticks of boost the own car has left (CarView.boost): BOOST lit, the time left in seconds. */
+  boost?: number;
 }
 
 export class Renderer {

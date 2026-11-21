@@ -26,12 +26,15 @@
 //   scaled (nearest neighbour, whole pixels). Size steps baked ahead would be a sheet per
 //   step and colour (0.5 MB each); the scaled blit costs no memory and happens for a car or
 //   two at a time.
+// - The catch-up visuals (PLAN-M4.md 2.5, 2.8; M4-FX), each drawn only when the frame names it:
+//   the lightning cells (WorldFx.cells), the flames of a boosting car (CarView.boost) and the
+//   streaks of air past a car in a slipstream (CarView.draft). See "Catch-up" below.
 
 import type { Track } from "../../shared/track";
 import { MINE_BLINK_FAST_TICKS } from "../../shared/weapons";
 import type { CarView, DrawPose, WorldFx } from "../render";
 import { P } from "./palette";
-import { BLAST_FRAMES, BURNT, carSheet, CELL, DENTED, FX_BLAST, FX_COLS, FX_MINE, FX_PUFF, FX_SPARK, HEADING_STEP, HEADINGS, lookOf, SHADOW_ALPHA, shadeSheet, sharedSheets, SPARK_FRAMES, SPARK_KINDS, spriteFrame, spritesFor, WHOLE, type SharedSheets } from "./sprites";
+import { BLAST_FRAMES, BURNT, carSheet, catchSheet, CELL, CELL_FRAMES, CX_AIR, CX_AIR_GONE, CX_GONE, CX_GROUND, CX_SHADE, DENTED, FLAME, FLAME_AT, FLAME_COLS, FLAME_FRAMES, FLAME_HEADINGS, FLAME_LOW, FX_BLAST, FX_COLS, FX_MINE, FX_PUFF, FX_SPARK, HEADING_STEP, HEADINGS, lookOf, RACER, SHADOW_ALPHA, shadeSheet, sharedSheets, SPARK_FRAMES, SPARK_KINDS, spriteFrame, spritesFor, WHOLE, type SharedSheets } from "./sprites";
 import { MARK, marksCleared, scorch, skid, VIEW_H, VIEW_W, ZOOM } from "./world";
 
 /** Airborne cars: drawn up to this much bigger at the top of the arc ... */
@@ -111,6 +114,64 @@ const BLASTS = 32; // mine blasts remembered as having left their scorch
 // blast burns for 133): for QUIET ms after the clearing a blast leaves no scorch and is not
 // remembered. A new race's first blast is seconds away (the countdown).
 const QUIET = 300;
+
+// ---- Catch-up (PLAN-M4.md 2.5 and 2.8) -----------------------------------------------------
+//
+// Lightning cells (WorldFx.cells). One on the ground lies under the cars, with the mines, and
+// crackles. A floating one is drawn over the cars on the ground and under the ones in the
+// air, at its own place, as a car in the air is; it bobs a few pixels, and its shadow lies on
+// the ground as far away as that of a car AIR_UP high. A cell that was taken is a broken
+// outline, still (no bob); with less than CELL_RETURNING of its wait left the outline blinks.
+// All of it is one picture a cell from the catch-up sheet (gfx/sprites.ts), picked by the
+// clock and by the cell's place (so the cells of a track do not move in step).
+/** A taken cell (render.ts CellView.state) with less than this share of its wait left is about to be back: its outline blinks. */
+export const CELL_RETURNING = 0.12;
+const CELL_BLINK = 140; // ms lit, ms not
+const CELL_FRAME = 95; // ms a frame of a cell's crackle
+const AIR_UP = 0.7; // a floating cell's shadow: that of a car this high (0..1)
+const BOB = Int8Array.of(0, -1, -1, -2, -2, -2, -1, -1, 0, 1, 1, 2, 2, 2, 1, 1); // a floating cell's rise (-) and fall, view pixels
+const BOB_STEP = 85; // ms a step: once up and down in 1.4 s
+// The flames of a boosting car (CarView.boost): out of the two pipes of the sport and of the
+// truck, one out of the racer's tail, under the car, at every heading (64 of them: the car's
+// cell rounded to every second one). They flicker through FLAME_FRAMES frames, FLAME_STEP ms
+// each; over the last FLAME_ENDS ticks of the boost they are the short frame. A car in the
+// air has them grow with it; a wreck and a falling car have none.
+const FLAME_STEP = 50;
+const FLAME_ENDS = 9;
+const PIPE = 3.4; // the two pipes: this far either side of the car's line, view pixels
+/** Per flame heading: from the car's line to its right pipe, whole view pixels (x, y); the left pipe is the same the other way. */
+const PIPE_AT = new Int8Array(FLAME_HEADINGS * 2);
+for (let f = 0; f < FLAME_HEADINGS; f++) {
+  const a = (f * Math.PI * 2) / FLAME_HEADINGS;
+  PIPE_AT[f * 2] = Math.round(-Math.sin(a) * PIPE) | 0;
+  PIPE_AT[f * 2 + 1] = Math.round(Math.cos(a) * PIPE) | 0;
+}
+// The slipstream (CarView.draft, 0..1): streaks of air running past the car, from ahead of
+// it (out of the wake of the car it follows) to behind it, in lanes either side, drawn in
+// toward its own wake. A streak is a one-pixel line along the car's heading. The stronger the
+// draft, the more streaks (STREAKS_MIN to STREAKS) and the longer (STREAK_MIN to STREAK_MAX
+// pixels), and from STREAK_BRIGHT on the lighter; every streak is dim over the first and the
+// last stretch of its run. Where a streak is depends on the clock alone: nothing is kept of
+// them. A line is filled as the rows (or columns) of pixels it is made of: at most
+// STREAKS x STREAK_MAX rectangles a car, a third of that at most headings. A car in the air, a
+// falling car and a wreck have none.
+const STREAKS = 8;
+const STREAKS_MIN = 3;
+const STREAK_MIN = 5;
+const STREAK_MAX = 14;
+const STREAK_BRIGHT = 0.5;
+const STREAK_MS = 300; // a streak's run past the car
+const STREAK_FROM = 30; // it starts this far ahead of the car's middle, view pixels ...
+const STREAK_RUN = 54; // ... and ends this much further back
+const STREAK_LANE = 8; // the first lane: this far from the car's line ...
+const STREAK_LANES = 2.5; // ... the next ones this much further out each
+const STREAK_IN = 0.25; // a lane is this much nearer the car's line at its end
+/** The cosine and the sine of a car cell's heading. */
+const COS = new Float64Array(HEADINGS), SIN = new Float64Array(HEADINGS);
+for (let k = 0; k < HEADINGS; k++) {
+  COS[k] = Math.cos(k * HEADING_STEP);
+  SIN[k] = Math.sin(k * HEADING_STEP);
+}
 
 // Numbers that are not whole go from one function here to the next through this array, not as
 // arguments or results: handed over in a call they are boxed (16 bytes each, in Node).
@@ -202,6 +263,8 @@ export class Actors {
   private readonly up = new Float64Array(MAX_CARS); // 0..1 height in the air
   private readonly fall = new Float64Array(MAX_CARS); // 0..1 of the fall, -1 = not falling
   private readonly order = new Uint8Array(MAX_CARS); // the airborne ones, lowest first
+  private boosting = 0; // how many of this frame's cars have a flame to draw ...
+  private drafting = 0; // ... and how many are in a slipstream
   // What is remembered of a car from frame to frame, by slot.
   private readonly ids: string[] = new Array<string>(SLOTS).fill("");
   private readonly seen = new Int32Array(SLOTS); // the frame it was last drawn in
@@ -291,6 +354,7 @@ export class Actors {
       this.leadAt[1] = leadY - oy;
     }
     let flying = 0;
+    this.boosting = this.drafting = 0;
     for (let i = 0; i < n; i++) {
       this.note(cars[i], i, ox, oy);
       if (kind[i] === AIR) {
@@ -319,6 +383,9 @@ export class Actors {
       const c = FX_MINE + (m.armed ? (lit ? 0 : 1) : 2);
       ctx.drawImage(fxSheet, (c % FX_COLS) * CELL + INSET, ((c / FX_COLS) | 0) * CELL + INSET, SMALL, SMALL, x - SMALL / 2, y - SMALL / 2, SMALL, SMALL);
     }
+    // The lightning cells on the ground lie there too.
+    const cells = fx.cells;
+    if (cells) this.cells(cells, fx.nCells ?? cells.length, ox, oy, 0);
     // Falling cars sink below the road (drawn first, no shadow); airborne cars fly above
     // everything (drawn last, lowest first) and their shadows do land on other cars.
     for (let i = 0; i < n; i++) if (kind[i] === FALLING) this.car(cars[i], i);
@@ -327,6 +394,9 @@ export class Actors {
     for (let i = 0; i < n; i++) if (kind[i] === GROUND) this.shadow(i);
     ctx.globalAlpha = 1;
     if (this.dustLive) this.dustDraw(ox, oy);
+    // The air past a car in a slipstream and the flames of a boosting one: under every car on the ground.
+    if (this.drafting) this.streaks(cars, n);
+    if (this.boosting) for (let i = 0; i < n; i++) if (kind[i] === GROUND) this.flames(cars[i], i);
     for (let i = 0; i < n; i++) if (kind[i] === GROUND) this.car(cars[i], i);
     for (let i = 0; i < n; i++) if (cars[i].wreck) this.smoke(cars[i], ox, oy);
     this.shots(fx, ox, oy);
@@ -362,13 +432,19 @@ export class Actors {
       }
       ctx.drawImage(fxSheet, (c % FX_COLS) * CELL, ((c / FX_COLS) | 0) * CELL, CELL, CELL, x - HALF, y - HALF, CELL, CELL);
     }
+    // The floating cells: over the cars on the ground, their shadows on them; under the cars in the air.
+    if (cells) this.cells(cells, fx.nCells ?? cells.length, ox, oy, 1);
     for (let j = 0; j < flying; j++) {
       const i = order[j];
       ctx.globalAlpha = SHADOW_ALPHA * (1 - 0.4 * ups[i]);
       this.shadow(i);
     }
     ctx.globalAlpha = 1;
-    for (let j = 0; j < flying; j++) this.car(cars[order[j]], order[j]);
+    if (cells) this.cells(cells, fx.nCells ?? cells.length, ox, oy, 2);
+    for (let j = 0; j < flying; j++) {
+      if (this.boosting) this.flames(cars[order[j]], order[j]);
+      this.car(cars[order[j]], order[j]);
+    }
     F[OWN] = NaN; // told for this frame only
     snaps = null;
   }
@@ -450,6 +526,9 @@ export class Actors {
     this.look[i] = lookOf(c.car);
     this.up[i] = up;
     this.fall[i] = fall;
+    // Absent, 0 and NaN all count as none.
+    if (c.boost! > 0 && kind !== FALLING && !c.wreck) this.boosting++;
+    if (c.draft! > 0 && kind === GROUND && !c.wreck) this.drafting++;
     // The cell: a falling car tumbles; the own car follows its heading; another player's
     // car keeps the cell it has until its heading is clearly in the next one.
     const turn = (kind === FALLING ? c.h + fall * 1.1 : c.h) / HEADING_STEP; // the heading in steps
@@ -693,6 +772,125 @@ export class Actors {
       ctx.drawImage(shadeSheet(look), sx, sy, CELL, CELL, dx, dy, size, size);
       ctx.globalAlpha = 1;
     } else if (alpha !== 1) ctx.globalAlpha = 1;
+  }
+
+  /**
+   * The lightning cells. `layer` 0: the ones on the ground; 1: the floating ones' shadows;
+   * 2: the floating ones themselves. `count`: how many of `cells` count.
+   */
+  private cells(cells: NonNullable<WorldFx["cells"]>, count: number, ox: number, oy: number, layer: number): void {
+    const n = count < cells.length ? count : cells.length;
+    if (!n) return;
+    const ctx = this.ctx, sheet = catchSheet();
+    const now = F[NOW];
+    const frame = (now / CELL_FRAME) | 0, bob = (now / BOB_STEP) | 0;
+    const lit = ((now / CELL_BLINK) | 0) & 1;
+    // A floating cell's shadow: as a car's that high.
+    const awayX = Math.round((3 + AIR_UP * AIR_SHADOW_X) * ZOOM), awayY = Math.round((4 + AIR_UP * AIR_SHADOW_Y) * ZOOM);
+    for (let i = 0; i < n; i++) {
+      const c = cells[i];
+      if (c.air !== layer > 0) continue;
+      let x = Math.round(c.x * ZOOM) - ox, y = Math.round(c.y * ZOOM) - oy;
+      if (x < -OFF || y < -OFF || x > VIEW_W + OFF || y > VIEW_H + OFF) continue;
+      // Its own turn in the crackle and in the bob, by where it is.
+      const turn = (c.x * 0.37 + c.y * 0.11) | 0;
+      const state = c.state;
+      const taken = state > 0;
+      let pic: number;
+      if (layer === 0) pic = taken ? CX_GONE + (state < CELL_RETURNING ? lit : 0) : CX_GROUND + ((frame + turn) & (CELL_FRAMES - 1));
+      else {
+        const rise = taken ? 0 : BOB[(bob + turn) & 15];
+        if (layer === 1) {
+          pic = taken ? CX_SHADE + 2 : CX_SHADE + (rise < 0 ? 1 : 0);
+          x += awayX;
+          y += awayY;
+        } else {
+          pic = taken ? CX_AIR_GONE + (state < CELL_RETURNING ? lit : 0) : CX_AIR + ((frame + turn) & (CELL_FRAMES - 1));
+          y += rise;
+        }
+      }
+      ctx.drawImage(sheet, pic * CELL, 0, CELL, CELL, x - HALF, y - HALF, CELL, CELL);
+    }
+  }
+
+  /** The flames at the tail of a boosting car, drawn before the car itself: they come out from under it. */
+  private flames(c: CarView, i: number): void {
+    const boost = c.boost;
+    if (boost === undefined || !(boost > 0) || c.wreck || this.kind[i] === FALLING) return;
+    const x = this.sx[i], y = this.sy[i];
+    if (x < -OFF || y < -OFF || x > VIEW_W + OFF || y > VIEW_H + OFF) return;
+    const ctx = this.ctx, sheet = catchSheet();
+    // The flame's heading: the car's cell, to the nearer of the flame's (every second one).
+    const f = ((this.cell[i] + 1) >> 1) & (FLAME_HEADINGS - 1);
+    const frame = boost <= FLAME_ENDS ? FLAME_LOW : (((F[NOW] / FLAME_STEP) | 0) + i * 2) % FLAME_FRAMES;
+    const pic = frame * FLAME_HEADINGS + f;
+    const px = (pic % FLAME_COLS) * FLAME, py = CELL + ((pic / FLAME_COLS) | 0) * FLAME;
+    let ax = FLAME_AT[f * 2], ay = FLAME_AT[f * 2 + 1];
+    let sx = this.look[i] === RACER ? 0 : PIPE_AT[f * 2], sy = this.look[i] === RACER ? 0 : PIPE_AT[f * 2 + 1];
+    let size = FLAME;
+    const up = this.up[i];
+    if (up > 0) {
+      // In the air the car is drawn bigger: its flames with it.
+      const grown = Math.round(CELL * (1 + up * AIR_SCALE));
+      size = (FLAME * grown) >> 5; // CELL is 32
+      ax = Math.round((ax * grown) / CELL) | 0;
+      ay = Math.round((ay * grown) / CELL) | 0;
+      sx = Math.round((sx * grown) / CELL) | 0;
+      sy = Math.round((sy * grown) / CELL) | 0;
+    }
+    const dx = x + ax - (size >> 1), dy = y + ay - (size >> 1);
+    if (sx === 0 && sy === 0) ctx.drawImage(sheet, px, py, FLAME, FLAME, dx, dy, size, size);
+    else {
+      ctx.drawImage(sheet, px, py, FLAME, FLAME, dx + sx, dy + sy, size, size);
+      ctx.drawImage(sheet, px, py, FLAME, FLAME, dx - sx, dy - sy, size, size);
+    }
+  }
+
+  /** The air running past the cars that are in a slipstream: the streaks tone by tone, the dim ones first. */
+  private streaks(cars: readonly CarView[], n: number): void {
+    const ctx = this.ctx;
+    const t = F[NOW] / STREAK_MS;
+    for (let pass = 0; pass < 3; pass++) {
+      ctx.fillStyle = pass === 0 ? P.steel2 : pass === 1 ? P.steel3 : P.bone2;
+      for (let i = 0; i < n; i++) {
+        const c = cars[i];
+        const draft = c.draft;
+        if (draft === undefined || !(draft > 0) || this.kind[i] !== GROUND || c.wreck) continue;
+        const x = this.sx[i], y = this.sy[i];
+        if (x < -OFF || y < -OFF || x > VIEW_W + OFF || y > VIEW_H + OFF) continue;
+        const d = draft < 1 ? draft : 1;
+        const count = STREAKS_MIN + Math.round(d * (STREAKS - STREAKS_MIN));
+        const len = STREAK_MIN + Math.round(d * (STREAK_MAX - STREAK_MIN));
+        const tone = d >= STREAK_BRIGHT ? 2 : 1;
+        const cos = COS[this.cell[i]], sin = SIN[this.cell[i]];
+        // The line's pixels: a step of one along x or along y, whichever the heading is nearer to.
+        const flat = (cos < 0 ? -cos : cos) >= (sin < 0 ? -sin : sin);
+        const steps = Math.round(len * (flat ? (cos < 0 ? -cos : cos) : sin < 0 ? -sin : sin));
+        const slope = flat ? sin / cos : cos / sin; // what the other axis moves in a step
+        for (let j = 0; j < count; j++) {
+          // How far along its run the streak is, 0..1: each streak and each car at its own moment.
+          let p = t + j * 0.618 + i * 0.37;
+          p -= Math.floor(p);
+          if ((p > 0.14 && p < 0.82 ? tone : 0) !== pass) continue;
+          // Its middle, from the car's middle: along the heading (u) and across it (v).
+          const u = STREAK_FROM - p * STREAK_RUN;
+          const v = (j & 1 ? 1 : -1) * (STREAK_LANE + (j >> 1) * STREAK_LANES) * (1 - STREAK_IN * p);
+          const mx = x + u * cos - v * sin, my = y + u * sin + v * cos;
+          // From its low end up the stepping axis; pixels that share a row (a column) are one rectangle.
+          const a0 = Math.round((flat ? mx : my) - steps / 2) | 0;
+          const b0 = (flat ? my : mx) - (((flat ? mx : my) - a0) * slope);
+          let from = a0, at = Math.round(b0) | 0;
+          for (let k = 1; k <= steps; k++) {
+            const b = k < steps ? Math.round(b0 + k * slope) | 0 : at + 1; // the end closes the last run
+            if (b === at) continue;
+            if (flat) ctx.fillRect(from, at, a0 + k - from, 1);
+            else ctx.fillRect(at, from, 1, a0 + k - from);
+            from = a0 + k;
+            at = b;
+          }
+        }
+      }
+    }
   }
 
   /** A wreck's smoke: four puffs rising and drifting as before, each one of three sprites by its age. */

@@ -350,6 +350,25 @@ M4-CARS+ENV review APPROVE (ctx_18b31c4f294b; no findings). Notes: cars lap with
 no lap-time cost) is the one to watch for 'none dominant'; FOR M4-MOVE: live rt skew up to ~7 ticks for about one round trip after an
 input gap (bots.ts:1672 bounds live <=10, replay <=3): size M4-MOVE's lagged parity bound accordingly. Merge waits for the user's
 car-feel taste gate.
+Car-feel taste (user): "generally its a bit too easy to outrun normal bots, otherwise it looks good". User: hold -> asked if catch-up
+exists (no) -> "keep the merge, start catch-up next". M4-CARS+ENV MERGED: main cf76e01 (check clean, sim 628/628, bots 109/109, build ok);
+tickets ready for qa test; workers released, m4-cars workspace removed (m4-cars-taste still on :3009, pid 45260).
+WAVE 3 in flight: M4-DRAFT 123jpnbfffj + M4-CELLS 123jpnbfffk in ONE Opus worker ctx_fb2f80ebae6b (~/orca/workspaces/scrap-rally/
+m4-catchup, TSandvaer/m4-catchup, :3006; spec tmp/spec-m4-catchup.md) and M4-FX 123jpnbfffm Fable ctx_7656545f063a (~/orca/workspaces/scrap-rally/
+m4-fx, TSandvaer/m4-fx, :3008; spec tmp/spec-m4-fx.md; contact sheet via ask). Bot difficulty: judge again after catch-up.
+Catch-up worker Q (answered): A4 'passes' = centre ahead within 4 s (measured 2.65 s; the bend finishes the pass; plan constants kept);
+Normal bots get wake-tucking + pull-out-to-pass in botdrive (option a, deterministic, Easy unchanged) because fixed lanes 48 apart never draft.
+M4-FX contact sheet: user GO (popup); contract confirmed (CarView.draft/boost, WorldFx.cells CellView[]+nCells state 0/share left,
+HudView.draft/boost). Catch-up at d8e34e3 (666/666, 114/114) told to worker_done now; main.ts mapping as a follow-up after M4-FX merges.
+Catch-up done: d8e34e3 (draft fe2fa9f,8ffe40e,a45aac4; cells c2dcb3e,48ed900,d8e34e3). A4 centre ahead 2.60 s; bots lead changes 0,1,3/lap
+(was 0,0,0); autopilot lead over a Normal bot shrank (Rust Bowl 1106 -> 508 units; Overpass bot ahead); wrecks 2 -> 7 (closer racing).
+Opus reviewer ctx_141516b6d00f (tmp/review-m4-catchup.md). Mapping follow-up after M4-FX merges.
+Catch-up review APPROVE (non-blocking: N1 no validation rule for air cells off-centre -> add in the follow-up; N2 lead-change check
+averaged -> accepted; N3 bot passes mostly time out after 4 s side by side -> user judges at the taste gate; N4 server/bots.ts glue ->
+accepted). NOT merged yet: after M4-FX merges, the catch-up worker merges main, maps the fields + adds N1 rule, quick re-check, then the
+user's taste gate on that branch head, then merge.
+M4-FX done: 3b32b11 (gate PASS, noise 0.004, 30 A ratios 0.021-0.719; canvas 11,715,912 B of 12,000,000; 0 px diff 18 scenes; +0.04/0.07 ms
+per frame with everything on). Merges cleanly with main and with m4-catchup. Fable reviewer ctx_c90a75a666fd (tmp/review-m4-fx.md).
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
@@ -406,7 +425,8 @@ Manual Deploy only on the user's go-ahead. The user's own dev server runs on :30
 
 | Ticket | Dispatch | Workspace | Branch | Port | Started |
 | --- | --- | --- | --- | --- | --- |
-| 123jpnbffdz+123jpnbffe0 M4-CARS+ENV | ctx_99a9c55e67a2 | ~/orca/workspaces/scrap-rally/m4-cars | TSandvaer/m4-cars | 3006 | 2026-11-20 |
+| 123jpnbfffj+123jpnbfffk M4-DRAFT+CELLS | ctx_fb2f80ebae6b | ~/orca/workspaces/scrap-rally/m4-catchup | TSandvaer/m4-catchup | 3006 | 2026-11-20 |
+| 123jpnbfffm M4-FX | ctx_7656545f063a | ~/orca/workspaces/scrap-rally/m4-fx | TSandvaer/m4-fx | 3008 | 2026-11-20 |
 | 123jpnbfb23 GFX-0 | ctx_27a7a271607b | ~/orca/workspaces/scrap-rally/gfx0 | TSandvaer/gfx0 | 3006 | 2026-11-18 |
 
 ## Queued (milestone 3, PLAN-M3.md; start after solid collisions 123jpnbf6cy and easier-start 123jpnbf3xa merge)
