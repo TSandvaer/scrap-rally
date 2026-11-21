@@ -520,6 +520,12 @@ Opus reviewer ctx_5e4241c749eb (tmp/review-m4-surf-1.md). TASTE COPY :3009 = ~/o
 SCRAP_DEV_TRACK=surf-yard, node pid 62645): Create room -> Surf Yard. Known: lobby Track dropdown blank on a test track (dev only).
 TOUCH-4 done: d9b8a42 (defaults v2; curve 3 + rounding -> felt dead zone ~0.26 R; 777/777 + 118/118 x2; touch-drive 96/96).
 Opus reviewer ctx_c8ccf2bf8248 (tmp/review-touch-4.md). surf-1 vs m4-map: README-only conflict (second to merge keeps both).
+2026-11-21 late: all three reviews APPROVE. TOUCH-4 MERGED a043ebf (gate 777/777 + 118/118, build ok; ClickUp ready for qa test).
+M4-MAP MERGED 9f3b29f (gate 777/777 + 118/118, build ok; ClickUp complete; nits only). M4-SURF-1 MERGED 2c7b70c (README conflict
+resolved keeping both; gate running). SURF-1 review F1 (laneFor mound look-ahead gap; a straight fix made mound contact worse),
+F2 (look-ahead no lap wrap), F3/F4 nits -> folded into the M4-SURF-2 spec (tmp/spec-m4-surf-2.md). Authors + reviewers released,
+workspaces touch-4, m4-map, m4-surf-1, surf1-taste removed; :3009 taste copy stopped (pid 62645 + npm 62594).
+Next: SURF-2 dispatch on a green gate; then ask the user to push (v2 stick to the phone).
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
