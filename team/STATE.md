@@ -375,6 +375,8 @@ catch-up sheet bakes ~17 ms on first cell frame -> hand cells over from the coun
 109/109, build ok); ticket ready for qa test; workers released, m4-fx workspace removed.
 Catch-up FOLLOW-UP (Opus) ctx_1153e3b15f09 in the m4-catchup workspace (tmp/spec-m4-catchup-map.md): merge main, map CarView/HudView/
 WorldFx fields, bake in the countdown, N1 off-centre rule, browser check. Then quick re-check, taste copy, user taste gate, merge.
+MINES-1 DEPLOYED 2026-11-21 (user: "deployed"; live bundle index-pWtsH_4Y.js = origin 2e9ec7f, checked with curl). Muted live QA7 (Opus)
+ctx_58124cb2ffa5 in the main checkout (tmp/spec-qa-live-7.md -> tmp/qa7-mines-live-report.md); on PASS close ClickUp 123jpnbfdq6.
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
