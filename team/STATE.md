@@ -360,6 +360,9 @@ Catch-up worker Q (answered): A4 'passes' = centre ahead within 4 s (measured 2.
 Normal bots get wake-tucking + pull-out-to-pass in botdrive (option a, deterministic, Easy unchanged) because fixed lanes 48 apart never draft.
 M4-FX contact sheet: user GO (popup); contract confirmed (CarView.draft/boost, WorldFx.cells CellView[]+nCells state 0/share left,
 HudView.draft/boost). Catch-up at d8e34e3 (666/666, 114/114) told to worker_done now; main.ts mapping as a follow-up after M4-FX merges.
+Catch-up done: d8e34e3 (draft fe2fa9f,8ffe40e,a45aac4; cells c2dcb3e,48ed900,d8e34e3). A4 centre ahead 2.60 s; bots lead changes 0,1,3/lap
+(was 0,0,0); autopilot lead over a Normal bot shrank (Rust Bowl 1106 -> 508 units; Overpass bot ahead); wrecks 2 -> 7 (closer racing).
+Opus reviewer ctx_141516b6d00f (tmp/review-m4-catchup.md). Mapping follow-up after M4-FX merges.
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
