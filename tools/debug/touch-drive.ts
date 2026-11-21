@@ -80,6 +80,26 @@ async function ab(more: string[]): Promise<string> {
   return stdout.trim();
 }
 
+/**
+ * A fresh browser for a pass. agent-browser's open right after the last pass's close sometimes
+ * fails with "Could not configure browser: Failed to connect: No such file or directory" (seen
+ * twice in TOUCH-3 runs, a different pass each time): only that is tried again, after a pause, and
+ * said in the output.
+ */
+async function launch(): Promise<void> {
+  for (let i = 1; ; i++) {
+    try {
+      await ab(["--args", CHROME_ARGS, "open", "about:blank"]);
+      return;
+    } catch (e) {
+      if (i >= 3 || !String(e).includes("Failed to connect")) throw e;
+      console.log(`  browser launch failed (try ${i} of 3: Failed to connect); again in 2 s`);
+      await ab(["close"]).catch(() => undefined);
+      await sleep(2000);
+    }
+  }
+}
+
 // ---- the DevTools socket ------------------------------------------------------------
 
 class Cdp {
@@ -1120,7 +1140,7 @@ async function main(): Promise<void> {
     console.log(`\n# ${name}`);
     let cdp: Cdp | null = null;
     try {
-      await ab(["--args", CHROME_ARGS, "open", "about:blank"]);
+      await launch();
       cdp = await Cdp.open(await ab(["get", "cdp-url"]));
       await pass(new PageDriver(cdp));
     } catch (e) {
