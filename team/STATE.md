@@ -383,6 +383,11 @@ Catch-up follow-up DONE: 2d1af22 (697e03e N1 air cells |lat|>=28 + test; 2d1af22
 669/669 + 114/114 twice; bake in countdown frame 0, 20-26 ms; steady 0 B/frame, cold race 600-740 B/frame during V8 tier-up). Evidence
 tmp/m4-catchup-followup/. Quick Opus re-check ctx_acfb6e2a085e (tmp/review-m4-catchup-map.md). TASTE COPY on :3009 =
 ~/orca/workspaces/scrap-rally/m4-catchup-taste (detached 2d1af22); m4-cars-taste removed. Merge after re-check APPROVE + user taste.
+CATCH-UP MERGED 2026-11-21: re-check APPROVE (ctx_acfb6e2a085e, no blocking; cold-race bytes = V8 boxing, JIT artefact) + user taste
+APPROVE; main 46c1524 (check clean, sim 669/669, bots 114/114, build ok); ClickUp 123jpnbfffj + 123jpnbfffk ready for qa test; workers
+released; m4-catchup workspace + branch removed. Taste copy :3009 (node pid 44733) kept for the user's Normal-bot test; remove after.
+Phone can't reach the Mac on Wi-Fi (Tango and Tango_IoT): the Mac sees only the router in ARP, the phone answers no ARP -> likely client
+isolation on the router (hypothesis). Mac IP now 192.168.50.247. Open: user's Normal-bot verdict (fine / faster / Hard level).
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
