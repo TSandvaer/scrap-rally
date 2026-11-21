@@ -30,9 +30,10 @@
 //
 // The sheets are module-level: built on first use, they outlive a Renderer. Canvas memory is
 // capped (spriteBytes(), SPRITE_BYTES_MAX): MAX_CAR_SHEETS car sheets, a silhouette for each
-// of the three looks, the effect sheet, and the catch-up sheet (the lightning cells and the
+// of the three looks, the effect sheet, the catch-up sheet (the lightning cells and the
 // boost flames, PLAN-M4.md 2.5 and 2.8: at the end of this file), which is not made before a
-// frame has a cell or a boosting car to draw.
+// frame has a cell or a boosting car to draw, and the obstacle sheet (what moves on a road:
+// gfx/obstacles.ts paints it), which is not made before a track with such a thing is drawn.
 
 import { MAX_PLAYERS } from "../../shared/protocol";
 import { BAYER4, carTones, P, PALETTE, rgbOf, type PaletteName } from "./palette";
@@ -495,7 +496,7 @@ export const FX_MINE = 32; // armed and lit, armed and dark, not armed
 export const FX_PUFF = 35; // three puffs, young to old
 
 // A pixel of the effect sheet: 0 = nothing, 1..32 = palette entry + 1, 33 = cast shadow.
-const FX_SHADOW = PALETTE.length + 1;
+export const FX_SHADOW = PALETTE.length + 1;
 /** The cast shadow's black, as the cars' (today's 38%). */
 export const SHADOW_ALPHA = 0.38;
 
@@ -643,7 +644,7 @@ export function fxPixels(out: Uint32Array = new Uint32Array(FX_W * FX_H)): Uint3
 }
 
 /** The colours of an effect sheet's indices: nothing, the palette's 32, the cast shadow. */
-function fxPalette(): Uint32Array {
+export function fxPalette(): Uint32Array {
   const pal = new Uint32Array(FX_SHADOW + 1);
   PALETTE.forEach((e, i) => (pal[i + 1] = word(e.hex)));
   pal[FX_SHADOW] = word(P.soot0, Math.round(SHADOW_ALPHA * 255)) & 0xff000000; // black, the shadow's alpha
@@ -1017,10 +1018,21 @@ export function catchSheet(): HTMLCanvasElement {
   return catchUp;
 }
 
+/** The obstacle sheet's size: the sprites of what moves on one track (gfx/obstacles.ts lays them out and paints them). */
+export const OBST_W = 512;
+export const OBST_H = 256;
+
+let obstacles: { canvas: HTMLCanvasElement; ctx: CanvasRenderingContext2D } | null = null;
+
+/** The obstacle sheet's canvas, made the first time a track with something that moves on it is drawn: one, whatever the track. */
+export function obstacleSheet(): { canvas: HTMLCanvasElement; ctx: CanvasRenderingContext2D } {
+  return obstacles ?? (obstacles = sheetCanvas(OBST_W, OBST_H));
+}
+
 /** Canvas memory the sprite sheets hold right now, in bytes. */
 export function spriteBytes(): number {
   return bytes;
 }
 
-/** The most the sprite sheets can ever hold: every car sheet, a silhouette a look, the effects, the catch-up sheet. */
-export const SPRITE_BYTES_MAX = (MAX_CAR_SHEETS + LOOKS.length) * SHEET_W * SHEET_H * 4 + FX_W * FX_H * 4 + CATCH_W * CATCH_H * 4;
+/** The most the sprite sheets can ever hold: every car sheet, a silhouette a look, the effects, the catch-up sheet, the obstacle sheet. */
+export const SPRITE_BYTES_MAX = (MAX_CAR_SHEETS + LOOKS.length) * SHEET_W * SHEET_H * 4 + FX_W * FX_H * 4 + CATCH_W * CATCH_H * 4 + OBST_W * OBST_H * 4;

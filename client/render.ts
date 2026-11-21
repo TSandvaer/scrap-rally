@@ -124,6 +124,19 @@ export interface WorldFx {
    */
   cells?: CellView[];
   nCells?: number;
+  /**
+   * The race tick the frame shows (M4-WORLD; PLAN-M4.md section 3, "Where moving things are
+   * drawn"): the own car's predicted race tick, the one its step runs at (client/game.ts:
+   * latest.rt + pending.length + 1, clamped at GO), so the own car's hits on what moves look
+   * right; a spectator's is the latest snapshot's. What moves on the road is drawn where the
+   * shared functions of the tick put it (shared/track.ts barrelLat, pressState): the barrels of
+   * a row, a crusher press's warning shadow, its lamps and its slab, the arrows running on a
+   * conveyor belt (gfx/obstacles.ts). A whole number of ticks; a fraction is rounded down.
+   * Absent = none of them is drawn (their still parts, the barrels' lane, the press's bed and the
+   * belt, are part of the baked world and always there). A track on which nothing moves (every
+   * shipped one today) is the same picture with it and without.
+   */
+  rt?: number;
 }
 
 export interface HudView {
