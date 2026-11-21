@@ -399,6 +399,12 @@ Whichever merges second merges main first and re-proves its hashes. Then M4-WORL
 M4-HARD pace band answered (user popups): 40-55% of the Normal-to-flat-out gap; rivet hit rate ~70-80% ('add a little miss').
 M4-SCHEMA done: acee696 (golden hashes 07d6ed0 first; schema-hash SAME x12; 717/717 + 114/114 twice; Preview Yard test track hidden).
 Evidence tmp/m4-schema/. Opus reviewer ctx_59d389e53131 (tmp/review-m4-schema.md). No taste gate (data only): merge on APPROVE + gate.
+Canvas cap (user popup): 16 MB counting everything (HUD/font included; ~12.8 MB today) -> M4-WORLD can start after M4-SCHEMA merges.
+M4-HARD done: 247a80c (golden cdedecb first; Easy/Normal hashes 7/7 same; gap closed 41.5-53.6% = 3.7-6.3% faster; traffic falls H0/N5;
+rivets H77%/N61%, mines H51%/N25%; Hard won 18/18 3v3; step 1.3 us; 692/692 + 116/116 twice). Evidence tmp/m4-hard/. Opus reviewer
+ctx_fbba44ce9791 (tmp/review-m4-hard.md). TASTE COPY :3009 = ~/orca/workspaces/scrap-rally/m4-hard-taste (detached 247a80c, node pid 11831).
+m4-hard conflicts with m4-schema only in the appended sim-test section + tools/debug/README.md: merge SCHEMA first, then the Hard worker
+merges main, resolves, re-proves golden hashes, re-runs tests; quick re-check; merge.
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
