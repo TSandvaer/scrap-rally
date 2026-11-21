@@ -41,7 +41,7 @@ import { promisify } from "node:util";
 import { crc32, deflateSync } from "node:zlib";
 import { FONT_LETTERS, SMALL } from "../../client/gfx/font";
 import { CAR_COLORS, P, PALETTE, rgbOf } from "../../client/gfx/palette";
-import { carPixels, CATCH_H, CATCH_W, catchPixels, CELL, CELL_FRAMES, CX_AIR, CX_AIR_GONE, CX_GONE, CX_GROUND, CX_SHADE, FLAME, FLAME_AT, FLAME_COLS, FLAME_FRAMES, FLAME_HEADINGS, LOOKS, SHEET_W, SPRITE_BYTES_MAX } from "../../client/gfx/sprites";
+import { carPixels, CATCH_H, CATCH_W, catchPixels, CELL, CX_AIR, CX_AIR_GONE, CX_GONE, CX_GROUND, CX_SHADE, FLAME, FLAME_AT, FLAME_COLS, FLAME_FRAMES, FLAME_HEADINGS, LOOKS, SHEET_W, SPRITE_BYTES_MAX } from "../../client/gfx/sprites";
 
 const args = process.argv.slice(2);
 const arg = (name: string) => (args.includes(name) ? args[args.indexOf(name) + 1] : undefined);
@@ -167,21 +167,12 @@ function sprites(): Picture {
       pic.ground(x, y, T, T, S, g.tones);
       const air = (k >= 4 && k < 8) || k >= 10;
       const cellNo = k < 4 ? CX_GROUND + k : k < 8 ? CX_AIR + (k - 4) : k < 10 ? CX_GONE + (k - 8) : CX_AIR_GONE + (k - 10);
-      // A floating cell's shadow, as far away as the renderer puts it (here cut to the tile).
+      // A floating cell's shadow: nearer than the renderer puts it (10, 14 view pixels away), so it stays in the tile.
       if (air) {
         const sh = k >= 10 ? CX_SHADE + 2 : CX_SHADE + ((k - 4) & 1);
-        const tile = new Picture(T, T, "#000000");
-        tile.data.set(pic.data.subarray(0, 0)); // (unused: the tile clips the shadow)
-        for (let j = 0; j < CELL; j++) {
-          for (let i = 0; i < CELL; i++) {
-            const v = sheet[j * CATCH_W + sh * CELL + i];
-            if (!(v >>> 24)) continue;
-            const tx = i + 6, ty = j + 8;
-            if (tx < 0 || ty < 0 || tx >= CELL || ty >= CELL) continue;
-            const one = new Uint32Array([v]);
-            pic.blit(one, 1, 0, 0, 1, 1, x + tx * S, y + ty * S, S);
-          }
-        }
+        const moved = new Uint32Array(CELL * CELL);
+        for (let j = 0; j < CELL - 8; j++) for (let i = 0; i < CELL - 6; i++) moved[(j + 8) * CELL + i + 6] = sheet[j * CATCH_W + sh * CELL + i];
+        pic.blit(moved, CELL, 0, 0, CELL, CELL, x, y, S);
       }
       pic.blit(sheet, CATCH_W, cellNo * CELL, 0, CELL, CELL, x, y, S);
     }
