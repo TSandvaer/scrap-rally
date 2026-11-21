@@ -12,6 +12,7 @@ import {
   DT,
   speedOf,
   stepCar,
+  wallLimit,
   type CarState,
   type CarStats,
   type Input,
@@ -26,9 +27,11 @@ import {
   queryTrackNear,
   recoveryAt,
   segDir,
+  type PlacedCell,
   type Track,
   type TrackQuery,
 } from "./track";
+import { CELL_AIR_HEIGHT, cellTouch } from "./catchup";
 
 // Nobody can fire or drop a mine until this long after the start (GO), in ms of server
 // time. A mine press inside the window is discarded, not saved for later.
@@ -123,7 +126,9 @@ export interface Mine {
  * - rt: the race tick this step runs at: 1 = the first tick after GO, counted while racing and
  *   not paused (server/room.ts); 0 = before GO (the countdown). The client predicts it from the
  *   latest snapshot's rt (game.ts rtAt). Nothing reads it yet.
- * - draft: slipstream strength 0..1 (M4-DRAFT); 0 for now.
+ * - draft: this car's slipstream strength 0..1 this tick (M4-DRAFT, shared/catchup.ts): the server
+ *   works it out from the start-of-tick poses (draftsFor), the client predicts its own from the
+ *   predicted poses (client/contact.ts draft). Applied only to a driving step (stepCar).
  */
 export interface RaceEnv {
   track: Track;
@@ -167,12 +172,14 @@ function startFall(c: CarState): void {
   c.fall = FALL_TICKS;
   c.vx = 0;
   c.vy = 0;
+  c.boost = 0;
 }
 
 /**
  * Advance a race car one tick. Server and client both step cars only through this, so the
  * client predicts freezes, jumps, falls and the respawn/recovery jumps exactly.
- * Precedence: wreck > fall > air > drive.
+ * Precedence: wreck > fall > air > drive. A boost (c.boost ticks) counts down on every driving
+ * and flying tick; a fall, a wreck and the respawn or recovery that follows end it.
  * - Wrecked: sits still and counts down, then respawns on the centerline at its current
  *   track distance (or at the recovery point when that spot is over a gap or a hole).
  * - Falling: sits still for FALL_TICKS, then is placed at the last recovery point at or
@@ -219,11 +226,13 @@ export function stepRaceCar(c: CarState, input: Input, stats: CarStats, env: Rac
       startFall(c);
       return "fall";
     } else {
-      stepCar(c, input, stats, track);
+      stepCar(c, input, stats, track, env.draft);
+      if (c.boost > 0) c.boost--;
       return null;
     }
   }
-  // Flight.
+  // Flight (a boost runs on, but a committed flight is not sped up).
+  if (c.boost > 0) c.boost--;
   c.x += c.vx * DT;
   c.y += c.vy * DT;
   const q = queryTrackNear(track, c.x, c.y, c.seg);
@@ -252,6 +261,7 @@ function place(c: CarState, track: Track, s: number): void {
   c.seg = p.seg;
   c.air = 0;
   c.fall = 0;
+  c.boost = 0;
 }
 
 export function respawn(c: CarState, track: Track): void {
@@ -267,6 +277,7 @@ export function wreckCar(c: CarState): void {
   c.vy = 0;
   c.air = 0;
   c.fall = 0;
+  c.boost = 0;
 }
 
 /** Spin away from the mine: deterministic for a given state. */
@@ -441,6 +452,140 @@ export function validateRunUps(track: Track, stats: CarStats = BASE_STATS): stri
     if (!ok) {
       const what = `run-up from recovery point s=${r.toFixed(1)} (hazard at s=${((r + hz.start) % L).toFixed(1)})`;
       errors.push(`${what}: ${problem || "never gets past it"}`);
+    }
+  }
+  return errors;
+}
+
+// ---- jumps at overspeed (M4-DRAFT/M4-CELLS, PLAN-M4 advisor change 7) -------------------
+
+/** Lanes (lateral offsets) the overspeed sweep takes off from: the centre and both sides. */
+const SWEEP_LANES = [-32, 0, 32];
+/** Arrival speeds are swept in steps of this (u/s), and the maximum itself. */
+const SWEEP_STEP = 4;
+
+/**
+ * The overspeed sweep: a car arriving at a ramp's lip faster than validateRunUps' run from rest
+ * ever gets (the slipstream's ~473 u/s, a boost's ~537) must still land. For every lip, on the
+ * centre and on lanes either side, heading along the track, arrival speeds from MIN_TAKEOFF_SPEED
+ * up to maxSpeed are flown: the slowest ones may fall short into the gap (validateRunUps proves a
+ * run-up gets fast enough), but from the slowest speed that lands up to maxSpeed every one must
+ * land without falling. A landing on the dirt verge (inside the walls) counts as landed: running
+ * wide is what overspeed costs; with `onAsphalt` it does not (the strict form, as validateRunUps).
+ * A flight is frozen (velocity and heading), so the car type does not change it: `stats` drives
+ * only the roll after the landing. Empty = every jump lands.
+ */
+export function validateJumpSweep(track: Track, maxSpeed: number, stats: CarStats = BASE_STATS, onAsphalt = false): string[] {
+  const errors: string[] = [];
+  const speeds: number[] = [];
+  for (let v = MIN_TAKEOFF_SPEED; v < maxSpeed; v += SWEEP_STEP) speeds.push(v);
+  speeds.push(maxSpeed);
+  for (const ramp of track.ramps) {
+    const lip = ramp.s + ramp.len;
+    for (const lane of SWEEP_LANES) {
+      let landed = -1; // the slowest speed that lands
+      const bad: { v: number; why: string }[] = [];
+      for (const v of speeds) {
+        const why = flyOff(track, lip, lane, v, stats, onAsphalt);
+        if (!why && landed < 0) landed = v;
+        else if (why && landed >= 0) bad.push({ v, why });
+      }
+      const at = `jump at the lip s=${lip.toFixed(1)}, lane ${lane}`;
+      if (landed < 0) errors.push(`${at}: no take-off up to ${maxSpeed.toFixed(0)} u/s lands`);
+      else if (bad.length) errors.push(`${at}: lands from ${landed} u/s, but not at ${bad.map((b) => b.v.toFixed(0)).join(", ")} u/s (${bad[0].why})`);
+    }
+  }
+  return errors;
+}
+
+/** Fly off the lip at s=lip, `lane` units right of the centerline, at speed v: "" = lands on the asphalt. */
+function flyOff(track: Track, lip: number, lane: number, v: number, stats: CarStats, onAsphalt: boolean): string {
+  const p = pointAt(track, lip + 0.5);
+  const c: CarState = {
+    x: p.x - Math.sin(p.h) * lane, y: p.y + Math.cos(p.h) * lane, h: p.h, vx: Math.cos(p.h) * v, vy: Math.sin(p.h) * v,
+    seg: p.seg, wreck: 0, air: 0, fall: 0, boost: 0,
+  };
+  const env = raceEnv(track);
+  for (let i = 0; i < MAX_AIR_TICKS + 2; i++) {
+    const wasAir = c.air > 0;
+    const ev = stepRaceCar(c, { throttle: 1, steer: 0 }, stats, env);
+    const q = queryTrackNear(track, c.x, c.y, c.seg);
+    if (ev === "fall") return `falls at s=${q.s.toFixed(1)}, ${q.dist.toFixed(1)} from the centerline`;
+    if (i === 0 && ev !== "takeoff") return "does not take off";
+    if (wasAir && c.air === 0) return onAsphalt && q.dist > track.def.halfWidth ? `lands off the asphalt at s=${q.s.toFixed(1)} (${q.dist.toFixed(1)} from the centerline)` : "";
+  }
+  return "still in the air";
+}
+
+// ---- lightning cells (M4-CELLS, PLAN-M4.md 2.5) ------------------------------------------
+
+/**
+ * Does car c take `cell` this tick, having moved from (x0, y0) (its pose at the start of the
+ * tick)? The fraction of the tick at which it touches it (the earliest wins), or -1. A ground
+ * cell: a car on the ground; an air cell: a car in the air at CELL_AIR_HEIGHT or higher in its
+ * jump. Never a car that was wrecked or falling at the start of the tick (a respawn or a recovery
+ * is a jump, not a drive) or is now. Ghosted and finished cars take nothing: the caller knows
+ * those (server: the player; client: its predicted ghost and the snapshot).
+ */
+export function cellReach(cell: PlacedCell, x0: number, y0: number, wasDown: boolean, c: CarState): number {
+  if (wasDown || c.wreck > 0 || c.fall > 0) return -1;
+  if (cell.air ? !(c.air > 0 && airHeight(c) >= CELL_AIR_HEIGHT) : c.air > 0) return -1;
+  return cellTouch(x0, y0, c.x, c.y, cell.x, cell.y);
+}
+
+/** The slowest take-off an air cell asks for (PLAN-M4 2.5: on the arc of take-offs from 300 u/s). */
+export const CELL_MIN_TAKEOFF = 300;
+
+/**
+ * The take-off speeds (from CELL_MIN_TAKEOFF up to maxSpeed) at which some straight jump off a lip
+ * before the air cell passes through it high enough to take it, flown with stepRaceCar from every
+ * lane across the lip; null if none.
+ */
+export function airCellReach(track: Track, cell: PlacedCell, maxSpeed: number): { min: number; max: number; lanes: number } | null {
+  const L = track.length;
+  const lim = wallLimit(track);
+  let min = Infinity, max = -Infinity;
+  const lanes = new Set<number>();
+  for (const ramp of track.ramps) {
+    const lip = ramp.s + ramp.len;
+    const ahead = (((cell.s - lip) % L) + L) % L;
+    if (ahead <= 0 || ahead > maxSpeed * (MAX_AIR_TICKS / 60) + 20) continue;
+    for (let lane = -Math.floor(lim); lane <= lim; lane += 4) {
+      for (let v = CELL_MIN_TAKEOFF; v <= maxSpeed; v += SWEEP_STEP) {
+        const p = pointAt(track, lip + 0.5);
+        const c: CarState = {
+          x: p.x - Math.sin(p.h) * lane, y: p.y + Math.cos(p.h) * lane, h: p.h, vx: Math.cos(p.h) * v, vy: Math.sin(p.h) * v,
+          seg: p.seg, wreck: 0, air: 0, fall: 0, boost: 0,
+        };
+        const env = raceEnv(track);
+        for (let i = 0; i < MAX_AIR_TICKS + 2; i++) {
+          const x0 = c.x, y0 = c.y;
+          const ev = stepRaceCar(c, { throttle: 1, steer: 0 }, BASE_STATS, env);
+          if (cellReach(cell, x0, y0, false, c) >= 0) {
+            min = Math.min(min, v);
+            max = Math.max(max, v);
+            lanes.add(lane);
+            break;
+          }
+          if (ev === "fall" || (i > 0 && c.air === 0)) break;
+        }
+      }
+    }
+  }
+  return min === Infinity ? null : { min, max, lanes: lanes.size };
+}
+
+/**
+ * The cells' simulation checks (validateTrack does the static ones): every air cell lies on the
+ * arc of some take-off between CELL_MIN_TAKEOFF and maxSpeed (a boost's ~537 u/s), high enough
+ * to be taken. Empty = fine. (That a boosted car still lands every jump is validateJumpSweep.)
+ */
+export function validateCells(track: Track, maxSpeed: number): string[] {
+  const errors: string[] = [];
+  for (const c of track.cells) {
+    if (!c.air) continue;
+    if (!airCellReach(track, c, maxSpeed)) {
+      errors.push(`air cell at s=${c.s.toFixed(1)}, lat ${c.lat}: not on the arc of any take-off between ${CELL_MIN_TAKEOFF} and ${maxSpeed.toFixed(0)} u/s (high enough to take it)`);
     }
   }
   return errors;

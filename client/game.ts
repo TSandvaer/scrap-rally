@@ -29,6 +29,7 @@ import { DEFAULT_TRACK_ID, findTrack, trackById } from "../shared/tracks";
 import {
   airHeight,
   BTN_RIVET,
+  cellReach,
   DEFAULT_MINE_MODE,
   FALL_TICKS,
   GHOST_TICKS,
@@ -45,6 +46,7 @@ import {
   type RaceStepEvent,
   type Shot,
 } from "../shared/weapons";
+import { boostOffer, CELL_RESPAWN, cellOpen } from "../shared/catchup";
 import { Contacts } from "./contact";
 import type { Transport } from "./net";
 
@@ -150,6 +152,8 @@ export interface Snapshot {
    */
   rtBase: number;
   rtOpen: boolean; // racing or the countdown: race ticks still count
+  /** The lightning cells (M4-CELLS): the race tick each comes back, 0 = there (track.cells order); absent = all there. */
+  cells?: number[];
   cars: Map<string, CarSnap>;
   shots: Map<number, ShotSnap>;
   mines: MineSnap[];
@@ -159,6 +163,8 @@ interface Pending {
   seq: number;
   rt: number; // the race tick this step is predicted at (rtAt), as of the latest replay
   rt0: number; // ... and as of the live step
+  draft: number; // the slipstream this step is predicted with (Contacts.draft), as of the latest replay
+  draft0: number; // ... and as of the live step
   cmd: Command;
   fired: boolean; // a rivet left the gun on this step (predicted)
   mine: boolean; // a mine press was sent on this step
@@ -281,6 +287,16 @@ export class Game {
 
   // Own car (predicted)
   car: CarState | null = null;
+  /** The own car's predicted slipstream 0..1 in the last live step (M4-DRAFT): the HUD's DRAFT cue. */
+  draft = 0;
+  /**
+   * The lightning cells as the own car's prediction has them (M4-CELLS): the latest snapshot's,
+   * with the own car's predicted pickups on top (the race tick each comes back, 0 = there).
+   * Other cars' pickups show only through the snapshots.
+   */
+  cellsPred: number[] = [];
+  /** The full length (ticks) of the own car's current boost (the HUD's bar); 0 = none. */
+  boostFull = 0;
   prevCar: CarState | null = null; // state before the last step, for render interpolation
   readonly smooth = { x: 0, y: 0, h: 0 }; // visual correction offset, decays to 0
   seq = 0;
@@ -295,6 +311,8 @@ export class Game {
    * and tests: the rt skew against the server's).
    */
   readonly rtLog: [number, number, number][] = [];
+  /** Debug (M4-DRAFT): per acked input, [seq, predicted draft live, ... after the last replay]. */
+  readonly draftLog: [number, number, number][] = [];
   localShots: Shot[] = []; // cosmetic: our own rivets, drawn before the server confirms
   readonly contact = new Contacts(); // own-car bump prediction, near cars' drawn pose
   private ownSounds: OwnCue[] = [];
@@ -532,6 +550,9 @@ export class Game {
     this.localShots = [];
     this.cooldown = 0;
     this.ghost = 0;
+    this.draft = 0;
+    this.cellsPred = [];
+    this.boostFull = 0;
     this.contact.reset();
     this.ownSounds = [];
   }
@@ -758,7 +779,9 @@ export class Game {
     const rtOpen = msg.phase === "racing" || msg.phase === "countdown";
     const goIn = msg.phase === "countdown" ? Math.max(1, Math.ceil((msg.phaseEnds - msg.time) / (1000 / TICK_HZ))) : 0;
     const rt = Number.isFinite(msg.rt) ? msg.rt : 0; // absent from an older server
-    const snap: Snapshot = { time: msg.time, rtBase: msg.phase === "countdown" ? 1 - goIn : rt, rtOpen, cars: new Map(), shots: new Map(), mines: [] };
+    const snap: Snapshot = {
+      time: msg.time, rtBase: msg.phase === "countdown" ? 1 - goIn : rt, rtOpen, cells: Array.isArray(msg.cells) ? msg.cells : [], cars: new Map(), shots: new Map(), mines: [],
+    };
     for (const e of msg.ents) {
       if (e.k === "car") snap.cars.set(e.id, e);
       else if (e.k === "shot") snap.shots.set(e.id, e);
@@ -811,6 +834,7 @@ export class Game {
     while (this.pending.length && this.pending[0].seq <= ack) {
       const p = this.pending.shift()!;
       if (this.rtLog.length < MAX_ERROR_SAMPLES) this.rtLog.push([p.seq, p.rt0, p.rt]);
+      if (this.draftLog.length < MAX_ERROR_SAMPLES) this.draftLog.push([p.seq, p.draft0, p.draft]);
     }
     for (const k of this.history.keys()) if (k <= ack) this.history.delete(k);
 
@@ -824,16 +848,23 @@ export class Game {
     const c = cloneCar(server);
     let ghost = 0;
     const env = raceEnv(this.track);
+    const cells = snap.cells?.slice() ?? [];
+    const snapGhost = !!snap.cars.get(this.you)?.ghost;
     this.pending.forEach((p, i) => {
       const wrecked = c.wreck > 0;
+      const x0 = c.x, y0 = c.y, down = wrecked || c.fall > 0;
       p.rt = env.rt = rtAt(snap, i);
+      p.draft = env.draft = this.contact.draft(c, i + 1);
       const ev = stepRaceCar(c, p.cmd, this.stats, env);
       ghost = ghostAfter(ghost, ev, wrecked && c.wreck === 0);
       this.contact.collide(c, i + 1);
+      this.takeCells(c, x0, y0, down, ghost > 0 || snapGhost, cells, p.rt, snap);
       this.history.set(p.seq, cloneCar(c));
     });
     this.car = c;
     this.ghost = ghost;
+    this.cellsPred = cells;
+    this.noteBoost();
 
     // Hide the jump: shift the render offset (and the interpolation start) by it. Wreck, air
     // and fall state changes (a take-off, a landing, a fall or a recovery a tick off) and
@@ -951,10 +982,18 @@ export class Game {
     this.prevCar = cloneCar(before);
     if (this.cooldown > 0) this.cooldown--;
     const rt = this.latest ? rtAt(this.latest, this.pending.length) : 0;
-    const ev = stepRaceCar(this.car, cmd, this.stats, raceEnv(this.track, rt));
+    // The slipstream from the start-of-step poses, at the step the server applies this one.
+    this.draft = this.contact.draft(this.car, this.pending.length + 1);
+    const ev = stepRaceCar(this.car, cmd, this.stats, raceEnv(this.track, rt, this.draft));
     const respawned = this.prevCar.wreck > 0 && this.car.wreck === 0;
     if (ev === "recover") this.ghost = GHOST_TICKS; // the server ghosts it before the shot
     this.contact.step(this.car, this.pending.length + 1); // the server applies it then
+    // The cells after the step and the bump, as the server takes them (its ghost: armed()'s rule).
+    if (this.latest && on) {
+      const was = this.prevCar;
+      this.takeCells(this.car, was.x, was.y, was.wreck > 0 || was.fall > 0, this.ghost > 0 || !!this.latest.cars.get(this.you)?.ghost, this.cellsPred, rt, this.latest);
+    }
+    this.noteBoost();
     if (ev) this.cue(ev);
     else if (this.prevCar.air > 0 && this.car.air === 0 && this.car.fall === 0) this.cue("land");
     else if (this.car.air === 0 && this.car.fall === 0 && this.car.wreck === 0) {
@@ -978,7 +1017,7 @@ export class Game {
     }
     if (minePress && armedNow) this.cue("mine");
     this.ghost = ghostAfter(this.ghost, ev, respawned);
-    this.pending.push({ seq, rt, rt0: rt, cmd, fired, mine: minePress && armedNow });
+    this.pending.push({ seq, rt, rt0: rt, draft: this.draft, draft0: this.draft, cmd, fired, mine: minePress && armedNow });
     this.history.set(seq, cloneCar(this.car));
     if (this.pending.length > MAX_PENDING) {
       const dropped = this.pending.shift()!;
@@ -988,6 +1027,80 @@ export class Game {
       .slice(-INPUT_REDUNDANCY)
       .map((p) => [p.seq, p.cmd.throttle, p.cmd.steer, p.cmd.buttons]);
     this.send({ t: "in", i: tail });
+  }
+
+  /**
+   * The own car's cell pickups for one step (live or replayed), as the server's takeCells: every
+   * cell there at race tick rt that the car touched moving from (x0, y0) gives it the boost its
+   * gap to the leader is worth (by `snap`'s race distances), and is gone until rt + CELL_RESPAWN in
+   * `cells`. Only the own car's pickups are predicted (a car that beats us to one shows through the
+   * next snapshot, and the replay takes the boost away again).
+   */
+  private takeCells(c: CarState, x0: number, y0: number, down: boolean, ghosted: boolean, cells: number[], rt: number, snap: Snapshot): void {
+    const list = this.track.cells;
+    const own = snap.cars.get(this.you);
+    if (!list.length || !own || own.fin || ghosted) return;
+    for (let i = 0; i < list.length; i++) {
+      if (!cellOpen(cells[i] ?? 0, rt) || cellReach(list[i], x0, y0, down, c) < 0) continue;
+      c.boost = Math.max(c.boost, this.boostOfferIn(snap));
+      cells[i] = rt + CELL_RESPAWN;
+    }
+  }
+
+  /** The race tick the own car's next step is predicted at (rtAt; 0 before the first snapshot). */
+  raceTickNow(): number {
+    return this.latest ? rtAt(this.latest, this.pending.length) : 0;
+  }
+
+  /** Boost ticks a cell would give the own car by a snapshot's race distances (0 without a car in it). */
+  private boostOfferIn(snap: Snapshot): number {
+    const own = snap.cars.get(this.you);
+    if (!own) return 0;
+    const field: { rd: number; fin: boolean }[] = [];
+    for (const s of snap.cars.values()) field.push({ rd: s.rd, fin: s.fin > 0 });
+    return boostOffer(own.rd, field);
+  }
+
+  /**
+   * The boost (ticks) a cell would give the own car now: by its gap to the leading car that has
+   * not finished, from the latest snapshot (the HUD shows it; PLAN-M4 2.5). 0 when not racing.
+   */
+  boostOffer(): number {
+    return this.latest && this.car ? this.boostOfferIn(this.latest) : 0;
+  }
+
+  /** The own car's boost ticks left (predicted), 0 = none. With boostFull: the HUD's bar. */
+  boostLeft(): number {
+    return this.car?.boost ?? 0;
+  }
+
+  /** Keep boostFull: the boost's length as it was given (the largest seen since it began). */
+  private noteBoost(): void {
+    const b = this.car?.boost ?? 0;
+    if (b === 0) this.boostFull = 0;
+    else if (b > this.boostFull) this.boostFull = b;
+  }
+
+  /**
+   * The cells to draw (M4-CELLS): every cell of the track with whether it is there at the race
+   * tick the own car is predicted at (the own car's pickups predicted, the others' from the
+   * snapshots) and the ticks until it is back. Fills and returns `out` (no allocation once warm).
+   */
+  cellViews(out: { x: number; y: number; air: boolean; open: boolean; backIn: number }[] = []): { x: number; y: number; air: boolean; open: boolean; backIn: number }[] {
+    const list = this.track.cells;
+    const rt = this.raceTickNow();
+    const cells = this.car ? this.cellsPred : (this.latest?.cells ?? []);
+    out.length = list.length;
+    for (let i = 0; i < list.length; i++) {
+      const c = list[i], back = cells[i] ?? 0;
+      const v = (out[i] ??= { x: 0, y: 0, air: false, open: true, backIn: 0 });
+      v.x = c.x;
+      v.y = c.y;
+      v.air = !!c.air;
+      v.open = cellOpen(back, rt);
+      v.backIn = v.open ? 0 : back - rt;
+    }
+    return out;
   }
 
   /** The own car's sound cues queued since the last call (client/sfx.ts). */

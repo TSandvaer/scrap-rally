@@ -158,7 +158,7 @@ export interface CarSnap {
   wreck: number; // ticks left wrecked, 0 = driving
   air: number; // ticks left in the air (shared/weapons.ts stepRaceCar), 0 = grounded
   fall: number; // ticks left falling, then placed at a recovery point; 0 = not falling
-  boost: number; // ticks of speed boost left (M4-ENV plumbing: always 0 for now)
+  boost: number; // ticks of speed boost left (M4-CELLS: a lightning cell gives it), 0 = none
   ghost: boolean; // just respawned, recovered or finished: no damage, no car collisions
 }
 
@@ -247,6 +247,9 @@ export type ServerMsg =
       // Race tick (M4-ENV): simulate ticks run while racing, not counting paused ones; 0 before
       // GO, reset by every new race (start or restart). The cars are as stepped at tick rt.
       rt: number;
+      // The lightning cells (M4-CELLS), in the track's cells order: the race tick each comes back,
+      // 0 = it is there. Absent from an older server.
+      cells?: number[];
       ack: number; // last input seq the server consumed for the recipient
       ammo: [number, number]; // recipient's [rivets, mines]
       ents: EntSnap[];

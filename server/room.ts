@@ -2,6 +2,7 @@
 // a socket is reached only through the Conn interface, so index.ts owns `ws`.
 
 import { randomBytes, randomInt } from "node:crypto";
+import { boostOffer, CELL_RESPAWN, cellOpen, draftsFor } from "../shared/catchup";
 import { BASE_STATS, collideCars, NO_INPUT, type CarStats } from "../shared/physics";
 import {
   BLOCKLIST_MAX,
@@ -44,7 +45,7 @@ import { AMMO, buy, clampAmmo, isItem, payouts, startingWallet, statsFor, type A
 import { BUILTIN_SOUND, DEFAULT_SONG_ID, isSongChoice, isSongId, RANDOM_SONG, snapVolume, SONG_IDS, type RoomSound, type SongId } from "../shared/sound";
 import { gridSlot, type Track } from "../shared/track";
 import { DEFAULT_TRACK_ID, isTrackId, trackById } from "../shared/tracks";
-import { BTN_RIVET, CAR_HP, DEFAULT_MINE_MODE, GHOST_TICKS, isMineMode, mineCount, NO_COMMAND, raceEnv, stepRaceCar, WEAPONS_ARM_MS, type Command, type MineMode } from "../shared/weapons";
+import { BTN_RIVET, CAR_HP, cellReach, DEFAULT_MINE_MODE, GHOST_TICKS, isMineMode, mineCount, NO_COMMAND, raceEnv, stepRaceCar, WEAPONS_ARM_MS, type Command, type MineMode } from "../shared/weapons";
 import { isBotLevel, type BotLevel } from "../shared/botdrive";
 import { DEFAULT_CAR, isCarType, type CarType } from "../shared/cars";
 import { BOT_SLOTS, botCar, botName, botStep, maxBotsFromEnv, newBotSeat, resetBotSeat, shopBot, type BotSeat } from "./bots";
@@ -179,6 +180,10 @@ export class Room {
   // The race tick (M4-ENV, shared/weapons.ts RaceEnv): simulate ticks run while racing (paused
   // ticks are not simulated, so they do not count); 0 before GO, back to 0 for every new race.
   private raceTick = 0;
+  private readonly drafts: number[] = []; // this tick's slipstream per racer (simulate), reused
+  // The lightning cells (M4-CELLS, track.cells order): the race tick each comes back, 0 = there.
+  // All 0 from every race start; in every snapshot.
+  private cellBack: number[] = [];
   private lastOrder: string[] = []; // last race's standings, for the reverse grid
   private lobbyAt = 0; // server time the lobby last opened (back from results)
   private lastJoinAt = 0; // server time the last new player joined (the creator included)
@@ -523,6 +528,7 @@ export class Room {
     this.combat.reset();
     this.combat.mode = this.mineMode; // this race's, whatever the host sets while it runs
     this.raceTick = 0;
+    this.cellBack = this.track.cells.map(() => 0);
     this.startAmmo.clear();
     this.retiredBuys.clear();
     this.gridOrder().forEach((q, slot) => {
@@ -989,12 +995,15 @@ export class Room {
     const racers = [...this.players.values()].filter((p) => p.car); // a retired player has none
     // Bots decide from the start-of-tick poses, before any car steps (no jitter buffer).
     const botCmds = new Map<Player, { cmd: Command; minePress: boolean }>();
-    for (const p of racers) if (p.bot) botCmds.set(p, botStep(p as Player & { bot: BotSeat }, racers, this.track, racing));
-    const prev = new Map<string, { x: number; y: number }>();
+    for (const p of racers) if (p.bot) botCmds.set(p, botStep(p as Player & { bot: BotSeat }, racers, this.track, racing, this.combat.mines, this.cellBack, this.raceTick));
+    // The slipstream (M4-DRAFT, shared/catchup.ts) from the same start-of-tick poses.
+    const drafts = draftsFor(racers.map((p) => ({ car: p.car!, ghost: p.ghost > 0, finished: p.finished })), this.drafts);
+    const prev = new Map<string, { x: number; y: number; down: boolean }>();
     const recovered = new Set<Player>();
-    for (const p of racers) {
+    for (let k = 0; k < racers.length; k++) {
+      const p = racers[k];
       const c = p.car!;
-      prev.set(p.id, { x: c.x, y: c.y });
+      prev.set(p.id, { x: c.x, y: c.y, down: c.wreck > 0 || c.fall > 0 });
       if (p.held > 0) {
         // Resumed: the car stands where the pause left it until its driver's inputs are in.
         if (p.queue.length >= QUEUE_START || !p.session) p.held = 0;
@@ -1004,6 +1013,7 @@ export class Room {
       const { cmd, minePress } = botCmds.get(p) ?? consumeInput(p);
       // A car put back at a recovery point after a fall is ghosted (as after a wreck), from
       // this tick's car-car pass on.
+      env.draft = drafts[k];
       if (stepRaceCar(c, racing ? cmd : NO_INPUT, p.stats, env) === "recover") {
         p.ghost = GHOST_TICKS;
         recovered.add(p);
@@ -1017,6 +1027,7 @@ export class Room {
     }
 
     if (racing) {
+      this.takeCells(racers, prev);
       this.combat.step(racers, prev, recovered);
       for (const p of racers) {
         // No progress while falling: the car sits where it fell (possibly lost, off its own
@@ -1039,6 +1050,47 @@ export class Room {
       if (racers.length > 0 && racers.every((p) => p.progress!.fin)) this.endRace(now);
       else if (racers.length === 0) this.toLobby(now);
     }
+  }
+
+  /**
+   * The lightning cells (M4-CELLS, PLAN-M4 2.5), after every car has stepped (and bumped): each
+   * cell that is there goes to the car that touched it earliest in this tick (shared/weapons.ts
+   * cellReach, the move from its start-of-tick pose); a tie to the car further behind (lower race
+   * distance), then to the one that joined first. Ghosted and finished cars take nothing. The
+   * taker's boost: boostOffer by its gap to the leading car that has not finished; the cell is
+   * back CELL_RESPAWN ticks later.
+   */
+  private takeCells(racers: Player[], prev: Map<string, { x: number; y: number; down: boolean }>): void {
+    const cells = this.track.cells;
+    if (this.cellBack.length !== cells.length) this.cellBack = cells.map(() => 0);
+    const rt = this.raceTick;
+    let field: { rd: number; fin: boolean }[] | null = null;
+    for (let i = 0; i < cells.length; i++) {
+      if (!cellOpen(this.cellBack[i], rt)) continue;
+      this.cellBack[i] = 0;
+      let best: Player | null = null, bestT = 2, bestRd = 0;
+      for (const p of racers) {
+        const a = prev.get(p.id);
+        if (!a || !p.progress || p.ghost > 0 || p.finished) continue;
+        const t = cellReach(cells[i], a.x, a.y, a.down, p.car!);
+        if (t < 0) continue;
+        const rd = raceDistance(this.track, p.progress);
+        if (t < bestT || (t === bestT && rd < bestRd)) {
+          best = p;
+          bestT = t;
+          bestRd = rd;
+        }
+      }
+      if (!best) continue;
+      field ??= racers.filter((q) => q.progress).map((q) => ({ rd: raceDistance(this.track, q.progress!), fin: q.progress!.fin > 0 }));
+      best.car!.boost = Math.max(best.car!.boost, boostOffer(bestRd, field));
+      this.cellBack[i] = rt + CELL_RESPAWN;
+    }
+  }
+
+  /** The cells' state as the snapshots carry it (tests). */
+  get cells(): readonly number[] {
+    return this.cellBack;
   }
 
   private endRace(now: number): void {
@@ -1096,6 +1148,7 @@ export class Room {
     this.startAmmo.clear();
     this.retiredBuys.clear();
     this.raceTick = 0;
+    this.cellBack = this.track.cells.map(() => 0);
   }
 
   private setPhase(phase: Phase, ends: number): void {
@@ -1139,6 +1192,8 @@ export class Room {
       });
     }
     ents.push(...this.combat.shotSnaps(), ...this.combat.mineSnaps());
+    if (this.cellBack.length !== this.track.cells.length) this.cellBack = this.track.cells.map(() => 0);
+    const cells = this.cellBack.slice();
     const time = round(now, 1);
     for (const p of this.players.values()) {
       p.session?.conn.send({
@@ -1148,6 +1203,7 @@ export class Room {
         phase: this.phase,
         phaseEnds: this.phaseEnds,
         rt: this.raceTick,
+        cells,
         ack: p.ack,
         ammo: [p.wallet.ammo.rivets, p.wallet.ammo.mines],
         ents,

@@ -9,6 +9,7 @@
 // critically damped offset, so a near car's velocity never jumps (no stutter).
 // No DOM access: the headless bot test runs this code too.
 
+import { draftFrom, givesDraft, takesDraft } from "../shared/catchup";
 import { angleDiff, collideCarOneSided, DT, TICK_HZ, type CarContact, type CarState } from "../shared/physics";
 import type { CarSnap } from "../shared/protocol";
 import { airHeight } from "../shared/weapons";
@@ -180,6 +181,29 @@ export class Contacts {
     }
     if (hardest) this.lastContact = performance.now();
     return hardest;
+  }
+
+  /**
+   * The own car's slipstream (M4-DRAFT, shared/catchup.ts) for step k after the base snapshot:
+   * the server works it out from the start-of-tick poses, so from c before the step and every
+   * other car's predicted pose k - 1 steps after its snapshot (the pose near cars are drawn at),
+   * with the server's rules (the leader on the ground at k - 1, not wrecked, ghosted, finished or
+   * falling, at DRAFT_LEAD_MIN_SPEED by its snapshot velocity). None while the own car runs
+   * further ahead than PREDICT_MAX_MS (advisor change 8): the reconcile brings it in later, as
+   * with bumps.
+   */
+  draft(c: CarState, k: number): number {
+    const base = this.base;
+    if (!base || this.ahead || k > CAP_STEPS || !takesDraft(c)) return 0;
+    const j = Math.max(0, k - 1);
+    let w = 0;
+    for (const [id, s] of base.cars) {
+      if (id === this.you || s.air > j || !givesDraft(s, s.ghost, s.fin > 0, 0)) continue; // landed by then
+      const p = drawnPose(s, j, this.turns.get(id) ?? 0);
+      const d = draftFrom(c.x, c.y, p.x, p.y, p.h);
+      if (d > w) w = d;
+    }
+    return w;
   }
 
   /**
