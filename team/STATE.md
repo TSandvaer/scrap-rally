@@ -417,6 +417,8 @@ M4-SCHEMA fix round done (1a4eb17: reach = wall - half car; barrel gutter >= 1 t
 (check clean, sim 719/719, bots 114/114, build ok); ClickUp 123jpnbffqj complete; workers released; m4-schema workspace + branch removed.
 M4-HARD fix round running as ctx_e36d7bf88127; queued after it: merge main (8c67b5c), keep both appended sections, re-prove golden 7/7 +
 schema-hash 12/12. Then a quick Opus re-check, the user's taste verdict (copy on :3009), merge. Next: M4-WORLD (Fable; 16 MB cap all-in).
+M4-WORLD 123jpnbffqz in flight (Fable): ctx_b0111cbb62bb (~/orca/workspaces/scrap-rally/m4-world, :3008; spec tmp/spec-m4-world.md;
+base main bbc1fad). Contact sheet via ask FIRST -> relay to the user. Bench scene for obstacles is S6 (S5 already = recovery teleport).
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
