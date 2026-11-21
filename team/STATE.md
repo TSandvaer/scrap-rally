@@ -536,6 +536,8 @@ DEPLOYED 2026-11-22 (user): live index-CZXDyCOY.js (curl), bundle holds steerLoc
 User on the phone (v2 live): "still to hard ... I constantly oversteer" -> point to steer (popups; PLAN-TOUCH.md TOUCH-5 addendum,
 Fable "sound with changes", approved). TOUCH-5 123jpnbfgbc (Opus) in flight: ctx_ef45d3475cfa (~/orca/workspaces/scrap-rally/touch-5,
 :3006; spec tmp/spec-touch-5.md; base main f2ca592). Taste gate: the user on the phone, live (push + deploy), A/B via the TUNE switch.
+QA10 live PASS (ctx_29619ea77ece, released; tmp/qa10-live-report.md): smoke 30.0/s, RTT ~40 ms; stick v2 24/24 CDP touch passes at
+3 sizes; Crusher Run 3 bots finish, 0 falls; minimap unchanged; no console errors. ClickUp complete: TOUCH-3, TOUCH-4, M4-SURF-1.
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
