@@ -106,7 +106,7 @@ Not `client/gfx/*`, `render.ts`, `preview.ts`, `shared/*`, `server/*`.
   top-aligned view.
 - Push: the merged lobby fix (3c2c9e6) goes live together with touch controls, in one push the user approves.
 
-## Addendum 2026-11-21 (after the phone test): TOUCH-2, a floating thumbstick replaces the 8-way pad — PROPOSED
+## Addendum 2026-11-21 (after the phone test): TOUCH-2, a floating thumbstick replaces the 8-way pad — APPROVED by the user 2026-11-21
 
 **Why.** User, after driving TOUCH-1 on a real phone (live c655bd8): "the controls on the phone is bad ... how can you hold down
 speed and turn at the same time. Intuitively it should be like the knob on a controller push up and to the sides or down and to
