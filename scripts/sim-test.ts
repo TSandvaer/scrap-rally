@@ -7171,7 +7171,7 @@ function botsAdd(): void {
   const { room, ann, bo, send } = R;
   const from = room.chatLines.length;
   send(bo, { t: "addBot", level: "easy" });
-  send(ann, { t: "addBot", level: "hard" as BotLevel });
+  send(ann, { t: "addBot", level: "insane" as BotLevel }); // a level that does not exist ("hard" exists since M4-HARD)
   check(
     "bots add: a guest's addBot and an unknown level are refused with an err; no bot",
     errMsgs(bo.conn).map((m) => m.msg).join() === "Only the host can add a bot" && errMsgs(ann.conn).map((m) => m.msg).join() === "Unknown bot level" && R.bots().length === 0,
@@ -9180,6 +9180,398 @@ function cellsOffCentre(): void {
   );
 }
 
+// ---- Hard bot level (M4-HARD, PLAN-M4.md addendum 2026-11-21, ClickUp 123jpnbffqh, 2026-11-21) ----
+
+// This section's imports (hoisted like the ones at the top).
+import { goldenAll, goldenClient, HARD_TRACKS, pace, runRaces, traffic, withHard, type CarRow } from "../tools/debug/hard-tune";
+import { apexLane, BOT_LEVELS, HARD, isBotLevel, resetBotMem, type BotMem, type BotMine, type BotOther } from "../shared/botdrive";
+import { HARD_UPGRADES } from "../shared/botshop";
+import { RIVET_SPEED } from "../shared/weapons";
+
+/** When the M4-HARD sections began (their added runtime is printed at the end). */
+const hardClock = { t0: 0 };
+
+/**
+ * Easy and Normal byte-identity (M4-HARD advisor change 3): the hashes tools/debug/hard-tune.ts
+ * --golden printed on main at a7fa942, BEFORE shared/botdrive.ts was touched: every tick's
+ * throttle/steer/fire/mine and car state (full float64 bits) and the wallets; server bots, every
+ * shipped track, 3 bots, two 3-lap races; and one client (socket-bot path) race.
+ */
+const HARD_GOLDEN: Record<string, string> = {
+  "rust-bowl easy": "18c705b27b88a5f7ac751b4ec55fc1ac596e2cf87b981997abb375625641e38c",
+  "rust-bowl normal": "66296aa9e346580c4856ab4d4a64e9ae9306e4a4d5dabc2bf6d37ff146f6e471",
+  "crusher-run easy": "962a1ab5523d30431f391cabf4d0cb1baff389febe48c4c5c7ee8261287bf8eb",
+  "crusher-run normal": "2292d28aad4e16ffd00c18fc281812c0834406964eedafdbd28b2c40a3d4e9f2",
+  "overpass-knot easy": "030246f58700d25177ae43ab8a9bb87ebaecd7600fef2f8a764f215fa33620e4",
+  "overpass-knot normal": "4841eb7a9aff30cd4cd3ac02fdecbe8e82f035567bcebfbe0eedc060ade1370d",
+  "client crusher-run": "af5b555839a4d32c11a32179850e7319179dc0bedc22a8a219d39e12e2244f4c",
+};
+
+function hardGolden(): void {
+  hardClock.t0 = performance.now();
+  const all = goldenAll();
+  const bad = Object.keys(HARD_GOLDEN).filter((k) => all[k]?.hash !== HARD_GOLDEN[k]);
+  check(
+    "hard golden: Easy and Normal bots drive, shoot and shop byte-identically to before M4-HARD (server bots on every shipped track, two races; the client bot path)",
+    bad.length === 0 && Object.keys(all).length === Object.keys(HARD_GOLDEN).length,
+    bad.map((k) => `${k}: ${all[k]?.hash.slice(0, 12)} != ${HARD_GOLDEN[k].slice(0, 12)}`).join("; ") || `${Object.keys(all).length} hashes match`,
+  );
+}
+
+function hardLevels(): void {
+  check(
+    "hard levels: \"hard\" is a bot level (isBotLevel, BOT_LEVELS in order); a made-up one is not",
+    isBotLevel("hard") && !isBotLevel("insane") && !isBotLevel("Hard") && BOT_LEVELS.join() === "easy,normal,hard",
+    BOT_LEVELS.join(),
+  );
+  const m = newBotMem(-24, "hard");
+  m.lastMine = 900;
+  const lastBefore = m.lastMine;
+  resetBotMem(m);
+  check(
+    "hard levels: a Hard bot gets weapons and the slipstream (as Normal, not Easy); its last-mine step is in BotMem and resetBotMem forgets it",
+    m.weapons && m.useWake && m.level === "hard" && lastBefore === 900 && m.lastMine === -Infinity && newBotMem(0, "hard").lastMine === -Infinity && !newBotMem(0, "easy").weapons,
+  );
+  // addBot "hard": accepted from the host, tagged in the room message; a wrong level and a guest refused.
+  const R = botRooms();
+  const { room, ann, bo, send } = R;
+  send(ann, { t: "addBot", level: "hard" });
+  send(ann, { t: "addBot", level: "extreme" as BotLevel });
+  send(bo, { t: "addBot", level: "hard" });
+  const infos = botInfos(lastRoomMsg(bo.conn));
+  check(
+    "hard levels: the host's addBot \"hard\" is accepted (the room message tags the bot \"hard\"); a wrong level and a guest's Hard are refused",
+    R.bots().length === 1 && R.bots()[0].bot!.level === "hard" && infos.length === 1 && infos[0].bot === "hard" &&
+      errMsgs(ann.conn).map((x) => x.msg).join() === "Unknown bot level" && errMsgs(bo.conn).map((x) => x.msg).join() === "Only the host can add a bot",
+    `${infos.map((p) => `${p.name}:${p.bot}`).join()}; host errs ${errMsgs(ann.conn).map((x) => x.msg).join()}; guest errs ${errMsgs(bo.conn).map((x) => x.msg).join()}`,
+  );
+  // A human joining a full lobby replaces the last-added bot, here a Hard one.
+  room.leave(bo.player!, R.clock.now);
+  for (let i = 0; i < 3; i++) send(ann, { t: "addBot", level: i % 2 ? "easy" : "normal" });
+  send(ann, { t: "addBot", level: "hard" });
+  const before = R.bots().map((b) => `${b.name}:${b.bot!.level}`).join();
+  const from = room.chatLines.length;
+  const cy = R.join("Cy", room.code);
+  check(
+    "hard levels: a human joining a full room replaces the last-added bot, a Hard one (its leave line, then the join line)",
+    before === "Gasket (bot):hard,Lugnut (bot):normal,Piston (bot):easy,Clutch (bot):normal,Axle (bot):hard" && !!cy.player &&
+      R.bots().map((b) => `${b.name}:${b.bot!.level}`).join() === "Gasket (bot):hard,Lugnut (bot):normal,Piston (bot):easy,Clutch (bot):normal" &&
+      linesSince(room, from).join("|") === "leave:Axle (bot) left the room|join:Cy joined the room",
+    `${before} -> ${R.bots().map((b) => `${b.name}:${b.bot!.level}`).join()}; ${linesSince(room, from).join(" | ")}`,
+  );
+  // Over the wire: the host's Game adds a Hard bot and sees it tagged.
+  const rooms = new Rooms(1);
+  const A = wiredGame(rooms, { now: 1000 });
+  A.game.create("Ann");
+  A.open();
+  A.flush();
+  A.game.addBot("hard");
+  A.flush();
+  const hb = A.game.players.filter((p) => p.bot);
+  check("hard levels: Game.addBot(\"hard\") over the wire: the bot is tagged hard (the lobby's \"hard bot\")", hb.length === 1 && hb[0].bot === "hard" && A.game.isBot(hb[0].id), hb.map((p) => `${p.name}:${p.bot}`).join());
+}
+
+function hardShop(): void {
+  // Ammo to a floor of 20 rivets and 2 mines, then engine, welder, tyres (one level each), then
+  // Normal's top-up (40 rivets, 3 mines), all while affordable (M4-HARD advisor change 8).
+  const w = (scrap: number, rivets: number, mines: number, lv = { engine: 0, tyres: 0, welder: 0 }) => ({ scrap, levels: { ...lv }, ammo: { rivets, mines } });
+  const cases: [string, ReturnType<typeof w>, string, string][] = [
+    ["start (400)", startingWallet(), "rivets,mines", "rivets,mines"],
+    ["500, 20 rivets, 2 mines", w(500, 20, 2), "engine", "rivets,mines"],
+    ["1000, full ammo", w(1000, 40, 3), "engine,welder", "welder,tyres"],
+    ["2000, no ammo", w(2000, 0, 0), "rivets,mines,engine,welder,tyres,rivets", "rivets,mines,welder,tyres,engine"],
+    ["900, 0 rivets, 3 mines, engine 1", w(900, 0, 3, { engine: 1, tyres: 0, welder: 0 }), "rivets,welder,tyres", "rivets,welder,tyres"],
+  ];
+  const got = cases.map(([, wal]) => botShopping(wal, "hard").join());
+  const gotN = cases.map(([, wal]) => botShopping(wal, "normal").join());
+  check(
+    "hard shop: Hard buys ammo to 20 rivets / 2 mines, then engine, welder, tyres, then tops ammo up as Normal (Normal's rule unchanged)",
+    HARD_UPGRADES.join() === "engine,welder,tyres" && cases.every((c, i) => got[i] === c[2] && gotN[i] === c[3]),
+    cases.map((c, i) => `${c[0]}: hard ${got[i]} (normal ${gotN[i]})`).join("; "),
+  );
+  // In the room: after the payout a Hard bot spends its scrap by its rule, exactly.
+  const sim = new Sim(1);
+  const host = sim.add("Host");
+  const h = sim.room.addBot(host, "hard", sim.now) as Player;
+  const added = `${h.wallet.scrap}|${h.ammo.rivets},${h.ammo.mines}`;
+  h.wallet.scrap = 800;
+  h.wallet.ammo.rivets = 0;
+  h.wallet.ammo.mines = 0;
+  sim.room.start(host, sim.now);
+  while (sim.room.phase !== "racing") sim.tick();
+  sim.room.retire(host);
+  for (let i = 0; i < 60 * 60 && sim.room.phase === "racing"; i++) sim.tick();
+  const res = sim.conns.get(host.id)!.msgs.filter((m): m is Extract<ServerMsg, { t: "results" }> => m.t === "results").pop();
+  const want = { scrap: 800 + (res?.rows.find((r) => r.id === h.id)?.earned ?? NaN), levels: { engine: 0, tyres: 0, welder: 0 }, ammo: { rivets: 0, mines: 0 } };
+  for (const item of botShopping(want, "hard")) shopBuy(want, item);
+  check(
+    "hard shop: a Hard bot shops with its starting scrap when added (20 rivets, 3 mines) and after the payout by its rule, exactly",
+    added === "50|20,3" && JSON.stringify(h.wallet) === JSON.stringify(want) && h.wallet.levels.engine === 1,
+    `added ${added}; after the race ${JSON.stringify(h.wallet)}`,
+  );
+}
+
+/** A straight (DRAFT_STRAIGHT, s ~ x, lateral = y) for the gate tests: a car at s, lane, heading +x at v. */
+const HARD_STRAIGHT = buildTrack(DRAFT_STRAIGHT);
+function straightCar(s: number, lane: number, vx = 400, vy = 0): CarState {
+  const p = pointAt(HARD_STRAIGHT, s);
+  return { x: p.x, y: p.y + lane, h: 0, vx, vy, seg: p.seg, wreck: 0, air: 0, fall: 0, boost: 0 };
+}
+
+function hardWeapons(): void {
+  // Rivets: a fire gate on relative velocity (the rivet flies along the heading with the car's
+  // velocity, weapons.ts spawnShot); the bot never steers to aim. The slipstream is off here so
+  // the line is the bot's own.
+  const me = straightCar(2000, 0);
+  const shoot = (level: BotLevel, o: CarState | null, raceSteps = 600) => {
+    const mem = newBotMem(0, level);
+    mem.useWake = false;
+    const others = o ? [{ x: o.x, y: o.y, solid: true, id: "t", vx: o.vx, vy: o.vy }] : [];
+    return botControls({ car: { ...me }, track: HARD_STRAIGHT, stats: BASE_STATS, raceOn: true, raceSteps, others, mines: [] }, mem);
+  };
+  // Crossing: 150 ahead and 40 to the left, moving right so it meets the rivet (900 u/s relative,
+  // 131 from the nose: 0.1456 s), or not moving across, or moving away.
+  const tCross = (150 - 19) / RIVET_SPEED;
+  const cases: [string, CarState, boolean, boolean][] = [
+    ["150 ahead on its line, same speed", straightCar(2150, 0), true, true],
+    ["150 ahead, 30 across", straightCar(2150, 30), false, true],
+    ["150 ahead, 40 left, crossing into the shot", straightCar(2150, -40, 400, 40 / tCross), true, true],
+    ["150 ahead, 40 left, not crossing", straightCar(2150, -40), false, true],
+    ["150 ahead, 40 left, moving away", straightCar(2150, -40, 400, -40 / tCross), false, true],
+    ["600 ahead on its line (past the range once it flies)", straightCar(2600, 0, 400), false, false],
+    ["100 behind", straightCar(1900, 0), false, false],
+  ];
+  const rows = cases.map(([what, o, wantH, wantN]) => {
+    const h = shoot("hard", o), n = shoot("normal", o);
+    return { what, ok: h.fire === wantH && n.fire === wantN, sameSteer: h.steer === shoot("hard", null).steer, h: h.fire, n: n.fire };
+  });
+  check(
+    "hard weapons: Hard fires only when the rivet (along its heading, with its velocity) would pass the target within a hit plus HARD.rivetSlack, leading a crossing car; Normal's 15-degree cone fires at more",
+    rows.every((r) => r.ok),
+    rows.map((r) => `${r.what}: hard ${r.h} normal ${r.n}${r.ok ? "" : " WRONG"}`).join("; "),
+  );
+  check("hard weapons: Hard never steers to aim (its steer is the same with each target as with none)", rows.every((r) => r.sameSteer));
+  check("hard weapons: no Hard rivet before the weapons arm (8 s: raceSteps 481 and less)", !shoot("hard", straightCar(2150, 0), 481).fire && shoot("hard", straightCar(2150, 0), 482).fire);
+  // Mines: a follower on its line at 0.4 x its speed + 10 to 300 behind; 240 steps apart; after the arming.
+  const drop = (mem: BotMem, o: CarState, raceSteps = 600) =>
+    botControls({ car: { ...me }, track: HARD_STRAIGHT, stats: BASE_STATS, raceOn: true, raceSteps, others: [{ x: o.x, y: o.y, solid: true, id: "f", vx: o.vx, vy: o.vy }], mines: [] }, mem).mine;
+  const fresh = () => {
+    const m = newBotMem(0, "hard");
+    m.useWake = false;
+    return m;
+  };
+  const near = 0.4 * 400 + HARD.mineNear; // 170 at 400 u/s
+  const mineCases: [string, CarState, number, boolean][] = [
+    [`${near + 1} behind at 400 u/s`, straightCar(2000 - near - 1, 0), 600, true],
+    ["250 behind", straightCar(1750, 0), 600, true],
+    [`${near - 5} behind (it would be over the mine before it arms)`, straightCar(2000 - near + 5, 0), 600, false],
+    ["310 behind", straightCar(1690, 0), 600, false],
+    ["250 behind, 20 across", straightCar(1750, 20), 600, false],
+    ["250 behind, 12 across", straightCar(1750, 12), 600, true],
+    ["250 behind at 50 u/s (stopped)", straightCar(1750, 0, 50), 600, false],
+    ["250 behind, before the weapons arm", straightCar(1750, 0), 470, false],
+  ];
+  const mrows = mineCases.map(([what, o, steps, want]) => ({ what, got: drop(fresh(), o, steps), want }));
+  const m = fresh();
+  const seq = [600, 601, 839, 840].map((st) => drop(m, straightCar(1750, 0), st));
+  check(
+    "hard weapons: Hard drops a mine when a solid car follows on its line between 0.4 x its speed + 10 and 300 behind (it reaches the mine as it arms), after the 8 s arming, then not for 240 steps",
+    mrows.every((r) => r.got === r.want) && seq.join() === "true,false,false,true" && m.lastMine === 840,
+    mrows.map((r) => `${r.what}: ${r.got}${r.got === r.want ? "" : " WRONG"}`).join("; ") + `; steps 600/601/839/840: ${seq.join("/")}`,
+  );
+}
+
+function hardApex(): void {
+  // The apex lane: by seat (each bot moves its own line), towards the inside, kept on the asphalt.
+  const lanes = [-24, 24, 0, -12, 12].map((l) => apexLane(l, 1.2, 64));
+  check(
+    "hard apex: each seat's line moves the same way by HARD.apex (20) into a sharp bend (no convergence on one inside lane), half of it at a mild bend, none on a straight, kept 6 inside the asphalt",
+    lanes.join() === "-4,44,20,8,32" && apexLane(24, -1.2, 64) === 4 && Math.abs(apexLane(0, 0.6, 64) - 10) < 1e-9 && apexLane(0, 0.25, 64) === 0 && apexLane(40, 1.2, 64) === 50 && apexLane(-40, -1.2, 64) === -50,
+    `lanes -24,24,0,-12,12 -> ${lanes.join()}`,
+  );
+  // In a bend of Rust Bowl: the bias moves the aim (steer differs from apex 0) but never mem.lateral;
+  // a mine on the apex path, or a running pass (the slipstream), keeps the bot on its own line.
+  const t = trackById("rust-bowl");
+  let s0 = -1, turn = 0;
+  for (let s = 0; s < t.length && s0 < 0; s += 10) {
+    const near = pointAt(t, s + 20).h, far = pointAt(t, s + 20 + 360 * HARD.bendLook).h;
+    if (Math.abs(angleDiff(near, far)) > HARD.apexFull + 0.1 && Math.abs(angleDiff(pointAt(t, s).h, near)) < 0.05) {
+      s0 = s;
+      turn = angleDiff(near, far);
+    }
+  }
+  const p = pointAt(t, s0);
+  const car: CarState = { x: p.x, y: p.y, h: p.h, vx: Math.cos(p.h) * 300, vy: Math.sin(p.h) * 300, seg: p.seg, wreck: 0, air: 0, fall: 0, boost: 0 };
+  const steer = (apex: number, extra: { mines?: BotMine[]; pass?: boolean } = {}) =>
+    withHard({ apex }, () => {
+      const mem = newBotMem(0, "hard");
+      const others: BotOther[] = [];
+      if (extra.pass) {
+        const q = pointAt(t, s0 + 15);
+        others.push({ x: q.x, y: q.y, solid: true, id: "p", vx: car.vx, vy: car.vy });
+        mem.wake = { id: "p", pass: true, side: Math.sign(turn), steps: 10 };
+      }
+      const out = botControls({ car: { ...car }, track: t, stats: BASE_STATS, raceOn: true, raceSteps: 600, others, mines: extra.mines ?? [] }, mem);
+      return { steer: out.steer, lateral: mem.lateral };
+    });
+  const inside = Math.sign(turn);
+  const mineAt = (lat: number) => {
+    const q = pointAt(t, s0 + 90);
+    return [{ x: q.x - Math.sin(q.h) * lat, y: q.y + Math.cos(q.h) * lat }];
+  };
+  const a0 = steer(0), a20 = steer(20), blocked = steer(20, { mines: mineAt(inside * 12) }), blocked0 = steer(0, { mines: mineAt(inside * 12) });
+  const outside = steer(20, { mines: mineAt(-inside * 40) }), pass20 = steer(20, { pass: true }), pass0 = steer(0, { pass: true });
+  // A mine behind (review 2026-11-21): put in track coordinates from behind the car too, so one on
+  // the apex lane 200-355 behind (the bot's own fresh mine, say) never switches the apex off.
+  const behind = (d: number) => {
+    const q = pointAt(t, s0 - d);
+    return steer(20, { mines: [{ x: q.x - Math.sin(q.h) * inside * 12, y: q.y + Math.cos(q.h) * inside * 12 }] }).steer;
+  };
+  const behindOk = [200, 280, 300, 320, 340, 355].every((d) => behind(d) === a20.steer);
+  check(
+    "hard apex: in a Rust Bowl bend the bias steers the bot further to the inside without changing mem.lateral; a mine on the apex path or a running pass keeps it on its own line; a mine on the far side or behind the car does not",
+    s0 >= 0 && Math.sign(a20.steer - a0.steer) === inside && a20.lateral === 0 && blocked.steer === blocked0.steer && outside.steer === a20.steer && pass20.steer === pass0.steer && behindOk,
+    `bend at s ${s0} (turn ${turn.toFixed(2)}): steer apex 0 ${a0.steer.toFixed(3)}, apex 20 ${a20.steer.toFixed(3)}; mine on the path ${blocked.steer.toFixed(3)} (vs ${blocked0.steer.toFixed(3)}); mine outside ${outside.steer.toFixed(3)}; pass ${pass20.steer.toFixed(3)} vs ${pass0.steer.toFixed(3)}; mines 200-355 behind on the apex lane ${behindOk ? "ignored" : "SWITCH IT OFF"}`,
+  );
+  // Cells: within HARD.cellLane (45) of its lane, below 58 (lane 0 never reaches both kerbs).
+  const cs = (level: BotLevel, lane: number) => {
+    const q = pointAt(t, 2000);
+    const c: CarState = { x: q.x - Math.sin(q.h) * lane, y: q.y + Math.cos(q.h) * lane, h: q.h, vx: Math.cos(q.h) * 400, vy: Math.sin(q.h) * 400, seg: q.seg, wreck: 0, air: 0, fall: 0, boost: 0 };
+    const v = (cells?: number[]) => botControls({ car: { ...c }, track: t, stats: BASE_STATS, raceOn: true, raceSteps: 600, others: [], cells, rt: 10 }, newBotMem(lane, level)).steer;
+    return v(t.cells.map(() => 0)) !== v(undefined);
+  };
+  const kerb = Math.min(...HARD_TRACKS.flatMap((id) => trackById(id).cells.filter((c) => !c.air).map((c) => Math.abs(c.lat))));
+  check(
+    `hard apex: Hard goes for a kerb cell within HARD.cellLane (${HARD.cellLane}) of its lane (Rust Bowl's at lat -58 from lane -24, 34 away, where Normal does not), not from lane 0 or 12; HARD.cellLane < ${kerb} (no lane-0 bot reaches both kerbs)`,
+    cs("hard", -24) && !cs("normal", -24) && !cs("hard", 0) && !cs("hard", -12) && HARD.cellLane < kerb,
+  );
+}
+
+function hardPace(): void {
+  // The band the user picked (2026-11-21): on every shipped track and car type, Hard closes 40-55 %
+  // of the gap between Normal's lap and the flat-out ceiling (a lone bot, weapons off, lanes
+  // -24/0/24, median of 3 laps), with no fall, wall contact or dirt.
+  const rows = pace();
+  for (const r of rows) {
+    console.log(`  pace ${r.track} ${r.car}: Normal ${(r.normal / 60).toFixed(2)} s, flat-out ${(r.flat / 60).toFixed(2)} s, Hard ${(r.hard / 60).toFixed(2)} s (${((1 - r.hard / r.normal) * 100).toFixed(1)}% faster than Normal): closes ${(r.share * 100).toFixed(1)}% of the gap`);
+  }
+  const off = rows.filter((r) => !(r.share >= 0.4 && r.share <= 0.55));
+  check(
+    "hard pace: on every shipped track and car type Hard's lap closes 40-55% of the Normal-to-flat-out gap (the band the user picked), with no fall, wall contact or dirt",
+    rows.length === 9 && off.length === 0 && rows.every((r) => r.falls[2] + r.walls[2] + r.dirt[2] === 0),
+    off.map((r) => `${r.track} ${r.car} ${(r.share * 100).toFixed(1)}%`).join("; ") || `closes ${(Math.min(...rows.map((r) => r.share)) * 100).toFixed(1)}-${(Math.max(...rows.map((r) => r.share)) * 100).toFixed(1)}%`,
+  );
+}
+
+function hardTraffic(): void {
+  // 3-lap races of 3 bots of one level in traffic (slipstream to 473 u/s, cells to 537, weapons):
+  // every shipped track, with the mix and all-Sport, all-Racer, all-Truck.
+  const n = traffic("normal"), h = traffic("hard"), h2 = traffic("hard");
+  const sum = (xs: { rows: CarRow[] }[], f: (r: CarRow) => number) => xs.reduce((a, x) => a + x.rows.reduce((b, r) => b + f(r), 0), 0);
+  const worse: string[] = [];
+  for (const id of HARD_TRACKS) {
+    const on = (xs: typeof n) => xs.filter((x) => x.key.startsWith(`${id} `));
+    const [fn, fh, wn, wh] = [sum(on(n), (r) => r.falls), sum(on(h), (r) => r.falls), sum(on(n), (r) => r.walls), sum(on(h), (r) => r.walls)];
+    console.log(`  traffic ${id}: falls Normal ${fn} Hard ${fh}; wall contacts Normal ${wn} Hard ${wh}; after a mine spin Normal ${sum(on(n), (r) => r.mineWalls)} Hard ${sum(on(h), (r) => r.mineWalls)}; wrecks Normal ${sum(on(n), (r) => r.wrecks)} Hard ${sum(on(h), (r) => r.wrecks)}`);
+    if (fh > fn || wh > wn) worse.push(`${id}: falls ${fh} vs ${fn}, walls ${wh} vs ${wn}`);
+  }
+  check("hard traffic: in traffic Hard has no more falls and wall contacts than Normal on any shipped track (4 races of 3 bots each)", worse.length === 0, worse.join("; ") || `falls Normal ${sum(n, (r) => r.falls)} Hard ${sum(h, (r) => r.falls)}`);
+  const finished = h.every((x) => x.rows.every((r) => r.finish[0] > 0));
+  check(
+    "hard traffic: 3 Hard bots finish every shipped track with every car type (all Sport, all Racer, all Truck, and the mix), identically on a rerun",
+    finished && JSON.stringify(h) === JSON.stringify(h2),
+    h.map((x) => `${x.key} ${x.rows.map((r) => (r.finish[0] / 60).toFixed(1)).join("/")} s`).join("; "),
+  );
+  const rate = (xs: typeof n, hit: (r: CarRow) => number, all: (r: CarRow) => number) => sum(xs, hit) / Math.max(1, sum(xs, all));
+  const hr = rate(h, (r) => r.rivetHits, (r) => r.rivets), nr = rate(n, (r) => r.rivetHits, (r) => r.rivets);
+  const hm = rate(h, (r) => r.mineHits, (r) => r.mines), nm = rate(n, (r) => r.mineHits, (r) => r.mines);
+  console.log(`  traffic: rivets that hit (of fired): Hard ${(hr * 100).toFixed(0)}% (${sum(h, (r) => r.rivetHits)}/${sum(h, (r) => r.rivets)}), Normal ${(nr * 100).toFixed(0)}% (${sum(n, (r) => r.rivetHits)}/${sum(n, (r) => r.rivets)}); mines that hit: Hard ${(hm * 100).toFixed(0)}% (${sum(h, (r) => r.mineHits)}/${sum(h, (r) => r.mines)}), Normal ${(nm * 100).toFixed(0)}% (${sum(n, (r) => r.mineHits)}/${sum(n, (r) => r.mines)})`);
+  check("hard traffic: Hard's rivets hit 70-80% of the shots it fires (\"a little miss\", the user 2026-11-21)", hr >= 0.7 && hr <= 0.8, `Hard ${(hr * 100).toFixed(1)}%, Normal ${(nr * 100).toFixed(1)}%`);
+}
+
+function hardVs(): void {
+  // REPORT (not a gate): 3 Hard against 3 Normal in one room (the host's seat drives as the sixth
+  // bot, a tool-only trick), 3 races of 3 laps per track, Hard on the first three seats and then
+  // on the last three; races won, and each level's scrap earned over the 3 races (the snowball).
+  const lines: string[] = [];
+  let ok = true;
+  for (const id of HARD_TRACKS) {
+    for (const hardFirst of [true, false]) {
+      const levels: BotLevel[] = hardFirst ? ["hard", "hard", "hard", "normal", "normal"] : ["normal", "normal", "normal", "hard", "hard"];
+      const rows = runRaces({ track: id, levels, hostBot: hardFirst ? "normal" : "hard", races: 3 });
+      ok &&= rows.every((r) => r.place.length === 3 && r.place.every((p) => p > 0));
+      const of = (l: BotLevel) => rows.filter((r) => r.level === l);
+      const wins = (l: BotLevel) => of(l).reduce((a, r) => a + r.place.filter((x) => x === 1).length, 0);
+      const earned = (l: BotLevel) => of(l).map((r) => r.earned.reduce((a, b) => a + b, 0));
+      const wrecks = (l: BotLevel) => of(l).reduce((a, r) => a + r.wrecks, 0);
+      lines.push(`${id} (Hard ${hardFirst ? "first" : "last"}): races won Hard ${wins("hard")} Normal ${wins("normal")}; scrap earned over 3 races Hard ${earned("hard").join("/")}, Normal ${earned("normal").join("/")}; wrecks Hard ${wrecks("hard")} Normal ${wrecks("normal")}`);
+    }
+  }
+  for (const l of lines) console.log(`  vs ${l}`);
+  check("hard vs: 3 Hard against 3 Normal, 3 races per track, both seatings: every race ends with all six placed (report printed above)", ok, `${lines.length} series`);
+}
+
+function hardClient(): void {
+  // The socket bots' path (BotDriver over the client Game, as botplay --level hard): three Hard
+  // client bots finish, the prediction matches the server, a rerun is identical.
+  const rows = ["crusher-run", "overpass-knot"].map((id) => ({ id, a: goldenClient(id, 2, "hard"), b: goldenClient(id, 2, "hard") }));
+  check(
+    "hard client: three Hard client bots (BotDriver over the Game) finish 2 laps of Crusher Run and Overpass Knot, no air/fall state mismatch, identically on a rerun",
+    rows.every((r) => r.a.finish[0].every((f) => f > 0) && r.a.stateErrs === 0 && r.a.hash === r.b.hash),
+    rows.map((r) => `${r.id}: finish ${r.a.finish[0].map((f) => (f / 1000).toFixed(2)).join("/")} s, state mismatches ${r.a.stateErrs}`).join("; "),
+  );
+  // Race after race (review 2026-11-21): the driver's race steps start over between races and so
+  // must its last-mine step, or the mine gap holds every mine back after race 1. Three 1-lap races
+  // of Crusher Run, each bot shopping by the Hard rule before each (as botplay --level hard does);
+  // before the fix: 0/3/3 mines in race 1, then 0/0/0.
+  const m = goldenClient("crusher-run", 1, "hard", 3, true);
+  const per = (xs: number[][] | undefined) => (xs ?? []).map((r) => r.reduce((a, b) => a + b, 0));
+  check(
+    "hard client: Hard client bots drop mines in every race, not only the first (3 races in one room, botplay's driver and shop rule)",
+    m.dropped!.length === 3 && per(m.dropped).every((x) => x > 0) && per(m.presses).every((x) => x > 0) && m.finish.every((f) => f.every((x) => x > 0)),
+    `mines dropped per race (bots on lanes -24/0/24): ${m.dropped!.map((r) => r.join("/")).join(", ")}; presses ${m.presses!.map((r) => r.join("/")).join(", ")}`,
+  );
+}
+
+function hardCpu(): void {
+  // 1 human (retired at GO) + 5 Hard bots, 3 laps of Crusher Run (ramps, gaps, holes, mines on the
+  // track): each bot step and every room tick timed.
+  const sim = new Sim(3);
+  const host = sim.add("Host");
+  sim.room.setTrack(host, "crusher-run");
+  for (let i = 0; i < 5; i++) sim.room.addBot(host, "hard", sim.now);
+  sim.room.start(host, sim.now);
+  while (sim.room.phase !== "racing") sim.tick();
+  sim.room.retire(host);
+  const tickMs: number[] = [];
+  const steps: number[] = [];
+  botTiming.samples = steps;
+  let ticks = 0;
+  try {
+    while (sim.room.phase === "racing" && ticks < 60 * 300) {
+      sim.tickNo++;
+      sim.now += 1000 / 60;
+      const t0 = performance.now();
+      sim.room.tick(sim.tickNo, sim.now);
+      tickMs.push(performance.now() - t0);
+      ticks++;
+    }
+  } finally {
+    botTiming.samples = null;
+  }
+  const pct = (a: number[], p: number) => [...a].sort((x, y) => x - y)[Math.min(a.length - 1, Math.floor(a.length * p))];
+  const med = pct(steps, 0.5), tickMed = pct(tickMs, 0.5);
+  console.log(`  CPU: Hard bot step median ${(med * 1000).toFixed(2)} us, p99 ${(pct(steps, 0.99) * 1000).toFixed(2)} us over ${steps.length} steps; room tick with 5 Hard bots median ${(tickMed * 1000).toFixed(2)} us, p99 ${(pct(tickMs, 0.99) * 1000).toFixed(2)} us, max ${(Math.max(...tickMs) * 1000).toFixed(1)} us over ${tickMs.length} ticks`);
+  check(
+    "hard CPU: the median Hard bot step stays <= 0.05 ms (the gate fails above 0.2 ms); room tick with 5 Hard bots printed",
+    steps.length > 5 * 3000 && med <= 0.2 && (sim.room.phase as string) === "results",
+    `median bot step ${med.toFixed(5)} ms (${med <= 0.05 ? "within" : "OVER"} the 0.05 ms target); room tick median ${tickMed.toFixed(4)} ms over ${ticks} ticks`,
+  );
+  const added = (performance.now() - hardClock.t0) / 1000;
+  console.log(`  M4-HARD sections' runtime (hardGolden .. hardCpu): ${added.toFixed(1)} s`);
+  check("hard CPU: the M4-HARD sim-test sections add at most 30 s (printed)", added <= 30, `${added.toFixed(1)} s`);
+}
+
 // ---- track feature schema (M4-SCHEMA, PLAN-M4.md 2.2-2.6, ClickUp 123jpnbffqj, 2026-11-21) ----
 // Data only: the M4 surfaces, obstacles and split lanes are typed, placed by buildTrack and checked
 // by validateTrack; physics, bots and collisions do not read them yet (M4-SURF, M4-MOVE).
@@ -9632,7 +10024,7 @@ function schemaDataOnly(): void {
   }).every(Boolean));
 }
 
-for (const t of [rivets, gating, mines, wrecks, finishing, garage, armDelay, engine, readyCheck, collisions, trackFeatures, roomTrack, jumpsWired, shippedTracks, botDriver, botLaps, mineCap, chatRoom, chatClient, sound, raceSounds, surfaceSounds, audioUnlock, menuHostOnly, menuStop, menuRestart, menuKick, menuLock, menuHandover, menuClient, menuRestartClient, retireRules, retireField, retireRaceEnd, retireGarage, retireRefund, retireOthers, retireNotices, retireClient, pauseRefused, pauseFreeze, pauseResume, pauseHold, pauseAuto, pauseCooldown, pauseGrace, pauseCountdown, pauseControls, pauseClient, musicSwitch, soundMigration, soundLayers, soundServer, soundRandom, soundRoomDrag, soundSliderGrip, soundClient, songs, songPlayer, ghostRivets, minesSetting, minesStay, minesCap, minesFade, minesAtStart, minesCleared, minesPaused, minesClient, botsPointAt, botsAdd, botsKickHost, botsHandover, botsFullRoom, botsSoloStart, botsRace, botsShop, botsTick, botsCpu, botsClient, carsTypes, carsStats, carsPick, carsRejoin, carsBots, carsRunUps, carsBalance, carsCut, carsClient, envRt, envStep, envClient, draftRule, draftStraight, draftClient, draftJumps, draftBots, cellsRule, boostPhysics, cellsServer, cellsClient, cellsValidate, cellsBots, cellsOffCentre, schemaTypes, schemaArrays, schemaLateral, schemaRt, schemaValidate, schemaPreview, schemaDataOnly]) {
+for (const t of [rivets, gating, mines, wrecks, finishing, garage, armDelay, engine, readyCheck, collisions, trackFeatures, roomTrack, jumpsWired, shippedTracks, botDriver, botLaps, mineCap, chatRoom, chatClient, sound, raceSounds, surfaceSounds, audioUnlock, menuHostOnly, menuStop, menuRestart, menuKick, menuLock, menuHandover, menuClient, menuRestartClient, retireRules, retireField, retireRaceEnd, retireGarage, retireRefund, retireOthers, retireNotices, retireClient, pauseRefused, pauseFreeze, pauseResume, pauseHold, pauseAuto, pauseCooldown, pauseGrace, pauseCountdown, pauseControls, pauseClient, musicSwitch, soundMigration, soundLayers, soundServer, soundRandom, soundRoomDrag, soundSliderGrip, soundClient, songs, songPlayer, ghostRivets, minesSetting, minesStay, minesCap, minesFade, minesAtStart, minesCleared, minesPaused, minesClient, botsPointAt, botsAdd, botsKickHost, botsHandover, botsFullRoom, botsSoloStart, botsRace, botsShop, botsTick, botsCpu, botsClient, carsTypes, carsStats, carsPick, carsRejoin, carsBots, carsRunUps, carsBalance, carsCut, carsClient, envRt, envStep, envClient, draftRule, draftStraight, draftClient, draftJumps, draftBots, cellsRule, boostPhysics, cellsServer, cellsClient, cellsValidate, cellsBots, cellsOffCentre, schemaTypes, schemaArrays, schemaLateral, schemaRt, schemaValidate, schemaPreview, schemaDataOnly, hardGolden, hardLevels, hardShop, hardWeapons, hardApex, hardPace, hardTraffic, hardVs, hardClient, hardCpu]) {
   console.log(`\n# ${t.name}`);
   try {
     t();

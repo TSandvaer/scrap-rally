@@ -4,7 +4,7 @@
 // player goes through. Everything a bot does differently by seat (name, racing line, mine
 // timing) is keyed by its slot, never by the random player id, so a rerun is identical.
 
-import { botControls, newBotMem, resetBotMem, type BotLevel, type BotMem, type BotMine, type BotOther } from "../shared/botdrive";
+import { botControls, newBotMem, resetBotMem, type BotControls, type BotLevel, type BotMem, type BotMine, type BotOther } from "../shared/botdrive";
 import { botShopping } from "../shared/botshop";
 import { CAR_TYPES, type CarType } from "../shared/cars";
 import type { CarStats } from "../shared/physics";
@@ -64,6 +64,12 @@ export function resetBotSeat(seat: BotSeat): void {
 export const botTiming: { samples: number[] | null } = { samples: null };
 
 /**
+ * Optional instrumentation (M4-HARD's golden hashes, tools/debug/hard-tune.ts): set to a function
+ * and every botStep hands it the bot's player and the driver's controls. null in the server.
+ */
+export const botTrace: { fn: ((p: Fighter, ctl: BotControls) => void) | null } = { fn: null };
+
+/**
  * The bot's command for this tick, from the start-of-tick poses of every car in the race.
  * racing: inputs apply (the race phase, not paused). mines: the mines on the track (the
  * slipstream lanes avoid them). cells, rt: the lightning cells' state and the race tick (M4-CELLS).
@@ -87,6 +93,7 @@ export function botStep(
     for (const q of racers) if (q !== p && q.car) others.push({ x: q.car.x, y: q.car.y, solid: solid(q), id: q.id, vx: q.car.vx, vy: q.car.vy });
   }
   const ctl = botControls({ car, track, stats: p.stats, raceOn: racing, raceSteps: seat.steps, others, carType: p.carType, mines, cells, rt }, seat.mem);
+  if (botTrace.fn) botTrace.fn(p, ctl);
   const out = { cmd: { throttle: ctl.throttle, steer: ctl.steer, buttons: ctl.fire ? BTN_RIVET : 0 }, minePress: ctl.mine };
   if (botTiming.samples) botTiming.samples.push(performance.now() - t0);
   return out;
