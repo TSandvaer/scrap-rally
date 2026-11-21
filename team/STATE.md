@@ -458,6 +458,10 @@ TOUCH-1 done: c72a574 (touch-drive 54/54 incl. real two-finger touch over DevToo
 hidden in every non-driving phase; 765/765 + 118/118 on runs 2-3, run 1 had a bots contact flake 55<60). Evidence tmp/touch-1/.
 Opus reviewer ctx_5e8bb5d9979b (tmp/review-touch-1.md). Conflicts with m4-world only in tools/debug/README.md (second to merge resolves).
 Known: a second-finger tap on Menu/Chat while a thumb holds the pad makes no click in Chrome (reviewer judges).
+TOUCH-1 review APPROVE (ctx_5e8bb5d9979b, released; tmp/touch-1/review-verdict.txt): no findings; second-finger Menu/Chat tap = Chrome
+behaviour (bare control page shows it; optional fix: open menu/chat on touch pointerup) -> judge at the phone gate. MERGED into main f57a8e3;
+gate running. M4-WORLD fix round: a53c73b committed, worker silent ~46 min -> nudged (ctx_15e23180e27f) to finish in the foreground; it must
+merge main (README conflict with touch) before its merge.
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
