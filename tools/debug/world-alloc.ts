@@ -4,6 +4,9 @@
 // no browser.
 //
 //   npx tsx tools/debug/world-alloc.ts              this working tree: the race tick filled, then absent
+//   npx tsx tools/debug/world-alloc.ts --ref main   a git ref beside it (its client/ and shared/ unpacked into a
+//                                                   temp folder; a build from before M4-WORLD draws Preview Yard as
+//                                                   a plain road and ignores the tick: what the rest costs there)
 //   --warm 60000     frames driven before the measurement (the optimising compiler has to be done: a tile with the
 //                    truck on it is baked four times a lap, and its painter is slow to be picked up)
 //   --frames 20000   frames measured
@@ -40,8 +43,9 @@
 // Each mode runs in a process of its own (the script starts itself again).
 
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { Session } from "node:inspector/promises";
+import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -221,12 +225,29 @@ async function measure(root: string, label: string, on: boolean, views: boolean)
 
 if (args.includes("--child")) {
   const at = args.indexOf("--child");
-  await measure(HERE, args[at + 1], args[at + 2] === "on", args[at + 3] === "views");
+  await measure(args[at + 1], args[at + 2], args[at + 3] === "on", args[at + 4] === "views");
 } else {
+  const refs: string[] = [];
+  for (let i = 0; i < args.length; i++) if (args[i] === "--ref") refs.push(args[++i]);
+  const builds: { label: string; root: string; temp: boolean }[] = [];
+  for (const ref of refs) {
+    const dir = mkdtempSync(join(tmpdir(), "world-alloc-"));
+    const sha = execFileSync("git", ["rev-parse", "--short", ref], { cwd: HERE, encoding: "utf8" }).trim();
+    execFileSync("sh", ["-c", `git archive ${sha} client shared | tar -x -C "${dir}"`], { cwd: HERE });
+    builds.push({ label: `${ref} (${sha})`, root: dir, temp: true });
+  }
+  builds.push({ label: "working tree", root: HERE, temp: false });
   console.log(`# The road's furniture: allocation probe (Node ${process.version})`);
   const modes = args.includes("--off") ? ["off"] : args.includes("--on") ? ["on"] : ["on", "off"];
   const ways = args.includes("--lap") ? ["lap"] : args.includes("--views") ? ["views"] : ["views", "lap"];
-  for (const way of ways) {
-    for (const mode of modes) execFileSync(process.execPath, [...process.execArgv, fileURLToPath(import.meta.url), ...args, "--child", `${way === "views" ? "The three standing views" : "The lap"}, race tick ${mode === "on" ? "filled" : "absent"}`, mode, way], { cwd: HERE, stdio: "inherit" });
+  try {
+    for (const b of builds) {
+      for (const way of ways) {
+        // A ref from before the tick knows nothing of it: one mode is all there is to it.
+        for (const mode of b.temp ? ["off"] : modes) execFileSync(process.execPath, [...process.execArgv, fileURLToPath(import.meta.url), ...args, "--child", b.root, `${b.label}: ${way === "views" ? "the three standing views" : "the lap"}, race tick ${mode === "on" ? "filled" : "absent"}`, mode, way], { cwd: HERE, stdio: "inherit" });
+      }
+    }
+  } finally {
+    for (const b of builds) if (b.temp) rmSync(b.root, { recursive: true, force: true });
   }
 }
