@@ -509,6 +509,8 @@ QA9 live PASS (ctx_e6b6ff0465ff, released; tmp/qa9-live-report.md): LOBBY-FIT 11
 ClickUp LOBBY-FIT 123jpnbffrm + TOUCH-2 123jpnbffxe COMPLETE.
 TOUCH-3 review APPROVE (ctx_627ab8cbd55c, released; note: at 360 wide the 190 px gate is wider than the 180 px zone, drawing only).
 MERGED main 90cca64; gate running. Slot free after cleanup: nothing startable (SURF-2 waits for SURF-1; MOVE/TRACKS after it).
+TOUCH-3 gate: check clean, sim 777/777, bots 118/118, build ok; ClickUp 123jpnbffye ready for qa test; workspace removed.
+PUSHED 2026-11-21 (user popup): origin/main 8c39954..7defc76. Waiting for the user's Manual Deploy; expected bundle index-B58xVwLA.js.
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
