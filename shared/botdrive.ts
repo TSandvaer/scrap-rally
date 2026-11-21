@@ -20,22 +20,66 @@
 // Lightning cells (M4-CELLS, PLAN-M4 2.5): a Normal bot takes a cell that is there and within
 // CELL_LANE of its lane: a ground cell when no ramp or hole is near, an air cell over the jump it
 // is lining up for. Easy bots ignore them.
+//
+// Hard (M4-HARD, PLAN-M4 addendum 2026-11-21 and its binding advisor changes): the same car,
+// physics, upgrades and ammo rules as everyone (no rubber band, no better stats); it only
+// drives, shoots and shops better. Bend targets x HARD.corner, braking later and tighter, the
+// aim lookahead scaled; an apex bias towards the inside of the bend ahead, only while the bot is
+// on its own racing line (a hole lane, a ramp, the slipstream incl. a running pass and a cell all
+// override it), never towards a mine; cells within HARD.cellLane; rivets only when the shot,
+// fired straight along the heading with the car's velocity, would pass through the target (a
+// fire gate: it never steers to aim); a mine when a solid car follows in its wake at a distance
+// where it arrives just after the mine arms. The slipstream and the no-ramming rule as Normal.
 
 import { CARS, DEFAULT_CAR, type CarType } from "./cars";
-import { angleDiff, CAR_WIDTH, clamp, DT, speedOf, type CarState, type CarStats } from "./physics";
+import { angleDiff, CAR_LENGTH, CAR_RADIUS, CAR_WIDTH, clamp, DT, speedOf, type CarState, type CarStats } from "./physics";
 import { LIP_ZONE, pointAt, queryTrackNear, type Ramp, type Track } from "./track";
-import { airTicksFor, MIN_TAKEOFF_SPEED } from "./weapons";
+import { airTicksFor, MIN_TAKEOFF_SPEED, MINE_ARM_TICKS, RIVET_RADIUS, RIVET_RANGE, RIVET_SPEED, WEAPONS_ARM_MS } from "./weapons";
 
-export type BotLevel = "easy" | "normal";
-export const BOT_LEVELS: readonly BotLevel[] = ["easy", "normal"];
+export type BotLevel = "easy" | "normal" | "hard";
+export const BOT_LEVELS: readonly BotLevel[] = ["easy", "normal", "hard"];
 
 export function isBotLevel(v: unknown): v is BotLevel {
-  return v === "easy" || v === "normal";
+  return v === "easy" || v === "normal" || v === "hard";
 }
 
 /** Easy: throttle cap away from ramps, and the share of Normal's corner speeds. */
 export const EASY_THROTTLE = 0.85;
 export const EASY_CORNER = 0.9;
+
+/**
+ * Hard (see the top of this file). Measured with tools/debug/hard-tune.ts; an object so the
+ * tuner can sweep them (the game never changes them).
+ */
+export const HARD = {
+  /** Bend targets (200/260/330 u/s by sharpness) times this. */
+  corner: 1.12,
+  /** Brake above target + this (Normal: 25), coast above the target. */
+  brakeBand: 25,
+  /** The bend lookahead (Normal: max(120, 0.9 v) past 20 ahead) times this: braking starts later. */
+  bendLook: 1,
+  /** The aim point's lookahead (Normal: 55 + 0.3 v) times this. */
+  aimLook: 1,
+  /** Apex bias: the racing line moves this far towards the inside of the bend ahead ... */
+  apex: 0,
+  /** ... once the bend ahead turns more than this (radians), fully from apexFull on. */
+  apexFrom: 0.3,
+  apexFull: 0.9,
+  /** A mine this close (track coordinates) to the apex line, up to APEX_MINE_LOOK ahead, keeps the bot on its line. */
+  apexMineClear: 26,
+  /** Cells within this of its lane (Normal CELL_LANE 30); below 58, the kerb cells' distance from lane 0. */
+  cellLane: 45,
+  /** Rivets: fire when the shot's path passes the target's centre within CAR_RADIUS + RIVET_RADIUS less this. */
+  rivetMargin: 3,
+  /** Mines: a follower at least 0.4 x its speed + mineNear behind (it arrives as the mine arms) ... */
+  mineNear: 10,
+  /** ... at most this far behind ... */
+  mineFar: 300,
+  /** ... and on the bot's line (across, track coordinates) within this. */
+  mineAcross: 14,
+  /** Steps between two mines at least (4 s). */
+  mineGap: 240,
+};
 
 /**
  * Corner speeds by car type (M4-CARS): the Sport's bend targets times (grip / Sport grip)^(1/4),
@@ -151,6 +195,8 @@ export interface BotMem {
   wake: { id: string; pass: boolean; side: number; steps: number } | null;
   /** Steps left resting on the racing line after a tuck or a pass was given up or done. */
   wakeRest: number;
+  /** Hard: the race step it last dropped a mine (-Infinity: none this race). */
+  lastMine: number;
 }
 
 /**
@@ -158,7 +204,7 @@ export interface BotMem {
  * lane); server seats pass one by seat so two bots on mirrored lanes do not drop together.
  */
 export function newBotMem(lateral: number, level: BotLevel = "normal", mineOffset = Math.round(Math.abs(lateral) * 7) % 480): BotMem {
-  return { level, lateral, weapons: level === "normal", mineOffset, slow: 0, reversing: 0, backup: null, backedUpFor: -1, useWake: level === "normal", wake: null, wakeRest: 0 };
+  return { level, lateral, weapons: level !== "easy", mineOffset, slow: 0, reversing: 0, backup: null, backedUpFor: -1, useWake: level !== "easy", wake: null, wakeRest: 0, lastMine: -Infinity };
 }
 
 /** Forget the race (between races): the settings stay. */
@@ -169,6 +215,7 @@ export function resetBotMem(mem: BotMem): void {
   mem.backedUpFor = -1;
   mem.wake = null;
   mem.wakeRest = 0;
+  mem.lastMine = -Infinity;
 }
 
 /** Distance from `from` forward to `to` along the track, in [0, length). */
@@ -376,14 +423,14 @@ function wakeLane(
  * past that lip (the jump it is lining up for); otherwise only a ground cell. max: the furthest a
  * lane may lie from the centerline (the car's centre gets within reach of a kerb cell from there).
  */
-function cellLane(view: BotView, s: number, lane: number, toLip: number, max: number): number | null {
+function cellLane(view: BotView, s: number, lane: number, toLip: number, max: number, reach = CELL_LANE): number | null {
   const cells = view.track.cells, back = view.cells!;
   const rt = view.rt ?? 0;
   let best: number | null = null, bestD = Infinity;
   for (let i = 0; i < cells.length; i++) {
     const c = cells[i];
     if (!(back[i] === 0 || rt >= (back[i] ?? 0))) continue;
-    if (Math.abs(c.lat - lane) > CELL_LANE) continue;
+    if (Math.abs(c.lat - lane) > reach) continue;
     const d = ahead(view.track, s, c.s);
     if (d > CELL_LOOK + (c.air ? 400 : 0) || d < 10) continue;
     if (toLip >= 0 ? !c.air || d < toLip : c.air) continue;
@@ -393,6 +440,86 @@ function cellLane(view: BotView, s: number, lane: number, toLip: number, max: nu
     }
   }
   return best;
+}
+
+/** Track coordinates of a point near the track `de` (about) ahead of s: its s and lateral offset (+ = right of travel). */
+function trackCoords(track: Track, s: number, de: number, x: number, y: number): { s: number; lat: number; h: number; dist: number } {
+  const q = queryTrackNear(track, x, y, pointAt(track, s + de).seg);
+  const p = pointAt(track, q.s);
+  return { s: q.s, lat: (x - p.x) * -Math.sin(p.h) + (y - p.y) * Math.cos(p.h), h: p.h, dist: q.dist };
+}
+
+/** Hard's apex check: no mine from 10 behind to APEX_MINE_LOOK ahead within reach of the lanes between `a` and `b`. */
+const APEX_MINE_LOOK = 320;
+function apexMineFree(view: BotView, c: CarState, s: number, a: number, b: number): boolean {
+  const mines = view.mines;
+  if (!mines || !mines.length) return true;
+  const lo = Math.min(a, b) - HARD.apexMineClear, hi = Math.max(a, b) + HARD.apexMineClear;
+  const far2 = (APEX_MINE_LOOK + 40) ** 2;
+  for (const m of mines) {
+    const d2 = (m.x - c.x) ** 2 + (m.y - c.y) ** 2;
+    if (d2 > far2) continue; // pre-filter: only the mines near the car are put in track coordinates
+    const t = trackCoords(view.track, s, Math.sqrt(d2), m.x, m.y);
+    const along = ahead(view.track, s, t.s);
+    if ((along < APEX_MINE_LOOK || along > view.track.length - 10) && t.lat > lo && t.lat < hi) return false;
+  }
+  return true;
+}
+
+/**
+ * Hard's rivet gate: would a rivet fired now (from the nose, along the heading, with the car's
+ * velocity: weapons.ts spawnShot) pass through a solid car ahead, it holding its velocity, within
+ * the rivet's range and over the road (a wall stops a rivet)? A gate on relative velocity only.
+ */
+function rivetWouldHit(track: Track, s: number, c: CarState): (o: BotOther) => boolean {
+  const cos = Math.cos(c.h), sin = Math.sin(c.h);
+  const nose = CAR_LENGTH / 2 + 4;
+  const sx = c.x + cos * nose, sy = c.y + sin * nose;
+  const wx = c.vx + cos * RIVET_SPEED, wy = c.vy + sin * RIVET_SPEED; // the rivet's velocity
+  const tMax = RIVET_RANGE / Math.hypot(wx, wy);
+  const r = CAR_RADIUS + RIVET_RADIUS - HARD.rivetMargin;
+  return (o) => {
+    if (!o.solid) return false;
+    const rx = o.x - sx, ry = o.y - sy;
+    if (rx * cos + ry * sin <= 0 || rx * rx + ry * ry > (RIVET_RANGE + 60) ** 2) return false;
+    const ux = wx - (o.vx ?? 0), uy = wy - (o.vy ?? 0);
+    const t = (rx * ux + ry * uy) / (ux * ux + uy * uy); // seconds to the closest approach
+    if (t <= 0 || t > tMax) return false;
+    const mx = rx - ux * t, my = ry - uy * t;
+    if (mx * mx + my * my > r * r) return false;
+    // Over the road the whole way: halfway and where it meets the car.
+    for (const f of [0.5, 1]) {
+      const px = sx + wx * t * f, py = sy + wy * t * f;
+      const q = queryTrackNear(track, px, py, pointAt(track, s + Math.hypot(px - c.x, py - c.y)).seg);
+      if (q.dist > track.wall - RIVET_RADIUS) return false;
+    }
+    return true;
+  };
+}
+
+/** Race steps before the weapons arm (WEAPONS_ARM_MS), plus one for the tick the race starts on. */
+const ARM_STEPS = Math.ceil((WEAPONS_ARM_MS * 60) / 1000) + 1;
+
+/**
+ * Hard's mine gate: a solid car follows on the bot's line (track coordinates) at a distance where
+ * it reaches the mine (dropped CAR_LENGTH / 2 + 12 behind) about as it arms (MINE_ARM_TICKS), at
+ * most HARD.mineFar behind; the weapons armed and HARD.mineGap steps since the last one.
+ */
+function mineWouldCatch(view: BotView, mem: BotMem, c: CarState, s: number, lat: number): boolean {
+  if (view.raceSteps <= ARM_STEPS || view.raceSteps - mem.lastMine < HARD.mineGap) return false;
+  const far = HARD.mineFar + 30;
+  const cos = Math.cos(c.h), sin = Math.sin(c.h);
+  for (const o of view.others) {
+    if (!o.solid) continue;
+    const dx = o.x - c.x, dy = o.y - c.y;
+    if (dx * cos + dy * sin >= 0 || dx * dx + dy * dy > far * far) continue; // behind, near: pre-filter
+    const t = trackCoords(view.track, s, -Math.hypot(dx, dy), o.x, o.y);
+    const d = ahead(view.track, t.s, s); // the follower's distance behind, along the track
+    const vf = (o.vx ?? 0) * Math.cos(t.h) + (o.vy ?? 0) * Math.sin(t.h);
+    if (vf < 100 || Math.abs(t.lat - lat) > HARD.mineAcross) continue;
+    if (d >= (vf * MINE_ARM_TICKS) / 60 + HARD.mineNear && d <= HARD.mineFar) return true;
+  }
+  return false;
 }
 
 /** Is a solid car right ahead of the bot on its line (BLOCK_AHEAD, BLOCK_ACROSS) and the bot closing on it? */
@@ -425,6 +552,7 @@ export function botControls(view: BotView, mem: BotMem): BotControls {
     return { throttle: 1, steer: 0, fire: false, mine: false };
   }
   const easy = mem.level === "easy";
+  const hard = mem.level === "hard";
   const track = view.track;
   const q = queryTrackNear(track, c.x, c.y, c.seg);
   const v = speedOf(c);
@@ -437,14 +565,16 @@ export function botControls(view: BotView, mem: BotMem): BotControls {
   // With no holes ahead the bot holds its own racing line (mem.lateral).
   const hole = holeLane(track, q.s, 140 + v * 0.6, clamp(lat, mem.lateral - 24, mem.lateral + 24));
   let lane = hole.holes ? hole.lane : mem.lateral;
-  const look = hole.holes ? 40 + v * 0.25 : 55 + v * 0.3;
+  let look = hole.holes ? 40 + v * 0.25 : 55 + v * 0.3;
+  if (hard) look *= HARD.aimLook;
 
   // A ramp coming up: full throttle, straight at it.
   const ramp = rampAhead(track, q.s, RAMP_APPROACH);
   if (!ramp) mem.backedUpFor = -1;
   const near = pointAt(track, q.s + 20).h;
-  const far = pointAt(track, q.s + 20 + Math.max(120, v * 0.9)).h;
-  const bend = Math.abs(angleDiff(near, far));
+  const far = pointAt(track, hard ? q.s + 20 + Math.max(120, v * 0.9) * HARD.bendLook : q.s + 20 + Math.max(120, v * 0.9)).h;
+  const turn = angleDiff(near, far);
+  const bend = Math.abs(turn);
 
   // The slipstream: follow a car ahead on a straight, then pass it (Normal only).
   let coast = false;
@@ -457,13 +587,23 @@ export function botControls(view: BotView, mem: BotMem): BotControls {
     }
   } else mem.wake = null;
   // A cell close to its lane (Normal): steer to it; it beats the slipstream.
+  let cell = false;
   if (!easy && view.raceOn && view.cells && !hole.holes) {
-    const cl = cellLane(view, q.s, lane, ramp ? ramp.toLip : -1, track.def.halfWidth - CAR_WIDTH / 2 - 2);
+    const cl = cellLane(view, q.s, lane, ramp ? ramp.toLip : -1, track.def.halfWidth - CAR_WIDTH / 2 - 2, hard ? HARD.cellLane : CELL_LANE);
     if (cl !== null) {
       lane = cl;
       coast = false;
       mem.wake = null;
+      cell = true;
     }
+  }
+  // Hard's apex bias: only on its own racing line (a hole lane, a ramp, the slipstream and a cell
+  // come first), towards the inside of the bend ahead, never onto a mine. mem.lateral stays.
+  if (hard && HARD.apex > 0 && !hole.holes && !ramp && !mem.wake && !cell && view.raceOn && bend > HARD.apexFrom) {
+    const k = Math.min(1, (bend - HARD.apexFrom) / (HARD.apexFull - HARD.apexFrom));
+    const max = track.def.halfWidth - CAR_WIDTH / 2 - 6;
+    const apex = clamp(mem.lateral + Math.sign(turn) * HARD.apex * k, -max, max);
+    if (apexMineFree(view, c, q.s, mem.lateral, apex)) lane = apex;
   }
   let aim = q.s + look;
   if (ramp && ramp.toLip < RAMP_STRAIGHTEN) aim = q.s + ramp.toLip + 180;
@@ -475,8 +615,9 @@ export function botControls(view: BotView, mem: BotMem): BotControls {
   const scale = CORNER_SCALE[view.carType ?? DEFAULT_CAR];
   if (scale !== 1) target *= scale;
   if (easy) target *= EASY_CORNER;
+  if (hard) target *= HARD.corner;
   if (hole.holes) target = Math.min(target, HOLE_SPEED);
-  let throttle = v > target + 25 ? -1 : v > target ? 0 : 1;
+  let throttle = v > target + (hard ? HARD.brakeBand : 25) ? -1 : v > target ? 0 : 1;
   // No ramming; never on a ramp approach (the jump needs the speed: a bump costs less than a fall).
   if (!ramp && (coast || (mem.useWake && !easy && closingOnCar(view, c, dir))) && throttle > 0) throttle = 0;
   if (ramp) throttle = 1; // Easy too: the cap would leave it short of some jumps
@@ -527,13 +668,22 @@ export function botControls(view: BotView, mem: BotMem): BotControls {
 
   const armed = mem.weapons && !easy;
   let fire = false;
-  if (armed) {
+  if (armed && hard) {
+    // Only when the rivet would hit (see rivetWouldHit); the weapons arm first (no rivet wasted).
+    fire = view.raceSteps > ARM_STEPS && view.others.some(rivetWouldHit(track, q.s, c));
+  } else if (armed) {
     // Not at cars the server ignores: ghosted, wrecked, airborne or falling.
     fire = view.others.some((o) => {
       if (!o.solid) return false;
       const d = Math.hypot(o.x - c.x, o.y - c.y);
       return d > 1 && d < 500 && Math.abs(angleDiff(c.h, Math.atan2(o.y - c.y, o.x - c.x))) < Math.PI / 12;
     });
+  }
+  if (armed && hard) {
+    // A mine when a car follows in its wake at the distance it arrives as the mine arms.
+    const mine = mineWouldCatch(view, mem, c, q.s, lat);
+    if (mine) mem.lastMine = view.raceSteps;
+    return { throttle, steer, fire, mine };
   }
   // No mines in the first 6 s (no start-line minefield), then one every 8 s, staggered by seat.
   const mine = armed && view.raceSteps > 360 && view.raceSteps % 480 === mem.mineOffset;

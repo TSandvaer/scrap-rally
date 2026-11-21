@@ -116,7 +116,7 @@ export type ClientMsg =
   // MineMode); anything else is refused with an err. A race under way keeps the mode it began
   // with: the change applies from the next race (a restart is one).
   | { t: "mines"; mode: MineMode }
-  // Host only, lobby only (M4-BOTS): add a server-driven bot ("easy" or "normal"), also while
+  // Host only, lobby only (M4-BOTS): add a server-driven bot ("easy", "normal" or "hard"), also while
   // the room is locked. Refused with an err when the room is full or the server runs MAX_BOTS
   // bots already ("Server busy"). A bot leaves through kick (no block).
   | { t: "addBot"; level: BotLevel }

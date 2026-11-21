@@ -7171,7 +7171,7 @@ function botsAdd(): void {
   const { room, ann, bo, send } = R;
   const from = room.chatLines.length;
   send(bo, { t: "addBot", level: "easy" });
-  send(ann, { t: "addBot", level: "hard" as BotLevel });
+  send(ann, { t: "addBot", level: "insane" as BotLevel }); // a level that does not exist ("hard" exists since M4-HARD)
   check(
     "bots add: a guest's addBot and an unknown level are refused with an err; no bot",
     errMsgs(bo.conn).map((m) => m.msg).join() === "Only the host can add a bot" && errMsgs(ann.conn).map((m) => m.msg).join() === "Unknown bot level" && R.bots().length === 0,

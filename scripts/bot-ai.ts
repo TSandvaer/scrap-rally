@@ -4,7 +4,7 @@
 // server's bot seats run the same step); this is the adapter that feeds it from a Game.
 
 import { NO_CONTROLS, type Controls, type Game } from "../client/game";
-import { botControls, newBotMem, type BotMem, type BotOther } from "../shared/botdrive";
+import { botControls, newBotMem, type BotLevel, type BotMem, type BotOther } from "../shared/botdrive";
 
 export { holeLane, runUpFor, speedAfter, takeoffSpeedFor } from "../shared/botdrive";
 
@@ -16,11 +16,13 @@ export class BotDriver {
     private readonly game: Game,
     /** Racing line offset from the centerline (units, + = right of travel). */
     readonly lateral: number,
+    /** The bot level (shared/botdrive.ts): Normal unless asked (botplay's --level). */
+    readonly level: BotLevel = "normal",
   ) {
-    this.mem = newBotMem(lateral, "normal");
+    this.mem = newBotMem(lateral, level);
   }
 
-  /** Fires rivets and drops mines (Normal); false: drives only. */
+  /** Fires rivets and drops mines (Normal, Hard); false: drives only. */
   get weapons(): boolean {
     return this.mem.weapons;
   }
