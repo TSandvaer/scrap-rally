@@ -196,7 +196,32 @@ export interface TrackQuery {
   ny: number;
   s: number; // distance along the track of the nearest centerline point
   seg: number; // nearest segment index
-  lat: number; // signed lateral offset (M4-SCHEMA): +dist right of travel, -dist left (|lat| = dist)
+  side: number; // M4-SCHEMA: +1 right of travel (or on the centerline), -1 left
+  readonly lat: number; // signed lateral offset (M4-SCHEMA): +dist right of travel, -dist left (|lat| = dist)
+}
+
+/**
+ * nearest()'s result. The side is a small integer (stored unboxed) and lat a getter from it, so the
+ * signed lateral adds one tagged slot per query, not a heap number (M4-SCHEMA review: 24 -> 8 bytes).
+ */
+class Query implements TrackQuery {
+  declare dist: number;
+  declare nx: number;
+  declare ny: number;
+  declare s: number;
+  declare seg: number;
+  declare side: number;
+  constructor(dist: number, nx: number, ny: number, s: number, seg: number, side: number) {
+    this.dist = dist;
+    this.nx = nx;
+    this.ny = ny;
+    this.s = s;
+    this.seg = seg;
+    this.side = side;
+  }
+  get lat(): number {
+    return this.side < 0 ? -this.dist : this.dist;
+  }
 }
 
 // Original layout: long left straight, a sweeping top section, a chicane in the
@@ -575,8 +600,7 @@ function nearest(track: Track, x: number, y: number, from: number, count: number
   }
   const s = cum[bestSeg] + (cum[bestSeg + 1] - cum[bestSeg]) * bestT;
   // The side: the cross product of the segment's direction and the point (+ = right of travel).
-  const lat = (b.x - a.x) * (y - a.y) - (b.y - a.y) * (x - a.x) < 0 ? -dist : dist;
-  return { dist, nx, ny, s, seg: bestSeg, lat };
+  return new Query(dist, nx, ny, s, bestSeg, (b.x - a.x) * (y - a.y) - (b.y - a.y) * (x - a.x) < 0 ? -1 : 1);
 }
 
 /** Nearest point on the whole centerline. Use only when there is no position history. */
@@ -1011,8 +1035,8 @@ function turnOver(track: Track, s0: number, s1: number): number {
  * The structural checks of the M4-SCHEMA features (validateTrack runs them; behavioural checks such
  * as run-ups through water and the bots' lane costs are M4-SURF's):
  * - Ranges: rectangles have s1 > s0 and lat1 > lat0 and stay inside the walls; tyre mounds have
- *   r in TYRES_R_MIN..TYRES_R_MAX; barrels n 1..BARRELS_MAX, whole ticks, |speed| in range, a cycle no
- *   shorter than a crossing and rows that do not overlap; a truck's length in range and its body
+ *   r in TYRES_R_MIN..TYRES_R_MAX; barrels n 1..BARRELS_MAX, whole ticks, |speed| in range, a cycle of
+ *   a crossing plus at least one tick in the gutter, and rows that do not overlap; a truck's length in range and its body
  *   inside the walls; a press's cycle in whole ticks with the warning inside the up time; a belt's
  *   drift 0 < |vx| <= BELT_MAX; a widen at least 2 * WIDEN_TAPER long, left and right >= 0, not both 0.
  *   All off the start zone and inside 0..length (as every feature).
@@ -1021,7 +1045,8 @@ function turnOver(track: Track, s0: number, s1: number): number {
  *   zone, or a ground cell; widens do not overlap each other, a ramp (take-off zone included) or a gap.
  * - Split lanes: an island leaves a lane of at least LANE_MIN either side, at every s it covers.
  * - Widen in a bend (PLAN-M4 advisor change 13): where a widen widens the inside of a bend, the
- *   half-width there stays below the local radius, or nearest() degenerates.
+ *   farthest a car centre goes there (the wall less half a car's width, as physics wallLimit) stays
+ *   below the local radius, or nearest() degenerates.
  * - Solids keep SOLID_CLEAR from every recovery point and from every grid slot.
  * - No water on a take-off zone (a ramp's, or a truck's band) or on a recovery point (a car put back
  *   there would touch it).
@@ -1072,7 +1097,11 @@ function validateSchema(track: Track, errors: string[], zone: (what: string, lo:
     if (!(Number.isInteger(b.n) && b.n >= 1 && b.n <= BARRELS_MAX)) errors.push(`${what}: n ${b.n} is not a whole number 1..${BARRELS_MAX}`);
     if (!(Number.isInteger(b.period) && b.period >= 1)) errors.push(`${what}: period ${b.period} is not a whole number of ticks`);
     if (!(speed >= BARREL_SPEED_MIN && speed <= BARREL_SPEED_MAX)) errors.push(`${what}: speed ${b.speed} outside ${BARREL_SPEED_MIN}..${BARREL_SPEED_MAX} (either way)`);
-    else if (!(b.period >= b.roll)) errors.push(`${what}: period ${b.period} is shorter than a crossing (${f1(b.roll)} ticks)`);
+    // The cycle covers a crossing and at least one tick in the gutter: the last tick of the cycle is
+    // past the far wall (barrelLat's own test), so a barrel never jumps straight from wall to wall.
+    else if (Number.isInteger(b.period) && b.period >= 1 && !(((b.period - 1) * speed) / TICKS_PER_S > b.lat1 - b.lat0)) {
+      errors.push(`${what}: period ${b.period} leaves no tick in the gutter (a crossing takes ${f1(b.roll)} ticks)`);
+    }
     if (!((speed * Math.floor(b.period / b.n)) / TICKS_PER_S >= 2 * BARREL_R)) errors.push(`${what}: the barrels of the row overlap each other (period / n too short)`);
     zone(what, b.s - BARREL_R, b.s + BARREL_R);
     solids.push(box(what, b.s - BARREL_R, b.s + BARREL_R));
@@ -1117,16 +1146,18 @@ function validateSchema(track: Track, errors: string[], zone: (what: string, lo:
     if (!(w.left >= 0 && w.right >= 0 && w.left + w.right > 0)) errors.push(`${what}: left ${w.left} / right ${w.right} must be >= 0 and not both 0`);
     zone(what, w.s0, w.s1);
     widens.push(box(what, w.s0, w.s1));
-    // Advisor change 13: the widened inside of a bend stays inside the bend's radius.
+    // Advisor change 13: on the widened inside of a bend, every car centre stays inside the bend's
+    // radius. A centre goes as far as the wall less half a car (physics wallLimit), verge included.
     for (let i = 0; i < track.pts.length; i++) {
       const s = track.cum[i];
       if (s < w.s0 || s > w.s1) continue;
       const k = curvatureAt(track, i);
       const side = k > 0 ? 1 : -1; // the inside of the bend
       if (k === 0 || widenAt(track, s, side) <= 0) continue;
-      const half = side > 0 ? track.halfR[i] : track.halfL[i];
-      if (!(half < 1 / Math.abs(k))) {
-        errors.push(`${what}: the half-width ${f1(half)} on the inside of the bend at s=${f1(s)} is not below the local radius ${f1(1 / Math.abs(k))} (nearest() degenerates)`);
+      const wall = side > 0 ? track.wallR[i] : track.wallL[i];
+      const reach = wall - CAR_HALF_WID;
+      if (!(reach < 1 / Math.abs(k))) {
+        errors.push(`${what}: a car centre reaches ${f1(reach)} (the wall ${f1(wall)} less half a car) on the inside of the bend at s=${f1(s)}, not below the local radius ${f1(1 / Math.abs(k))} (nearest() degenerates)`);
         break;
       }
     }

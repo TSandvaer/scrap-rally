@@ -9438,12 +9438,23 @@ function schemaValidate(): void {
     ["n 0 is not a whole number 1..6", "n 2.5 is not", "period 240.5 is not a whole number of ticks", "n 7 is not", "speed -39 outside 40..240"],
     schemaErrs([{ k: "barrels", s: 4600, n: 6, period: 900, speed: -40 }]),
   );
-  const roll = (2 * 108 - 2 * BARREL_R) / 110 * TICK_HZ;
+  // A crossing at 110 u/s is 108 ticks (198 units wall to wall): ticks 0..108 are on the road, so a
+  // period of 108 or 109 leaves no tick in the gutter and 110 leaves one; at 97 u/s (122.5 ticks) 123 none, 124 one.
+  const barrelRow = (period: number, speed: number) => schemaErrs([{ k: "barrels", s: 4600, n: 1, period, speed }]);
   rule(
-    "barrels: a cycle no shorter than a crossing, and a row whose barrels do not overlap",
-    schemaErrs([{ k: "barrels", s: 4600, n: 1, period: Math.floor(roll), speed: 110 }]) + schemaErrs([{ k: "barrels", s: 4600, n: 6, period: 53, speed: 120 }]),
-    ["is shorter than a crossing", "the barrels of the row overlap each other"],
-    schemaErrs([{ k: "barrels", s: 4600, n: 1, period: Math.ceil(roll), speed: 110 }]),
+    "barrels: a cycle of a crossing plus at least one tick in the gutter, and a row whose barrels do not overlap",
+    barrelRow(108, 110) + barrelRow(109, 110) + barrelRow(123, 97) + schemaErrs([{ k: "barrels", s: 4600, n: 6, period: 53, speed: 120 }]),
+    ["period 108 leaves no tick in the gutter (a crossing takes 108.0 ticks)", "period 109 leaves no tick in the gutter", "period 123 leaves no tick in the gutter (a crossing takes 122.5 ticks)", "the barrels of the row overlap each other"],
+    barrelRow(110, 110) + barrelRow(124, 97),
+  );
+  const gutter = (period: number, speed: number) => {
+    const b = buildTrack({ ...SCHEMA_LOOP, id: "schema-gutter", features: [{ k: "barrels", s: 4600, n: 1, period, speed }] }).barrels[0];
+    return Array.from({ length: period }, (_, rt) => barrelLat(b, 0, rt)).filter((v) => Number.isNaN(v)).length;
+  };
+  check(
+    "schema validate: the gutter rule is barrelLat's own (the accepted near misses have exactly one gutter tick, the rejected periods none)",
+    gutter(110, 110) === 1 && gutter(124, 97) === 1 && gutter(109, 110) === 0 && gutter(123, 97) === 0,
+    `gutter ticks: 109/110 u/s ${gutter(109, 110)}, 110/110 ${gutter(110, 110)}, 123/97 ${gutter(123, 97)}, 124/97 ${gutter(124, 97)}`,
   );
   rule("a truck's length is 80..160", schemaErrs([{ k: "truck", s: 4600, lat: 0, len: 79 }]) + schemaErrs([{ k: "truck", s: 4600, lat: 0, len: 161 }]), ["length 79 outside 80..160", "length 161 outside"], schemaErrs([{ k: "truck", s: 4600, lat: 0, len: 160 }]));
   rule("a truck's body stays inside the walls", schemaErrs([{ k: "truck", s: 4600, lat: -89, len: 110 }]), "truck at s=4600.0: reaches past the wall", schemaErrs([{ k: "truck", s: 4600, lat: -88, len: 110 }]));
@@ -9496,18 +9507,28 @@ function schemaValidate(): void {
     schemaErrs([{ k: "island", s0: 5900, s1: 6900, lat0: -52, lat1: 28 }], (f) => f.k === "island" && f.s0 === 5900),
   );
 
-  // Advisor change 13: widening the inside of a bend past the local radius. The yard's tightest bend
-  // (a right-hander near s 2950: the inside is the right) has a radius of about 400.
+  // Advisor change 13: widening the inside of a bend so far that a car centre (the wall less half a
+  // car: 64 + 44 - 8 = 100 plus the widen) passes the local radius. The yard's tightest bend (a
+  // right-hander near s 2950: the inside is the right) has a radius of about 400. A widen whose
+  // asphalt stays below the radius but whose verge does not (half 376, wall 420) is rejected too.
   const bend = buildTrack(SCHEMA_LOOP);
   let tight = 0;
   for (let i = 0; i < bend.pts.length; i++) if (Math.abs(curvatureAt(bend, i)) > Math.abs(curvatureAt(bend, tight))) tight = i;
   const radius = 1 / Math.abs(curvatureAt(bend, tight)), sB = bend.cum[tight];
   const inside = (right: number, left: number) => schemaErrs([{ k: "widen", s0: sB - 200, s1: sB + 200, left, right }]);
+  const reachOf = (right: number) => `a car centre reaches ${(64 + right + 44 - CAR_WIDTH / 2).toFixed(1)}`;
+  const verge = Math.floor(radius - 64) - 20, past = Math.ceil(radius - 100) + 1, fits = Math.floor(radius - 100) - 1;
+  const degen = (e: string) => (e.includes("degenerates") ? e : "");
   rule(
-    "widen in a bend (advisor change 13): the inside half-width stays below the local radius; widening the outside is not limited by it",
-    inside(Math.ceil(radius - 64) + 1, 0),
-    ["on the inside of the bend at", "is not below the local radius", "(nearest() degenerates)"],
-    [inside(Math.floor(radius - 64) - 20, 0), inside(0, Math.ceil(radius - 64) + 50)].map((e) => (e.includes("degenerates") ? e : "")).join(""),
+    "widen in a bend (advisor change 13): a car centre on the widened inside (the wall less half a car) stays below the local radius, verge included; the outside is not limited by it",
+    inside(verge, 0) + inside(past, 0),
+    [`${reachOf(verge)} (the wall ${(64 + verge + 44).toFixed(1)} less half a car)`, reachOf(past), "not below the local radius", "(nearest() degenerates)"],
+    degen(inside(fits, 0)) + degen(inside(0, Math.ceil(radius - 64) + 50)),
+  );
+  check(
+    "schema validate: the advisor-13 near misses straddle the radius (a centre reaching just under it passes, just over it fails)",
+    64 + verge < radius && 64 + verge + 44 - 8 > radius && 100 + past > radius && 100 + fits < radius,
+    `radius ${radius.toFixed(1)} at s=${sB.toFixed(1)}; asphalt-only widen ${verge}: half ${64 + verge}, reach ${100 + verge}; ${past}: reach ${100 + past}; passing ${fits}: reach ${100 + fits}`,
   );
 
   // Solids keep 40 from recovery points (3200 here) and the grid's slots.
