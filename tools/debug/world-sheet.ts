@@ -24,7 +24,13 @@
 // - no barrel reaches the border of its picture;
 // - the eight frames of a barrel's turn are eight different pictures, each with the label or
 //   the seam in sight;
-// - what moves on every shipped track and every test track has room on the sheet (obstacleFit).
+// - what moves on every shipped track and every test track has room on the sheet (obstacleFit);
+// - a belt's arrows stay on the belt: Preview Yard's loop with one belt on it, in a sweep of
+//   widths and places across the road, lengths, speeds either way and three places along the
+//   track (a straight, a gentle bend, a tight one), 60 ticks each; every pixel of every arrow
+//   Obstacles.under() draws is put back on the track (queryTrackNear) and must lie inside the
+//   belt's rectangle, for every belt validateTrack accepts (and here for the others too); a
+//   belt with room for an arrow has one in every frame, one without has none.
 // (That nothing of this lies on a shipped track, and what the puddles promise: puddle-probe.ts.)
 
 import { execFile } from "node:child_process";
@@ -39,8 +45,8 @@ import { crc32, deflateSync } from "node:zlib";
 import { FONT_LETTERS, SMALL } from "../../client/gfx/font";
 import { P, PALETTE, rgbOf } from "../../client/gfx/palette";
 import { FX_SHADOW, OBST_H, OBST_W } from "../../client/gfx/sprites";
-import { TEST_TRACKS, testTrack } from "../../shared/testtracks";
-import type { Track } from "../../shared/track";
+import { PREVIEW_YARD, TEST_TRACKS, testTrack } from "../../shared/testtracks";
+import { buildTrack, pointAt, queryTrackNear, validateTrack, type Track } from "../../shared/track";
 import { trackById, trackList } from "../../shared/tracks";
 import { sheetYard } from "./world-sheet/yard";
 
@@ -190,7 +196,79 @@ async function check(): Promise<boolean> {
     const fit = obstacleFit(track);
     say(fit.fits, `${track.def.name}: what moves on it has room on the obstacle sheet (${fit.used} of ${fit.room} pixels; ${track.barrels.length} rows of barrels, ${track.presses.length} presses, ${track.belts.length} belts)`);
   }
+  await belts(say);
   return ok;
+}
+
+/** A belt's arrows stay on the belt: see the top of the file. */
+async function belts(say: (good: boolean, what: string) => void): Promise<void> {
+  const { Obstacles, obstacleIndexSheet, BELT_ARROW_WIDTH, BELT_ARROW_LENGTH } = await import("../../client/gfx/obstacles");
+  const { ZOOM, VIEW_W, VIEW_H } = await import("../../client/gfx/world");
+  // Across the road: the review's five, the contact sheet's, wall to wall, narrow ones, and every width from 10 to 210 at three places.
+  const across: [number, number][] = [[-64, 64], [-64, 40], [-64, 13], [-13, 64], [-64, 3], [-10, 104], [-108, 108], [-108, -40], [20, 50], [-8, 8], [-7, 7], [0, 13], [-5, 5], [30, 31]];
+  for (let w = 10; w <= 210; w += 8) {
+    across.push([-105, -105 + w]);
+    across.push([105 - w, 105]);
+    if (w <= 128) across.push([-w / 2 + 3.3, w / 2 + 3.3]);
+  }
+  const places = [{ name: "a straight", s: 1000 }, { name: "a gentle bend", s: 8800 }, { name: "a tight bend", s: 2780 }];
+  const lengths = [10, 17, 21, 44, 130, 300];
+  // The canvas: it notes where each arrow is drawn (their pictures are the top 24 rows of the sheet).
+  const drawn: number[] = [];
+  const ctx = {
+    globalAlpha: 1, fillStyle: "",
+    fillRect(): void {},
+    putImageData(): void {},
+    getContextAttributes: () => ({}),
+    drawImage(_sheet: unknown, sx: number, sy: number, _w: number, _h: number, dx: number, dy: number): void {
+      if (sy < 24) drawn.push(sx, sy, dx, dy);
+    },
+  } as unknown as CanvasRenderingContext2D;
+  let sheet: Uint8Array | null = null;
+  for (const place of places) {
+    let cases = 0, valid = 0, arrows = 0, outside = 0, outsideValid = 0, worst = 0, missing = 0, unexpected = 0;
+    let worstCase = "";
+    for (const [lat0, lat1] of across) {
+      for (const len of lengths) {
+        for (const vx of [60, -200]) {
+          const s0 = place.s, s1 = place.s + len;
+          const track = buildTrack({ ...PREVIEW_YARD, id: "belt-sweep", features: [{ k: "belt", s0, s1, lat0, lat1, vx }], recovery: [0] });
+          const accepted = validateTrack(track).length === 0;
+          cases++;
+          if (accepted) valid++;
+          sheet ??= obstacleIndexSheet(track);
+          const o = new Obstacles(ctx, track);
+          const mid = pointAt(track, (s0 + s1) / 2), lat = (lat0 + lat1) / 2;
+          const ox = Math.round((mid.x - Math.sin(mid.h) * lat) * ZOOM - VIEW_W / 2), oy = Math.round((mid.y + Math.cos(mid.h) * lat) * ZOOM - VIEW_H / 2);
+          const room = lat1 - lat0 >= BELT_ARROW_WIDTH && len >= BELT_ARROW_LENGTH;
+          for (let tick = 0; tick < 60; tick++) {
+            drawn.length = 0;
+            o.under(tick, ox, oy);
+            arrows += drawn.length / 4;
+            if (room && !drawn.length) missing++;
+            if (!room && drawn.length) unexpected++;
+            for (let k = 0; k < drawn.length; k += 4) {
+              for (let j = 0; j < 12; j++) {
+                for (let i = 0; i < 12; i++) {
+                  if (!sheet![(drawn[k + 1] + j) * OBST_W + drawn[k] + i]) continue;
+                  const q = queryTrackNear(track, (ox + drawn[k + 2] + i + 0.5) / ZOOM, (oy + drawn[k + 3] + j + 0.5) / ZOOM, mid.seg);
+                  const out = Math.max(s0 - q.s, q.s - s1, lat0 - q.lat, q.lat - lat1);
+                  if (out <= 0) continue;
+                  outside++;
+                  if (accepted) outsideValid++;
+                  if (out > worst) {
+                    worst = out;
+                    worstCase = `lat ${lat0}..${lat1}, ${len} long, vx ${vx}, tick ${tick}${accepted ? "" : " (not a belt validateTrack accepts)"}`;
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+    say(outside === 0 && missing === 0 && unexpected === 0, `belts on ${place.name} (s ${place.s}): ${cases} belts (${valid} of them accepted by validateTrack), 60 ticks each, ${arrows} arrows drawn: ${outside} arrow pixels outside their belt (${outsideValid} on accepted belts)${outside ? `, the worst ${worst.toFixed(1)} units out: ${worstCase}` : ""}; ${missing} frames without an arrow on a belt with room for one, ${unexpected} with one on a belt without`);
+  }
 }
 
 // ---- the contact sheet (headless Chrome) -----------------------------------------------------

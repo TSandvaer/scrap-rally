@@ -635,10 +635,16 @@ export class Actors {
           F[QX] = c.x;
           F[QY] = c.y;
           let seg = this.seg[s] < 0 ? nearTrack(track, 0, track.pts.length) : nearTrack(track, this.seg[s] - 6, 13);
+          // A widened road: the distance from where its edge would be without the widening. Before
+          // the test below: the outer verge of a widened road lies further from the centreline than
+          // a plain road's wall, and a car there is where it was (tools/debug/verge-scan.ts).
+          if (this.wide) widened(track, seg);
           // Not where it was (put back on the track elsewhere): look everywhere, once.
-          if (F[QDIST] > track.wall + 30) seg = nearTrack(track, 0, track.pts.length);
+          if (F[QDIST] > track.wall + 30) {
+            seg = nearTrack(track, 0, track.pts.length);
+            if (this.wide) widened(track, seg);
+          }
           this.seg[s] = seg;
-          if (this.wide) widened(track, seg); // a widened road: the distance from where its edge would be without the widening
           if (F[QDIST] > track.def.halfWidth + 2 && F[QDIST] < track.wall + 30) {
             this.owed[s] += moved;
             if (this.owed[s] >= DUST_EVERY) {

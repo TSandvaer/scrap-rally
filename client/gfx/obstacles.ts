@@ -48,11 +48,18 @@ const SLAB_PAD = 6; // air round a slab in its picture: its outline's and its sh
 const BARREL_HALF = 7.5;
 /** Frames a world unit rolled: ROLL frames a turn of 2 * pi * BARREL_R. */
 const ROLL_K = ROLL / (2 * Math.PI * BARREL_R);
-// A belt's arrows: a row of them every ARROW_ROWS units along the road, ARROW_PITCH apart
-// across it, every second row half a pitch on; they keep ARROW_EDGE off the rollers.
+// A belt's arrows: a row of them every ARROW_ROWS units along the road, about ARROW_PITCH apart
+// across it, every second row half a pitch on. An arrow's middle keeps ARROW_EDGE off the
+// belt's two rollers, and its run across the belt ends there: it wraps over exactly the room
+// between the two edges, whatever the belt's width, so no arrow is ever drawn past the belt
+// (tools/debug/world-sheet.ts --check sweeps the widths). A belt with less than a pitch of
+// that room has one arrow a row standing in its middle, and one narrower than BELT_ARROW_WIDTH
+// or shorter than BELT_ARROW_LENGTH has none: an arrow would not fit on it.
 const ARROW_ROWS = 36;
 const ARROW_PITCH = 28;
 const ARROW_EDGE = 9;
+export const BELT_ARROW_WIDTH = 14;
+export const BELT_ARROW_LENGTH = 20;
 /** For this many ticks after a press has gone up its shadow is still seen leaving. */
 const LIFT = 10;
 // A press's shadow lies as far from its bed as a car's from the car, by the slab's height
@@ -95,7 +102,9 @@ interface Band {
   ny: Float64Array;
   head: Uint8Array;
   l0: number; // the arrows run from here across the road (world units) ...
-  count: number; // ... `count` of them a row, ARROW_PITCH apart, wrapping after count * ARROW_PITCH
+  count: number; // ... `count` of them a row (0: the belt is too small for one), `pitch` apart ...
+  pitch: number;
+  cycle: number; // ... and wrap after this much: the room between the two edges (0: they stand)
   vx: number;
   cx: number; // its middle and its reach, view pixels
   cy: number;
@@ -164,10 +173,15 @@ function layOut(track: Track): Movers | null {
     set.gates.push({ p, x: Math.round((p.x + p.nx * mid) * ZOOM), y: Math.round((p.y + p.ny * mid) * ZOOM), w, h, ax: at.x, ay: at.y, lamps });
   }
   for (const b of track.belts) {
-    const rows = Math.max(1, Math.round((b.s1 - b.s0 - 12) / ARROW_ROWS));
+    const width = b.lat1 - b.lat0, room = width - 2 * ARROW_EDGE; // the room an arrow's middle has to run in
+    const fits = width >= BELT_ARROW_WIDTH && b.s1 - b.s0 >= BELT_ARROW_LENGTH;
+    const rows = fits ? Math.max(1, Math.round((b.s1 - b.s0 - 12) / ARROW_ROWS)) : 0;
+    // The arrows of a row share the room out evenly and wrap at its end; with less than a pitch of it, one stands in the belt's middle.
+    const runs = room >= ARROW_PITCH;
+    const count = !fits ? 0 : runs ? Math.max(1, Math.round(room / ARROW_PITCH)) : 1;
     const band: Band = {
       rows, x: new Float64Array(rows), y: new Float64Array(rows), nx: new Float64Array(rows), ny: new Float64Array(rows), head: new Uint8Array(rows),
-      l0: b.lat0 + ARROW_EDGE, count: Math.max(1, Math.floor((b.lat1 - b.lat0 - 2 * ARROW_EDGE) / ARROW_PITCH) + 1), vx: b.vx, cx: 0, cy: 0, reach: 0,
+      l0: runs ? b.lat0 + ARROW_EDGE : (b.lat0 + b.lat1) / 2, count, pitch: runs ? room / count : 0, cycle: runs ? room : 0, vx: b.vx, cx: 0, cy: 0, reach: 0,
     };
     const way = b.vx < 0 ? -1 : 1;
     for (let r = 0; r < rows; r++) {
@@ -358,16 +372,20 @@ export class Obstacles {
     for (let q = 0; q < bands.length; q++) {
       const b = bands[q];
       if (b.cx - ox < -b.reach || b.cy - oy < -b.reach || b.cx - ox > VIEW_W + b.reach || b.cy - oy > VIEW_H + b.reach) continue;
-      const cycle = b.count * ARROW_PITCH;
+      const cycle = b.cycle, pitch = b.pitch;
       // How far the belt has run, within a cycle of its arrows (the belt's speed is per second, 60 ticks).
-      let run = ((tick * b.vx) / 60) % cycle;
-      if (run < 0) run += cycle;
+      let run = 0;
+      if (cycle > 0) {
+        run = ((tick * b.vx) / 60) % cycle;
+        if (run < 0) run += cycle;
+      }
       for (let r = 0; r < b.rows; r++) {
         const head = b.head[r];
         const sx = (head % ARROW_COLS) * ARROW, sy = ((head / ARROW_COLS) | 0) * ARROW;
-        const from = r & 1 ? run + ARROW_PITCH / 2 : run;
+        const from = r & 1 ? run + pitch / 2 : run;
         for (let j = 0; j < b.count; j++) {
-          let at = from + j * ARROW_PITCH;
+          // Within the room between the edges: an arrow that reaches its end starts again at the other.
+          let at = from + j * pitch;
           if (at >= cycle) at -= cycle;
           const lat = b.l0 + at;
           const x = Math.round(b.x[r] + b.nx[r] * lat) - ox, y = Math.round(b.y[r] + b.ny[r] * lat) - oy;

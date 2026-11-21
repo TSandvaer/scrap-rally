@@ -495,7 +495,8 @@ export const FX_SPARK = 8; // SPARK_KINDS x SPARK_FRAMES
 export const FX_MINE = 32; // armed and lit, armed and dark, not armed
 export const FX_PUFF = 35; // three puffs, young to old
 
-// A pixel of the effect sheet: 0 = nothing, 1..32 = palette entry + 1, 33 = cast shadow.
+// A pixel of the effect sheet: 0 = nothing, 1.. = palette entry + 1 (1..32 the palette's 32, 33
+// `water`, which no sprite uses), FX_SHADOW (the one after the last entry: 34) = cast shadow.
 export const FX_SHADOW = PALETTE.length + 1;
 /** The cast shadow's black, as the cars' (today's 38%). */
 export const SHADOW_ALPHA = 0.38;
@@ -733,7 +734,7 @@ function flameTone(u: number, v: number, j: number, x: number, y: number): Palet
   return t > 0.86 ? "rust2" : "rust3";
 }
 
-/** The catch-up sheet as indices (0 = nothing, 1..32 = palette entry + 1, 33 = cast shadow), CATCH_W x CATCH_H. */
+/** The catch-up sheet as indices (0 = nothing, 1.. = palette entry + 1, FX_SHADOW = cast shadow), CATCH_W x CATCH_H. */
 export function catchIndexSheet(): Uint8Array {
   const sheet = new Uint8Array(CATCH_W * CATCH_H);
   let ox = 0;
