@@ -1,9 +1,11 @@
 // Race progress: laps and checkpoints, detected as forward crossings between the car's
 // previous and current distance along the track. Server-only; the client just displays
-// what the snapshots say.
+// what the snapshots say. BR-PHYS (PLAN-BRANCH 2.4): the distance is the main road's s, on a
+// branch its mapS (shared/track.ts mainS): continuous and increasing from the fork to the merge,
+// so a car on a shortcut crosses every checkpoint inside it, in order. q.s itself without branches.
 
 import type { CarState } from "../shared/physics";
-import { queryTrackNear, type Track } from "../shared/track";
+import { mainS, queryTrackNear, type Track } from "../shared/track";
 
 export interface Progress {
   s: number; // distance along the track at the last update
@@ -13,7 +15,7 @@ export interface Progress {
 }
 
 export function newProgress(track: Track, car: CarState): Progress {
-  return { s: queryTrackNear(track, car.x, car.y, car.seg).s, cp: 0, lap: 0, fin: 0 };
+  return { s: mainS(track, queryTrackNear(track, car.x, car.y, car.seg)), cp: 0, lap: 0, fin: 0 };
 }
 
 /** Forward distance from a to b around the loop, in [0, L). */
@@ -28,7 +30,7 @@ function ahead(a: number, b: number, L: number): number {
  */
 export function advance(track: Track, p: Progress, car: CarState): boolean {
   const L = track.length;
-  const s1 = queryTrackNear(track, car.x, car.y, car.seg).s;
+  const s1 = mainS(track, queryTrackNear(track, car.x, car.y, car.seg));
   let d = s1 - p.s;
   if (d > L / 2) d -= L;
   else if (d < -L / 2) d += L;

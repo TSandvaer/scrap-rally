@@ -24,7 +24,7 @@ import { cleanBotTune, type BotLevel, type BotTune } from "../shared/botdrive";
 import { DEFAULT_CAR, isCarType, type CarType } from "../shared/cars";
 import { statsFor, type Levels } from "../shared/shop";
 import { BUILTIN_SOUND, DEFAULT_SONG_ID, isSongChoice, type RoomSound } from "../shared/sound";
-import { queryTrackNear, type Track } from "../shared/track";
+import { queryTrackNear, roadOf, type Track } from "../shared/track";
 import { DEFAULT_TRACK_ID, findTrack, trackById } from "../shared/tracks";
 import { testTrack } from "../shared/testtracks";
 import {
@@ -101,7 +101,9 @@ export const WALL_HIT_MIN = 50; // units/s into the wall for a wall-hit cue
  */
 export function wallHitSpeed(before: { vx: number; vy: number }, after: CarState, track: Track): number {
   const q = queryTrackNear(track, after.x, after.y, after.seg);
-  const isles = track.islandsAt[q.seg];
+  // BR-PHYS: the road the car is on (the nearer one in a mouth), as collideWalls takes it.
+  const road = q.road === 0 ? track : roadOf(track, q.road);
+  const isles = road.islandsAt[q.seg];
   if (isles !== undefined && isles.length > 0) {
     for (const isle of isles) {
       if (q.s < isle.s0 + NOSE_MID || q.s > isle.s1 - NOSE_MID) continue;
@@ -112,7 +114,7 @@ export function wallHitSpeed(before: { vx: number; vy: number }, after: CarState
       return Math.max(0, at < 0 ? before.vx * rx + before.vy * ry : -(before.vx * rx + before.vy * ry));
     }
   }
-  if (q.dist < wallLimit(track, q) - 0.01) return 0;
+  if (q.dist < wallLimit(road, q) - 0.01) return 0;
   return Math.max(0, before.vx * q.nx + before.vy * q.ny);
 }
 
