@@ -428,7 +428,7 @@ plain road and the shortest gap between two obstacle groups, and the user judges
 is 700 units, s 6050-6750). Binding for M4-TRACKS: no dirt/mud stretch longer than ~350 units (a lane of dirt in a split counts);
 report each one's length per track; the user judges at the taste gate.
 
-## Addendum 2026-11-22: HARD-2, Hard bots make human mistakes + a dev tuning knob — PENDING (Fable review, then the user's approval)
+## Addendum 2026-11-22: HARD-2, Hard bots make human mistakes + a dev tuning knob — APPROVED by the user 2026-11-22 (with the advisor changes below)
 
 **Why.** User 2026-11-22, racing the Hard bots: "the hard bots are a bit too hard, they drive perfect!" (Hard today: 40-55 % of the gap
 between Normal's lap and flat-out, a clean apex line, rivets about 3 in 4; shared/botdrive.ts:110 `HARD`). This is the second round of
