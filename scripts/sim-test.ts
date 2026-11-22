@@ -13578,7 +13578,7 @@ function brMaps(): void {
     for (let i = 1; i < b.mapS.length; i++) inc &&= b.mapS[i] > b.mapS[i - 1];
     for (let i = 0; i < r.pts.length; i++) {
       const u = r.cum[i];
-      const q = queryTrackNear(t, r.pts[i].x, r.pts[i].y, hint);
+      const q = brT.queryMain(t, r.pts[i].x, r.pts[i].y, hint); // the main road's projection (BR-PHYS: queryTrackNear now cross-searches a mouth)
       hint = q.seg;
       if (u <= fg.u && i > 0) proj = Math.max(proj, Math.abs(b.mapS[i] - q.s));
       else if (u > fg.u && u < mg.u) lin = Math.max(lin, Math.abs(b.mapS[i] - (fg.s + ((u - fg.u) * (mg.s - fg.s)) / (mg.u - fg.u))));
@@ -13606,7 +13606,7 @@ function brMaps(): void {
     }
     for (let u = 1; r.cum[pointAt(r, u).seg + 1] <= b.forkGore!.u; u += 7) {
       const p = pointAt(r, u);
-      const qb = queryTrackNear(r, p.x, p.y, p.seg), qm = queryTrackNear(t, p.x, p.y, pointAt(t, b.s0 + u).seg);
+      const qb = queryTrackNear(r, p.x, p.y, p.seg), qm = brT.queryMain(t, p.x, p.y, pointAt(t, b.s0 + u).seg); // the main road's own (BR-PHYS: queryMain)
       worst = Math.max(worst, Math.abs(brT.mainS(t, qb) - qm.s));
       mainSame &&= brT.mainS(t, qm) === qm.s;
       steps++;
@@ -14958,6 +14958,774 @@ for (const t of [thTypes, thLists, thRules, thYards, thShipped]) {
     t();
   } catch (e) {
     check(`${t.name} threw`, false, String(e));
+  }
+}
+
+// ---- branch roads drive (BR-PHYS, PLAN-BRANCH.md 2.2-2.5, 2.8, 2.9, advisor changes 1-5, 8, 9, user decision 6; ClickUp 123jpnbfgha, 2026-11-22) ----
+// Cars drive, collide, progress, fall, recover, respawn and shoot on branch roads, server and client alike;
+// the server bots keep the main road (BR-BOTS gives them routes). A scripted driver (tools/debug/branch-walls.ts
+// RouteDriver) takes the shortcuts.
+
+// This section's imports (hoisted like the ones at the top).
+import * as bpT from "../shared/track";
+import * as bpW from "../shared/weapons";
+import * as bpRace from "../server/race";
+import { branchWalls as bpBranchWalls, RouteDriver as BpRoute } from "../tools/debug/branch-walls";
+import { wallHitSpeed as bpWallHitSpeed } from "../client/game";
+import { touchesMound as bpTouchesMound } from "../tools/debug/surf-tune";
+import { moveContact as bpMoveContact } from "../tools/debug/move-tune";
+import { BRANCH_YARD as BP_YARD } from "../shared/testtracks";
+import { CAR_TYPES as BP_TYPES } from "../shared/cars";
+import { statsFor as bpStatsFor } from "../shared/shop";
+import { botCar as bpBotCar, botStep as bpBotStep, botTiming as bpBotTiming, newBotSeat as bpNewSeat } from "../server/bots";
+import { collideCars as bpCollideCars } from "../shared/physics";
+import { createHash as bpHash } from "node:crypto";
+
+const bpClock = { t0: 0 };
+const bpF = (v: number) => v.toFixed(1);
+const bpYard = () => testTrack(BP_YARD.id)!;
+/** Branch Yard's three branches as declared. */
+const bpDefs = () => BP_YARD.features!.filter((f): f is bpT.Branch => f.k === "branch");
+/** Branch Yard with branch k (0-based) given these features (and recovery points), the others as declared. */
+const bpWith = (k: number, features: bpT.RoadFeature[], recovery?: number[], id = "bp-test") =>
+  buildTrack({ ...BP_YARD, id, features: bpDefs().map((b, i) => (i === k ? { ...b, features, ...(recovery ? { recovery } : {}) } : b)) });
+/** A car at s (u on a branch), lat on road `road` of t (0 = the main road), heading along it (+ dh), at speed v along its heading; its seg global. */
+function bpCar(t: Track, road: number, s: number, lat = 0, v = 0, dh = 0): CarState {
+  const r = bpT.roadOf(t, road), p = pointAt(r, s), h = p.h + dh;
+  return {
+    x: p.x - Math.sin(p.h) * lat, y: p.y + Math.cos(p.h) * lat, h, vx: Math.cos(h) * v, vy: Math.sin(h) * v,
+    seg: road === 0 ? p.seg : t.branches[road - 1].base + p.seg, wreck: 0, air: 0, fall: 0, boost: 0,
+  };
+}
+const bpQ = (t: Track, c: { x: number; y: number; seg: number }) => queryTrackNear(t, c.x, c.y, c.seg);
+/** How far inside road r's car-centre limit (its wall there less half a car) a point is (its own nearest point, the whole road). */
+function bpInside(r: Track, x: number, y: number): number {
+  const q = queryTrack(r, x, y);
+  return bpT.halfOn(r, q.seg, q.s, q.side) + r.def.verge - 8 - q.dist;
+}
+const BP_KEYS = ["x", "y", "h", "vx", "vy", "seg", "wreck", "air", "fall", "boost"] as const;
+const bpSame = (a: CarState, b: CarState) => BP_KEYS.every((k) => Object.is(a[k], b[k]));
+
+function bpQuery(): void {
+  bpClock.t0 = performance.now();
+  const t = bpYard(), n = t.pts.length;
+  // Criterion 1: no new netcode field; the global segment is CarState.seg.
+  const keys = Object.keys(cloneCar(bpCar(t, 2, 1000))).join(",");
+  check("branch drive: CarState and cloneCar carry no new field (the global segment is CarState.seg itself)", keys === BP_KEYS.join(","), keys);
+  // Without branches queryTrackNear is the window round the hint, as before (byte for byte: schema-hash, bpShipped);
+  // queryMain (the bots' main-road query) is the same there.
+  let same = 0, differ = 0;
+  for (const id of brShippedIds) {
+    const s = trackById(id);
+    for (let i = 0; i < s.pts.length; i += 2) {
+      for (const [dx, dy] of [[31.7, -12.2], [-90.1, 44.3], [3.3, 170.9]]) {
+        const x = s.pts[i].x + dx, y = s.pts[i].y + dy;
+        for (const h of [i, (i + 9) % s.pts.length]) {
+          const a = queryTrackNear(s, x, y, h), b = bpT.queryMain(s, x, y, h);
+          if (a.dist === b.dist && a.s === b.s && a.seg === b.seg && a.nx === b.nx && a.ny === b.ny && a.side === b.side && a.road === 0 && b.road === 0) same++;
+          else differ++;
+        }
+      }
+    }
+  }
+  check("branch query: on the shipped tracks queryTrackNear and queryMain give the same query (road 0) at every probe", differ === 0 && same > 1000, `${same} same, ${differ} differ`);
+  // On Branch Yard: the hint's road, its window clamped on a branch; the other road in a mouth; a tie to the
+  // hint's road; queryRoads with a hint is queryTrackNear exactly.
+  const b = t.branches[1], r = b.road, m = bpT.segCount(r), fg = b.forkGore!;
+  const midSeg = m >> 1, midP = pointAt(r, (r.cum[midSeg] + r.cum[midSeg + 1]) / 2);
+  const qMid = queryTrackNear(t, midP.x + 5, midP.y - 3, b.base + midSeg);
+  const fork = r.pts[0];
+  const qWrap = queryTrackNear(t, fork.x, fork.y, b.base + m - 1); // the branch's last segment: never wraps to its first
+  const inMouth = pointAt(r, fg.u - 120), mainBeside = pointAt(t, b.mapS[pointAt(r, fg.u - 120).seg]);
+  const qCrossB = queryTrackNear(t, inMouth.x, inMouth.y, mainBeside.seg); // a main hint, on the branch's centreline
+  const qCrossM = queryTrackNear(t, mainBeside.x, mainBeside.y, b.base + inMouth.seg); // a branch hint, on the main centreline
+  const qTieM = queryTrackNear(t, fork.x, fork.y, pointAt(t, b.s0).seg), qTieB = queryTrackNear(t, fork.x, fork.y, b.base);
+  let hinted = 0, unequal = 0;
+  for (const bb of t.branches) {
+    for (let u = 0; u <= bb.road.length; u += 23.7) {
+      const p = pointAt(bb.road, u);
+      for (let lat = -230; lat <= 230; lat += 23) {
+        const x = p.x - Math.sin(p.h) * lat, y = p.y + Math.cos(p.h) * lat;
+        for (const h of [bb.base + p.seg, pointAt(t, bb.mapS[p.seg]).seg, bb.base + Math.max(0, p.seg - 3)]) {
+          const a = queryTrackNear(t, x, y, h), c = bpT.queryRoads(t, x, y, h), a2 = queryTrackNear(t, x, y, h);
+          hinted++;
+          if (!(a.dist === c.dist && a.s === c.s && a.seg === c.seg && a.road === c.road && a.side === c.side && a2.dist === a.dist && a2.road === a.road && a2.seg === a.seg)) unequal++;
+        }
+      }
+    }
+  }
+  check(
+    "branch query: a branch hint searches its branch (TrackQuery.road = 2, seg on it) round the hint, clamped at the branch's ends (from its last segment the fork point, its first, is not found: the window never wraps; the merge's main road beside it is searched); in a mouth the other road too, the nearer centreline winning; on an exact tie (the fork point) the hint's road; queryRoads with a hint is queryTrackNear, and a repeat the same (deterministic)",
+    qMid.road === 2 && Math.abs(qMid.seg - midSeg) <= 1 && qMid.dist < 10 && (qWrap.road !== 2 || qWrap.seg >= m - 1 - bpT.LOCAL_WINDOW) && qWrap.dist > 1000 &&
+      qCrossB.road === 2 && qCrossB.dist < 1e-6 && qCrossM.road === 0 && qCrossM.dist < 1e-6 && qTieM.road === 0 && qTieB.road === 2 && qTieM.dist === qTieB.dist && unequal === 0 && hinted > 5000,
+    `middle: road ${qMid.road} seg ${qMid.seg} (hint ${midSeg}); fork point from the last segment: road ${qWrap.road} seg ${qWrap.seg} of ${m}, ${bpF(qWrap.dist)} away; mouth: main hint -> road ${qCrossB.road}, branch hint -> road ${qCrossM.road}; tie: ${qTieM.road} / ${qTieB.road}; ${hinted} hinted queries, ${unequal} differ from queryRoads or a repeat`,
+  );
+  // Every hint store writes the global segment: stepCar (and its wall pass), a flight, a rivet (spawnShot copies it).
+  const drive = bpCar(t, 2, 1700, 0, 300);
+  stepCar(drive, { throttle: 1, steer: 0.1 }, BASE_STATS, t);
+  const qd = bpQ(t, drive);
+  const fly = bpCar(t, 2, 1150 + 80 + 2, 0, 420);
+  const evs: string[] = [], flySegs: number[] = [];
+  for (let k = 0; k < 40; k++) {
+    evs.push(stepRaceCar(fly, NO_COMMAND, BASE_STATS, raceEnv(t)) ?? "-");
+    if (fly.air > 0) flySegs.push(fly.seg);
+  }
+  const shot = bpW.spawnShot(drive, 1, "x"), shotSegs: number[] = [];
+  for (let k = 0; k < 12 && bpW.moveShot(shot, t, 0); k++) shotSegs.push(shot.seg);
+  check(
+    "branch hint stores: stepCar on a branch stores the global segment (base + the road's segment, >= n); a flight off the branch's ramp stores it every air tick; a rivet fired there starts with the car's and moveShot keeps it global",
+    drive.seg === bpT.globalSeg(t, qd) && drive.seg >= n && bpT.roadOfSeg(t, drive.seg) === 2 && qd.road === 2 &&
+      evs[0] === "takeoff" && flySegs.length > 10 && flySegs.every((g) => g >= b.base && g < b.base + m) && !evs.includes("fall") &&
+      shotSegs.length > 5 && shotSegs.every((g) => bpT.roadOfSeg(t, g) === 2),
+    `drive seg ${drive.seg} (road ${qd.road} seg ${qd.seg}, base ${b.base}); flight ${evs.filter((e) => e !== "-").join(",")} over ${flySegs.length} air ticks, segs ${flySegs[0]}..${flySegs[flySegs.length - 1]}; rivet segs ${shotSegs.join(",")}`,
+  );
+  // Hint readers beyond physics: the client's wall cue against a branch wall, surf-tune's mound probe at a gore's nose (on the branch).
+  const wall = bpCar(t, 1, 1700, 40, 320, 0.6);
+  let cue = 0;
+  for (let k = 0; k < 45; k++) {
+    const before = { vx: wall.vx, vy: wall.vy };
+    stepRaceCar(wall, { throttle: 1, steer: 0 }, BASE_STATS, raceEnv(t));
+    cue = Math.max(cue, bpWallHitSpeed(before, wall, t));
+  }
+  const nb = t.branches[0].forkGore!.noseBranch;
+  const nose = bpCar(t, 1, nb.s - 70, nb.lat + 20, 200);
+  let touch = 0, noseSeg = -1;
+  for (let k = 0; k < 40; k++) {
+    stepRaceCar(nose, NO_COMMAND, BASE_STATS, raceEnv(t));
+    if (bpTouchesMound(t, nose)) {
+      touch++;
+      noseSeg = nose.seg;
+    }
+  }
+  check(
+    "branch hint readers: the client's wall cue (wallHitSpeed) hears a car driven into a branch's wall; tools/debug/surf-tune.ts touchesMound sees a car on the branch against its fork gore's nose (the global segment's bucket)",
+    cue >= WALL_HIT_MIN && bpT.roadOfSeg(t, wall.seg) === 1 && touch > 0 && bpT.roadOfSeg(t, noseSeg) === 1,
+    `wall cue ${bpF(cue)} u/s on road ${bpT.roadOfSeg(t, wall.seg)}; nose touched ${touch} ticks (seg ${noseSeg})`,
+  );
+}
+
+function bpWallsCheck(): void {
+  // Criterion 2: round every mouth, the physics walls are the union of the two corridors and the bake's rule.
+  const t = bpYard();
+  const w = bpBranchWalls(t, 4);
+  console.log(`  ${w.mouths.join("\n  ")}`);
+  check(
+    "branch walls (tools/debug/branch-walls.ts): round every mouth of Branch Yard, from BRANCH_GUIDE before each fork to 12 segments past each gore on both roads (and back from each merge), a car standing at a point is pushed exactly when the point is outside both corridors (car-centre limits), for every hint a car there can carry; the bake's rule (queryRoads, no hint) gives the same verdict; queryTrackNear finds queryRoads' road and distance where a car can be; a pushed car ends on the union's edge",
+    w.pushWrong + w.bakeWrong + w.roadWrong + w.landWrong === 0 && w.checks > 1e6 && w.pushed > 1e5 && w.free > 1e5,
+    `${w.points} points, ${w.checks} point-hint pairs: ${w.pushed} pushed, ${w.free} free, ${w.nose} at a nose, ${w.edge} on the edge; disagree: union ${w.pushWrong}, bake ${w.bakeWrong}, road ${w.roadWrong}, landing ${w.landWrong} (${w.far} lost-ground readings)`,
+  );
+  // Driven (as schema-hash's walls): cars into both walls round every mouth at a spread of angles and speeds;
+  // after every driving step the car's centre is inside the union, and the client's wall cue hears the walls.
+  let runs = 0, steps = 0, out = 0, worst = 0, cues = 0, onBranch = 0;
+  for (const b of t.branches) {
+    const r = b.road;
+    for (const g of [b.forkGore!, b.mergeGore!]) {
+      for (const [road, s0, s1] of [[b.road.roadNo, Math.max(0, g.u - 300), Math.min(r.length, g.u + 300)], [0, g.s - 300, g.s + 300]] as const) {
+        for (let s = s0; s <= s1; s += 40) {
+          for (const side of [-1, 1]) {
+            for (const [lat, dh, v] of [[0, 0.35, 430], [0, 0.9, 260], [side * 60, 0.5, 380], [side * 90, 0.15, 400]] as const) {
+              const c = bpCar(t, road, s, lat, v, side * dh);
+              runs++;
+              for (let k = 0; k < 45; k++) {
+                const before = { vx: c.vx, vy: c.vy };
+                stepRaceCar(c, { throttle: 1, steer: 0 }, BASE_STATS, raceEnv(t, k + 1));
+                if (c.air || c.fall || c.wreck) break;
+                steps++;
+                const inside = Math.max(bpInside(t, c.x, c.y), bpInside(r, c.x, c.y));
+                if (inside < -1e-6) {
+                  out++;
+                  worst = Math.min(worst, inside);
+                }
+                if (bpWallHitSpeed(before, c, t) > 0) cues++;
+                if (c.seg >= t.pts.length) onBranch++;
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  check(
+    "branch walls driven: cars driven into both walls round every mouth (both roads, 300 either side of each gore, four angles and speeds) never leave the union of the corridors after a driving step, and the client's wall cue hears the walls",
+    out === 0 && steps > 20000 && cues > 1000 && onBranch > 5000,
+    `${runs} runs, ${steps} driving steps (${onBranch} on a branch), ${out} outside the union (worst ${worst.toFixed(4)}), ${cues} wall cues`,
+  );
+}
+
+/**
+ * One car in a Room on Branch Yard (the dev flag set for the run) driven by the route driver taking
+ * `take`, `laps` laps: the progress transitions (lap.cp, in order), ticks on a branch, falls, the largest
+ * move of progress.s in one tick, finish time. Optionally a second car (route `take2`) racing beside it.
+ */
+function bpRoomRun(take: number[], laps = 2, take2?: number[]): {
+  seq: string[]; onBranch: number; falls: number; maxDs: number; fin: number; ticks: number; mainSOk: boolean;
+  rdChecks: number; rdBad: number; apart: number; leadSwaps: number; fin2: number;
+} {
+  return withDevTrack(BP_YARD.id, () => {
+    const sim = new Sim(laps);
+    const host = sim.add("Host");
+    if (sim.room.setTrack(host, BP_YARD.id)) throw new Error("Branch Yard refused");
+    const other = take2 ? sim.add("Other") : null;
+    const t = sim.room.track;
+    const drv = new BpRoute(t, take), drv2 = take2 ? new BpRoute(t, take2, 0) : null;
+    const cmd = (p: Player): Ctl => (p.car ? (p === host ? drv.controls(p.car) : drv2!.controls(p.car)) : {});
+    sim.readyAll(host);
+    if (sim.room.start(host, sim.now)) throw new Error("start");
+    while (sim.room.phase !== "racing") sim.run(1, cmd);
+    const seq: string[] = [];
+    let onBranch = 0, falls = 0, maxDs = 0, ticks = 0, mainSOk = true, rdChecks = 0, rdBad = 0, apart = 0, leadSwaps = 0, lead = "";
+    let cp = 0, lap = 0, lastS = host.progress!.s;
+    while (sim.room.phase === "racing" && ticks < 60 * 60 * laps && !(host.progress!.fin && (!other || other.progress!.fin))) {
+      sim.run(1, cmd);
+      ticks++;
+      const c = host.car!, p = host.progress!;
+      if (c.seg >= t.pts.length) onBranch++;
+      if (c.fall === FALL_TICKS) falls++;
+      if (c.fall === 0 && !p.fin) {
+        let d = Math.abs(p.s - lastS);
+        if (d > t.length / 2) d = t.length - d;
+        maxDs = Math.max(maxDs, d);
+        // The progress is mainS of the car's own query (an independent read of its pose).
+        if (!Object.is(p.s, bpT.mainS(t, bpQ(t, c)))) mainSOk = false;
+      }
+      lastS = p.s;
+      if (p.cp !== cp || p.lap !== lap) {
+        seq.push(`${p.lap}.${p.cp}`);
+        cp = p.cp;
+        lap = p.lap;
+      }
+      if (other && other.car && !p.fin && !other.progress!.fin) {
+        // Two cars on different roads: rd from each one's mainS, and the standing the room's rule gives.
+        const ra = bpRace.raceDistance(t, p), rb = bpRace.raceDistance(t, other.progress!);
+        const roadA = bpT.roadOfSeg(t, c.seg), roadB = bpT.roadOfSeg(t, other.car.seg);
+        if (roadA !== roadB) apart++;
+        rdChecks++;
+        const exp = (q: { lap: number; cp: number }, s: number) => q.lap * t.length + (q.cp === 0 && s > t.length / 2 ? s - t.length : s);
+        if (ra !== exp(p, bpT.mainS(t, bpQ(t, c))) && c.fall === 0) rdBad++;
+        const now = ra > rb ? "Host" : "Other";
+        if (lead && now !== lead) leadSwaps++;
+        lead = now;
+      }
+    }
+    return { seq, onBranch, falls, maxDs, fin: host.progress!.fin, ticks, mainSOk, rdChecks, rdBad, apart, leadSwaps, fin2: other?.progress?.fin ?? 0 };
+  });
+}
+
+function bpProgress(): void {
+  // Criterion 3: the same checkpoint / lap sequence through each branch as on the main road; none skipped.
+  const t = bpYard();
+  const cps = t.checkpoints.map((s) => {
+    const k = t.branches.findIndex((b) => s > b.s0 && s < b.s1);
+    return k < 0 ? `${bpF(s)} (main road)` : `${bpF(s)} (beside branch ${k + 1})`;
+  });
+  const runs = [[], [1], [2], [3], [1, 2, 3]].map((take) => ({ take, ...bpRoomRun(take) }));
+  const ref = runs[0].seq.join(" ");
+  for (const r of runs) console.log(`  route ${r.take.length ? `branches ${r.take.join("+")}` : "main road"}: ${(r.fin / 1000).toFixed(2)} s for 2 laps, ${r.onBranch} ticks on a branch, ${r.falls} falls, progress ${r.seq.join(" ")}, largest move of s in a tick ${bpF(r.maxDs)}`);
+  check(
+    `branch progress: a scripted car through each branch (and through all three) gets the main road's checkpoint and lap sequence (${ref}) and finishes 2 laps with no fall, though every checkpoint (${cps.join(", ")}) lies beside a shortcut (the car on it crosses it on the branch, by mapS); progress.s is always mainS of the car's own query; a road change in a mouth moves it a few units at most (advisor 9: < 55)`,
+    runs.every((r) => r.seq.join(" ") === ref && r.fin > 0 && r.falls === 0 && r.mainSOk && r.maxDs < 55) && ref === "0.1 0.2 0.3 1.0 1.1 1.2 1.3 2.0" &&
+      runs.slice(1).every((r) => r.onBranch > 300) && runs[4].fin < runs[0].fin && cps.every((c) => c.includes("branch")),
+    runs.map((r) => `${r.take.join("+") || "main"}: ${(r.fin / 1000).toFixed(2)} s, ${r.onBranch} on a branch, ${r.seq.join(" ")}, max ds ${bpF(r.maxDs)}`).join(" | "),
+  );
+  // Two cars on different roads: the room's race distance (rd) from each one's mainS, and the standing by it.
+  const two = bpRoomRun([], 2, [1, 2, 3]);
+  check(
+    "branch positions: a car on the main road and one taking every shortcut race 2 laps: every tick each one's rd is lap x L + mainS of its own query (the grid rule as before), with hundreds of ticks on different roads; the shortcut car gains the lead",
+    two.rdBad === 0 && two.rdChecks > 3000 && two.apart > 300 && two.fin > 0 && two.fin2 > 0 && two.fin2 < two.fin,
+    `${two.rdChecks} ticks checked, ${two.rdBad} wrong, ${two.apart} on different roads, ${two.leadSwaps} lead changes; main road ${(two.fin / 1000).toFixed(2)} s, shortcuts ${(two.fin2 / 1000).toFixed(2)} s`,
+  );
+  // Placed: a car on a branch is ahead of a main-road car exactly when its mainS is.
+  const b = t.branches[1], at = (u: number) => bpT.mainS(t, bpQ(t, bpCar(t, 2, u)));
+  const order = [1000, 1500, 2000].map((u) => {
+    const sb = at(u), car = bpCar(t, 2, u), pb = bpRace.newProgress(t, car);
+    const ahead = bpRace.raceDistance(t, pb) > bpRace.raceDistance(t, bpRace.newProgress(t, bpCar(t, 0, sb - 30)));
+    const behind = bpRace.raceDistance(t, pb) < bpRace.raceDistance(t, bpRace.newProgress(t, bpCar(t, 0, sb + 30)));
+    return ahead && behind && sb > b.s0 && sb < b.s1;
+  });
+  check("branch positions: a car at u on a branch stands ahead of a main-road car 30 behind its mainS and behind one 30 ahead", order.every(Boolean), order.join(","));
+}
+
+function bpRecovery(): void {
+  // Criterion 4: falls and recovery, respawn on the car's own road, isLost on the nearer road, jumps and holes.
+  const t = bpYard(), n = t.pts.length;
+  const run = (c: CarState, ticks: number, input = NO_COMMAND) => {
+    const evs: string[] = [];
+    for (let k = 0; k < ticks; k++) {
+      const e = stepRaceCar(c, input, BASE_STATS, raceEnv(t, k + 1));
+      if (e) evs.push(e);
+    }
+    return evs;
+  };
+  const where = (c: CarState) => {
+    const q = bpQ(t, c);
+    return { road: q.road, s: q.s, lat: q.lat, global: bpT.roadOfSeg(t, c.seg) };
+  };
+  // A slow car rolls off branch 2's ramp into its chasm and comes back at the branch's recovery point (u 850).
+  const roll = bpCar(t, 2, 1180, 0, 150); // on the ramp, coasting: it rolls off the lip (1230) under take-off speed
+  const e1 = run(roll, 60 + FALL_TICKS);
+  const w1 = where(roll);
+  // A fall on branch 2 before its first recovery point (lost off its outside at u 600), and on the dirt cut
+  // (no recovery point at all): the main road's recovery point before the fork (user decision 6).
+  const lost = bpCar(t, 2, 600, 2.3 * t.branches[1].road.wall);
+  const e2 = run(lost, 1 + FALL_TICKS);
+  const w2 = where(lost);
+  const lost1 = bpCar(t, 1, 1300, -2.3 * t.branches[0].road.wall);
+  const e3 = run(lost1, 1 + FALL_TICKS);
+  const w3 = where(lost1);
+  check(
+    "branch recovery: a car that rolls into branch 2's chasm recovers at its recovery point u 850 (on the branch, facing along it, standing still, its global segment); one that falls on branch 2 before its first recovery point, or anywhere on the dirt cut (none), recovers at the main road's point before the fork (8800, 3600: user decision 6)",
+    e1.join(",") === "fall,recover" && w1.road === 2 && w1.global === 2 && Math.abs(w1.s - 850) < 1e-6 && Math.abs(w1.lat) < 1e-6 && roll.vx === 0 && roll.seg >= n &&
+      e2.join(",") === "fall,recover" && w2.road === 0 && Math.abs(w2.s - recoveryAt(t, t.branches[1].s0)) < 1e-6 && recoveryAt(t, t.branches[1].s0) === 8800 &&
+      e3.join(",") === "fall,recover" && w3.road === 0 && Math.abs(w3.s - 3600) < 1e-6,
+    `chasm: ${e1.join(",")} -> road ${w1.road} u ${bpF(w1.s)}; before u 850: ${e2.join(",")} -> road ${w2.road} s ${bpF(w2.s)}; dirt cut: ${e3.join(",")} -> road ${w3.road} s ${bpF(w3.s)}`,
+  );
+  // A wreck respawns on its own road at its u; over a hole, at the branch's recovery point.
+  const wr = bpCar(t, 1, 1700, 25, 200);
+  bpW.wreckCar(wr);
+  run(wr, WRECK_TICKS);
+  const w4 = where(wr);
+  const holeCar = bpCar(t, 3, 1100, -18, 0);
+  bpW.wreckCar(holeCar);
+  run(holeCar, WRECK_TICKS);
+  const w5 = where(holeCar);
+  check(
+    "branch respawn: a wrecked car respawns on its own branch at its u (the centreline, standing); one wrecked over a branch's hole respawns at that branch's recovery point (u 850)",
+    w4.road === 1 && w4.global === 1 && Math.abs(w4.s - 1700) < 2 && Math.abs(w4.lat) < 1e-6 && wr.wreck === 0 && w5.road === 3 && Math.abs(w5.s - 850) < 1e-6,
+    `wreck at u 1700 lat 25 -> road ${w4.road} u ${bpF(w4.s)} lat ${bpF(w4.lat)}; over the hole at u 1100 -> road ${w5.road} u ${bpF(w5.s)}`,
+  );
+  // isLost on the nearer road: just past branch 1's fork gore, on the branch's centreline with a main-road
+  // hint, the car is 2 x main's wall from the main road (lost there) but on the branch: it drives on.
+  const g = t.branches[0].forkGore!;
+  const past = bpCar(t, 1, g.u + 60, 0, 200);
+  const mainHint = pointAt(t, t.branches[0].mapS[pointAt(t.branches[0].road, g.u + 60).seg]).seg;
+  const mainOnly = bpT.queryMain(t, past.x, past.y, mainHint);
+  past.seg = mainHint;
+  const e6 = run(past, 30, { throttle: 1, steer: 0, buttons: 0 });
+  check(
+    "branch lost: a car just past a fork gore on the branch's centreline, carrying a main-road hint, is lost by the main road's measure alone but on the nearer road (the branch) it is not: it drives on (no fall), onto the branch",
+    mainOnly.dist > 2 * t.wall && e6.length === 0 && bpT.roadOfSeg(t, past.seg) === 1,
+    `main-road distance ${bpF(mainOnly.dist)} (lost beyond ${2 * t.wall}); events ${e6.join(",") || "none"}; ends on road ${bpT.roadOfSeg(t, past.seg)}`,
+  );
+  // Jumps and holes on a branch: a fast car jumps branch 2's chasm; a car on a pit's line falls into branch 3's.
+  const jump = bpCar(t, 2, 950, 0, 420);
+  const e7 = run(jump, 120, { throttle: 1, steer: 0, buttons: 0 });
+  const w7 = where(jump);
+  const pit = bpCar(t, 3, 1020, -18, 200);
+  const e8 = run(pit, 30, { throttle: 0, steer: 0, buttons: 0 });
+  check(
+    "branch jumps and holes: a fast car on the jump cut takes off at its lip and lands past its chasm on the branch (no fall); a car on a pit's line on the narrow cut falls into it",
+    e7.join(",") === "takeoff" && w7.road === 2 && w7.s > 1370 && e8[0] === "fall",
+    `jump: ${e7.join(",")}, ends on road ${w7.road} u ${bpF(w7.s)}; pit: ${e8.join(",")}`,
+  );
+}
+
+/** The M4 features on branch 1 of a Branch Yard copy (two copies: the obstacles, and a split with dirt in its right lane). */
+const BP_OBST: bpT.RoadFeature[] = [
+  { k: "water", s0: 850, s1: 1000, lat0: -56, lat1: 0 },
+  { k: "belt", s0: 1080, s1: 1180, lat0: 0, lat1: 56, vx: 70 },
+  { k: "tyres", s: 1260, lat: -24, r: 20 },
+  { k: "barrels", s: 1360, n: 2, period: 200, speed: 100 },
+  { k: "press", s: 1480, lat0: -56, lat1: 0, period: 120, down: 40 },
+  { k: "truck", s: 1600, lat: 24, len: 100 },
+];
+const BP_SPLIT: bpT.RoadFeature[] = [
+  { k: "widen", s0: 850, s1: 1750, left: 48, right: 48 },
+  { k: "island", s0: 1000, s1: 1600, lat0: -22, lat1: 22 },
+  { k: "dirt", s0: 1100, s1: 1400, lat0: 22, lat1: 100 },
+];
+
+function bpFeatures(): void {
+  // Criterion 4: the M4 features act on a branch. (a) A branch drives exactly as its road alone: from starts
+  // across the features (no mouth near), stepRaceCar on the whole track and on the branch's road as its own
+  // track agree bit for bit (the global segment = the road's + base) until either falls: every per-segment
+  // lookup is the road's. (b) Each feature acts: a run into it parts from the same run on the plain branch
+  // there, and the effects are seen (water underfoot, the belt's drift, a mound's bounce, a barrel's and a
+  // press's and a truck's contact, a truck jump, the island never entered, the split's dirt underfoot).
+  const plain = bpWith(0, [], undefined, "bp-plain");
+  const rows: string[] = [];
+  let all = true;
+  for (const [name, feats] of [["obstacles", BP_OBST], ["split", BP_SPLIT]] as const) {
+    const t = bpWith(0, feats, undefined, `bp-${name}`), b = t.branches[0], r = b.road;
+    let starts = 0, ticks = 0, mismatch = 0, first = "";
+    for (let u = 800; u <= 1700; u += 25) {
+      for (const lat of [-30, 0, 30]) {
+        for (const [v, dh] of [[150, 0], [300, 0.12], [430, -0.12]] as const) {
+          const a = bpCar(t, 1, u, lat, v, dh), c = { ...a, seg: a.seg - b.base };
+          starts++;
+          for (let k = 0; k < 50; k++) {
+            const ea = stepRaceCar(a, { throttle: 1, steer: 0 }, BASE_STATS, raceEnv(t, 100 + k));
+            const ec = stepRaceCar(c, { throttle: 1, steer: 0 }, BASE_STATS, raceEnv(r, 100 + k));
+            ticks++;
+            if (!bpSame(a, { ...c, seg: c.seg + b.base }) || ea !== ec) {
+              mismatch++;
+              if (!first) first = `u ${u} lat ${lat} v ${v} tick ${k}`;
+              break;
+            }
+            if (ea === "fall") break;
+          }
+        }
+      }
+    }
+    // (b) Per feature: where a car's run first parts from the plain branch's, and what it met.
+    const met: string[] = [];
+    const parts = (u: number, lat: number, v: number, ticks: number, rt0: number, until: (c: CarState, k: number) => void, dh = 0) => {
+      const a = bpCar(t, 1, u, lat, v, dh), p = bpCar(plain, 1, u, lat, v, dh);
+      let at = NaN;
+      for (let k = 0; k < ticks; k++) {
+        stepRaceCar(a, { throttle: v > 0 ? 1 : 0, steer: 0 }, BASE_STATS, raceEnv(t, rt0 + k));
+        stepRaceCar(p, { throttle: v > 0 ? 1 : 0, steer: 0 }, BASE_STATS, raceEnv(plain, rt0 + k));
+        until(a, k);
+        if (Number.isNaN(at) && Math.hypot(a.x - p.x, a.y - p.y) > 1e-6) at = bpQ(t, a).s;
+      }
+      return { at, end: bpQ(t, a), car: a, plainEnd: bpQ(plain, p) };
+    };
+    if (name === "obstacles") {
+      let wet = 0;
+      const w = parts(780, -28, 300, 50, 1, (c) => {
+        const q = bpQ(t, c);
+        if (bpT.surfaceAt(bpT.roadFor(t, q), q.seg, q.s, q.lat)?.kind === bpT.SURF_WATER) wet++;
+      });
+      met.push(`water: parts at u ${bpF(w.at)}, ${wet} ticks wet`);
+      const bl = parts(1040, 28, 200, 50, 1, () => {});
+      met.push(`belt: parts at u ${bpF(bl.at)}, drift ${bpF(bl.end.lat - bl.plainEnd.lat)}`);
+      let bounce = 0;
+      const ty = parts(1200, -24, 200, 30, 1, (c) => void (bpTouchesMound(t, c) && bounce++));
+      met.push(`tyres: parts at u ${bpF(ty.at)}, ${bounce} ticks on the mound`);
+      let barrel = 0, press = 0, truck = 0, jumps = 0;
+      const ba = parts(1360, -10, 0, 240, 1, (c, k) => void (bpMoveContact(r, c, 1 + k) === "barrel" && barrel++));
+      met.push(`barrels: a parked car moved at u ${bpF(ba.at)}, ${barrel} contact ticks`);
+      const pr = parts(1480, -28, 0, 240, 1, (c, k) => void (bpMoveContact(r, c, 1 + k) === "press" && press++));
+      met.push(`press: a parked car moved at u ${bpF(pr.at)}, ${press} contact ticks (${bpF(Math.abs(pr.end.s - 1480))} along from it)`);
+      const tb = parts(1540, 24, 300, 40, 1, (c) => void (c.air > 0 && jumps++));
+      const tk = parts(1560, 24, 120, 40, 1, (c, k) => void (bpMoveContact(r, c, 1 + k) === "truck" && truck++));
+      met.push(`truck: in its band at 300 u/s ${jumps} air ticks; at 120 u/s ${truck} body contact ticks (stopped at u ${bpF(tk.end.s)})`);
+      const ok = wet > 5 && Math.abs(bl.end.lat - bl.plainEnd.lat) > 5 && bounce > 0 && barrel > 0 && press > 0 && jumps > 10 && truck > 0 &&
+        [w.at, bl.at, ty.at, ba.at, pr.at, tb.at, tk.at].every((x) => !Number.isNaN(x));
+      all &&= ok;
+    } else {
+      let inside = 0, dirt = 0;
+      const isle = r.islands[0];
+      // Steered across the island's right side from its lane: kept in the lane (the side is a wall).
+      const sp = parts(1150, 50, 260, 60, 1, (c) => {
+        const q = bpQ(t, c);
+        if (q.s > isle.s0 && q.s < isle.s1 && q.lat > isle.lat0 && q.lat < isle.lat1) inside++;
+      }, -0.35);
+      const dl = parts(1060, 60, 300, 60, 1, (c) => {
+        const q = bpQ(t, c);
+        if (bpT.surfaceAt(bpT.roadFor(t, q), q.seg, q.s, q.lat)?.kind === bpT.SURF_DIRT) dirt++;
+      });
+      const wide = bpT.halfOf(r, bpQ(t, bpCar(t, 1, 1300, 90)));
+      met.push(`island: a car steered across its side parts at u ${bpF(sp.at)}, ends in its lane at lat ${bpF(sp.end.lat)} (the plain branch's at ${bpF(sp.plainEnd.lat)}), ${inside} ticks inside it; dirt lane: ${dirt} ticks on dirt, parts at u ${bpF(dl.at)}; asphalt half-width at u 1300 ${bpF(wide)}`);
+      all &&= inside === 0 && sp.end.lat >= isle.lat1 + 8 - 1e-6 && sp.plainEnd.lat < isle.lat1 && dirt > 5 && !Number.isNaN(sp.at) && !Number.isNaN(dl.at) && Math.abs(wide - (56 + 48)) < 1e-9;
+    }
+    all &&= mismatch === 0 && starts > 300;
+    rows.push(`${name}: ${starts} starts, ${ticks} ticks, ${mismatch} differ from the road alone${first ? ` (${first})` : ""}; ${met.join("; ")}`);
+  }
+  console.log(`  ${rows.join("\n  ")}`);
+  check(
+    "branch features: on a branch the water, belt, tyre mound, barrels, press, truck (body and jump), widen, island and dirt act (each run parts from the plain branch's at the feature; water and dirt underfoot, the belt's drift, the mound's bounce, barrel, press and truck contacts, a truck jump, the island never entered), and a branch drives bit for bit as its road alone",
+    all,
+    rows.join(" | "),
+  );
+}
+
+function bpRivets(): void {
+  // Criterion 4: rivets on a branch (moveShot, spawnShot): along it, dying at its wall; across a mouth from one
+  // corridor into the other; on a gore's nose; on a branch's mound and truck.
+  const t = bpYard();
+  const fly = (s: bpW.Shot, tt: Track, rt = 1) => {
+    const roads = new Set<number>();
+    let ticks = 0;
+    while (bpW.moveShot(s, tt, rt)) {
+      ticks++;
+      roads.add(bpT.roadOfSeg(tt, s.seg));
+    }
+    const q = bpQ(tt, s);
+    return { ticks, roads: [...roads], q, travelled: s.travelled, x: s.x, y: s.y };
+  };
+  const along = bpCar(t, 2, 1500, 20, 300, 1.1); // across the branch to its right (the corner's inside, away from the main road)
+  const sa = fly(bpW.spawnShot(along, 1, "a"), t);
+  const wallB = bpT.wallOf(bpT.roadFor(t, sa.q), sa.q);
+  // From the main road's centreline in branch 1's fork mouth, aimed across at the branch's side: it flies on
+  // into the branch's corridor (the union), where the main road's wall alone would have stopped it.
+  const f = t.branches[0], fg = f.forkGore!;
+  const from = bpCar(t, 0, f.s0 + 120, 0, 0, 0.55);
+  const sx = fly(bpW.spawnShot(from, 2, "x"), t);
+  // At the fork gore's nose from the main road.
+  const nose = fg.noseMain;
+  const nc = bpCar(t, 0, nose.s - 160, nose.lat - Math.sign(nose.lat) * 10, 0);
+  nc.h = Math.atan2(nose.y - nc.y, nose.x - nc.x);
+  const sn = fly(bpW.spawnShot(nc, 3, "n"), t);
+  const atNose = Math.hypot(sn.x - nose.x, sn.y - nose.y); // where it died: within a tick's flight of the nose's edge
+  // A branch's mound and truck (the obstacles copy).
+  const ot = bpWith(0, BP_OBST, undefined, "bp-obstacles"), ob = ot.branches[0];
+  const mc = bpCar(ot, 1, 1200, -24, 0);
+  const sm = fly(bpW.spawnShot(mc, 4, "m"), ot);
+  const tc = bpCar(ot, 1, 1500, 42, 0); // behind the truck, outside its ramp band (lat 10..38), inside its body (4..44)
+  const st = fly(bpW.spawnShot(tc, 5, "t"), ot);
+  check(
+    "branch rivets: a rivet fired across a branch flies on it (its segment on the branch every tick) and dies at the branch's own wall; one fired across a fork's mouth from the main road flies on into the branch's corridor; one at a gore's nose dies on it; one at a branch's tyre mound or parked truck dies on it",
+    sa.roads.join() === "2" && sa.travelled < bpW.RIVET_RANGE && sa.q.dist > wallB && sa.q.road === 2 &&
+      sx.roads.includes(1) && sx.roads.includes(0) && sx.ticks > 8 &&
+      sn.travelled < 160 && atNose < nose.r + 30 &&
+      sm.travelled < 70 && bpT.roadOfSeg(ot, mc.seg) === 1 && st.travelled < 150 && ob.road.trucks.length === 1,
+    `along: ${sa.ticks} ticks on roads ${sa.roads.join(",")}, dead at ${bpF(sa.q.dist)} from its centreline (wall ${bpF(wallB)}); across the mouth: roads ${sx.roads.join(",")}, ${sx.ticks} ticks; nose: dead after ${bpF(sn.travelled)}, ${bpF(atNose)} from its centre; mound after ${bpF(sm.travelled)}; truck after ${bpF(st.travelled)}`,
+  );
+}
+
+function bpRunUps(): void {
+  // Criterion 5: validateRunUps drives from the main recovery point before each fork through each branch and
+  // from each branch's recovery points past its hazards, every car type at L0 and L3; the jump sweep flies
+  // each branch's lips; validateCells takes a branch's cell off its own road's lips.
+  const t = bpYard();
+  const errs: string[] = [];
+  for (const type of BP_TYPES) for (const lv of [0, 3]) for (const e of validateRunUps(t, bpStatsFor(type, { engine: lv, tyres: lv, welder: lv }))) errs.push(`${type} L${lv}: ${e}`);
+  const sweep = [...bpW.validateJumpSweep(t, 537), ...bpW.validateJumpSweep(t, 473, BASE_STATS, true), ...BP_TYPES.flatMap((type) => bpW.validateJumpSweep(t, 537, bpStatsFor(type, { engine: 3, tyres: 3, welder: 3 })))];
+  // Negative controls: the runs really go through the branches.
+  const longGap = bpWith(1, [{ k: "ramp", s: 1150, len: 80 }, { k: "gap", s0: 1230, s1: 1720 }], [850], "bp-long-gap");
+  const lg = validateRunUps(longGap);
+  const lgSweep = bpW.validateJumpSweep(longGap, 300);
+  const pits = bpWith(2, [{ k: "hole", s: 1100, lat: -20, r: 26 }, { k: "hole", s: 1100, lat: 20, r: 26 }], [850], "bp-pits");
+  const pe = validateRunUps(pits);
+  check(
+    "branch run-ups: validateRunUps passes on Branch Yard for every car type at L0 and L3 (runs from the main recovery point before each fork through each branch past its merge, and from each branch's recovery point past its hazards), and the jump sweep lands every branch lip (537 u/s, every type at L3; 473 on the asphalt)",
+    errs.length === 0 && sweep.length === 0,
+    `${errs.join(" | ") || "every run gets past"}; sweep ${sweep.join(" | ") || "every lip lands"}`,
+  );
+  check(
+    "branch run-ups (controls): a chasm too long for the jump cut fails both runs (from the main point 8800 through branch 2, and from its point u 850) and the jump sweep names its branch lip; pits closing the narrow cut fail both runs on branch 3",
+    lg.some((e) => e.startsWith("run-up from main recovery point s=8800.0 through branch 2") && e.includes("on branch 2")) && lg.some((e) => e.startsWith("run-up from branch 2 recovery point u=850.0")) &&
+      lgSweep.some((e) => e.startsWith("jump on branch 2 at the lip u=1230.0")) &&
+      pe.some((e) => e.includes("through branch 3") && e.includes("falls into a hole")) && pe.some((e) => e.startsWith("run-up from branch 3 recovery point u=850.0")),
+    `${lg.join(" | ")}; sweep ${lgSweep[0] ?? "-"}; ${pe.join(" | ")}`,
+  );
+  // An air cell over the jump cut's chasm (a branch cell: road 2, s in u): validateCells flies the branch's lip.
+  const cellT = bpWith(1, [{ k: "ramp", s: 1150, len: 80 }, { k: "gap", s0: 1230, s1: 1370 }, { k: "cell", s: 1330, lat: 34, air: true }], [850], "bp-cell");
+  const cell = cellT.cells.find((c) => c.road === 2)!;
+  const reach = bpW.airCellReach(cellT, cell, 537);
+  const ce = bpW.validateCells(cellT, 537);
+  const farT = bpWith(1, [{ k: "ramp", s: 1150, len: 80 }, { k: "gap", s0: 1230, s1: 1370 }, { k: "cell", s: 1950, lat: 34, air: true }], [850], "bp-cell-far");
+  const fe = bpW.validateCells(farT, 537);
+  check(
+    "branch cells: an air cell over the jump cut's chasm (a branch cell, s in u) is on the arc of take-offs off that branch's own lip (validateCells passes; there is no main-road ramp it could be confused with); one beyond any flight is refused, named on its branch",
+    !!reach && reach.min >= bpW.CELL_MIN_TAKEOFF && ce.length === 0 && cell.seg >= cellT.pts.length && fe.length === 1 && fe[0].startsWith("air cell at u=1950.0 on branch 2"),
+    `reach ${JSON.stringify(reach)}; ${ce.join(" | ") || "valid"}; far: ${fe.join(" | ")}`,
+  );
+  // The bots keep the main road: a branch's cell does not move a bot (cellLane skips it), a main-road one there does.
+  const botRun = (tt: Track) => {
+    const h = bpHash("sha256");
+    const bots = [0, 1, 2].map((k) => {
+      const g = gridSlot(tt, k), carType = bpBotCar(k);
+      return {
+        id: `bot${k}`, car: { x: g.x, y: g.y, h: g.h, vx: 0, vy: 0, seg: g.seg, wreck: 0, air: 0, fall: 0, boost: 0 }, finished: false, hp: bpW.CAR_HP, maxHp: bpW.CAR_HP, ghost: 0,
+        cooldown: 0, ammo: { rivets: 0, mines: 0 }, levels: { engine: 0, tyres: 0, welder: 0 }, stats: bpStatsFor(carType, { engine: 0, tyres: 0, welder: 0 }), bot: bpNewSeat("hard", k, k), carType,
+      };
+    });
+    const cells = tt.cells.map(() => 0);
+    for (let rt = 1; rt <= 60 * 60; rt++) {
+      const cmds = bots.map((b) => bpBotStep(b as never, bots as never, tt, true, [], cells, rt));
+      bots.forEach((b, k) => {
+        h.update(`${cmds[k].cmd.throttle},${cmds[k].cmd.steer};`);
+        stepRaceCar(b.car, cmds[k].cmd, b.stats, raceEnv(tt, rt));
+      });
+      for (let i = 0; i < bots.length; i++) for (let j = i + 1; j < bots.length; j++) bpCollideCars(bots[i].car, bots[j].car);
+    }
+    return h.digest("hex");
+  };
+  const ground = (s: number, lat: number): bpT.Branch[] => [{ ...bpDefs()[0], features: [...(bpDefs()[0].features ?? []), { k: "cell", s, lat }] }];
+  const noCell = botRun(bpYard());
+  const withBranchCell = botRun(buildTrack({ ...BP_YARD, id: "bp-bcell", features: [...ground(1700, 30), ...bpDefs().slice(1)] }));
+  const withMainCell = botRun(buildTrack({ ...BP_YARD, id: "bp-mcell", features: [{ k: "cell", s: 1700, lat: 30 }, ...bpDefs()] }));
+  check(
+    "branch cells (bots): three Hard bots' control streams on Branch Yard are the same with a ground cell on a branch at u 1700, lat 30 (cellLane skips a branch's cell: its s is u on its road) as without it; a cell on the main road at s 1700, lat 30 changes them (the control)",
+    withBranchCell === noCell && withMainCell !== noCell,
+    `${noCell.slice(0, 12)} / with the branch cell ${withBranchCell.slice(0, 12)} / with a main cell ${withMainCell.slice(0, 12)}`,
+  );
+}
+
+function bpParity(): void {
+  // Criterion 6: stepRaceCar on a clone gives exactly the server's pose, tick by tick, for a scripted car
+  // through every branch and mouth (2 laps), wrecked once on the dirt cut; and for a slow one that rolls into
+  // the jump cut's chasm and recovers on the branch, again and again.
+  const rows: string[] = [];
+  let all = true;
+  for (const [name, take, top, wreckAt] of [["all three shortcuts, a wreck on the dirt cut", [1, 2, 3], Infinity, 1300], ["the jump cut at 160 u/s (falls and recoveries)", [2], 160, -1]] as const) {
+    const r = withDevTrack(BP_YARD.id, () => {
+      const sim = new Sim(2);
+      const host = sim.add("Host");
+      if (sim.room.setTrack(host, BP_YARD.id)) throw new Error("Branch Yard refused");
+      const t = sim.room.track;
+      const drv = new BpRoute(t, [...take], 0);
+      // On a branch at most `top` u/s (the slow one rolls into the jump cut's chasm), full speed elsewhere.
+      const cmd = (p: Player): Ctl => {
+        if (!p.car) return {};
+        const c = drv.controls(p.car);
+        return bpT.roadOfSeg(t, p.car.seg) > 0 && speedOf(p.car) > top ? { ...c, throttle: 0 } : c;
+      };
+      sim.readyAll(host);
+      sim.room.start(host, sim.now);
+      while (sim.room.phase !== "racing") sim.run(1, cmd);
+      let ticks = 0, mismatch = 0, first = "", onBranch = 0, mouth = 0, wrecked = false, falls = 0, recovers = 0;
+      while (sim.room.phase === "racing" && !host.progress!.fin && ticks < 60 * (top < Infinity ? 70 : 240)) {
+        const c0 = host.car!;
+        if (!wrecked && wreckAt > 0 && bpT.roadOfSeg(t, c0.seg) === 1 && bpQ(t, c0).s > wreckAt) {
+          bpW.wreckCar(c0);
+          wrecked = true;
+        }
+        const clone = cloneCar(c0);
+        sim.run(1, cmd);
+        ticks++;
+        const c = host.car!;
+        const ev = stepRaceCar(clone, { throttle: host.lastInput.throttle, steer: host.lastInput.steer }, host.stats, raceEnv(t, sim.room.rt, 0));
+        if (ev === "fall") falls++;
+        if (ev === "recover") recovers++;
+        if (!bpSame(clone, c)) {
+          mismatch++;
+          if (!first) first = `tick ${ticks}: ${BP_KEYS.filter((k) => !Object.is(clone[k], c[k])).join(",")}`;
+        }
+        if (c.seg >= t.pts.length) onBranch++;
+        if (t.mouthAt[c.seg] >= 0) mouth++;
+      }
+      return { ticks, mismatch, first, onBranch, mouth, wrecked, falls, recovers, fin: host.progress!.fin };
+    });
+    const ok = r.mismatch === 0 && r.onBranch > 300 && r.mouth > 100 && (wreckAt > 0 ? r.wrecked && r.fin > 0 : r.falls >= 2 && r.recovers >= 2);
+    all &&= ok;
+    rows.push(`${name}: ${r.ticks} ticks (${r.onBranch} on a branch, ${r.mouth} in a mouth window), ${r.mismatch} mismatches${r.first ? ` (${r.first})` : ""}; wrecked ${r.wrecked}, falls ${r.falls}, recoveries ${r.recovers}${r.fin ? `, finished in ${(r.fin / 1000).toFixed(2)} s` : ""}`);
+  }
+  console.log(`  ${rows.join("\n  ")}`);
+  check("branch parity: stepRaceCar on a clone equals the server's pose bit for bit every tick for a scripted car through every branch and mouth (with a wreck and respawn on a branch) and for one that falls into a branch's chasm and recovers on the branch", all, rows.join(" | "));
+}
+
+function bpWire(): void {
+  // Criterion 6: over the wire (no lag), a client car driven through every shortcut predicts its own car
+  // exactly: the snapshot's seg is the global segment (unrounded), the replay starts from it.
+  const realNow = performance.now.bind(performance);
+  const clock = { now: 1_000_000 };
+  performance.now = () => clock.now;
+  try {
+    const r = withDevTrack(BP_YARD.id, () => {
+      const rooms = new Rooms(1);
+      const w = wiredGame(rooms, clock);
+      w.game.create("Solo");
+      w.open();
+      w.flush();
+      const room = [...rooms.rooms.values()][0];
+      const t = room.track;
+      w.game.start();
+      w.flush();
+      const drv = new BpRoute(t, [1, 2, 3], 0);
+      let raceTicks = 0, snapBranch = 0, snapSegOk = true, fin = 0;
+      for (let i = 0; i < 60 * 240 && !fin; i++) {
+        clock.now += 1000 / 60;
+        rooms.step(clock.now);
+        w.flush();
+        const car = w.game.car;
+        w.game.step(car ? { ...drv.controls(car), fire: false, mine: false } : { throttle: 0, steer: 0, fire: false, mine: false }, 1000 / 60);
+        if (room.phase === "racing") raceTicks++;
+        const snap = w.game.latest?.cars.get(w.game.you), p = room.players.get(w.game.you)!;
+        if (snap && snap.seg >= t.pts.length) {
+          snapBranch++;
+          if (!Number.isInteger(snap.seg) || bpT.roadOfSeg(t, snap.seg) === 0) snapSegOk = false;
+        }
+        if (p.progress?.fin) fin = p.progress.fin;
+      }
+      const errs = w.game.recErrors;
+      const sorted = [...errs].sort((a, b) => a - b);
+      return { t: w.game.track === t, raceTicks, snapBranch, snapSegOk, fin, n: errs.length, median: sorted[sorted.length >> 1] ?? NaN, max: errs.length ? Math.max(...errs) : NaN, stateErrs: w.game.recStateErrors };
+    });
+    check(
+      `branch wire: a client car driven through every shortcut (no lag) predicts its own car: the snapshots carry its global segment (an integer >= n on a branch), median reconciliation error < 0.5, none > ${LARGE_ERR}, no state mismatch; it finishes`,
+      r.t && r.fin > 0 && r.snapBranch > 100 && r.snapSegOk && r.n > 1000 && r.median < 0.5 && r.max <= LARGE_ERR && r.stateErrs === 0,
+      `${r.raceTicks} race ticks, ${r.snapBranch} snapshots on a branch, finish ${(r.fin / 1000).toFixed(2)} s; rec err n=${r.n} median ${r.median} max ${r.max}; state mismatches ${r.stateErrs}`,
+    );
+  } finally {
+    performance.now = realNow;
+  }
+}
+
+function bpCpu(): void {
+  // Criterion 7: the cost. 5 Hard server bots (they keep the main road, through every mouth) 3 laps of Branch
+  // Yard: every bot step and room tick timed; and queryTrackNear itself on mouth segments against the rest.
+  const r = withDevTrack(BP_YARD.id, () => {
+    const sim = new Sim(3);
+    const host = sim.add("Host");
+    sim.room.setTrack(host, BP_YARD.id);
+    for (let k = 0; k < 5; k++) sim.room.addBot(host, "hard", sim.now);
+    sim.room.start(host, sim.now);
+    while (sim.room.phase !== "racing") sim.tick();
+    sim.room.retire(host);
+    const tickMs: number[] = [], steps: number[] = [];
+    bpBotTiming.samples = steps;
+    let ticks = 0, onBranch = 0;
+    try {
+      while (sim.room.phase === "racing" && ticks < 60 * 300) {
+        sim.tickNo++;
+        sim.now += 1000 / 60;
+        const t0 = performance.now();
+        sim.room.tick(sim.tickNo, sim.now);
+        tickMs.push(performance.now() - t0);
+        ticks++;
+        for (const p of sim.room.players.values()) if (p.car && p.car.seg >= sim.room.track.pts.length) onBranch++;
+      }
+    } finally {
+      bpBotTiming.samples = null;
+    }
+    const fins = [...sim.room.players.values()].filter((p) => p.bot).map((p) => p.progress?.fin ?? 0);
+    return { tickMs, steps, fins, onBranch, phase: sim.room.phase as string };
+  });
+  const pct = (a: number[], p: number) => [...a].sort((x, y) => x - y)[Math.min(a.length - 1, Math.floor(a.length * p))];
+  const med = pct(r.steps, 0.5), tickMed = pct(r.tickMs, 0.5);
+  // queryTrackNear: mouth segments (two window searches) against the rest (one), and a shipped track's.
+  const t = bpYard(), rb = trackById("rust-bowl");
+  const time = (tt: Track, segs: number[]) => {
+    const pts = segs.map((g) => {
+      const road = bpT.roadOf(tt, bpT.roadOfSeg(tt, g)), i = bpT.localSeg(tt, g), p = road.pts[i];
+      return [p.x + 17.3, p.y - 9.1, g];
+    });
+    let sink = 0;
+    const t0 = performance.now();
+    for (let rep = 0; rep < 40; rep++) for (const [x, y, g] of pts) sink += queryTrackNear(tt, x, y, g).dist;
+    return { us: ((performance.now() - t0) * 1000) / (40 * pts.length), sink };
+  };
+  const all = t.mouthAt.map((_, g) => g);
+  const mouthSegs = all.filter((g) => t.mouthAt[g] >= 0), other = all.filter((g) => t.mouthAt[g] < 0);
+  time(t, all); // warm
+  const tm = time(t, mouthSegs), to = time(t, other), ts = time(rb, rb.pts.map((_, i) => i));
+  console.log(`  CPU (Branch Yard): Hard bot step median ${(med * 1000).toFixed(2)} us, p99 ${(pct(r.steps, 0.99) * 1000).toFixed(2)} us over ${r.steps.length} steps; room tick with 5 Hard bots median ${(tickMed * 1000).toFixed(2)} us, p99 ${(pct(r.tickMs, 0.99) * 1000).toFixed(2)} us; queryTrackNear ${tm.us.toFixed(3)} us on ${mouthSegs.length} mouth segments, ${to.us.toFixed(3)} us on the other ${other.length}, ${ts.us.toFixed(3)} us on Rust Bowl`);
+  check(
+    "branch CPU: 5 Hard server bots race 3 laps of Branch Yard through every mouth (on the main road, finishing): the median bot step stays <= 0.05 ms (the gate fails above 0.2 ms); a mouth segment's query costs about one more window search (< 3 x the others'); room tick printed",
+    med <= 0.05 && r.fins.every((f) => f > 0) && tm.us < 3 * to.us,
+    `median bot step ${med.toFixed(5)} ms; room tick median ${tickMed.toFixed(4)} ms; finishes ${r.fins.map((f) => (f / 1000).toFixed(1)).join(", ")} s; bot ticks on a branch (in a mouth) ${r.onBranch}; query ${tm.us.toFixed(3)} / ${to.us.toFixed(3)} / Rust Bowl ${ts.us.toFixed(3)} us`,
+  );
+}
+
+function bpShipped(): void {
+  // Criterion 7: the shipped tracks byte-identical: schema-hash --check, every part SAME (Branch Yard's
+  // `queries` re-recorded by BR-PHYS: its main-road queries now cross-search the mouths).
+  let out = "";
+  let ok = true;
+  try {
+    out = surfExec(process.execPath, ["--import", "tsx", "tools/debug/schema-hash.ts", "--check"], { encoding: "utf8" });
+  } catch (e) {
+    ok = false;
+    out = String((e as { stdout?: string }).stdout ?? e);
+  }
+  const lines = out.split("\n").filter((l) => /^(SAME|DIFF|NEW |GONE) /.test(l));
+  const shipped = brShippedIds.flatMap((id) => ["built", "queries", "botsDirect", "room", "walls"].map((p) => `SAME  ${id} ${p}`));
+  check(
+    "branch shipped: schema-hash --check: every part of the five shipped tracks SAME (built arrays, queries and validators, server bots, a room race, wall contacts) and every other line SAME",
+    ok && shipped.every((l) => lines.includes(l)) && lines.every((l) => l.startsWith("SAME")) && lines.length >= shipped.length + 3,
+    lines.filter((l) => !l.startsWith("SAME")).join("; ") || `${lines.length} parts SAME`,
+  );
+  console.log(`  BR-PHYS sim-test sections' runtime (bpQuery .. bpShipped): ${((performance.now() - bpClock.t0) / 1000).toFixed(1)} s`);
+}
+
+for (const t of [bpQuery, bpWallsCheck, bpProgress, bpRecovery, bpFeatures, bpRivets, bpRunUps, bpParity, bpWire, bpCpu, bpShipped]) {
+  console.log(`\n# ${t.name}`);
+  try {
+    t();
+  } catch (e) {
+    check(`${t.name} threw`, false, String((e as Error).stack ?? e));
   }
 }
 
