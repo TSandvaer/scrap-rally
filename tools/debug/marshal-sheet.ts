@@ -263,7 +263,7 @@ function themed(id: string, theme: Theme): Track {
 
 function contact(): Picture {
   const W = 2000;
-  const sheet = blank(W, 4200, ...rgbOf(P.soot1));
+  const sheet = blank(W, 12000, ...rgbOf(P.soot1));
   let y = 16;
   text(sheet, "MARSHALS-1: THE FLAG MARSHALS AT THE START/FINISH LINE (client/gfx/marshals.ts)", 20, y, P.bone2, 3);
   y += 44;
