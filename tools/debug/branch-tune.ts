@@ -11,9 +11,11 @@
 // contacts, and the time each route gains on the main road (s a lap).
 //
 // --races: the acceptance races (BR-BOTS criterion 4): 3 bots of each level, and the mixed 5 (Hard,
-// Normal, Easy, Normal, Hard on seats 0..4), weapons on, 3 laps, each run twice: finishes, laps, falls
-// per bot, wall and obstacle (mound, gore nose, island, mover) contacts, ticks per shortcut, the plan
-// per seat, and whether the rerun is identical (a SHA-256 over every tick's controls and car state).
+// Normal, Easy, Hard, Normal on seats 0..4, M4-TRACKS' long-track field), weapons on, 3 laps, each run
+// twice, the race kept open until every bot has finished (grace: false): finishes (and whether within the
+// game's 30 s after the winner), laps, falls per bot, wall and obstacle (mound, gore nose, island, mover)
+// contacts, ticks per shortcut, the plan per seat, and whether the rerun is identical (a SHA-256 over every
+// tick's controls and car state).
 //
 // --mistakes: 3 Hard bots with the Bot tune knob at rate 3, size 1 (weapons off and on): the mistakes
 // begun, and any step of one inside a mouth (fork or merge to MOUTH_CLEAR past its gore, on either road)
@@ -26,10 +28,10 @@
 import { createHash } from "node:crypto";
 import { botTiming, botTrace } from "../../server/bots";
 import { Room, type Player, type Session } from "../../server/room";
-import { BOT_LANES, routePlan, type BotLevel, type BotTune, type MistakeKind } from "../../shared/botdrive";
+import { BOT_LANES, routePlan, type BotControls, type BotLevel, type BotTune, type MistakeKind } from "../../shared/botdrive";
 import { CAR_TYPES, type CarType } from "../../shared/cars";
-import { wallLimit } from "../../shared/physics";
-import type { GameEvent, ServerMsg } from "../../shared/protocol";
+import { wallLimit, type CarState } from "../../shared/physics";
+import { FINISH_GRACE_MS, type GameEvent, type ServerMsg } from "../../shared/protocol";
 import { statsFor } from "../../shared/shop";
 import { MOUTH_CLEAR, queryTrackNear, roadOfSeg, type Track } from "../../shared/track";
 import { CAR_HP } from "../../shared/weapons";
@@ -49,6 +51,13 @@ export interface BranchRaceOpts {
   weapons?: boolean; // default true
   force?: (number | undefined)[]; // per bot: its route forced to this mask (else its plan)
   tune?: BotTune; // the room's Bot tune knob (HARD-2; the dev flag on for it)
+  observe?: (k: number, car: CarState, ctl: BotControls) => void; // told of every bot step (bot k, its car before the step, its controls)
+  /**
+   * false: the race stays open until every bot has finished (the harness clears the room's finish deadline,
+   * Room.phaseEnds, each tick), so a slow bot's 3 laps are measured past FINISH_GRACE_MS (30 s after the
+   * winner, the game's rule); BranchRow.inGrace says whether it made the game's deadline. Default true.
+   */
+  grace?: boolean;
 }
 
 export interface BranchRow {
@@ -67,6 +76,7 @@ export interface BranchRow {
   mistakeSteps: number;
   badMouth: number; // mistake steps inside a mouth zone
   badHazard: number; // ... within a shortcut hazard's zone
+  inGrace: boolean; // finished within FINISH_GRACE_MS of the winner (the game's deadline)
 }
 
 /** A track's mouth zones per road: [road, from, to] (main s, or u on a branch): the fork or merge to MOUTH_CLEAR past its gore. */
@@ -119,7 +129,7 @@ export function branchRace(o: BranchRaceOpts): { rows: BranchRow[]; hash: string
   const nb = t.branches.length;
   const rows: BranchRow[] = bots.map((p) => ({
     name: p.name, seat: p.bot!.slot, level: p.bot!.level, car: p.carType, plan: -1, lapTicks: [], finish: 0, falls: 0, walls: 0, obstacles: 0,
-    onBranch: new Array<number>(nb).fill(0), mistakes: { "late-brake": 0, wide: 0, wobble: 0, hesitate: 0 }, mistakeSteps: 0, badMouth: 0, badHazard: 0,
+    onBranch: new Array<number>(nb).fill(0), mistakes: { "late-brake": 0, wide: 0, wobble: 0, hesitate: 0 }, mistakeSteps: 0, badMouth: 0, badHazard: 0, inGrace: false,
   }));
   const h = createHash("sha256");
   const idx = new Map(bots.map((p, k) => [p.id, k]));
@@ -127,6 +137,7 @@ export function branchRace(o: BranchRaceOpts): { rows: BranchRow[]; hash: string
     const k = idx.get(p.id);
     if (k === undefined) return;
     const c = p.car;
+    if (c && o.observe) o.observe(k, c, ctl);
     h.update(new Uint8Array(new Float64Array([k, ctl.throttle, ctl.steer, ctl.fire ? 1 : 0, ctl.mine ? 1 : 0, ...(c ? [c.x, c.y, c.h, c.vx, c.vy, c.seg, c.wreck, c.air, c.fall, c.boost] : [0])]).buffer));
   };
   const step = () => {
@@ -156,9 +167,11 @@ export function branchRace(o: BranchRaceOpts): { rows: BranchRow[]; hash: string
     bots.forEach((p, k) => (rows[k].plan = p.bot!.mem.plan));
     const prev = bots.map(() => ({ fall: 0, lap: 0, lapAt: 0, wall: false, obstacle: false }));
     events.length = 0;
+    const open = o.grace === false;
     while (room.phase === "racing" && rt < 60 * 600) {
       step();
       rt++;
+      if (open && room.phase === "racing" && bots.some((p) => !p.progress?.fin)) room.phaseEnds = 0; // open-ended until every bot finishes
       events.length = 0;
       bots.forEach((p, k) => {
         const c = p.car, pr = p.progress, was = prev[k], row = rows[k];
@@ -192,6 +205,8 @@ export function branchRace(o: BranchRaceOpts): { rows: BranchRow[]; hash: string
   } finally {
     botTrace.fn = null;
   }
+  const first = Math.min(...rows.map((x) => (x.finish > 0 ? x.finish : Infinity)));
+  for (const x of rows) x.inGrace = x.finish > 0 && x.finish - first <= (FINISH_GRACE_MS * 60) / 1000;
   return { rows, hash: h.digest("hex"), track: t, ticks: rt };
 }
 
@@ -255,7 +270,7 @@ export function raceLines(label: string, r: ReturnType<typeof branchRace>): stri
   const out = [`${label}: ${r.ticks} race ticks, hash ${r.hash.slice(0, 16)}`];
   for (const x of r.rows) {
     out.push(
-      `  seat ${x.seat} ${x.level.padEnd(6)} ${x.car.padEnd(5)} route ${maskText(r.track, x.plan)}  finish ${x.finish ? f2(x.finish / 60) + " s" : "DNF"}  laps ${x.lapTicks.map((l) => f2(l / 60)).join(" ")}  ` +
+      `  seat ${x.seat} ${x.level.padEnd(6)} ${x.car.padEnd(5)} route ${maskText(r.track, x.plan)}  finish ${x.finish ? f2(x.finish / 60) + " s" + (x.inGrace ? "" : " (past the 30 s grace)") : "DNF"}  laps ${x.lapTicks.map((l) => f2(l / 60)).join(" ")}  ` +
         `falls ${x.falls}  walls ${x.walls}  obstacles ${x.obstacles}  on branches ${x.onBranch.join("/")}`,
     );
   }
@@ -267,7 +282,7 @@ export const ACCEPT_RACES: { label: string; levels: BotLevel[] }[] = [
   { label: "3 Easy", levels: ["easy", "easy", "easy"] },
   { label: "3 Normal", levels: ["normal", "normal", "normal"] },
   { label: "3 Hard", levels: ["hard", "hard", "hard"] },
-  { label: "mixed 5", levels: ["hard", "normal", "easy", "normal", "hard"] },
+  { label: "mixed 5", levels: ["hard", "normal", "easy", "hard", "normal"] }, // M4-TRACKS' mixed field on the long tracks (track-density.ts raceSet)
 ];
 
 function main(): void {
@@ -281,7 +296,7 @@ function main(): void {
   if (args.includes("--gain")) for (const l of gainTable(id).lines) console.log(l);
   if (args.includes("--races")) {
     for (const a of ACCEPT_RACES) {
-      const r1 = branchRace({ track: id, levels: a.levels }), r2 = branchRace({ track: id, levels: a.levels });
+      const r1 = branchRace({ track: id, levels: a.levels, grace: false }), r2 = branchRace({ track: id, levels: a.levels, grace: false });
       for (const l of raceLines(a.label, r1)) console.log(l);
       console.log(`  rerun ${r1.hash === r2.hash ? "identical" : "DIFFERS"}`);
     }

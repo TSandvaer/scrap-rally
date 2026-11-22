@@ -97,7 +97,6 @@ import {
   PRESS_DEPTH,
   pressDown,
   queryMain,
-  roadOf,
   roadOfSeg,
   segCount,
   SURF_DIRT,
@@ -1558,6 +1557,12 @@ export interface Route {
   hint: Int32Array;
   /** Per ring segment: the road it lies on. */
   segRoad: Uint8Array;
+  /**
+   * Per ring sample: the asphalt half-width the driver's lanes keep inside (its def.halfWidth on the main road,
+   * as today's driver; on a branch its own, but in a mouth and its taper the narrower side's, the main road's
+   * width there: a lane round a main-road hole just past a merge is open from the mouth).
+   */
+  half: Float64Array;
   /** Per ring cell: its index in track.cells (the race's cell timers, BotView.cells). */
   cellIdx: number[];
 }
@@ -1623,7 +1628,7 @@ function buildRoute(track: Track, mask: number): Route {
   }
   legs.push({ road: 0, s0: s, len: L - s, at: 0 });
   // The centreline, sample by sample: each with its road's per-sample half-widths and walls.
-  const pts: Vec[] = [], halfL: number[] = [], halfR: number[] = [], wallL: number[] = [], wallR: number[] = [], segRoad: number[] = [];
+  const pts: Vec[] = [], halfL: number[] = [], halfR: number[] = [], wallL: number[] = [], wallR: number[] = [], segRoad: number[] = [], laneHalf: number[] = [];
   const mainAt = new Int32Array(n).fill(-1);
   const branchAt: (Int32Array | null)[] = bs.map(() => null);
   const firstOf: number[] = []; // per leg: its first ring sample
@@ -1634,6 +1639,10 @@ function buildRoute(track: Track, mask: number): Route {
     wallL.push(r.wallL[i]);
     wallR.push(r.wallR[i]);
     segRoad.push(road);
+    // The lanes' half-width (Route.half): a branch's sample in one of its mouths' widens (the taper included) the narrower side's.
+    const u = r.cum[i];
+    const mouth = r !== track && r.widens.some((w) => (w as { mouth?: boolean }).mouth === true && u >= w.s0 && u <= w.s1);
+    laneHalf.push(mouth ? Math.min(r.halfL[i], r.halfR[i]) : r.def.halfWidth);
   };
   legs.forEach((g, li) => {
     firstOf.push(pts.length);
@@ -1736,14 +1745,22 @@ function buildRoute(track: Track, mask: number): Route {
   // beside it (its mapS); a branch's not taken, the main road's beside it.
   const mainHint = (i: number): number => {
     if (mainAt[i] >= 0) return mainAt[i];
-    const mid = (track.cum[i] + track.cum[i + 1]) / 2;
+    // Left out: a taken branch's stretch from its fork to its merge (or within ROUTE_JOIN of either end).
+    const c = track.cum[i];
     for (const k of take) {
       const b = bs[k];
-      if (mid >= b.s0 - 1 && mid <= b.s1 + 1) return branchAt[k]![Math.min(lastAtOrBelow(b.mapS, mid), segCount(b.road) - 1)];
+      if (c >= b.s0 - 2 * ROUTE_JOIN && c <= b.s1 + 2 * ROUTE_JOIN) return branchAt[k]![Math.min(lastAtOrBelow(b.mapS, c), segCount(b.road) - 1)];
     }
-    // Not on the ring nor beside a taken branch (cannot happen): the ring's sample nearest in s.
-    let best = 0;
-    for (let j = 0; j < n; j++) if (mainAt[j] >= 0 && track.cum[j] <= track.cum[i]) best = mainAt[j];
+    // (Not reached: every main sample is on the ring or beside a taken branch.) The nearest ring sample.
+    let best = 0, bd = Infinity;
+    const p = track.pts[i];
+    for (let j = 0; j < pts.length; j++) {
+      const d = (pts[j].x - p.x) ** 2 + (pts[j].y - p.y) ** 2;
+      if (d < bd) {
+        bd = d;
+        best = j;
+      }
+    }
     return best;
   };
   const hint = new Int32Array(track.mouthAt.length);
@@ -1753,7 +1770,16 @@ function buildRoute(track: Track, mask: number): Route {
   });
   let built = 0;
   for (const k of take) built |= 1 << k;
-  return { mask: built, ring, legs, hint, segRoad: Uint8Array.from(segRoad), cellIdx };
+  return { mask: built, ring, legs, hint, segRoad: Uint8Array.from(segRoad), half: Float64Array.from(laneHalf), cellIdx };
+}
+
+/** The lanes' half-width (Route.half) at route distance s on ring segment seg: its two samples', linear between them. */
+function routeHalf(route: Route, seg: number, s: number): number {
+  const h = route.half, ring = route.ring, n = h.length;
+  const a = h[seg], b = h[seg + 1 < n ? seg + 1 : 0];
+  if (a === b) return a;
+  const c0 = ring.cum[seg], len = ring.cum[seg + 1] - c0;
+  return a + (b - a) * (len > 0 ? clamp((s - c0) / len, 0, 1) : 0);
 }
 
 /** routeStep's position on its route (one object, refilled): the leg, the road, its s on that road and the main s beside it. */
@@ -1794,6 +1820,9 @@ function jumpReach(b: PlacedBranch, toFork: number, v: number, stats: CarStats):
   return true;
 }
 
+/** routeStep builds every route of a track with at most this many branches at its first plan (2^n rings). */
+const ROUTE_PREBUILD = 4;
+
 /** routeStep's answer (one object, refilled): the route this step and the bot's query on its ring. */
 const ROUTE_STEP: { route: Route; q: TrackQuery } = { route: null as unknown as Route, q: null as unknown as TrackQuery };
 
@@ -1813,6 +1842,9 @@ function routeStep(view: BotView, mem: BotMem, c: CarState): typeof ROUTE_STEP {
     mem.planTrack = track;
     mem.route = mem.plan;
     mem.forkDone = 0;
+    // Every route it may switch to (a jump given up, a bump past a gore), built now (the countdown, first
+    // bot only: routeOf keeps them per track) rather than in a race tick; up to ROUTE_PREBUILD branches.
+    if (bs.length <= ROUTE_PREBUILD) for (let m = 0; m < 1 << bs.length; m++) routeOf(track, m);
   }
   let route = routeOf(track, mem.route);
   let q = queryMain(route.ring, c.x, c.y, route.hint[c.seg]);
@@ -1907,10 +1939,11 @@ export function botControls(view: BotView, mem: BotMem): BotControls {
     ring = route.ring;
     q = rs.q;
   }
-  // The road it is on (a route's leg's): its asphalt and wall, and its seat's racing line scaled to its width.
-  const road = route === null ? track : roadOf(track, route.segRoad[q.seg]);
-  const half = road.def.halfWidth, wall = road.wall;
-  const lateral = road === track ? mem.lateral : (mem.lateral * (half - CAR_WIDTH / 2)) / (track.def.halfWidth - CAR_WIDTH / 2);
+  // The road it is on (a route's leg's): its lanes' asphalt half-width and wall (Route.half), and its seat's
+  // racing line scaled to that width (on the main road: the track's, today's).
+  const half = route === null ? track.def.halfWidth : routeHalf(route, q.seg, q.s);
+  const wall = route === null ? track.wall : half + track.def.verge;
+  const lateral = half === track.def.halfWidth ? mem.lateral : (mem.lateral * (half - CAR_WIDTH / 2)) / (track.def.halfWidth - CAR_WIDTH / 2);
   const v = speedOf(c);
   const p = pointAt(ring, q.s);
   const dir = p.h;
@@ -2017,10 +2050,10 @@ export function botControls(view: BotView, mem: BotMem): BotControls {
     lane = clamp(lane, lo, Math.max(lo, hi));
   }
   if (route !== null) {
-    // BR-BOTS: an aim point on a narrower road (a shortcut beyond its fork): inside its asphalt there.
-    const ar = roadOf(track, route.segRoad[t.seg]);
-    if (ar.def.halfWidth < half) {
-      const m = ar.def.halfWidth - CAR_WIDTH / 2 - 2;
+    // BR-BOTS: an aim point where the road is narrower (a shortcut past its mouth's taper): inside its asphalt there.
+    const ah = routeHalf(route, t.seg, aim);
+    if (ah < half) {
+      const m = ah - CAR_WIDTH / 2 - 2;
       lane = clamp(lane, -m, m);
     }
   }
