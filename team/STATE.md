@@ -586,6 +586,8 @@ re-run in the foreground. MOVE fix round 1 done: 84b1323 (7366491 F1-F4 + notes,
 Re-review (fixes + criterion 9) sent to ctx_b64bf57fdff3.
 QA11 live PASS (ctx_1c351f557824, released; tmp/qa11-live-report.md): point mode faces the stick (<5 deg at 250 ms), brakes/turns
 round, wall back-out, Mode switch; SURF-2 regression ok (3 bots x2 on Overpass Knot, 0 falls). ClickUp complete: TOUCH-5, M4-SURF-2.
+User popups: rate stick stays debug-only; no straight-line brake. User stick values: radius 67 (rest unchanged) -> TOUCH-6
+123jpnbfgh3 (Opus) in flight: ctx_2e38d6f098e2 (~/orca/workspaces/scrap-rally/touch-6, :3006; spec tmp/spec-touch-6.md).
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
