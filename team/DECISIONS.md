@@ -151,3 +151,4 @@
 - 2026-11-22 — Cap (user popup): BR-BOTS started by mistake as a 4th active author; kept as a one-off 4th (no file overlap). The cap of 3 stays the rule.
 - 2026-11-22 — S8 (Branch Yard fly-through, BR-BAKE question; orchestrator): judged per frame without bake steps vs the same frames without shortcuts (1.015/0.982) and the whole lap vs the dearest shipped lap (0.893); the higher lap mean is extra bake work for the second road. Noted in PLAN-BRANCH.md.
 - 2026-11-22 — BR-BOTS (orchestrator): an Easy bot finishing > 30 s behind the winner is cut off by the existing FINISH_GRACE (normal rule; e.g. the Easy Truck 32.4 s behind on Branch Yard's mixed race) - accepted, no change.
+- 2026-11-22 — MARSHALS-1 speed (orchestrator): one 5 us timer step more on S1 where the marshals are drawn (four sprites), none where culled - accepted. Small final round (late-join flag burst, flags during a pause, stale comment, per-side walls) before the merge.
