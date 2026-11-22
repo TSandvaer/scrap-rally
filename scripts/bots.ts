@@ -396,6 +396,7 @@ async function run(ctx: Ctx, bots: Bot[]): Promise<void> {
   await runSurf(ctx, bots);
   await runSplit(ctx, bots);
   await runMove(ctx, bots);
+  await runLong(ctx, bots);
 }
 
 const lost = new Map<string, (ConnReason | undefined)[]>();
@@ -2255,5 +2256,113 @@ async function runMove(ctx: Ctx, bots: Bot[]): Promise<void> {
     for (const b of [H, S]) b.game.leave();
     if (old === undefined) delete process.env.SCRAP_DEV_TRACK;
     else process.env.SCRAP_DEV_TRACK = old;
+  }
+}
+
+// ---- the two long tracks, Slag Harbour and Breaker's Mile (M4-TRACKS, ClickUp 123jpnbffz6) ----
+
+// This section's imports (hoisted like the ones at the top).
+import { islandContact as longIslandContact } from "../tools/debug/split-tune";
+import { touchesMound as longTouchesMound } from "../tools/debug/surf-tune";
+
+/**
+ * Over a lagged link on each long track (shipped: no dev flag): a lagged socket bot (80±10 ms, line 0)
+ * races an unlagged one (line 24, in Slag Harbour's truck band: it jumps the truck). Both are blind to
+ * the barrels and the press (botdrive MOVE.see false), so the lagged one drives into them, and it is
+ * stalled for 30 steps (an underrun: nothing predicted or sent) just before Slag Harbour's first row of
+ * barrels and Breaker's Mile's press, so those contacts come while its race tick is skewed. The bounds
+ * are the Move Yard's (MOVE_LAGGED, M4-MOVE Notes): a median reconciliation error below 0.5, at most 4
+ * errors above 13 units, none above 40, at most 4 state mismatches.
+ */
+async function runLong(ctx: Ctx, bots: Bot[]): Promise<void> {
+  for (const [id, n] of [["slag-harbour", 6], ["breakers-mile", 7]] as const) {
+    const t = trackById(id);
+    const H = new Bot(`Hotel${n}`, ctx.url, 24);
+    const S = new Bot(`Victor${n}`, ctx.url, 0, { lag: 80, jitter: 10 });
+    bots.push(H, S);
+    for (const b of [H, S]) b.weapons = false;
+    let stall = 0, stalls = 0;
+    const step = S.step.bind(S);
+    S.step = () => {
+      if (stall > 0) stall--; // no game.step: nothing predicted, nothing sent (an underrun)
+      else step();
+    };
+    let room: ReturnType<typeof ctx.server.rooms.rooms.get> | undefined;
+    let tick: ((tk: number, now: number) => void) | null = null;
+    MOVE_BOTS.see = false;
+    try {
+      H.game.create(H.name);
+      await waitFor(`${id}: H welcome`, () => !!H.game.you, 3000);
+      S.game.join(H.game.code, S.name);
+      await waitFor(`${id}: S in H's room`, () => H.game.players.length === 2 && !!S.game.you, 3000);
+      room = ctx.server.rooms.rooms.get(H.game.code)!;
+      H.game.pickTrack(id);
+      await waitFor(`${id}: both clients on it`, () => H.game.trackId === id && S.game.trackId === id, 3000);
+      check(`${id} over sockets: the host picks it (no dev flag) and both clients build that track`, room.trackId === id && H.game.track === t && S.game.track === t, `room ${room.trackId}`);
+      const r = room;
+      tick = r.tick.bind(r);
+      const met = { barrel: 0, press: 0, truck: 0, mound: 0, island: 0, jumps: 0, sJumps: 0, falls: 0 };
+      const truth = new Map<number, number>();
+      let last = -1, hAir = false, sAir = false, sFall = false;
+      const at = id === "slag-harbour" ? r.track.barrels[0].s : r.track.presses[0].s;
+      r.tick = (tk: number, now: number) => {
+        tick!(tk, now);
+        if (r.phase !== "racing") return;
+        const p = r.players.get(S.game.you);
+        if (p && p.car && p.ack !== last) {
+          last = p.ack;
+          truth.set(p.ack, r.rt);
+        }
+        const c = p?.car;
+        if (c) {
+          if (c.air > 0 && !sAir) met.sJumps++;
+          sAir = c.air > 0;
+          if (c.fall > 0 && !sFall) met.falls++;
+          sFall = c.fall > 0;
+        }
+        if (c && !p.progress?.fin && c.air === 0 && c.fall === 0) {
+          const q = queryTrackNear(r.track, c.x, c.y, c.seg);
+          if (stalls === 0 && q.s > at - 220 && q.s < at) {
+            stalls++;
+            stall = 30;
+          }
+          const hit = moveContact(r.track, c, r.rt);
+          if (hit) met[hit]++;
+          if (longTouchesMound(r.track, c)) met.mound++;
+          if (longIslandContact(r.track, c)) met.island++;
+        }
+        const hc = r.players.get(H.game.you)?.car;
+        if (hc) {
+          if (hc.air > 0 && !hAir) met.jumps++;
+          hAir = hc.air > 0;
+        }
+      };
+      const e0 = S.game.recErrors.length, st0 = S.game.recStateErrors, log0 = S.game.rtLog.length;
+      const rows = await runRace(id, bots, H, [H, S]);
+      const errs = S.game.recErrors.slice(e0);
+      const s = stats(errs);
+      const over13 = errs.filter((x) => x > 13).length;
+      const st = S.game.recStateErrors - st0;
+      const log = S.game.rtLog.slice(log0).filter(([seq]) => truth.has(seq));
+      const live = absStats(log.map(([seq, rt0]) => rt0 - truth.get(seq)!));
+      const contacts = id === "slag-harbour" ? met.barrel : met.press;
+      const jumped = id === "slag-harbour" ? met.jumps >= 1 : met.jumps >= 1 && met.sJumps >= 1;
+      console.log(
+        `      ${S.name} (80±10 ms, line 0, blind, stalled 30 steps before ${id === "slag-harbour" ? "the first barrels" : "the press"}) and ${H.name} (line 24) on ${t.def.name}: ${S.name}'s contact ticks barrel ${met.barrel}, press ${met.press}, truck ${met.truck}, mound ${met.mound}, island ${met.island}; falls ${met.falls}, take-offs ${met.sJumps}; ${H.name}'s take-offs ${met.jumps}; ` +
+          `rt skew live max ${live.max} (exact ${(100 * live.exact).toFixed(1)}%); rec err n=${s.n} median=${s.median.toFixed(3)} p95=${s.p95.toFixed(3)} max=${s.max.toFixed(2)}, ${over13} > 13; state mismatches ${st}; ` +
+          `finish ${rows.map((x) => `${x.name} ${(x.timeMs / 1000).toFixed(2)}s`).join(", ")}`,
+      );
+      check(
+        `${id} over sockets: a lagged bot (80±10 ms), blind to the barrels and the press and stalled before them (its race tick skewed), races it and hits them: both finish, the unlagged one jumps, it keeps a median reconciliation error below 0.5, at most ${MOVE_LAGGED.over13} errors above 13 units, none above ${MOVE_LAGGED.max}, at most 4 state mismatches`,
+        rows.length === 2 && rows.every((x) => x.timeMs > 0) && stalls === 1 && contacts > 0 && jumped &&
+          s.n > 500 && s.median < 0.5 && over13 <= MOVE_LAGGED.over13 && s.max <= MOVE_LAGGED.max && st <= 4 && H.errors.length + S.errors.length === 0,
+        `contacts barrel ${met.barrel} / press ${met.press} / truck ${met.truck}; take-offs ${met.jumps} / ${met.sJumps}; median ${s.median.toFixed(3)}, max ${s.max.toFixed(2)}, ${over13} > 13; skew live max ${live.max}; state mismatches ${st}`,
+      );
+    } finally {
+      MOVE_BOTS.see = true;
+      S.step = step;
+      if (room && tick) room.tick = tick;
+      for (const b of [H, S]) b.game.leave();
+    }
   }
 }

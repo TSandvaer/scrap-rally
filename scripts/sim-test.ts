@@ -1532,8 +1532,8 @@ function roomTrack(): void {
   const rust = trackById(DEFAULT_TRACK_ID);
   check("track: the test loop is nowhere near Rust Bowl", loop.pts.every((q) => queryTrack(rust, q.x, q.y).dist > 4 * rust.wall));
   check(
-    "track: the registry ships rust-bowl (first, the default), crusher-run and overpass-knot, keyed by TrackDef.id",
-    trackList().map((e) => e.id).join() === `${DEFAULT_TRACK_ID},crusher-run,overpass-knot,${LOOP}` &&
+    "track: the registry ships rust-bowl (first, the default), crusher-run, overpass-knot, slag-harbour and breakers-mile, keyed by TrackDef.id",
+    trackList().map((e) => e.id).join() === `${DEFAULT_TRACK_ID},crusher-run,overpass-knot,slag-harbour,breakers-mile,${LOOP}` &&
       rust.def === RUST_BOWL && trackList()[0].name === RUST_BOWL.name &&
       trackById("crusher-run").def === CRUSHER_RUN && trackById("overpass-knot").def === OVERPASS_KNOT,
     trackList().map((e) => e.id).join(),
@@ -11408,10 +11408,11 @@ function surfValidate(): void {
 }
 
 function surfLanes(): void {
-  // laneFor: with neither a mound nor a surface ahead it is holeLane exactly (every shipped track).
+  // laneFor: with neither a mound nor a surface ahead it is holeLane exactly (the three original shipped
+  // tracks; M4-TRACKS: the long tracks have mounds and surfaces).
   let diff = 0, n = 0;
-  for (const e of trackList()) {
-    const t = trackById(e.id);
+  for (const id of ["rust-bowl", "crusher-run", "overpass-knot"]) {
+    const t = trackById(id);
     for (let s = 0; s < t.length; s += 13) {
       const p = pointAt(t, s);
       for (const [look, pref] of [[200, 0], [400, -24], [330, 30]]) {
@@ -11485,10 +11486,16 @@ function surfShipped(): void {
     out = String((e as { stdout?: string }).stdout ?? e);
   }
   const lines = out.split("\n").filter((l) => /^(SAME|DIFF) /.test(l));
+  // M4-TRACKS (coordinator's rule): every line of the three original tracks present and SAME; every
+  // other line SAME or new (a track the golden file has no entry for yet: schema-hash prints it DIFF),
+  // with no exact total. ok (the exit code) is not required: schema-hash exits 1 on a new track too.
+  const golden = JSON.parse(surfRead("tools/debug/schema-hash.golden.json", "utf8")) as Record<string, unknown>;
+  const original = ["rust-bowl", "crusher-run", "overpass-knot"].flatMap((id) => ["built", "queries", "botsDirect", "room", "walls"].map((part) => `SAME  ${id} ${part}`));
+  const changed = lines.filter((l) => l.startsWith("DIFF") && l.split(/\s+/)[1] in golden);
   check(
     "surf shipped: tools/debug/schema-hash.ts --check: every part SAME on every shipped track (built, queries, botsDirect, room, walls), against the golden recorded before M4-SURF changed physics",
-    ok && lines.length === 15 && lines.every((l) => l.startsWith("SAME")),
-    lines.filter((l) => l.startsWith("DIFF")).join("; ") || `${lines.length} parts SAME`,
+    original.every((l) => lines.includes(l)) && changed.length === 0,
+    changed.join("; ") || `the original 15 SAME: ${original.every((l) => lines.includes(l))}; ${lines.filter((l) => l.startsWith("SAME")).length} SAME, ${lines.length - lines.filter((l) => l.startsWith("SAME")).length} new${ok ? "" : " (exit code 1)"}`,
   );
   const got = surfTune.hardHashes();
   const bad = Object.keys(SURF_HARD_GOLDEN).filter((k) => got[k] !== SURF_HARD_GOLDEN[k]);
@@ -11695,10 +11702,11 @@ function splitSL(t: Track, c: { x: number; y: number; seg: number }): { s: numbe
 
 function splitWalls(): void {
   splitClock.t0 = performance.now();
-  // Shipped tracks (no widen): the per-sample walls are the constants, exactly.
+  // Shipped tracks (no widen): the per-sample walls are the constants, exactly (the three original ones;
+  // M4-TRACKS: the long tracks have widens).
   let n = 0, diff = 0;
-  for (const e of trackList()) {
-    const t = trackById(e.id);
+  for (const id of ["rust-bowl", "crusher-run", "overpass-knot"]) {
+    const t = trackById(id);
     for (let i = 0; i < t.pts.length; i += 3) {
       for (let lat = -230; lat <= 230; lat += 23) {
         const q = splitQuery(t, t.cum[i] + 5.3, lat);
@@ -12206,9 +12214,10 @@ function splitBots(): void {
     JSON.stringify(sides) === JSON.stringify({ tie: [-1, -1, 1, 1], types: [-1, -1, 1], bend: [1, 1, 1] }) && C.lenL - C.lenR > 80,
     JSON.stringify(sides) + ` (bend lanes ${C.lenL.toFixed(1)} / ${C.lenR.toFixed(1)})`,
   );
-  // On a plain track there is no split: splitFor is null, laneFor's span path never runs.
-  const none = trackList().every((e) => {
-    const t = trackById(e.id);
+  // On a plain track there is no split: splitFor is null, laneFor's span path never runs (the three
+  // original shipped tracks; M4-TRACKS: the long tracks have splits).
+  const none = ["rust-bowl", "crusher-run", "overpass-knot"].every((id) => {
+    const t = trackById(id);
     return t.islands.length === 0 && splitBot.splitFor(t, 100, 3, 0, 400, 0, BASE_STATS) === null;
   });
   check("split bots: on the shipped tracks there is no island and splitFor is null (the bots drive as before)", none);
@@ -13435,6 +13444,312 @@ function moveReview1(): void {
 }
 
 for (const t of [moveBarrels, moveSolids, moveLandings, moveRivets, moveRespawn, moveSweep, moveBuckets, moveParity, moveBots, moveShipped, moveDraw, moveReview1, moveCpu, moveDevFlag]) {
+  console.log(`\n# ${t.name}`);
+  try {
+    t();
+  } catch (e) {
+    check(`${t.name} threw`, false, String(e));
+  }
+}
+
+// ---- M4-TRACKS (ClickUp 123jpnbffz6): the two long tracks, Slag Harbour and Breaker's Mile ----------
+// This section's imports (hoisted like the ones at the top).
+import { BREAKERS_MILE, SLAG_HARBOUR } from "../shared/longtracks";
+import * as longW from "../shared/weapons";
+import * as longDensity from "../tools/debug/track-density";
+import * as longBot from "../shared/botdrive";
+import { CAR_TYPES as LONG_CAR_TYPES } from "../shared/cars";
+import { statsFor as longStatsFor } from "../shared/shop";
+import { isTrackId as longIsTrackId, trackName as longTrackName } from "../shared/tracks";
+import { draftTopSpeed as longDraftTop, boostTopSpeed as longBoostTop } from "../shared/catchup";
+
+const LONG_IDS = ["slag-harbour", "breakers-mile"];
+const longClock = { t0: 0 };
+
+function longRegistry(): void {
+  longClock.t0 = performance.now();
+  // Both in the registry after the three shipped tracks (their order and ids stay), with their names
+  // (the lobby lists trackList()'s names), and a host can pick them with no dev flag.
+  const list = trackList();
+  const ids = list.map((e) => e.id);
+  const okOrder = ids.indexOf("slag-harbour") === 3 && ids.indexOf("breakers-mile") === 4 && ids.slice(0, 3).join() === "rust-bowl,crusher-run,overpass-knot";
+  const named = list[3]?.name === "Slag Harbour" && list[4]?.name === "Breaker's Mile" && longTrackName("slag-harbour") === "Slag Harbour" && longTrackName("breakers-mile") === "Breaker's Mile";
+  const defs = trackById("slag-harbour").def === SLAG_HARBOUR && trackById("breakers-mile").def === BREAKERS_MILE;
+  const picked = withDevTrack(undefined, () => {
+    const sim = new Sim(1);
+    const host = sim.add("Host");
+    const out = LONG_IDS.map((id) => {
+      const e = sim.room.setTrack(host, id);
+      return `${id}: ${e ?? `room on ${sim.room.trackId}`}`;
+    });
+    return out;
+  });
+  check(
+    "long tracks: Slag Harbour and Breaker's Mile are in the registry after the three shipped tracks (order and ids kept), named in the lobby's list, and a host picks them with no dev flag",
+    okOrder && named && defs && LONG_IDS.every(longIsTrackId) && picked.every((m, i) => m === `${LONG_IDS[i]}: room on ${LONG_IDS[i]}`),
+    `${ids.join(", ")}; ${list.map((e) => e.name).join(", ")}; ${picked.join("; ")}`,
+  );
+}
+
+function longValidate(): void {
+  // Every car type at L0 and L3: the layout (validateTrack: the schema rules for surfaces, mounds, splits,
+  // barrels, the press and the truck), the run-ups from rest (validateRunUps, through every pool in a
+  // run-up and each split lane), every jump and the truck's at overspeed (validateJumpSweep at the
+  // slipstream's 473 and a boost's 537 u/s), the air cells reachable (validateCells up to 537).
+  const draft = longDraftTop(430), boost = longBoostTop(430);
+  const rows: string[] = [];
+  let ok = true;
+  for (const id of LONG_IDS) {
+    const t = trackById(id);
+    const errs = [...validateTrack(t), ...longW.validateCells(t, boost)];
+    for (const car of LONG_CAR_TYPES) {
+      for (const lv of [0, 3]) {
+        const st = longStatsFor(car, { engine: lv, tyres: lv, welder: lv });
+        errs.push(...longW.validateRunUps(t, st).map((m) => `${car} L${lv}: ${m}`));
+        for (const v of [draft, 473, 537, boost]) errs.push(...longW.validateJumpSweep(t, v, st).map((m) => `${car} L${lv} at ${v.toFixed(1)}: ${m}`));
+      }
+    }
+    ok &&= errs.length === 0;
+    rows.push(`${id}: length ${t.length.toFixed(0)}, ${t.ramps.length} ramp(s), ${t.trucks.length} truck(s), ${t.islands.length} split(s), ${t.cells.length} cells; ${errs.length ? errs.join(" | ") : "valid"}`);
+  }
+  check(
+    `long tracks validate for every car type at L0 and L3: validateTrack, validateRunUps, validateJumpSweep at ${draft.toFixed(1)} and 473 (slipstream), 537 and ${boost.toFixed(1)} u/s (boost) (ramps and the truck), validateCells up to ${boost.toFixed(1)}`,
+    ok && Math.round(draft) === 473 && Math.floor(boost) === 537,
+    rows.join("; "),
+  );
+  // Recovery points: the start line listed, one before every hazard (each jump and each pit is driven
+  // from the one before it by validateRunUps), and none on a solid or in the water (validateTrack).
+  const rec = LONG_IDS.map((id) => {
+    const t = trackById(id);
+    const hazards = [...t.ramps.map((r) => r.s), ...t.holes.map((h) => h.s - h.r)];
+    const before = hazards.every((s) => t.recovery.some((r) => r < s && s - r < 1500));
+    return { id, ok: t.def.recovery?.[0] === 0 && before && t.recovery.length >= 4, rec: t.recovery.join(",") };
+  });
+  check("long tracks: recovery points: the start line listed, one within 1500 before every jump and pit, at least four round the lap", rec.every((r) => r.ok), rec.map((r) => `${r.id} ${r.rec}`).join("; "));
+}
+
+function longTruckCell(): void {
+  // airCellReach flies a ramp truck's lip too (coordinator's Q1 A): on the Move Yard an air cell over
+  // the truck's flight validates; the same cell with the truck taken away, one far past the flight
+  // and one off the band's side are refused. Slag Harbour's cell over its truck is reachable.
+  const base = MOVE_YARD.features ?? [];
+  const tk = trackById("slag-harbour").trucks[0];
+  const yard = (extra: moveTrack.Feature[], keepTruck = true) =>
+    buildTrack({ ...MOVE_YARD, id: "long-cell-yard", features: [...base.filter((f) => keepTruck || f.k !== "truck"), ...extra] });
+  const mt = yard([]).trucks[0];
+  const over = { k: "cell" as const, s: mt.lip + 160, lat: mt.lat + 10, air: true };
+  const boost = longBoostTop(430);
+  const good = longW.validateCells(yard([over]), boost);
+  const noTruck = longW.validateCells(yard([over], false), boost);
+  const far = longW.validateCells(yard([{ ...over, s: mt.lip + 900 }]), boost);
+  const side = longW.validateCells(yard([{ ...over, lat: -40 }]), boost);
+  const reach = longW.airCellReach(yard([over]), yard([over]).cells[0], boost);
+  const slag = trackById("slag-harbour");
+  const slagCell = slag.cells.find((c) => c.air)!;
+  const slagReach = longW.airCellReach(slag, slagCell, boost);
+  check(
+    "long tracks: an air cell over a ramp truck's flight validates (airCellReach flies the truck's lip across its band); with no truck, far past the flight or off the band's side it is refused; Slag Harbour's air cell over its truck is reachable",
+    good.length === 0 && noTruck.length === 1 && far.length === 1 && side.length === 1 && !!reach && reach.min >= longW.CELL_MIN_TAKEOFF && !!slagReach && slagCell.s > tk.lip && slagCell.lat >= tk.band0 && slagCell.lat <= tk.band1,
+    `Move Yard truck lip ${mt.lip.toFixed(0)}, cell s ${over.s.toFixed(0)} lat ${over.lat}: ${good.join(" | ") || `valid, from ${reach?.min}..${reach?.max} u/s on ${reach?.lanes} lanes`}; no truck: ${noTruck.length}; far: ${far.length}; side: ${side.length}; Slag Harbour cell s ${slagCell.s} lat ${slagCell.lat}: ${slagReach ? `${slagReach.min}..${slagReach.max} u/s on ${slagReach.lanes} lanes` : "unreachable"}`,
+  );
+}
+
+function longDensityRules(): void {
+  // The user's rules (PLAN-M4 "User feedback for M4-TRACKS" and "Mud length"), measured by
+  // tools/debug/track-density.ts: obstacle groups spaced (no two kinds back to back: no mixed group;
+  // at least 1000 units of obstacle-free road between two groups and between two obstacles of
+  // different kinds), most of the lap plain, and no dirt stretch longer than 350.
+  const rows: string[] = [];
+  let ok = true;
+  for (const id of LONG_IDS) {
+    const d = longDensity.densityOf(trackById(id));
+    const good = d.mixed.length === 0 && d.shortestGap >= 1000 && d.breather.gap >= 1000 && d.clear >= 0.85 && d.mud.every((m) => m.length <= 350);
+    ok &&= good;
+    rows.push(`${id}: ${d.groups.length} groups, shortest gap ${d.shortestGap.toFixed(0)}, breather ${d.breather.gap.toFixed(0)}, plain ${(d.plain * 100).toFixed(1)} % (obstacle-free ${(d.clear * 100).toFixed(1)} %), mixed ${d.mixed.length}, dirt ${d.mud.map((m) => m.length.toFixed(0)).join("/") || "none"}`);
+  }
+  check("long tracks density: no two obstacle kinds back to back, >= 1000 of clear road between obstacle groups and between kinds, >= 85 % of the lap obstacle-free, every dirt stretch <= 350", ok, rows.join("; "));
+}
+
+function longFeatures(): void {
+  // PLAN-M4 2.7 as the ticket asks, adapted to the density and mud rules.
+  const sh = trackById("slag-harbour"), bm = trackById("breakers-mile");
+  const shorterSide = (i: moveTrack.PlacedIsland) => (i.lenL < i.lenR ? -1 : 1);
+  const inLane = (i: moveTrack.PlacedIsland, f: { lat0: number; lat1: number }, side: number) => (side < 0 ? f.lat1 <= i.lat0 : f.lat0 >= i.lat1);
+  // Slag Harbour: the split with the flooded short lane (a ground cell in the pool) and the dry long one.
+  const si = sh.islands[0];
+  const pool = sh.water.find((w) => w.s0 < si.s1 && w.s1 > si.s0);
+  const sSide = shorterSide(si);
+  const poolCell = pool && sh.cells.find((c) => !c.air && c.s > pool.s0 && c.s < pool.s1 && c.lat > pool.lat0 && c.lat < pool.lat1);
+  const dryLong = (sSide < 0 ? si.surfR : si.surfL).length === 0;
+  const chicane = sh.tyres.length >= 3 && sh.tyres.every((m, k) => k === 0 || Math.sign(m.lat) !== Math.sign(sh.tyres[k - 1].lat));
+  const slag = sh.islands.length === 1 && !!pool && inLane(si, pool, sSide) && !!poolCell && dryLong && sh.barrels.length >= 1 && sh.trucks.length === 1 && sh.cells.some((c) => c.air && c.s > sh.trucks[0].lip && c.s - sh.trucks[0].lip < 600) && chicane && sh.belts.length >= 1;
+  check(
+    "long tracks: Slag Harbour has barrels off the quay, a split whose shorter lane is flooded (a ground cell in the pool) and whose longer lane is dry, a ramp truck with an air cell over its flight, a tyre-mound chicane and a belt",
+    slag,
+    `split ${si.s0}..${si.s1} lanes ${si.lenL.toFixed(0)} / ${si.lenR.toFixed(0)}, the ${sSide < 0 ? "left" : "right"} shorter, pool ${pool?.s0}..${pool?.s1}, cell in it ${poolCell ? `${poolCell.s}/${poolCell.lat}` : "none"}; barrels ${sh.barrels.length}; truck ${sh.trucks.length}; mounds ${sh.tyres.map((m) => m.lat).join(",")}; belts ${sh.belts.length}`,
+  );
+  // Breaker's Mile: two plain straights of >= 1500, a dirt shortcut split (the dirt in the shorter
+  // lane, <= 350, the longer lane clean), a crusher press, a chasm jump with an air cell over it, a pit pair.
+  const d = longDensity.densityOf(bm);
+  const plainStraights = d.straights.filter((s) => s.plain >= 1500);
+  const bi = bm.islands[0];
+  const dirt = bm.dirt.find((f) => f.s0 < bi.s1 && f.s1 > bi.s0);
+  const bSide = shorterSide(bi);
+  const gap = bm.gaps[0];
+  const mile = plainStraights.length >= 2 && bm.islands.length === 1 && !!dirt && inLane(bi, dirt, bSide) && dirt.s1 - dirt.s0 <= 350 &&
+    (bSide < 0 ? bi.surfR : bi.surfL).length === 0 && bm.presses.length >= 1 && bm.ramps.length === 1 && !!gap &&
+    bm.cells.some((c) => c.air && c.s > gap.s0 && c.s < gap.s1) && bm.holes.length === 2;
+  check(
+    "long tracks: Breaker's Mile has two plain straights of >= 1500 for drafting, a dirt shortcut split (the dirt, <= 350, in the shorter lane), a crusher press, a chasm jump with an air cell over it and a pit pair",
+    mile,
+    `straights ${d.straights.map((s) => `${s.s0.toFixed(0)}..${s.s1.toFixed(0)} plain ${s.plain.toFixed(0)}`).join(", ")}; split lanes ${bi.lenL.toFixed(0)} / ${bi.lenR.toFixed(0)}, dirt ${dirt?.s0}..${dirt?.s1}; presses ${bm.presses.length}; gap ${gap?.s0}..${gap?.s1}; pits ${bm.holes.length}`,
+  );
+}
+
+/**
+ * The stated bounds on the long tracks' bot races (longBots): per bot per race, ticks touching (walls:
+ * hit at >= 50 u/s), weapons off, then on (a mine or a rivet can spin a bot into one). Measured
+ * 2026-11-22: weapons off all 0; on at most walls 3, mound 1, island 2, truck 1.
+ */
+const LONG_BOUNDS = {
+  off: { walls: 2, mound: 2, island: 2, barrel: 0, press: 0, truck: 0 },
+  on: { walls: 8, mound: 6, island: 6, barrel: 4, press: 4, truck: 4 },
+};
+
+function longBots(): void {
+  // Server bots, 3 laps, per level (Easy, Normal, Hard; Sport, Racer, Truck by add order), weapons off
+  // and on, and five mixed bots with weapons: every bot finishes, Normal laps 50-60 s each, at most one
+  // fall per bot per race, contacts within LONG_BOUNDS, and a rerun is identical.
+  const rows: string[] = [];
+  let ok = true;
+  for (const id of LONG_IDS) {
+    for (const r of longDensity.raceSet(id)) {
+      const a = r.a;
+      const on = r.name.includes("weapons");
+      const b = on ? LONG_BOUNDS.on : LONG_BOUNDS.off;
+      const n = a.cars.length;
+      const within = [...Array(n).keys()].every((k) => a.walls[k] <= b.walls && a.mounds[k] <= b.mound && a.sides[k] + a.noses[k] <= b.island && a.barrels[k] <= b.barrel && a.presses[k] <= b.press && a.trucks[k] <= b.truck);
+      const finished = a.phase === "results" && a.laps.every((l) => l.length === 3);
+      const normalLaps = !r.name.startsWith("normal") || a.laps.every((l) => l.every((x) => x >= 50 && x <= 60));
+      const good = finished && normalLaps && a.falls.every((f) => f <= 1) && within && r.same;
+      ok &&= good;
+      rows.push(`${id} ${r.name}: ${good ? "" : "FAIL "}laps ${a.laps.map((l) => l.map((x) => x.toFixed(1)).join(",")).join(" | ")}; falls ${a.falls.join("/")}; walls ${a.walls.join("/")} mound ${a.mounds.join("/")} island ${a.sides.map((x, k) => x + a.noses[k]).join("/")} barrel ${a.barrels.join("/")} press ${a.presses.join("/")} truck ${a.trucks.join("/")}; ${r.same ? "rerun same" : "RERUN DIFFERS"}`);
+    }
+  }
+  console.log(`  ${rows.join("\n  ")}`);
+  check(
+    "long tracks bots: Easy, Normal and Hard server bots (and five mixed) finish 3 laps on both tracks, weapons off and on, Normal laps 50-60 s each, <= 1 fall per bot per race, contacts within LONG_BOUNDS, identically on a rerun",
+    ok,
+    rows.filter((r) => r.includes("FAIL")).join("; ") || `${rows.length} races`,
+  );
+}
+
+function longParity(): void {
+  // stepRaceCar on a clone at the room's race tick equals the server's pose bit for bit every tick: a
+  // lone server bot per level and type over a lap of each track (barrels and the truck's band at the race
+  // tick, the pools, the belt, the mounds, the splits, the press, the jump and the pits); and three client
+  // cars over the wire, no lag, predict each track exactly.
+  const rows: string[] = [];
+  let all = true;
+  for (const id of LONG_IDS) {
+    for (const [level, car, slot] of [["easy", "sport", 0], ["normal", "racer", 1], ["hard", "truck", 2]] as const) {
+      const sim = new Sim(1);
+      const host = sim.add("Host");
+      if (sim.room.setTrack(host, id)) throw new Error("track refused");
+      const bots: Player[] = [];
+      for (let k = 0; k <= slot; k++) bots.push(sim.room.addBot(host, level, sim.now) as Player);
+      const b = bots[slot];
+      for (const o of bots) if (o !== b) sim.room.kick(host, o.id, sim.now);
+      if (sim.room.setCar(host, car, b.id)) throw new Error("car");
+      b.wallet.ammo.rivets = 0;
+      b.wallet.ammo.mines = 0;
+      sim.room.start(host, sim.now);
+      while (sim.room.phase !== "racing") sim.tick();
+      sim.room.retire(host);
+      const t = sim.room.track;
+      let ctl: longBot.BotControls | null = null;
+      surfServerBots.botTrace.fn = (p, c) => {
+        if (p === b) ctl = c;
+      };
+      let ticks = 0, mismatch = 0, first = "", cells = 0;
+      try {
+        while (sim.room.phase === "racing" && ticks < 60 * 120) {
+          const clone = cloneCar(b.car!);
+          sim.tick();
+          ticks++;
+          if (!b.car || sim.room.phase !== "racing") break;
+          const c = ctl as longBot.BotControls | null;
+          longW.stepRaceCar(clone, { throttle: c?.throttle ?? 0, steer: c?.steer ?? 0 }, b.stats, longW.raceEnv(t, sim.room.rt, 0));
+          // A lightning cell is taken by the room after the step (room.ts: boost = max(boost, offer)), not by stepRaceCar.
+          if (b.car.boost > clone.boost) {
+            clone.boost = Math.max(clone.boost, b.car.boost);
+            cells++;
+          }
+          const keys = ["x", "y", "h", "vx", "vy", "seg", "wreck", "air", "fall", "boost"] as const;
+          if (!keys.every((k) => Object.is(clone[k], b.car![k]))) {
+            mismatch++;
+            if (!first) first = `tick ${ticks}: ${keys.filter((k) => !Object.is(clone[k], b.car![k])).join(",")}`;
+          }
+        }
+      } finally {
+        surfServerBots.botTrace.fn = null;
+      }
+      const good = mismatch === 0 && ticks > 60 * 40;
+      all &&= good;
+      rows.push(`${id} ${level} ${car}: ${ticks} ticks, ${mismatch} mismatches${first ? ` (${first})` : ""}, ${cells} cells taken`);
+    }
+  }
+  check("long tracks parity: stepRaceCar on a clone at the room's race tick equals the server's pose bit for bit every tick (a cell's boost set by the room as it does), a lone server bot per level and type over a lap of each long track", all, rows.join("; "));
+  for (const id of LONG_IDS) {
+    const r = carsClientLap(id);
+    check(
+      `long tracks parity: three client cars (Sport, Racer, Truck) racing ${id} over the wire predict it exactly: no state mismatch, no error > ${LARGE_ERR}`,
+      r.ticks.every((x) => x > 0) && r.stateErrs === 0 && r.large === 0 && r.samples > 500 && r.same,
+      `laps ${r.ticks.map((x) => (x / 60).toFixed(1)).join("/")} s; ${r.samples} samples, ${r.stateErrs} state mismatches, ${r.large} > ${LARGE_ERR}, max ${r.maxErr.toFixed(4)}`,
+    );
+  }
+}
+
+function longCpu(): void {
+  // Five Hard server bots, 3 laps of each long track: the median bot step and room tick beside the
+  // M4-MOVE numbers (bot step 0.00137 ms, room tick 0.0134 ms with 5 mixed bots on the Move Yard).
+  const pct = (a: number[], p: number) => [...a].sort((x, y) => x - y)[Math.min(a.length - 1, Math.floor(a.length * p))];
+  const rows: string[] = [];
+  let ok = true;
+  for (const id of LONG_IDS) {
+    const sim = new Sim(3);
+    const host = sim.add("Host");
+    sim.room.setTrack(host, id);
+    for (let k = 0; k < 5; k++) sim.room.addBot(host, "hard", sim.now);
+    sim.room.start(host, sim.now);
+    while (sim.room.phase !== "racing") sim.tick();
+    sim.room.retire(host);
+    const tickMs: number[] = [];
+    const steps: number[] = [];
+    botTiming.samples = steps;
+    let ticks = 0;
+    try {
+      while (sim.room.phase === "racing" && ticks < 60 * 300) {
+        sim.tickNo++;
+        sim.now += 1000 / 60;
+        const t0 = performance.now();
+        sim.room.tick(sim.tickNo, sim.now);
+        tickMs.push(performance.now() - t0);
+        ticks++;
+      }
+    } finally {
+      botTiming.samples = null;
+    }
+    const med = pct(steps, 0.5), tickMed = pct(tickMs, 0.5);
+    ok &&= steps.length > 5 * 5000 && med <= 0.05 && (sim.room.phase as string) === "results";
+    rows.push(`${id}: bot step median ${med.toFixed(5)} ms (p99 ${pct(steps, 0.99).toFixed(5)}) over ${steps.length} steps; room tick with 5 Hard bots median ${tickMed.toFixed(4)} ms (p99 ${pct(tickMs, 0.99).toFixed(4)}) over ${ticks} ticks`);
+  }
+  console.log(`  CPU: ${rows.join("\n  CPU: ")}\n  (M4-MOVE on the Move Yard, 5 mixed bots: bot step 0.00137 ms, room tick 0.0134 ms)`);
+  check("long tracks CPU: the median bot step stays within the M4-BOTS bound (0.2 ms; target 0.05) with 5 Hard bots on each long track; room tick printed beside the M4-MOVE numbers", ok, rows.join("; "));
+  console.log(`  M4-TRACKS sim-test sections' runtime (longRegistry .. longCpu): ${((performance.now() - longClock.t0) / 1000).toFixed(1)} s`);
+}
+
+for (const t of [longRegistry, longValidate, longTruckCell, longDensityRules, longFeatures, longBots, longParity, longCpu]) {
   console.log(`\n# ${t.name}`);
   try {
     t();

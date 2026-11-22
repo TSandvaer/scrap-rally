@@ -18,7 +18,9 @@
 // - how much of the declared rectangle the puddle fills, how much of the puddle the traction
 //   rectangle covers, and how near the puddle's edge comes to the traction rectangle at its
 //   nearest (world units; the bake's sampling is a pixel, 1.25 units).
-// And the shipped tracks have no pixel of water or of a dirt patch at all.
+// And the three original shipped tracks have no pixel of water or of a dirt patch at all (M4-TRACKS: the
+// two long shipped tracks, Slag Harbour and Breaker's Mile, have puddles: they are probed like the test
+// tracks).
 // Exit code 1 if a pixel breaks a promise.
 
 import { PUDDLE_TRACTION_INSET, tractionRect, type PuddleRect } from "../../client/gfx/puddle-shape";
@@ -119,12 +121,14 @@ function probe(track: Track): void {
 }
 
 console.log(`# Puddle probe: the baked world against tractionRect (inset ${PUDDLE_TRACTION_INSET} units)`);
-for (const track of [...TEST_TRACKS.map((d) => testTrack(d.id)!), sheetYard()]) probe(track);
+const ORIGINAL = ["rust-bowl", "crusher-run", "overpass-knot"];
+const long = trackList().filter((e) => !ORIGINAL.includes(e.id)).map((e) => trackById(e.id));
+for (const track of [...TEST_TRACKS.map((d) => testTrack(d.id)!), sheetYard(), ...long]) probe(track);
 
-// The shipped tracks: nothing of this on them.
-console.log("\n## Shipped tracks\n");
-for (const e of trackList()) {
-  const track = trackById(e.id);
+// The three original shipped tracks: nothing of this on them.
+console.log("\n## Shipped tracks (the three original ones)\n");
+for (const id of ORIGINAL) {
+  const track = trackById(id);
   let wet = 0, tiles = 0;
   const seen = new Set<string>();
   for (const p of track.pts) {
