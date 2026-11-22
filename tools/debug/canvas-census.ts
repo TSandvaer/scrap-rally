@@ -8,7 +8,8 @@
 // `document.createElement("canvas")` is noted with its size and with who asked for it, read off
 // the call stack), through a session made to fill every pool there is:
 // - every track in turn (the shipped ones and the Preview Yard test track), a Renderer each and a
-//   lap at 430 u/s: the tile pool fills up, each track gets its minimap;
+//   lap at 430 u/s: the tile pool fills up, each track gets its minimap (M4-TRACKS: one test track,
+//   not every one: a session holds at most one at a time, canvas-cap.ts MINIMAPS);
 // - six cars of the three looks that keep changing state (whole, battered, wreck), one hopping,
 //   one falling: every car sheet, every silhouette, the effect sheet;
 // - lightning cells and boosts (the catch-up sheet), the race tick (the obstacle sheet);
@@ -23,7 +24,7 @@
 // The pools must be full for the sum to be the most the game can hold: the census says which
 // are, and fails if one is not.
 
-import { CANVAS_CAP, HUD_BYTES_MAX } from "./canvas-cap";
+import { CANVAS_CAP, HUD_BYTES_MAX, MINIMAP_BYTES, MINIMAPS } from "./canvas-cap";
 
 const LIST = process.argv.includes("--list");
 const SPEED = 430;
@@ -90,14 +91,14 @@ g.ImageData = class {
 };
 
 const { trackById, trackList } = await import("../../shared/tracks");
-const { TEST_TRACKS, testTrack } = await import("../../shared/testtracks");
+const { testTrack } = await import("../../shared/testtracks");
 const { pointAt } = await import("../../shared/track");
 const { Renderer, VIEW_W, VIEW_H } = await import("../../client/render");
 const { TILE, TILE_POOL, tilePoolBytes } = await import("../../client/gfx/world");
 const sprites = await import("../../client/gfx/sprites");
 type Track = ReturnType<typeof trackById>;
 
-const tracks: Track[] = [...trackList().map((e) => trackById(e.id)), ...TEST_TRACKS.map((d) => testTrack(d.id)!)];
+const tracks: Track[] = [...trackList().map((e) => trackById(e.id)), testTrack("preview-yard")!];
 const NAMES = ["You", "Rustbucket", "Åse Ørn", "Bolt", "SkidMarks 12", "Иван", "Gasket", "Sprocket", "Dipstick", "Flange", "Camshaft", "Piston", "Grommet", "Manifold", "Tappet", "Washer", "Ratchet", "Gudgeon", "Cotter", "Spanner"];
 const CENTRE = ["3", "2", "1", "GO!", "PAUSED", "FINISH", "RACE OVER", "WAIT"];
 let frames = 0;
@@ -151,7 +152,7 @@ const BOUND: Record<string, string> = {
   "catch-up sheet": "one (lightning cells, boost flames)",
   "obstacle sheet": "one, whatever the track (M4-WORLD: barrels, press, belt arrows)",
   "font sheets": "one a cut of the font and colour the HUD writes in",
-  "minimaps": `one a track drawn in the session (${tracks.length} here: every shipped one and the test track)`,
+  "minimaps": `one a track drawn in the session (${tracks.length} here: every shipped one and one test track; canvas-cap.ts MINIMAPS = ${MINIMAPS})`,
   "hp bars": "one",
   "catch-up cue art": "one",
   "name tags": "a fixed pool of 16",
@@ -201,7 +202,7 @@ check((kinds.get("car silhouettes")?.n ?? 0) === sprites.LOOKS.length, `a silhou
 check(sheets === sprites.SPRITE_BYTES_MAX && sheets === sprites.spriteBytes(), `the sprites are at their most: ${sheets} B counted, spriteBytes() ${sprites.spriteBytes()}, SPRITE_BYTES_MAX ${sprites.SPRITE_BYTES_MAX}`);
 check((kinds.get("name tags")?.n ?? 0) === 16, `the name tags' pool is full: ${kinds.get("name tags")?.n ?? 0} of 16`);
 check((kinds.get("centre texts")?.n ?? 0) === 6, `the centre texts' pool is full: ${kinds.get("centre texts")?.n ?? 0} of 6`);
-check((kinds.get("minimaps")?.n ?? 0) === tracks.length, `a minimap for every track: ${kinds.get("minimaps")?.n ?? 0} of ${tracks.length}`);
+check((kinds.get("minimaps")?.n ?? 0) === MINIMAPS && tracks.length === MINIMAPS && kinds.get("minimaps")?.bytes === MINIMAPS * MINIMAP_BYTES, `a minimap for every shipped track and one test track: ${kinds.get("minimaps")?.n ?? 0} of MINIMAPS ${MINIMAPS} (canvas-cap.ts: trackList().length + 1), ${kinds.get("minimaps")?.bytes ?? 0} B = MINIMAPS x ${MINIMAP_BYTES}`);
 check(!kinds.has("other"), `every canvas is of a known kind (${kinds.get("other")?.n ?? 0} are not)`);
 check(hud <= HUD_BYTES_MAX, `the HUD's canvases are within what the other tools allow them: ${hud} <= HUD_BYTES_MAX ${HUD_BYTES_MAX} (tools/debug/canvas-cap.ts)`);
 check(sprites.SPRITE_BYTES_MAX + TILE_POOL * TILE * TILE * 4 + HUD_BYTES_MAX <= CANVAS_CAP, `the caps add up within the cap: sprites ${sprites.SPRITE_BYTES_MAX} + tiles ${TILE_POOL * TILE * TILE * 4} + HUD ${HUD_BYTES_MAX} = ${sprites.SPRITE_BYTES_MAX + TILE_POOL * TILE * TILE * 4 + HUD_BYTES_MAX} <= ${CANVAS_CAP}`);

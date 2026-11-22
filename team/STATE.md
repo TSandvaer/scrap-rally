@@ -613,6 +613,48 @@ PLAN-THEMES is approved or BR-SCHEMA merges). Next: push popup (MOVE + TOUCH-6) 
 PLAN-THEMES drafted (PLAN-THEMES.md: TH-LOOK-1 Fable desert look first; THEME-SCHEMA before BR-PHYS; census HUD allowance already
 fails on main 1,942,744 > 1,900,000, folded into TH-LOOK-1). HARD-2 addendum (PLAN-M4.md end). Both under Fable review in parallel.
 The free 3rd slot goes to whichever is approved first (HARD-2 likely: small, user-facing).
+HARD-2 approved (Fable "sound with changes", 10 binding; user popup). HARD-2 123jpnbfghz (Opus) in flight: ctx_779075f2c605
+(~/orca/workspaces/scrap-rally/hard-2, :3006; spec tmp/spec-hard-2.md). Authors now 3/3: M4-TRACKS, BR-SCHEMA, HARD-2.
+M4-TRACKS asked: (A) extend airCellReach in shared/weapons.ts to fly truck lips -> yes (weapons.ts joins it for that); edits to
+pre-existing 'every registered track' checks -> yes, loop over the 3 originals; surfShipped rule (3 originals SAME, others SAME or new)
+sent to BR-SCHEMA too. PLAN-THEMES review still running; TH-LOOK-1 waits for approval AND a free slot.
+PLAN-THEMES approved (Fable "sound with changes", 10 binding; user popup, recommended answers). Tickets: TH-LOOK-1 123jpnbfgj0 (Fable;
+first free slot) -> THEME-SCHEMA 123jpnbfgj1 (after BR-SCHEMA + M4-TRACKS, before BR-PHYS) -> TH-LOOK-2 123jpnbfgj2 (after BR-BAKE) ->
+THEME-SURF 123jpnbfgj3 (after BR-BOTS) + TH-LOOK-3 123jpnbfgj4 -> THEME-TRACKS 123jpnbfgj5. Census HUD fix sent to M4-TRACKS.
+TOUCH-6 gate green on 4282640 (893/893 + 133/133, build index-CucohtTX.js). Next: push popup (MOVE + TOUCH-6).
+PUSHED (user popup): origin/main = 28e251c (TOUCH-6 + M4-MOVE). Expected live bundle after Manual Deploy: index-CucohtTX.js.
+M4-MOVE taste APPROVED by the user (barrels, ramp, press; bots ok). Move Yard copy on :3009 can go when the next taste copy needs it.
+DEPLOYED (user): live index-CucohtTX.js (curl), bundle holds radius:67. QA12 live worker dispatched (muted; spec
+tmp/spec-qa-live-12.md; report tmp/qa12-live-report.md): TOUCH-6 + M4-MOVE regression.
+QA12 live PASS (ctx_b97a15d62f9f, released): stick R 67 at 3 sizes, Crusher Run 3 bots 0 falls, 0 console errors. ClickUp complete:
+TOUCH-6, M4-MOVE.
+BR-SCHEMA done: 221beef (branch data, Branch Yard, 19 rule tests; 930/930 + 133/133 x2; shipped SAME; done text tmp/br-schema-done.md).
+Opus reviewer ctx_d7ef3257a313 (tmp/review-br-schema.md). Cap rule (user popup): idle authors in review do not count. TH-LOOK-1
+123jpnbfgj0 (Fable) in flight: ctx_79748d316f06 (~/orca/workspaces/scrap-rally/th-look-1, :3011; spec tmp/spec-th-look-1.md).
+Active authors: M4-TRACKS, HARD-2, TH-LOOK-1 (BR-SCHEMA idle in review).
+MARSHALS-1 123jpnbfgjb (Fable) on the board: two flag marshals at the start/finish line; starts after TH-LOOK-1 merges (render.ts),
+beside BR-BAKE; asks before touching client/main.ts or game.ts (HARD-2).
+M4-TRACKS done: 4d4e97b (Slag Harbour 19,324 / Breaker's Mile 20,426; Normal laps 51.8-59.0 s, 0 falls; density plain 89.4/90.6 %,
+shortest gaps 1041/1338, mud 330; census fixed: HUD allowance from trackList().length+1; 907/907 + 143/143 x2; report
+tmp/m4-tracks/m4-tracks-report.md). Conflicts with br-schema (sim-test, golden): second to merge resolves. Opus reviewer ctx_ca6629690be1
+(tmp/review-m4-tracks.md). TASTE COPY :3009 = M4-TRACKS 4d4e97b (worktree split-taste, no dev flag; node pid 16214, npm pid 16191);
+the Move Yard copy is stopped. Active authors: HARD-2, TH-LOOK-1 (M4-TRACKS + BR-SCHEMA idle in review). Nothing else startable yet.
+NOSELECT-1 123jpnbfgjj (Opus) in flight: ctx_2980deef1d34 (~/orca/workspaces/scrap-rally/noselect-1, :3013; spec tmp/spec-noselect-1.md;
+index.html, style.css, maybe input.ts). Active authors: HARD-2, TH-LOOK-1, NOSELECT-1.
+BR-SCHEMA review 1 REQUEST_CHANGES (ctx_d7ef3257a313 kept for re-review): branch roads get no self-crossing / close-sections check
+(reproduced). Fix round sent to ctx_d7d9decab927 (tmp/br-schema-review-1-fix.md; + 2 nits). Review notes for BR-PHYS added to its ticket.
+M4-TRACKS taste APPROVED by the user (both tracks; popup-confirmed). Merge on review APPROVE.
+User: merge M4-TRACKS when the review approves (popup; keep the gate). HARD-2 done: 7688eea (mistakes + SCRAP_DEV_BOTS Bot tune panel;
+rate 0 = goldens; falls 0; loss +0.08..+1.25 %, pace 0 lone lap 30.29 s vs Hard 29.22 vs Normal 30.71; 921/921 + 135/135 x2; report
+tmp/hard-2/HARD-2-report.md). Conflicts with m4-tracks + br-schema (appends). Opus reviewer ctx_8f7a8c933e4d (tmp/review-hard-2.md).
+TUNING COPY :3009 = HARD-2 7688eea (worktree split-taste, SCRAP_DEV_BOTS=1; node pid 63109, npm pid 63083); the tracks copy is stopped.
+M4-TRACKS review APPROVE (ctx_ca6629690be1, released; F1 bench.ts quick-look throws on tracks without SPOTS -> sent to TH-LOOK-1, it owns
+bench.ts). M4-TRACKS MERGED c90ee9c; gate running. BR-SCHEMA told to merge main in its fix round (sim-test + golden conflicts). HARD-2:
+after its review, the author merges main and re-runs falls-0 on the new tracks (advisor 9) before the merge.
+User: HARD-2 merges on review APPROVE; tuning later (keep the :3009 SCRAP_DEV_BOTS copy up; pasted values -> HARD-3).
+M4-TRACKS gate on main c90ee9c: check 0, sim 907/907, build ok (index-D5zCxkUp.js), bots 142/143: FAIL 'breakers-mile over sockets ...
+hits them' (contacts 0; author/reviewer had press 1 tick) = timing flake in the new check. Fix sent to the M4-TRACKS author ctx_25b6cddb77d6
+(make it deterministic, 10x PASS); BR-SCHEMA + HARD-2 told it is known. No push until main is green.
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).

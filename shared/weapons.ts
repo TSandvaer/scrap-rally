@@ -808,20 +808,25 @@ export const CELL_MIN_TAKEOFF = 300;
 /**
  * The take-off speeds (from CELL_MIN_TAKEOFF up to maxSpeed) at which some straight jump off a lip
  * before the air cell passes through it high enough to take it, flown with stepRaceCar from every
- * lane across the lip; null if none.
+ * lane across the lip; null if none. M4-TRACKS: a ramp truck's lip too (an air cell over its
+ * flight), flown from every lane across its band (band0..band1), TRUCK_SWEEP_IN into its take-off
+ * zone, as validateJumpSweep flies it.
  */
 export function airCellReach(track: Track, cell: PlacedCell, maxSpeed: number): { min: number; max: number; lanes: number } | null {
   const L = track.length;
   const lim = wallLimit(track);
   let min = Infinity, max = -Infinity;
   const lanes = new Set<number>();
-  for (const ramp of track.ramps) {
-    const lip = ramp.s + ramp.len;
+  const lips: { lip: number; lane0: number; lane1: number; into: number }[] = [
+    ...track.ramps.map((ramp) => ({ lip: ramp.s + ramp.len, lane0: -Math.floor(lim), lane1: lim, into: 0.5 })),
+    ...track.trucks.map((t) => ({ lip: t.lip, lane0: t.band0, lane1: t.band1, into: TRUCK_SWEEP_IN })),
+  ];
+  for (const { lip, lane0, lane1, into } of lips) {
     const ahead = (((cell.s - lip) % L) + L) % L;
     if (ahead <= 0 || ahead > maxSpeed * (MAX_AIR_TICKS / 60) + 20) continue;
-    for (let lane = -Math.floor(lim); lane <= lim; lane += 4) {
+    for (let lane = lane0; lane <= lane1; lane += 4) {
       for (let v = CELL_MIN_TAKEOFF; v <= maxSpeed; v += SWEEP_STEP) {
-        const p = pointAt(track, lip + 0.5);
+        const p = pointAt(track, lip + into);
         const c: CarState = {
           x: p.x - Math.sin(p.h) * lane, y: p.y + Math.cos(p.h) * lane, h: p.h, vx: Math.cos(p.h) * v, vy: Math.sin(p.h) * v,
           seg: p.seg, wreck: 0, air: 0, fall: 0, boost: 0,
@@ -847,7 +852,8 @@ export function airCellReach(track: Track, cell: PlacedCell, maxSpeed: number): 
 /**
  * The cells' simulation checks (validateTrack does the static ones): every air cell lies on the
  * arc of some take-off between CELL_MIN_TAKEOFF and maxSpeed (a boost's ~537 u/s), high enough
- * to be taken. Empty = fine. (That a boosted car still lands every jump is validateJumpSweep.)
+ * to be taken, off a ramp's lip or a ramp truck's (airCellReach). Empty = fine. (That a boosted car
+ * still lands every jump is validateJumpSweep.)
  */
 export function validateCells(track: Track, maxSpeed: number): string[] {
   const errors: string[] = [];
