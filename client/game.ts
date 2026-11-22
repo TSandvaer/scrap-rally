@@ -975,7 +975,9 @@ export class Game {
       if (this.car) this.prevCar = cloneCar(this.car);
       return;
     }
-    this.moveLocalShots();
+    // The cosmetic rivets at the race tick the server moves them: it moves a rivet first in the tick
+    // its car fired in, we in the step after the one that fired it (M4-MOVE: barrels and presses).
+    this.moveLocalShots(this.latest ? rtAt(this.latest, this.pending.length) - 1 : 0);
     if (!this.car || !this.connected) return;
 
     const on = this.raceOn();
@@ -1137,7 +1139,7 @@ export class Game {
    * Cosmetic own rivets: fly until range, a wall, or another car they visibly touch (one the
    * server can hit: not ghosted, wrecked, airborne or falling).
    */
-  private moveLocalShots(): void {
+  private moveLocalShots(rt: number): void {
     if (!this.localShots.length) return;
     const targets = this.otherPoses().filter((p) => {
       const s = this.latest?.cars.get(p.id);
@@ -1145,7 +1147,7 @@ export class Game {
     });
     const r = CAR_RADIUS + 2;
     this.localShots = this.localShots.filter((s) => {
-      if (!moveShot(s, this.track)) return false;
+      if (!moveShot(s, this.track, rt)) return false;
       return !targets.some((t) => (t.x - s.x) ** 2 + (t.y - s.y) ** 2 <= r * r);
     });
   }

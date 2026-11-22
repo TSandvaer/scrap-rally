@@ -10,6 +10,7 @@ import {
   CAR_WIDTH,
   clamp,
   DT,
+  segMeetsBox,
   speedOf,
   stepCar,
   wallLimit,
@@ -18,6 +19,9 @@ import {
   type Input,
 } from "./physics";
 import {
+  BARREL_R,
+  barrelLat,
+  clearSpot,
   gapAt,
   halfOf,
   halfOn,
@@ -26,14 +30,17 @@ import {
   lipAt,
   overHazard,
   pointAt,
+  PRESS_DEPTH,
+  pressDown,
   queryTrackNear,
   recoveryAt,
   segDir,
-  clearLaneAt,
   tractionRect,
+  TRUCK_HALF,
   wallOf,
   type PlacedCell,
   type PlacedIsland,
+  type PlacedTruck,
   type PlacedTyres,
   type Track,
   type TrackQuery,
@@ -132,7 +139,8 @@ export interface Mine {
  * and draft-dependent rules (moving obstacles, boosts, drafting) predict exactly.
  * - rt: the race tick this step runs at: 1 = the first tick after GO, counted while racing and
  *   not paused (server/room.ts); 0 = before GO (the countdown). The client predicts it from the
- *   latest snapshot's rt (game.ts rtAt). Nothing reads it yet.
+ *   latest snapshot's rt (game.ts rtAt). M4-MOVE: the barrels and presses a driving step meets are
+ *   where barrelLat / pressState put them at it (shared/physics.ts stepCar).
  * - draft: this car's slipstream strength 0..1 this tick (M4-DRAFT, shared/catchup.ts): the server
  *   works it out from the start-of-tick poses (draftsFor), the client predicts its own from the
  *   predicted poses (client/contact.ts draft). Applied only to a driving step (stepCar).
@@ -229,14 +237,14 @@ export function stepRaceCar(c: CarState, input: Input, stats: CarStats, env: Rac
       startFall(c);
       return "fall";
     }
-    if (lipAt(track, q.s) && forwardSpeed(c, track, q) >= MIN_TAKEOFF_SPEED) {
+    if ((lipAt(track, q.s) || onTruckLip(track, q)) && forwardSpeed(c, track, q) >= MIN_TAKEOFF_SPEED) {
       c.air = airTicksFor(speedOf(c));
       ev = "takeoff";
     } else if (overHazard(track, c.x, c.y, q.s)) {
       startFall(c);
       return "fall";
     } else {
-      stepCar(c, input, stats, track, env.draft);
+      stepCar(c, input, stats, track, env.draft, env.rt);
       if (c.boost > 0) c.boost--;
       return null;
     }
@@ -256,14 +264,30 @@ export function stepRaceCar(c: CarState, input: Input, stats: CarStats, env: Rac
 }
 
 /**
+ * A ramp truck's take-off zone holds the query's car centre (shared/track.ts truckLipAt, from the
+ * query segment's bucket: no scan of every truck per tick). Always false on a track without one.
+ */
+function onTruckLip(track: Track, q: TrackQuery): boolean {
+  const list = track.trucksAt[q.seg];
+  if (list === undefined || list.length === 0) return false;
+  for (let i = 0; i < list.length; i++) {
+    const t = list[i];
+    if (q.s >= t.lip && q.s < t.lip + LIP_ZONE && q.lat >= t.band0 && q.lat <= t.band1) return true;
+  }
+  return false;
+}
+
+/**
  * Place a fallen car at the last recovery point at or before its s (it has not moved), on the
  * nearest clear lane there (M4-SURF: never in a tyre mound; validation keeps solids SOLID_CLEAR
- * from recovery points, so that is the centerline).
+ * from recovery points, so that is the centerline). M4-MOVE: clearSpot, also clear of the barrels'
+ * path, the presses and the trucks.
  */
 export function recover(c: CarState, track: Track): void {
   const q = queryTrackNear(track, c.x, c.y, c.seg);
   const r = recoveryAt(track, q.s);
-  place(c, track, r, clearLaneAt(track, r));
+  const at = clearSpot(track, r);
+  place(c, track, at.s, at.lat);
 }
 
 /** Put a car `lat` units right of the centerline at s (0 = on it), facing along the track, standing still. */
@@ -284,13 +308,16 @@ function place(c: CarState, track: Track, s: number, lat = 0): void {
  * A wreck's respawn: on the centerline at the car's s, or on the nearest clear lane there when a
  * tyre mound is in the way (M4-SURF); a respawn onto a hazard (a gap, a hole) goes to the recovery
  * point instead (and its clear lane). In a split (M4-SURF part 2) the clear lane is in the lane the
- * car wrecked in (clearLaneAt's side of the island: the car's own lateral offset).
+ * car wrecked in (clearLaneAt's side of the island: the car's own lateral offset). M4-MOVE
+ * (clearSpot): never in a barrel row's path, under a press or in a truck: on a lane clear of them,
+ * or just behind one that leaves no lane.
  */
 export function respawn(c: CarState, track: Track): void {
   const q = queryTrackNear(track, c.x, c.y, c.seg);
   const p = pointAt(track, q.s);
   const s = overHazard(track, p.x, p.y, q.s) ? recoveryAt(track, q.s) : q.s;
-  place(c, track, s, clearLaneAt(track, s, 4, q.lat));
+  const at = clearSpot(track, s, 4, q.lat);
+  place(c, track, at.s, at.lat);
 }
 
 export function wreckCar(c: CarState): void {
@@ -327,17 +354,77 @@ export function spawnShot(c: CarState, id: number, owner: string): Shot {
 }
 
 /**
- * Move a shot one tick. Returns false when it is spent (out of range, into a wall, into a tyre
- * mound, or into an island or its noses: M4-SURF part 2, the wall on its side is the per-sample one).
+ * Move a shot one tick, at race tick rt. Returns false when it is spent (out of range, into a wall,
+ * into a tyre mound, or into an island or its noses: M4-SURF part 2, the wall on its side is the
+ * per-sample one; M4-MOVE: into a barrel where barrelLat puts it at rt, a press that is down at rt,
+ * or a truck's body). Server: server/combat.ts, at the tick the cars stepped; the client's cosmetic
+ * rivets (client/game.ts) at the tick the server moves them.
  */
-export function moveShot(s: Shot, track: Track): boolean {
+export function moveShot(s: Shot, track: Track, rt: number): boolean {
   const x0 = s.x, y0 = s.y;
   s.x += s.vx * DT;
   s.y += s.vy * DT;
   s.travelled += Math.hypot(s.vx, s.vy) * DT;
   const q = queryTrackNear(track, s.x, s.y, s.seg);
   s.seg = q.seg;
-  return s.travelled <= RIVET_RANGE && q.dist <= wallOf(track, q) && !shotIntoTyres(track.tyresAt[q.seg], x0, y0, s.x, s.y) && !shotIntoIslands(track, q, x0, y0, s.x, s.y);
+  return s.travelled <= RIVET_RANGE && q.dist <= wallOf(track, q) && !shotIntoTyres(track.tyresAt[q.seg], x0, y0, s.x, s.y) && !shotIntoIslands(track, q, x0, y0, s.x, s.y) &&
+    !shotIntoMovers(track, q.seg, x0, y0, s.x, s.y, rt);
+}
+
+/**
+ * Did a rivet moving from (x0, y0) to (x1, y1) this tick (seg: its segment at the end) touch a barrel
+ * at race tick rt, a press that is down at rt, or a truck's body (M4-MOVE: rivets die on solids)?
+ * From the segment's buckets (empty on a track without any).
+ */
+function shotIntoMovers(track: Track, seg: number, x0: number, y0: number, x1: number, y1: number, rt: number): boolean {
+  const rows = track.barrelsAt[seg], gates = track.pressesAt[seg], trucks = track.trucksAt[seg];
+  if (rows !== undefined && rows.length > 0) {
+    const r = BARREL_R + RIVET_RADIUS;
+    for (const b of rows) {
+      for (let k = 0; k < b.n; k++) {
+        const lat = barrelLat(b, k, rt);
+        if (lat !== lat) continue; // in the gutter
+        if (pointSegDist2(b.x + b.nx * lat, b.y + b.ny * lat, x0, y0, x1, y1) <= r * r) return true;
+      }
+    }
+  }
+  if (gates !== undefined && gates.length > 0) {
+    for (const g of gates) {
+      if (!pressDown(g, rt)) continue;
+      const gx = Math.cos(g.h), gy = Math.sin(g.h);
+      const a0 = (x0 - g.x) * gx + (y0 - g.y) * gy, l0 = (x0 - g.x) * g.nx + (y0 - g.y) * g.ny;
+      const a1 = (x1 - g.x) * gx + (y1 - g.y) * gy, l1 = (x1 - g.x) * g.nx + (y1 - g.y) * g.ny;
+      if (segMeetsBox(a0, l0, a1, l1, PRESS_DEPTH / 2 + RIVET_RADIUS, g.lat0 - RIVET_RADIUS, g.lat1 + RIVET_RADIUS)) return true;
+    }
+  }
+  if (trucks !== undefined && trucks.length > 0) {
+    for (const t of trucks) if (segSegDist(x0, y0, x1, y1, t) <= TRUCK_HALF + RIVET_RADIUS) return true;
+  }
+  return false;
+}
+
+/** Squared distance from (px, py) to the segment (x0, y0)..(x1, y1). */
+function pointSegDist2(px: number, py: number, x0: number, y0: number, x1: number, y1: number): number {
+  const dx = x1 - x0, dy = y1 - y0, len2 = dx * dx + dy * dy;
+  let t = len2 > 0 ? ((px - x0) * dx + (py - y0) * dy) / len2 : 0;
+  t = t < 0 ? 0 : t > 1 ? 1 : t;
+  const ex = x0 + dx * t - px, ey = y0 + dy * t - py;
+  return ex * ex + ey * ey;
+}
+
+/** Distance from the segment (x0, y0)..(x1, y1) to a truck's body axis (0 when they cross). */
+function segSegDist(x0: number, y0: number, x1: number, y1: number, t: PlacedTruck): number {
+  const ex = x1 - x0, ey = y1 - y0, fx = t.x1 - t.x0, fy = t.y1 - t.y0;
+  const den = ex * fy - ey * fx;
+  if (den !== 0) {
+    const gx = t.x0 - x0, gy = t.y0 - y0;
+    const u = (gx * fy - gy * fx) / den, v = (gx * ey - gy * ex) / den;
+    if (u >= 0 && u <= 1 && v >= 0 && v <= 1) return 0;
+  }
+  return Math.sqrt(Math.min(
+    pointSegDist2(x0, y0, t.x0, t.y0, t.x1, t.y1), pointSegDist2(x1, y1, t.x0, t.y0, t.x1, t.y1),
+    pointSegDist2(t.x0, t.y0, x0, y0, x1, y1), pointSegDist2(t.x1, t.y1, x0, y0, x1, y1),
+  ));
 }
 
 /**
@@ -621,17 +708,24 @@ export function validateJumpSweep(track: Track, maxSpeed: number, stats: CarStat
   const speeds: number[] = [];
   for (let v = MIN_TAKEOFF_SPEED; v < maxSpeed; v += SWEEP_STEP) speeds.push(v);
   speeds.push(maxSpeed);
-  for (const ramp of track.ramps) {
-    const lip = ramp.s + ramp.len;
-    for (const lane of SWEEP_LANES) {
+  // M4-MOVE (advisor change 7): a ramp truck's lip too, from the middle of its band and TRUCK_SWEEP
+  // either side of it; it has no gap behind it, so every speed from MIN_TAKEOFF_SPEED up must land.
+  // A truck's flight starts TRUCK_SWEEP_IN into its take-off zone (a ramp's 0.5): its band lies off the
+  // centre line, where in a bend the start's own s can be a little short of the one on the centre line.
+  const lips: { lip: number; lanes: readonly number[]; what: string; into: number }[] = [
+    ...track.ramps.map((r) => ({ lip: r.s + r.len, lanes: SWEEP_LANES, what: "jump", into: 0.5 })),
+    ...track.trucks.map((t) => ({ lip: t.lip, lanes: [t.lat - TRUCK_SWEEP, t.lat, t.lat + TRUCK_SWEEP], what: `truck jump (truck at s=${t.s.toFixed(1)})`, into: TRUCK_SWEEP_IN })),
+  ];
+  for (const { lip, lanes, what, into } of lips) {
+    for (const lane of lanes) {
       let landed = -1; // the slowest speed that lands
       const bad: { v: number; why: string }[] = [];
       for (const v of speeds) {
-        const why = flyOff(track, lip, lane, v, stats, onAsphalt);
+        const why = flyOff(track, lip, lane, v, stats, onAsphalt, into);
         if (!why && landed < 0) landed = v;
         else if (why && landed >= 0) bad.push({ v, why });
       }
-      const at = `jump at the lip s=${lip.toFixed(1)}, lane ${lane}`;
+      const at = `${what} at the lip s=${lip.toFixed(1)}, lane ${lane}`;
       if (landed < 0) errors.push(`${at}: no take-off up to ${maxSpeed.toFixed(0)} u/s lands`);
       else if (bad.length) errors.push(`${at}: lands from ${landed} u/s, but not at ${bad.map((b) => b.v.toFixed(0)).join(", ")} u/s (${bad[0].why})`);
     }
@@ -639,9 +733,14 @@ export function validateJumpSweep(track: Track, maxSpeed: number, stats: CarStat
   return errors;
 }
 
+/** The overspeed sweep flies a truck's jump from its band's middle and this far either side (the band is TRUCK_BAND = 14 either side). */
+const TRUCK_SWEEP = 10;
+/** ... from this far into its take-off zone (LIP_ZONE 12). */
+const TRUCK_SWEEP_IN = 2;
+
 /** Fly off the lip at s=lip, `lane` units right of the centerline, at speed v: "" = lands on the asphalt. */
-function flyOff(track: Track, lip: number, lane: number, v: number, stats: CarStats, onAsphalt: boolean): string {
-  const p = pointAt(track, lip + 0.5);
+function flyOff(track: Track, lip: number, lane: number, v: number, stats: CarStats, onAsphalt: boolean, into = 0.5): string {
+  const p = pointAt(track, lip + into);
   const c: CarState = {
     x: p.x - Math.sin(p.h) * lane, y: p.y + Math.cos(p.h) * lane, h: p.h, vx: Math.cos(p.h) * v, vy: Math.sin(p.h) * v,
     seg: p.seg, wreck: 0, air: 0, fall: 0, boost: 0,

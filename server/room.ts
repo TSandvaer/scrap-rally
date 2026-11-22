@@ -1048,7 +1048,7 @@ export class Room {
 
     if (racing) {
       this.takeCells(racers, prev);
-      this.combat.step(racers, prev, recovered);
+      this.combat.step(racers, prev, recovered, this.raceTick);
       for (const p of racers) {
         // No progress while falling: the car sits where it fell (possibly lost, off its own
         // section) until it is put back, and moving back to the recovery point never counts.

@@ -10795,7 +10795,7 @@ function surfRivets(): void {
     const c = surfCar(t, m.s - 200, lat, 0);
     const s = surfW.spawnShot(c, 1, "a");
     let ticks = 0;
-    while (ticks < 40 && surfW.moveShot(s, t)) ticks++;
+    while (ticks < 40 && surfW.moveShot(s, t, 0)) ticks++; // rt: no barrels or presses here
     return { ticks, s: queryTrackNear(t, s.x, s.y, s.seg).s };
   };
   const hit = shoot(m.lat), edge = shoot(m.lat + m.r + surfW.RIVET_RADIUS - 0.5), past = shoot(m.lat - m.r - surfW.RIVET_RADIUS - 1);
@@ -11277,7 +11277,7 @@ function splitWalls(): void {
   const rivet = (t: Track) => {
     const p = pointAt(t, 1000);
     const s: splitW.Shot = { id: 1, owner: "x", x: p.x - Math.sin(p.h) * -130, y: p.y + Math.cos(p.h) * -130, vx: Math.cos(p.h) * 900, vy: Math.sin(p.h) * 900, seg: p.seg, travelled: 0 };
-    return splitW.moveShot(s, t);
+    return splitW.moveShot(s, t, 0); // rt: no barrels or presses here
   };
   check(
     "split walls: isLost, a landing and a rivet read the widened wall (156 beside island A): lat -250 is not lost (2 x 156), a car landing at -140 lands and a rivet at -130 flies on; on the bare loop (wall 108) all three end",
@@ -11453,7 +11453,7 @@ function splitIslands(): void {
     const p = pointAt(t, s), hh = p.h + dh;
     const sh: splitW.Shot = { id: 1, owner: "x", x: p.x - Math.sin(p.h) * lat, y: p.y + Math.cos(p.h) * lat, vx: Math.cos(hh) * 900, vy: Math.sin(hh) * 900, seg: p.seg, travelled: 0 };
     let k = 0;
-    while (k < 60 && splitW.moveShot(sh, t)) k++;
+    while (k < 60 && splitW.moveShot(sh, t, 0)) k++; // rt: no barrels or presses here
     return { k, at: splitSL(t, sh), far: sh.travelled };
   };
   const across = shoot(yard, 1000, -80, Math.PI / 2), acrossBare = shoot(bare, 1000, -80, Math.PI / 2);

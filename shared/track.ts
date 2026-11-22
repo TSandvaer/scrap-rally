@@ -234,6 +234,18 @@ export interface Track {
   islandsAt: readonly PlacedIsland[][];
   /** Per segment i: the first index in islands whose tail (s1) is less than ISLAND_BEHIND behind cum[i] (the bots look ahead from there). */
   islandsFrom: number[];
+  // M4-MOVE: what moves (barrels, presses) and the parked trucks, per segment (by s: on their own
+  // section, as the islands; MOVER_BUCKET_REACH round their s range).
+  /** Per segment i: the rows of barrels a car or a rivet whose nearest segment is i can touch. */
+  barrelsAt: readonly PlacedBarrels[][];
+  /** Per segment i: the presses a car or a rivet whose nearest segment is i can touch. */
+  pressesAt: readonly PlacedPress[][];
+  /** Per segment i: the trucks a car or a rivet whose nearest segment is i can touch. */
+  trucksAt: readonly PlacedTruck[][];
+  /** Per segment i: the first index in barrels / presses / trucks whose far edge is less than MOVER_BEHIND behind cum[i] (the bots look ahead from there). */
+  barrelsFrom: number[];
+  pressesFrom: number[];
+  trucksFrom: number[];
 }
 
 /** What a surface does (Surface.kind). */
@@ -446,6 +458,12 @@ export const DRY_LANE_MIN = 48;
 export const POOL_STRAIGHT_TOLERANCE = 0.05;
 /** A belt is at least this long (M4-WORLD re-check finding 1: a shorter one's arrows reach past its end in a bend). */
 export const BELT_LEN_MIN = 48;
+/**
+ * M4-MOVE: a barrel row or a press keeps this far along the track (edge to edge in s) from every
+ * other solid (a press: but an island beside it): two SOLID_CLEAR, room for a car (31 long) pushed
+ * along the road out of it to stand clear of both, so a squeeze is only ever against a wall.
+ */
+export const MOVER_CLEAR = 2 * SOLID_CLEAR;
 
 // ---- the traction area of a puddle (M4-WORLD; moved here from client/gfx/puddle-shape.ts by M4-SURF, unchanged) ----
 // User decisions 2026-11-21: "dirt and water puddles should not be square, it should read as a
@@ -553,6 +571,12 @@ export function buildTrack(def: TrackDef): Track {
     tyresFrom: [],
     islandsAt: [],
     islandsFrom: [],
+    barrelsAt: [],
+    pressesAt: [],
+    trucksAt: [],
+    barrelsFrom: [],
+    pressesFrom: [],
+    trucksFrom: [],
   };
   const features = def.features ?? [];
   // The widens first: the per-sample walls, and the barrels' wall-to-wall run, depend on them.
@@ -643,6 +667,9 @@ export function buildTrack(def: TrackDef): Track {
 const NO_SURFACES: readonly Surface[] = Object.freeze([]) as readonly Surface[];
 const NO_TYRES: readonly PlacedTyres[] = Object.freeze([]) as readonly PlacedTyres[];
 const NO_ISLANDS: readonly PlacedIsland[] = Object.freeze([]) as readonly PlacedIsland[];
+const NO_BARRELS: readonly PlacedBarrels[] = Object.freeze([]) as readonly PlacedBarrels[];
+const NO_PRESSES: readonly PlacedPress[] = Object.freeze([]) as readonly PlacedPress[];
+const NO_TRUCKS: readonly PlacedTruck[] = Object.freeze([]) as readonly PlacedTruck[];
 
 /**
  * An island as buildTrack places it (the widens are in already): its noses' axes, how far out its
@@ -749,6 +776,40 @@ function buildBuckets(track: Track): void {
     isle.surfL = l.length ? l : NO_SURFACES;
     isle.surfR = r.length ? r : NO_SURFACES;
   }
+  // M4-MOVE: the barrels, presses and trucks by segment (by s, as the islands: they lie on one
+  // section), and where the bots look ahead for them.
+  const barrels = moverBuckets(track, track.barrels, (b) => b.s - BARREL_R, (b) => b.s + BARREL_R, NO_BARRELS);
+  const presses = moverBuckets(track, track.presses, (p) => p.s - PRESS_DEPTH / 2, (p) => p.s + PRESS_DEPTH / 2, NO_PRESSES);
+  const trucks = moverBuckets(track, track.trucks, (t) => t.s, (t) => t.s + t.len, NO_TRUCKS);
+  track.barrelsAt = barrels.at;
+  track.barrelsFrom = barrels.from;
+  track.pressesAt = presses.at;
+  track.pressesFrom = presses.from;
+  track.trucksAt = trucks.at;
+  track.trucksFrom = trucks.from;
+}
+
+/**
+ * A car capsule's reach from its centre (15.5) plus a tick's travel (~9 at 537 u/s), and a rivet's
+ * swept tick (~24 units at 900 + 537 u/s) plus its radius: a barrel row, a press or a truck goes in
+ * the bucket of every segment within this of its s range.
+ */
+const MOVER_BUCKET_REACH = 30;
+/** The bots keep a barrel row, a press or a truck in view until it is this far behind the car (as a mound). */
+const MOVER_BEHIND = 40;
+
+/** Per segment: the features (sorted by s) whose s range lo..hi comes within MOVER_BUCKET_REACH of it, and the bots' first index. */
+function moverBuckets<T>(track: Track, list: readonly T[], lo: (x: T) => number, hi: (x: T) => number, empty: readonly T[]): { at: T[][]; from: number[] } {
+  const { cum } = track;
+  const at: T[][] = [], from: number[] = [];
+  for (let i = 0; i < track.pts.length; i++) {
+    const a = cum[i], b = cum[i + 1];
+    const near = list.filter((x) => lo(x) - MOVER_BUCKET_REACH < b && hi(x) + MOVER_BUCKET_REACH > a);
+    at.push(near.length ? near : (empty as T[]));
+    const k = list.findIndex((x) => hi(x) + MOVER_BEHIND > a);
+    from.push(k < 0 ? list.length : k);
+  }
+  return { at, from };
 }
 
 /** Distance from (x, y) to a convex quad (0 inside it). */
@@ -793,15 +854,31 @@ export function surfaceAt(track: Track, seg: number, s: number, lat: number): Su
  * `margin`) goes in a lane beside it, out to that lane's widened asphalt, on the side of the island
  * that `prefer` (the car's own lateral offset) is on, the nearest the centerline there; on the
  * other side only if that one has no room. Without an island in the way: exactly as before.
+ * M4-MOVE: the car's box also keeps `margin` clear of a barrel row's path (s +- BARREL_R, wall to
+ * wall: no lane at such an s is clear), of a crusher press (up or down: it may come down) and of a
+ * parked truck. 0 when no lane is clear (clearSpot then looks further back).
  */
 export function clearLaneAt(track: Track, s: number, margin = 4, prefer = 0): number {
+  return laneAt(track, s, margin, prefer) ?? 0;
+}
+
+/** clearLaneAt's search: the lane, or null when none is clear (no mound, island or mover near: 0). */
+function laneAt(track: Track, s: number, margin: number, prefer: number): number | null {
   const p = pointAt(track, s);
   const near = track.tyresAt[p.seg];
   const isles = track.islandsAt[p.seg];
-  const boxed = (f: PlacedIsland, lat: number) =>
-    s + CAR_HALF_LEN + margin > f.s0 && s - CAR_HALF_LEN - margin < f.s1 && lat + CAR_HALF_WID + margin > f.lat0 && lat - CAR_HALF_WID - margin < f.lat1;
-  const isle = isles !== undefined && isles.length > 0 ? isles.find((f) => s + CAR_HALF_LEN + margin > f.s0 && s - CAR_HALF_LEN - margin < f.s1) : undefined;
-  if (isle === undefined && (near === undefined || near.length === 0)) return 0;
+  const rows = track.barrelsAt[p.seg], gates = track.pressesAt[p.seg], trucks = track.trucksAt[p.seg];
+  const along = (s0: number, s1: number) => s + CAR_HALF_LEN + margin > s0 && s - CAR_HALF_LEN - margin < s1;
+  const across = (lat: number, lat0: number, lat1: number) => lat + CAR_HALF_WID + margin > lat0 && lat - CAR_HALF_WID - margin < lat1;
+  const boxed = (f: PlacedIsland, lat: number) => along(f.s0, f.s1) && across(lat, f.lat0, f.lat1);
+  const isle = isles !== undefined && isles.length > 0 ? isles.find((f) => along(f.s0, f.s1)) : undefined;
+  // The movers whose s range the car's box meets (none on a track without any).
+  const row = rows !== undefined && rows.length > 0 ? rows.find((b) => along(b.s - BARREL_R, b.s + BARREL_R)) : undefined;
+  if (row !== undefined) return null; // a barrel row's path: wall to wall
+  const gate = gates !== undefined && gates.length > 0 ? gates.filter((g) => along(g.s - PRESS_DEPTH / 2, g.s + PRESS_DEPTH / 2)) : NO_PRESSES;
+  const truck = trucks !== undefined && trucks.length > 0 ? trucks.filter((t) => along(t.s, t.s + t.len)) : NO_TRUCKS;
+  const movers = gate.length > 0 || truck.length > 0;
+  if (isle === undefined && !movers && (near === undefined || near.length === 0)) return 0;
   const ux = Math.cos(p.h), uy = Math.sin(p.h);
   const clear = (lat: number) => {
     const x = p.x - uy * lat, y = p.y + ux * lat;
@@ -813,12 +890,17 @@ export function clearLaneAt(track: Track, s: number, margin = 4, prefer = 0): nu
       }
     }
     if (isle !== undefined && isles.some((f) => boxed(f, lat))) return false;
+    if (movers) {
+      for (const g of gate) if (across(lat, g.lat0, g.lat1)) return false;
+      for (const t of truck) if (across(lat, t.lat - TRUCK_HALF, t.lat + TRUCK_HALF)) return false;
+    }
     return !overHazard(track, x, y, s);
   };
   if (isle === undefined) {
-    const max = track.def.halfWidth - CAR_HALF_WID;
+    // Without an island the asphalt as drawn here (def.halfWidth on a road that is not widened: as before).
+    const max = (movers && track.widens.length > 0 ? Math.min(halfOn(track, p.seg, s, -1), halfOn(track, p.seg, s, 1)) : track.def.halfWidth) - CAR_HALF_WID;
     for (let k = 0; k <= max; k += 2) for (const lat of k === 0 ? [0] : [-k, k]) if (clear(lat)) return lat;
-    return 0;
+    return movers ? null : 0;
   }
   // An island in the way: the lanes either side, the car's own side first.
   const maxL = halfOn(track, p.seg, s, -1) - CAR_HALF_WID, maxR = halfOn(track, p.seg, s, 1) - CAR_HALF_WID;
@@ -831,7 +913,34 @@ export function clearLaneAt(track: Track, s: number, margin = 4, prefer = 0): nu
       }
     }
   }
-  return 0;
+  return movers ? null : 0;
+}
+
+/**
+ * Where a respawn or a recovery puts a car near s (M4-MOVE, PLAN-M4 2.3 "the nearest clear lane"):
+ * at s on its nearest clear lane (clearLaneAt, `prefer` the side of an island); when no lane at s is
+ * clear (a barrel row's path, wall to wall; a press or a truck leaving no room) just behind what is in
+ * the way (its s range less the car's half-length and `margin`), up to twice; failing that, the
+ * recovery point at or before s and its lane (validation keeps solids SOLID_CLEAR from it). On a
+ * track without barrels, presses and trucks: s and clearLaneAt(s), exactly.
+ */
+export function clearSpot(track: Track, s: number, margin = 4, prefer = 0): { s: number; lat: number } {
+  let at = s;
+  for (let k = 0; k < 3; k++) {
+    const lat = laneAt(track, at, margin, prefer);
+    if (lat !== null) return { s: at, lat };
+    // What is in the way here: the furthest-back start of a barrel row, press or truck the car's box meets.
+    const seg = pointAt(track, at).seg;
+    let back = Infinity;
+    const meets = (s0: number, s1: number) => at + CAR_HALF_LEN + margin > s0 && at - CAR_HALF_LEN - margin < s1;
+    for (const b of track.barrelsAt[seg]) if (meets(b.s - BARREL_R, b.s + BARREL_R)) back = Math.min(back, b.s - BARREL_R);
+    for (const g of track.pressesAt[seg]) if (meets(g.s - PRESS_DEPTH / 2, g.s + PRESS_DEPTH / 2)) back = Math.min(back, g.s - PRESS_DEPTH / 2);
+    for (const t of track.trucksAt[seg]) if (meets(t.s, t.s + t.len)) back = Math.min(back, t.s);
+    if (back === Infinity) break; // a mound or an island alone: not a mover's doing
+    at = wrapS(track, back - CAR_HALF_LEN - margin - 1);
+  }
+  const r = recoveryAt(track, s);
+  return { s: r, lat: clearLaneAt(track, r, margin, prefer) };
 }
 
 /** The world point `lat` units sideways (+ = right of travel) of the centerline at s, and its segment. */
@@ -1578,6 +1687,26 @@ function validateSchema(track: Track, errors: string[], zone: (what: string, lo:
   };
   among(surfaces, " (one surface at a time)");
   among(solids, "");
+  // M4-MOVE: room along the track round what moves, so a car is only ever squeezed against a wall.
+  // A barrel row keeps MOVER_CLEAR (s to s, edge to edge) from every other solid, islands included
+  // (a car pushed along the road out of a row lands on open road); a press keeps it from every other
+  // solid but an island beside it (a car under a press is pushed along the road, never across).
+  const ranges: { what: string; s0: number; s1: number; island: boolean; mover: number }[] = [
+    ...track.tyres.map((m) => ({ what: `tyres at s=${f1(m.s)}`, s0: m.s - m.r, s1: m.s + m.r, island: false, mover: 0 })),
+    ...track.trucks.map((t) => ({ what: `truck at s=${f1(t.s)}`, s0: t.s, s1: t.s + t.len, island: false, mover: 0 })),
+    ...track.islands.map((i) => ({ what: `island ${span(i.s0, i.s1)}`, s0: i.s0, s1: i.s1, island: true, mover: 0 })),
+    ...track.barrels.map((b) => ({ what: `barrels at s=${f1(b.s)}`, s0: b.s - BARREL_R, s1: b.s + BARREL_R, island: false, mover: 1 })),
+    ...track.presses.map((p) => ({ what: `press at s=${f1(p.s)}`, s0: p.s - PRESS_DEPTH / 2, s1: p.s + PRESS_DEPTH / 2, island: false, mover: 2 })),
+  ];
+  for (let i = 0; i < ranges.length; i++) {
+    for (let j = 0; j < ranges.length; j++) {
+      const a = ranges[i], b = ranges[j];
+      if (i === j || a.mover === 0 || (b.mover !== 0 && j < i)) continue; // each pair once
+      if (a.mover === 2 && b.island) continue; // a press beside an island
+      const gap = Math.max(b.s0 - a.s1, a.s0 - b.s1);
+      if (gap < MOVER_CLEAR) errors.push(`${a.what}: ${f1(Math.max(0, gap))} along the track from ${b.what} (what moves keeps >= ${MOVER_CLEAR} along the track from other solids)`);
+    }
+  }
   across(solids, hazards, "");
   among(widens, "");
   across(widens, jumps, " (a widened road has no jumps)");
