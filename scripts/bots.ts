@@ -2265,19 +2265,67 @@ async function runMove(ctx: Ctx, bots: Bot[]): Promise<void> {
 // This section's imports (hoisted like the ones at the top).
 import { islandContact as longIslandContact } from "../tools/debug/split-tune";
 import { touchesMound as longTouchesMound } from "../tools/debug/surf-tune";
+import { BARREL_R as LONG_BARREL_R, barrelLat as longBarrelLat, PRESS_DEPTH as LONG_PRESS_DEPTH, PRESS_UP as LONG_PRESS_UP, PRESS_WARNING as LONG_PRESS_WARNING, pressState as longPressState, type PlacedBarrels as LongBarrels } from "../shared/track";
+import { CAPSULE_HALF as LONG_CAPSULE_HALF, CAPSULE_R as LONG_CAPSULE_R } from "../shared/physics";
 
 /**
  * Over a lagged link on each long track (shipped: no dev flag): a lagged socket bot (80±10 ms, line 0)
  * races an unlagged one (line 24, in Slag Harbour's truck band: it jumps the truck). Both are blind to
- * the barrels and the press (botdrive MOVE.see false), so the lagged one drives into them, and it is
- * stalled for 30 steps (an underrun: nothing predicted or sent) just before Slag Harbour's first row of
- * barrels and Breaker's Mile's press, so those contacts come while its race tick is skewed. The bounds
- * are the Move Yard's (MOVE_LAGGED, M4-MOVE Notes): a median reconciliation error below 0.5, at most 4
- * errors above 13 units, none above 40, at most 4 state mismatches.
+ * the barrels and the press (botdrive MOVE.see false). The lagged one is stalled for 30 steps (an
+ * underrun: nothing predicted or sent): its first inputs after it come with their race tick skewed
+ * (the client predicts them up to ~8 ticks early for about 6 inputs), and the test makes those inputs
+ * meet what moves, for certain (M4-TRACKS review of the flake fix: by position alone the contacts came
+ * by chance, and never on a skewed input):
+ * - Breaker's Mile: it stops with its nose LONG_PRESS_IN inside the raised press's slab (a hold on its
+ *   own predicted car) and the stall starts on the server tick the press's warning begins, 30 before it
+ *   slams; the slam pushes the standing car out to touching, and its first inputs after the stall, which
+ *   it predicts at a race tick before the slam (the press up), drive into the slab while it is down (every
+ *   input of the skewed window touches it).
+ * - Slag Harbour (the second row of barrels, 80 u/s, one across its line every 130 ticks): it stops
+ *   with its nose LONG_BARREL_OUT short of the row's path, creeps in to LONG_BARREL_IN inside it (its
+ *   nose at the barrels' line) once the last barrel is by, and the stall starts LONG_BARREL_HIT ticks
+ *   before the next barrel crosses its line (barrelLat: a pure function of the race tick): that barrel
+ *   strikes the car's side on about its first input after the stall and then keeps pushing it across
+ *   while it drives on, through the skewed inputs (the client predicts the barrel up to ~10 units behind
+ *   where it is).
+ * After the stall the car goes straight ahead at full throttle (`push`) until past what it meets: the
+ * blind driver, standing still that long, would first back up (its stuck recovery).
+ * The check counts the contact ticks whose input (one consumed that tick) had a live race-tick skew
+ * (Game.rtLog's against the server's tick): at least one. The bounds are the Move Yard's (MOVE_LAGGED,
+ * M4-MOVE Notes): a median reconciliation error below 0.5, at most 4 errors above 13 units, none above
+ * 40, at most 4 state mismatches.
  */
+/** Breaker's Mile: where the lagged bot stands while the press is up, its nose this far inside the slab. */
+const LONG_PRESS_IN = 2.5;
+/** Slag Harbour: it waits with its nose this far short of the barrels' path, then creeps to this far inside it. */
+const LONG_BARREL_OUT = 2;
+const LONG_BARREL_IN = 9;
+/**
+ * Slag Harbour: the stall starts this many ticks before the next barrel crosses the car's line: the
+ * barrel first touches the car (its nose LONG_BARREL_IN in the path) ~8 ticks before it crosses, and the
+ * first inputs after the stall are applied ~34-35 ticks after it starts (their skew lasts ~6-8 inputs).
+ */
+const LONG_BARREL_HIT = 42;
+/** Slag Harbour: it creeps in this many ticks before that barrel crosses (after the one before it is by: 130 ticks apart). */
+const LONG_BARREL_CREEP = 105;
+/** The car's reach ahead of its centre (the capsule's). */
+const LONG_REACH = LONG_CAPSULE_HALF + LONG_CAPSULE_R;
+
+/** The first tick from `from` (within 600) at which a barrel of the row crosses lat 0 (from <= 0 to > 0, or the other way for a row rolling left). */
+function longCrossing(b: LongBarrels, from: number): number {
+  for (let rt = from; rt < from + 600; rt++) {
+    for (let k = 0; k < b.n; k++) {
+      const a = longBarrelLat(b, k, rt), c = longBarrelLat(b, k, rt + 1);
+      if (a === a && c === c && (b.speed > 0 ? a <= 0 && c > 0 : a >= 0 && c < 0)) return rt;
+    }
+  }
+  return -1;
+}
+
 async function runLong(ctx: Ctx, bots: Bot[]): Promise<void> {
   for (const [id, n] of [["slag-harbour", 6], ["breakers-mile", 7]] as const) {
     const t = trackById(id);
+    const slag = id === "slag-harbour";
     const H = new Bot(`Hotel${n}`, ctx.url, 24);
     const S = new Bot(`Victor${n}`, ctx.url, 0, { lag: 80, jitter: 10 });
     bots.push(H, S);
@@ -2287,6 +2335,39 @@ async function runLong(ctx: Ctx, bots: Bot[]): Promise<void> {
     S.step = () => {
       if (stall > 0) stall--; // no game.step: nothing predicted, nothing sent (an underrun)
       else step();
+    };
+    // Where the car's centre stands: Breaker's Mile in front of the press; Slag Harbour short of the second
+    // row of barrels, then in its path. `target` is read by the hold (client side) and set by the tick
+    // (server side, the same process).
+    const press = slag ? null : t.presses[0];
+    const row = slag ? t.barrels[1] : null;
+    const atPress = press ? press.s - LONG_PRESS_DEPTH / 2 + LONG_PRESS_IN - LONG_REACH : 0;
+    const out = row ? row.s - LONG_BARREL_R - LONG_BARREL_OUT - LONG_REACH : 0;
+    const inside = row ? row.s - LONG_BARREL_R + LONG_BARREL_IN - LONG_REACH : 0;
+    let target = slag ? out : atPress;
+    let mode: "drive" | "hold" | "in" | "go" = "drive", held = 0, cross = -1, w = -1;
+    // After the stall: straight ahead at full throttle along the road until past what it meets (the blind
+    // driver, standing still that long, would back up first: its stuck recovery).
+    const push = (): Controls => {
+      const base = S.driver.controls();
+      const c = S.game.car;
+      if (!c) return base;
+      const h = pointAt(t, queryTrackNear(t, c.x, c.y, c.seg).s).h;
+      return { ...base, throttle: 1, steer: clamp(angleDiff(c.h, h) * 2.2, -1, 1), fire: false, mine: false };
+    };
+    const hold = (): Controls => {
+      // To a stop at `target` on the predicted car, never reversing (the driver steers: line 0): the
+      // braking curve far out, the coast (ROLL 60) over the last 20 units, small pushes to get there.
+      const base = S.driver.controls();
+      const c = S.game.car;
+      if (!c) return base;
+      const q = queryTrackNear(t, c.x, c.y, c.seg);
+      const h = pointAt(t, q.s).h;
+      const fwd = c.vx * Math.cos(h) + c.vy * Math.sin(h);
+      const d = target - q.s;
+      const want = d <= 0 ? 0 : d < 20 ? Math.sqrt(2 * 40 * d) : Math.sqrt(2 * 40 * 20) + Math.sqrt(2 * 600 * (d - 20));
+      const throttle = fwd > want + 3 ? (fwd > 25 ? -1 : 0) : fwd < want - 3 && d > 0.3 ? 0.4 : 0;
+      return { ...base, throttle, fire: false, mine: false };
     };
     let room: ReturnType<typeof ctx.server.rooms.rooms.get> | undefined;
     let tick: ((tk: number, now: number) => void) | null = null;
@@ -2304,15 +2385,17 @@ async function runLong(ctx: Ctx, bots: Bot[]): Promise<void> {
       tick = r.tick.bind(r);
       const met = { barrel: 0, press: 0, truck: 0, mound: 0, island: 0, jumps: 0, sJumps: 0, falls: 0 };
       const truth = new Map<number, number>();
+      const hits: { seq: number; rt: number }[] = []; // contacts (the row's barrel / the press) on a tick an input was consumed
       let last = -1, hAir = false, sAir = false, sFall = false;
-      const at = id === "slag-harbour" ? r.track.barrels[0].s : r.track.presses[0].s;
       r.tick = (tk: number, now: number) => {
         tick!(tk, now);
         if (r.phase !== "racing") return;
         const p = r.players.get(S.game.you);
+        let fresh = -1;
         if (p && p.car && p.ack !== last) {
           last = p.ack;
           truth.set(p.ack, r.rt);
+          fresh = p.ack;
         }
         const c = p?.car;
         if (c) {
@@ -2323,12 +2406,43 @@ async function runLong(ctx: Ctx, bots: Bot[]): Promise<void> {
         }
         if (c && !p.progress?.fin && c.air === 0 && c.fall === 0) {
           const q = queryTrackNear(r.track, c.x, c.y, c.seg);
-          if (stalls === 0 && q.s > at - 220 && q.s < at) {
-            stalls++;
-            stall = 30;
+          const still = Math.hypot(c.vx, c.vy) < 2;
+          if (mode === "drive" && q.s > target - 400 && q.s < target) {
+            mode = "hold";
+            S.script = hold;
+          } else if (mode === "hold" && press) {
+            // Standing under the raised slab as its warning begins: stall now, the slam comes in 30.
+            const warns = longPressState(press, r.rt) === LONG_PRESS_WARNING && longPressState(press, r.rt - 1) === LONG_PRESS_UP;
+            if (warns && still && Math.abs(q.s - atPress) < 1.5) {
+              stalls++;
+              stall = 30;
+              w = r.rt;
+              mode = "go";
+              S.script = push; // after the stall: into the slab
+            }
+          } else if (mode === "hold" && row && still && Math.abs(q.s - out) < 1.5 && cross < 0) {
+            // Waiting short of the path: plan on the next barrel across the line far enough ahead.
+            cross = longCrossing(row, r.rt + LONG_BARREL_CREEP + 1);
+          } else if (mode === "hold" && row && cross > 0 && r.rt >= cross - LONG_BARREL_CREEP) {
+            mode = "in"; // the barrel before it is by: creep into the path
+            target = inside;
+          } else if (mode === "in" && row && r.rt >= cross - LONG_BARREL_HIT) {
+            if (still && Math.abs(q.s - inside) < 1.5) {
+              stalls++;
+              stall = 30;
+              w = r.rt;
+            }
+            mode = "go"; // not in place: no stall (stalls 0 fails the check)
+            S.script = stalls ? push : null; // after the stall: on through the path (the barrel strikes it there)
+          }
+          if (mode === "go" && S.script === push && q.s > (press ? press.s : row!.s) + 60) S.script = null; // past it: the blind driver again
+          if ((mode === "hold" || mode === "in") && ++held > 1200) {
+            mode = "go"; // never ready in 20 s: let it race on (stalls 0 fails the check)
+            S.script = null;
           }
           const hit = moveContact(r.track, c, r.rt);
           if (hit) met[hit]++;
+          if (fresh >= 0 && w >= 0 && ((slag && hit === "barrel") || (!slag && hit === "press"))) hits.push({ seq: fresh, rt: r.rt });
           if (longTouchesMound(r.track, c)) met.mound++;
           if (longIslandContact(r.track, c)) met.island++;
         }
@@ -2346,22 +2460,28 @@ async function runLong(ctx: Ctx, bots: Bot[]): Promise<void> {
       const st = S.game.recStateErrors - st0;
       const log = S.game.rtLog.slice(log0).filter(([seq]) => truth.has(seq));
       const live = absStats(log.map(([seq, rt0]) => rt0 - truth.get(seq)!));
-      const contacts = id === "slag-harbour" ? met.barrel : met.press;
-      const jumped = id === "slag-harbour" ? met.jumps >= 1 : met.jumps >= 1 && met.sJumps >= 1;
+      // The contacts after the stall, each with its input's live skew (the predicted race tick less the server's).
+      const predicted = new Map(log.map(([seq, rt0]) => [seq, rt0]));
+      const skews = hits.map((h) => ({ at: h.rt - w, skew: predicted.has(h.seq) ? predicted.get(h.seq)! - truth.get(h.seq)! : NaN }));
+      const skewed = skews.filter((x) => x.skew === x.skew && x.skew !== 0);
+      const what = slag ? "the second row's barrels" : "the press";
+      const jumped = slag ? met.jumps >= 1 : met.jumps >= 1 && met.sJumps >= 1;
       console.log(
-        `      ${S.name} (80±10 ms, line 0, blind, stalled 30 steps before ${id === "slag-harbour" ? "the first barrels" : "the press"}) and ${H.name} (line 24) on ${t.def.name}: ${S.name}'s contact ticks barrel ${met.barrel}, press ${met.press}, truck ${met.truck}, mound ${met.mound}, island ${met.island}; falls ${met.falls}, take-offs ${met.sJumps}; ${H.name}'s take-offs ${met.jumps}; ` +
-          `rt skew live max ${live.max} (exact ${(100 * live.exact).toFixed(1)}%); rec err n=${s.n} median=${s.median.toFixed(3)} p95=${s.p95.toFixed(3)} max=${s.max.toFixed(2)}, ${over13} > 13; state mismatches ${st}; ` +
+        `      ${S.name} (80±10 ms, line 0, blind, stalled 30 steps from W = race tick ${w}, timed on ${what}) and ${H.name} (line 24) on ${t.def.name}: ${S.name}'s contact ticks barrel ${met.barrel}, press ${met.press}, truck ${met.truck}, mound ${met.mound}, island ${met.island}; ` +
+          `with ${what} on its inputs after the stall ${hits.length}, at W+${skews.length ? `${Math.min(...skews.map((x) => x.at))}..${Math.max(...skews.map((x) => x.at))}` : "-"}, skewed ${skewed.length} (skews ${skewed.map((x) => `${x.skew}@W+${x.at}`).join(" ") || "none"}); ` +
+          `falls ${met.falls}, take-offs ${met.sJumps}; ${H.name}'s take-offs ${met.jumps}; rt skew live max ${live.max} (exact ${(100 * live.exact).toFixed(1)}%); rec err n=${s.n} median=${s.median.toFixed(3)} p95=${s.p95.toFixed(3)} max=${s.max.toFixed(2)}, ${over13} > 13; state mismatches ${st}; ` +
           `finish ${rows.map((x) => `${x.name} ${(x.timeMs / 1000).toFixed(2)}s`).join(", ")}`,
       );
       check(
-        `${id} over sockets: a lagged bot (80±10 ms), blind to the barrels and the press and stalled before them (its race tick skewed), races it and hits them: both finish, the unlagged one jumps, it keeps a median reconciliation error below 0.5, at most ${MOVE_LAGGED.over13} errors above 13 units, none above ${MOVE_LAGGED.max}, at most 4 state mismatches`,
-        rows.length === 2 && rows.every((x) => x.timeMs > 0) && stalls === 1 && contacts > 0 && jumped &&
+        `${id} over sockets: a lagged bot (80±10 ms), blind to the barrels and the press, stalled 30 steps timed so its first inputs after the stall (their race tick skewed) meet ${what}: both finish, the unlagged one jumps, at least one contact with ${what} on an input whose race tick was skewed, a median reconciliation error below 0.5, at most ${MOVE_LAGGED.over13} errors above 13 units, none above ${MOVE_LAGGED.max}, at most 4 state mismatches`,
+        rows.length === 2 && rows.every((x) => x.timeMs > 0) && stalls === 1 && skewed.length >= 1 && jumped &&
           s.n > 500 && s.median < 0.5 && over13 <= MOVE_LAGGED.over13 && s.max <= MOVE_LAGGED.max && st <= 4 && H.errors.length + S.errors.length === 0,
-        `contacts barrel ${met.barrel} / press ${met.press} / truck ${met.truck}; take-offs ${met.jumps} / ${met.sJumps}; median ${s.median.toFixed(3)}, max ${s.max.toFixed(2)}, ${over13} > 13; skew live max ${live.max}; state mismatches ${st}`,
+        `stalls ${stalls}; contacts barrel ${met.barrel} / press ${met.press}; with ${what} after the stall ${hits.length}, skewed ${skewed.length}; take-offs ${met.jumps} / ${met.sJumps}; median ${s.median.toFixed(3)}, max ${s.max.toFixed(2)}, ${over13} > 13; skew live max ${live.max}; state mismatches ${st}`,
       );
     } finally {
       MOVE_BOTS.see = true;
       S.step = step;
+      S.script = null;
       if (room && tick) room.tick = tick;
       for (const b of [H, S]) b.game.leave();
     }

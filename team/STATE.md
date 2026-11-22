@@ -697,6 +697,29 @@ Slag Harbour barrel contact can be 0 by design. Both sent back to the author ctx
 TH-LOOK-1 done: c4900c3 (theme machinery + provisional desert; scrapyard bit-identical; speed gate PASS; S7 0.991/1.007; census 14.09 MB;
 975/975 + 145/145; report tmp/th-look-1/REPORT.md; sheets/shots in ~/orca/workspaces/scrap-rally/th-look-1/tmp/th-look/). Fable reviewer
 ctx_765df883d782 (tmp/review-th-look-1.md). Desert preview shown to the user inline (taste is separate; merge does not wait on it).
+TH-LOOK-1 review APPROVE (Fable; cosmetic desert notes on the ticket; mud rim on tarmac beside pools = the user's call). MERGED 2e171f1;
+gate running; ClickUp ready for qa test; workers released, workspace removed; desert sheet + 58 shots saved in tmp/th-look-1/.
+IN FLIGHT: BR-BAKE 123jpnbfghb (Fable) ctx_373cca46924f (~/orca/workspaces/scrap-rally/br-bake, :3011; spec tmp/spec-br-bake.md);
+MARSHALS-1 123jpnbfgjb (Fable) ctx_d2ef6307e5f5 (~/orca/workspaces/scrap-rally/marshals-1, :3016; spec tmp/spec-marshals-1.md).
+BR-PHYS next when THEME-SCHEMA merges (3rd author slot). Desert APPROVED by the user (push gate cleared).
+TH-LOOK-1 gate GREEN on 2e171f1 (975/975 + 145/145, build index-CNyat145.js). THEME-SCHEMA re-review APPROVE; MERGED c92c578 (README
+conflict kept both); gate running; ClickUp complete; workers released, workspace removed. BR-PHYS 123jpnbfgha (Opus) in flight:
+ctx_de494cfdd510 (~/orca/workspaces/scrap-rally/br-phys, :3010; spec tmp/spec-br-phys.md); its scripts/bots.ts:92 change waits until the
+M4-TRACKS flake fix merges (tell it). Active authors: BR-BAKE, MARSHALS-1, BR-PHYS (+ the flake fix round).
+THEME-SCHEMA gate on c92c578: 1022/1022, build index-QaMhT72h.js, bots 144/145 (only the known flake). PUSHED (user popup): origin/main =
+dcea465 (TH-LOOK-1 + THEME-SCHEMA: Breaker's Mile in the approved desert). Expected live bundle: index-QaMhT72h.js.
+DEPLOYED (user): live index-QaMhT72h.js (curl), bundle holds theme:`desert`. QA14 live worker dispatched (spec tmp/spec-qa-live-14.md;
+report tmp/qa14-live-report.md). Flake fix f9b0f6d/e8aadad (skewed contacts certain + checked on both long tracks) re-review sent to
+ctx_27271d92a5da.
+Flake fix re-review APPROVE; MERGED 45383dd; gate running; M4-TRACKS workers released, workspace removed; BR-PHYS told 'go for bots.ts:92'.
+QA14 live PASS (ctx_71fbdd000662, released): Breaker's Mile desert (9 bots, 0 falls), other 4 tracks scrapyard, frame work 5.9 vs 5.2 ms,
+no console errors. ClickUp complete: TH-LOOK-1.
+Flake-fix gate on 45383dd FULLY GREEN (1022/1022 + 145/145, build index-QaMhT72h.js = the live bundle; test-only change, nothing to push).
+BR-PHYS done: 0890198 (cars drive branch roads; 0/2.26M wall probe pairs disagree; cp/lap identical per route; parity 0/10422; lagged
+median 0.005; shipped schema-hash SAME, branch-yard queries re-recorded; 1046/1046 + 150/150 x2; small botdrive fixes; report
+tmp/br-phys/BR-PHYS-report.md). Opus reviewer ctx_63fc3d9518d9 (tmp/review-br-phys.md). README-only conflicts with br-bake, marshals-1.
+BR-MAP 123jpnbfghd (Fable) in flight early (needs only BR-SCHEMA's data; hud.ts free): ctx_7fe9b95cd759 (~/orca/workspaces/scrap-rally/br-map,
+:3017; spec tmp/spec-br-map.md). Active authors: BR-BAKE, MARSHALS-1, BR-MAP (BR-PHYS idle in review). BR-BOTS after BR-PHYS merges.
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).

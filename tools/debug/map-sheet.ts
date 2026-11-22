@@ -209,9 +209,18 @@ async function child(root: string, out: string): Promise<void> {
       }
       return track.length / 2;
     })();
-    // The road's tone on the map: what lies on the centreline of a plain stretch. The panel's: a pixel inside the frame's corner.
+    // The road's tone on the map: what lies in the middle of the line across a plain stretch (the run of
+    // non-panel tones round the centreline, its middle sample). THEME-SCHEMA: not the centreline's own
+    // pixel, which at a smaller map scale (the theme yards' wider loop) can be the line's 1-px edge step.
+    // The panel's: a pixel inside the frame's corner.
     const plain = across(plainS);
-    const road = plain[plain.length >> 1], face = hex(bare, (2 * MAP + 2) * 4);
+    const face = hex(bare, (2 * MAP + 2) * 4);
+    const road = (() => {
+      let a = plain.length >> 1, b = a;
+      while (a > 0 && plain[a - 1] !== face && plain[a - 1] !== "") a--;
+      while (b < plain.length - 1 && plain[b + 1] !== face && plain[b + 1] !== "") b++;
+      return plain[(a + b) >> 1];
+    })();
     /** The run of tones round the line's middle, as far as the panel shows through either side: "road 2 | other 2 | road 2", in px. */
     const runsOf = (tones: string[]): string => {
       let a = tones.length >> 1, b = a;
