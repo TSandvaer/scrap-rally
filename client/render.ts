@@ -6,6 +6,7 @@
 import type { Track } from "../shared/track";
 import { Actors } from "./gfx/actors";
 import { Hud } from "./gfx/hud";
+import { sceneryFor } from "./gfx/theme";
 import { VIEW_H, VIEW_W, World, ZOOM } from "./gfx/world";
 
 export { VIEW_H, VIEW_W };
@@ -178,8 +179,12 @@ export class Renderer {
     canvas.height = VIEW_H;
     this.ctx = canvas.getContext("2d")!;
     this.ctx.imageSmoothingEnabled = false;
-    this.world = new World(this.ctx, track);
-    this.actors = new Actors(this.ctx, track);
+    // The track's theme (PLAN-THEMES.md), resolved here, once: its definition's, the scrapyard
+    // when it names none or one whose art has not landed. The world's tiles, the dust and what
+    // moves on the road are made with it; the cars, the effects and the HUD are every theme's.
+    const scenery = sceneryFor(track);
+    this.world = new World(this.ctx, track, scenery);
+    this.actors = new Actors(this.ctx, track, scenery);
     this.hud = new Hud(this.ctx, track);
   }
 
