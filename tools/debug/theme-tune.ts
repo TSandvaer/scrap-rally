@@ -7,7 +7,8 @@
 //              in the theme yards' tightest bend (s 4000-4180, the outside half, lane -32) and on the top
 //              straight (s 800-980, full width, a lane change to +30 asked at its start): the slip angle
 //              (velocity against heading) and the speed at its exit, the speed lost over it, and the
-//              lateral offset against the same run dry (at the exit and the widest in the 0.5 s after).
+//              lateral offset against the same run dry (at the exit and the widest in the 0.5 s after); and the
+//              braking distance from 400 to 100 u/s on the straight's patch (oil's brakes are the asphalt's).
 //   --ford     a car crossing Canopy Yard's first ford (vx 60, 140 long) from 380 u/s at full throttle on lane 0,
 //              steering at the bots' look-ahead: how far the drift takes it holding its lane by pursuit only,
 //              and with the bots' upstream aim (fordAim); and a server bot (botStep) made to cross a ford (declared
@@ -119,7 +120,7 @@ export interface AbRow {
 }
 
 /** One A/B run: a speed-holding pursuit driver on `lane` (from `turnTo` at the patch's start), through `patch` of `kind` and dry. */
-function abRun(type: CarType, where0: "bend" | "straight", kind: "oil" | "water", patch: { s0: number; s1: number; lat0: number; lat1: number }, lane: number, turnTo: number, v0: number): AbRow {
+function abRun(type: CarType, where0: AbRow["where"], kind: "oil" | "water", patch: { s0: number; s1: number; lat0: number; lat1: number }, lane: number, turnTo: number, v0: number): AbRow {
   const st = statsFor(type, { engine: 0, tyres: 0, welder: 0 });
   const wet = loopWith(kind === "oil" ? "city" : undefined, [{ k: kind, ...patch } as Feature]);
   const dry = loopWith(undefined, []);
@@ -159,6 +160,32 @@ export function abRows(): AbRow[] {
     }
   }
   return rows;
+}
+
+/** The braking A/B: full brake from 400 u/s at the start of the straight's patch (800-980, full width) down to 100 u/s: how far it takes, on oil, in water and dry. */
+export function brakeRows(): string[] {
+  const out: string[] = [];
+  for (const type of CAR_TYPES) {
+    const st = statsFor(type, { engine: 0, tyres: 0, welder: 0 });
+    const dist = (t: Track) => {
+      const c = carAt(t, 600, 0, 400);
+      const env = raceEnv(t);
+      let from = NaN;
+      for (let i = 0; i < 400; i++) {
+        const w = where(t, c);
+        if (from !== from && w.s >= 812) from = w.s; // the traction rectangle's start
+        env.rt = i + 1;
+        stepRaceCar(c, { throttle: from === from ? -1 : speedOf(c) < 400 ? 1 : 0, steer: pursue(t, c, 0) }, st, env); // 400 held up to it
+        if (from === from && speedOf(c) <= 100) return where(t, c).s - from;
+      }
+      return NaN;
+    };
+    const oil = dist(loopWith("city", [{ k: "oil", s0: 800, s1: 980, lat0: -64, lat1: 64 }]));
+    const water = dist(loopWith(undefined, [{ k: "water", s0: 800, s1: 980, lat0: -64, lat1: 64 }]));
+    const dry = dist(loopWith(undefined, []));
+    out.push(`${CARS[type].name.padEnd(5)} brake    400 -> 100 u/s from the patch's start: oil ${f1(oil)}, water ${f1(water)}, dry ${f1(dry)} units`);
+  }
+  return out;
 }
 
 export function abLines(rows: AbRow[]): string[] {
@@ -362,7 +389,7 @@ export function raceLine(r: { a: ThemeRace; same: boolean }): string {
 if (process.argv[1]?.endsWith("theme-tune.ts")) {
   const arg = process.argv;
   if (arg.includes("--numbers")) for (const l of themeNumbers()) console.log(l);
-  else if (arg.includes("--ab")) for (const l of abLines(abRows())) console.log(l);
+  else if (arg.includes("--ab")) for (const l of [...abLines(abRows()), ...brakeRows()]) console.log(l);
   else if (arg.includes("--ford")) for (const l of [...fordCross(), ...fordBotLines()]) console.log(l);
   else if (arg.includes("--race")) {
     const only = arg[arg.indexOf("--race") + 1];
