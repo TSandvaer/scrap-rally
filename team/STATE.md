@@ -591,6 +591,8 @@ User popups: rate stick stays debug-only; no straight-line brake. User stick val
 User drove the Split Yard: "mud area is too long" (dirt lane 700) -> M4-TRACKS rule <= ~350 (PLAN-M4.md + ClickUp comment); splits
 otherwise fine. Branch roads = shortcuts, shorter but risky; plan now, build after M4-TRACKS: an Opus Plan agent is drafting PLAN-BRANCH
 (then Fable review, then the user's approval). Split taste copy :3009 stays until the Move Yard copy needs the port.
+MOVE re-review @84b1323 REQUEST_CHANGES (F3 edge: rivetInBand tests each tick's start, not the spawn; 128/3900 pass; ctx_178052ad9776;
+tmp/m4-move/m4-move-review-2.md). 2nd round -> user popup: send back. Fix round 2 sent to ctx_ab8415d5a6c7; reviewer to re-check it only.
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
