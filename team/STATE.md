@@ -755,7 +755,25 @@ theme surfaces join Track.surfaces/surfAt, re-record only the 3 theme yards' fea
 theme-sheet --hash identical before/after).
 WAVE-4 DRIVE PASSED (user: "feels good"). BR-TRACKS 123jpnbfghe dispatching (Opus, :3011, spec tmp/spec-br-tracks.md; fixes the two
 map-sheet false-FAIL checks first). Active authors then: MARSHALS-1, THEME-SURF, BR-TRACKS (cap full). After MARSHALS-1 merges: NOSELECT-2
-or TH-LOOK-2 takes its slot (TH-LOOK-2 first if a slot is free; NOSELECT-2 next). TH-LOOK-2 waits for
+or TH-LOOK-2 takes its slot (TH-LOOK-2 first if a slot is free; NOSELECT-2 next).
+BR-TRACKS in flight: ctx_976a6ba7e36e (Opus, ~/orca/workspaces/scrap-rally/br-tracks, :3011). THEME-SURF nudged once (idled on its own
+background test). MARSHALS-1 final round DONE: head 5a52066 (round commit 2cf675a = bfa7747..2cf675a, 5 files; later commits are main merges;
+marshal-sheet --check 74 ok, census 14,120,632 B, Gate PASS, 1064/1064 + 154/154). Delta check: reviewer follow-up ctx_74c8fb88d3ea (of
+ctx_2a3e4c9c5a1a; spec tmp/review-marshals-1-delta.md). Merge on APPROVE, then TH-LOOK-2 + NOSELECT-2.
+MARSHALS-1 delta check REQUEST_CHANGES (ctx_74c8fb88d3ea kept; tmp/review-marshals-1-delta-verdict.md): the round's late-join fix
+(marshals.ts:430 phase === RACING) drops the finish burst for the race-ENDING car (solo winner / last car in; the client is already OVER
+that frame). One-line fix + a same-step check sent: ctx_8942783f6d9b (tmp/fix-marshals-1-r3.md). Then the same reviewer confirms, merge.
+HARBOUR THEME (user): Slag Harbour becomes its own harbour theme (containers, cranes). Draft amendment tmp/plan-themes-harbour-draft.md
+(new HARBOUR-SCHEMA Opus + TH-LOOK-H Fable tickets; oil legal on harbour + city; Quay Yard) at the Fable advisor; then user approval.
+TH-LOOK-2 HELD until approved. BR-TRACKS bot-lap rule answered (Normal 50-60; Hard may dip by its gain; Easy pre-existing).
+HARBOUR AMENDMENT APPROVED (user popups; advisor "sound with changes"): PLAN-THEMES Amendment 1. New tickets HARBOUR-SCHEMA 123jpnbfgzv
+(Opus, after THEME-SURF + BR-TRACKS) and TH-LOOK-H 123jpnbfgzw (Fable, after TH-LOOK-2 + HARBOUR-SCHEMA); TH-LOOK-3 after TH-LOOK-H (+ ford
+cue); THEME-TRACKS after HARBOUR-SCHEMA. BR-TRACKS told to drop Slag Harbour's "city" tag + sim-test:14655 (msg_1c860f55453b) and allowed
+to re-scope 5 branch checks to brPlainShippedIds. TH-LOOK-2 hold LIFTED (accept adds Slag Harbour 0 px).
+MARSHALS-1 fix done 13a2273 (75 ok / 0 FAIL; 1064 + 154); reviewer confirm: ctx_32b9038272b3.
+THEME-SURF DONE 7eb64c2 (sim 1085/1085, bots 166/166 x2; numbers match 2.3; report tmp/theme-surf/theme-surf-report.md). Finding: bots
+skirt full-width theme surfaces on the 12-unit dry edge. Reviewer ctx_2e888ff0a56f (Opus, :3018, spec tmp/review-theme-surf.md).
+NOTE: the client does not draw sand/oil/fords yet (TH-LOOK-2 sand+oil, TH-LOOK-3 ford), so THEME-SURF's drive gate is with the looks. TH-LOOK-2 waits for
 MARSHALS-1 (shares render.ts + canvas-census.ts). Ford direction cue moved from THEME-SURF to TH-LOOK-3 (drawing = world.ts, Fable).
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
