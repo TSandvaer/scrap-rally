@@ -543,6 +543,10 @@ wall, noses = mound contact (26 deep), Split Yard test track, bots lane per seat
 shipped tracks SAME (schema-hash 15/15, Hard goldens, map-sheet 0 px); sim 840/840 + bots 128/128 twice. Opus reviewer ctx_758bdaf628ba
 (tmp/review-m4-surf-2.md). TASTE COPY :3009 = ~/orca/workspaces/scrap-rally/split-taste (detached 512dc98, SCRAP_DEV_TRACK=split-yard,
 node pid 3163, npm pid 3142): Create room -> Split Yard. ClickUp 123jpnbffz4 in review.
+SURF-2 review 1 REQUEST_CHANGES: F1 physics walls use the exact taper but the bake draws linear-in-t between samples (world.ts:404-409,
+1022, 1072, 1276) -> up to 4.7 units off the drawn barrier; fix = interpolate like the bake; the trial fix pushes the weapons-on
+island bound (Normal Racer 33 > 20) -> bots get island margin / lane recovery first. Fix round sent to the author as ctx_43c279b87152
+(tmp/m4-surf-2/review-1-fix.md); reviewer ctx_758bdaf628ba kept for the re-review. Taste copy :3009 (512dc98) gets refreshed after.
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
