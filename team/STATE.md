@@ -671,6 +671,9 @@ BR-SCHEMA re-review APPROVE (ctx_08fa33cba092). BR-SCHEMA MERGED 287dd18; gate r
 THEME-SCHEMA 123jpnbfgj1 (Opus) in flight: ctx_0362282f9fe4 (~/orca/workspaces/scrap-rally/theme-schema, :3010; spec
 tmp/spec-theme-schema.md); runs before BR-PHYS (both shared/track.ts). M4-TRACKS author told: flake fix inside scripts/bots.ts only.
 HARD-2 final round done: a7f1f66 (main merged; falls 0 on the 2 new tracks; nits fixed). Delta look sent to ctx_8f7a8c933e4d.
+BR-SCHEMA gate on 287dd18 GREEN (946/946 + 143/143, build index-Cu4WChiY.js; the flake passed this run). HARD-2 delta APPROVE; MERGED d111e89;
+gate running; ClickUp ready for qa test; workers released, workspace hard-2 removed. TUNING COPY :3009 rebuilt at d111e89 (main incl. the
+Bot tune row; SCRAP_DEV_BOTS=1; node pid 96649). Active authors: TH-LOOK-1, THEME-SCHEMA, M4-TRACKS flake fix.
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
