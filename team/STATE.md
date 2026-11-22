@@ -554,6 +554,12 @@ Opus reviewer ctx_09e09c787a72 (tmp/review-touch-5.md). On APPROVE: merge, gate,
 SURF-2 fix round 1 done: 860795c (f02ecde walls interpolate like the bake, gap 0.0000 on all 5 widens; 860795c bots back off islands,
 weapons-on contacts <= 1-2, bound 8; N2 hoisted; 840/840 + 128/128 twice; report tmp/m4-surf-2/m4-surf-2-fix1-report.md). Re-review
 sent to ctx_758bdaf628ba. TASTE COPY :3009 refreshed to 860795c (node pid 62281, npm pid 62260; same worktree split-taste).
+SURF-2 re-review APPROVE (ctx_857a55d25a38, released). User popup: "Merge now, drive later". MERGED ae4db2c; gate 840/840 + 128/128,
+build ok; ClickUp 123jpnbffz4 ready for qa test; author released, workspace m4-surf-2 removed. Taste copy :3009 STAYS UP (split-taste,
+860795c) until the user has driven it. TOUCH-5 review 1 REQUEST_CHANGES (F1 no test catches a per-frame car read; F2 brake blips at
+~150 u/s): fix round sent to ctx_ef45d3475cfa (tmp/touch-5/review-1-fix.md; merge main first; reviewer ctx_09e09c787a72 kept).
+M4-MOVE 123jpnbffz5 (Opus) in flight: ctx_2677067f1bc7 (~/orca/workspaces/scrap-rally/m4-move, :3008; spec tmp/spec-m4-move.md; base
+ae4db2c). Its criterion 9 (WorldFx.rt fill in client/main.ts) waits until TOUCH-5 merges: then tell it "go for 9, git merge main".
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
