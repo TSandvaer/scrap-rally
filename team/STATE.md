@@ -720,6 +720,17 @@ median 0.005; shipped schema-hash SAME, branch-yard queries re-recorded; 1046/10
 tmp/br-phys/BR-PHYS-report.md). Opus reviewer ctx_63fc3d9518d9 (tmp/review-br-phys.md). README-only conflicts with br-bake, marshals-1.
 BR-MAP 123jpnbfghd (Fable) in flight early (needs only BR-SCHEMA's data; hud.ts free): ctx_7fe9b95cd759 (~/orca/workspaces/scrap-rally/br-map,
 :3017; spec tmp/spec-br-map.md). Active authors: BR-BAKE, MARSHALS-1, BR-MAP (BR-PHYS idle in review). BR-BOTS after BR-PHYS merges.
+BR-PHYS review APPROVE; MERGED a2e5a42; gate GREEN (1046/1046 + 150/150, build index-CJUbyskG.js); workers released, workspace removed.
+BR-BOTS (Opus) started as a one-off 4th author (user popup). DONE ALL FOUR: BR-BAKE 83e8f73, BR-MAP fd79a5f, MARSHALS-1 96ceaf5, BR-BOTS d7c0423
+(each merges clean into main; the 3 Fable branches conflict pairwise only in tools/debug/README.md). Reviewers: BR-BAKE ctx_fb09b3361ccf,
+BR-MAP ctx_4e40bed80056, MARSHALS-1 ctx_2a3e4c9c5a1a (Fable), BR-BOTS ctx_dfe9940aaeb7 (Opus). S8 rule accepted (PLAN-BRANCH note).
+Merge order: BR-BAKE, BR-MAP, MARSHALS-1 (re-run marshal-sheet --check after BR-BAKE), BR-BOTS. Then wave 4: the user drives Branch Yard.
+BR-MAP review APPROVE (2 map-sheet false-FAIL findings on slanted shortcuts -> comment on BR-TRACKS). BR-MAP MERGED c73653d (order relaxed:
+README-only conflicts); gate running; ClickUp ready for qa test; workers released, workspace removed; sheets saved in tmp/br-map/.
+BR-BAKE head moved to 2771b39 (docs/tool only, S8 rule) - its reviewer told to include it.
+BR-BOTS review 1 REQUEST_CHANGES (ctx_dfe9940aaeb7 kept): routeStep tests pastGores with the segment-start s (botdrive.ts:1874/1878), so past a
+fork gore the route keeps the other road for up to one segment (14 vs 4 wall contacts in fork-mouth drives). Fix round + merge main sent to
+ctx_0bc7149aa317 (tmp/br-bots/BR-BOTS-review-1.md).
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).

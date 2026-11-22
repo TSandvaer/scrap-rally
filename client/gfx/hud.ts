@@ -7,8 +7,9 @@
 // is filled again only when its text changes (the race time ten times a second). A text the
 // font does not cover (a name in another script) is written into its label with the system
 // font, that label only. The minimap's box, frame, track line (two lines, a lane each, where an
-// island splits the road) and start tick are baked once per track. All of it in palette
-// colours, hard pixels, no alpha.
+// island splits the road; a shortcut road a line of its own, joined to the main road's at its
+// fork and its merge) and start tick are baked once per track. All of it in palette colours,
+// hard pixels, no alpha.
 //
 // A frame allocates nothing here: labels, tags and the countdown's texts are fixed pools.
 //
@@ -16,7 +17,7 @@
 // panel, as wide as it, there only while one of them is on. See "the catch-up cues" below.
 
 import { TICK_HZ } from "../../shared/physics";
-import { halfAt, pointAt, WIDEN_TAPER, type Track, type Vec } from "../../shared/track";
+import { halfAt, pointAt, WIDEN_TAPER, type PlacedBranch, type Track, type Vec } from "../../shared/track";
 import type { CarView, HudView } from "../render";
 import { artCanvas, BOLD, covers, print, SMALL, TALL, widthOf, type Strike } from "./font";
 import { P, rgbOf } from "./palette";
@@ -82,6 +83,8 @@ const MAP_ISLE = P.dirt0; // an island, between its two lanes
 const MAP_ISLE_MIN = 2; // ... and how wide it is drawn at least, px
 const MAP_FORK = WIDEN_TAPER; // the two lanes run together over this much road before and after an island (units): a widen's taper ...
 const MAP_FORK_MIN = 4; // ... and over this much of the map at least, px: a fork shorter than that is a blunt end
+// Shortcut roads on it (BR-MAP; shared/track.ts PlacedBranch): see miniOf.
+const MAP_PARTED = 5; // the two lines of a mouth have parted for good where their middles are this far apart, px: two 2 px lines and a pixel between them on any slant, and a pixel to spare
 
 // The catch-up cues: a panel of two rows under the lap panel, CUE_GAP below it. DRAFT with a
 // meter of CUE_PIPS pips (the slipstream's strength), BOOST with the time left in seconds and
@@ -448,6 +451,127 @@ function word(hex: string): number {
 }
 
 /**
+ * A stretch of a road's centreline the minimap stamps as one line. from: where it starts along its
+ * road. loop: it closes on itself (a main road without a gap). head, tail: that end is a gap's
+ * edge, where line and casing stop flat.
+ */
+interface MapRun { pts: Vec[]; from: number; loop: boolean; head: boolean; tail: boolean }
+/** A road of the minimap (the main road, or a branch's) and its runs. */
+interface MapRoad { road: Track; runs: MapRun[] }
+
+/** The main road's runs (groundRuns): the whole loop, or a run a gap, from that gap's end to the next one's start. */
+function mainRuns(track: Track): MapRun[] {
+  const gaps = track.gaps;
+  return groundRuns(track).map((pts, i) => (gaps.length ? { pts, from: gaps[i].s1, loop: false, head: true, tail: true } : { pts, from: 0, loop: true, head: false, tail: false }));
+}
+
+/**
+ * A branch's runs (BR-MAP). Its road is open (shared/track.ts Track.roadNo), so nothing wraps: one
+ * run from its fork to its merge, or, with gaps, from the fork to the first gap, between the gaps,
+ * and from the last one to the merge. The fork and the merge are the road's own first and last
+ * points (on the main centreline), and no flat ends there.
+ */
+function branchRuns(road: Track): MapRun[] {
+  const { pts, cum, gaps } = road, last = pts.length - 1;
+  const runs: MapRun[] = [];
+  for (let gi = 0; gi <= gaps.length; gi++) {
+    const from = gi ? gaps[gi - 1].s1 : 0, to = gi < gaps.length ? gaps[gi].s0 : road.length;
+    const run: Vec[] = [];
+    if (gi) {
+      const a = pointAt(road, from);
+      run.push({ x: a.x, y: a.y });
+    } else run.push(pts[0]);
+    for (let j = 1; j < last; j++) if (cum[j] > from && cum[j] < to) run.push(pts[j]);
+    if (gi < gaps.length) {
+      const b = pointAt(road, to);
+      run.push({ x: b.x, y: b.y });
+    } else run.push(pts[last]);
+    runs.push({ pts: run, from, loop: false, head: gi > 0, tail: gi < gaps.length });
+  }
+  return runs;
+}
+
+/**
+ * A mouth of a branch on the map (BR-MAP): the sliver between the two centrelines, from where the
+ * roads meet to where the two lines have parted for good, as a closed outline in map pixels (x, y,
+ * x, y, ...). The branch's samples from the meeting on (its fork, or back from its merge when
+ * `merge`), as far as the first one MAP_PARTED px from its own place on the main road
+ * (PlacedBranch.mapS), at most to the branch's middle; then the main road between that place and
+ * the meeting. The outline's one side that is no centreline, across the far end, is the opening.
+ */
+function mouthOutline(track: Track, b: PlacedBranch, merge: boolean, mx: number, my: number, scale: number): number[] {
+  const r = b.road, last = r.pts.length - 1, mid = last >> 1, out: number[] = [];
+  const add = (p: Vec) => out.push(mx + p.x * scale, my + p.y * scale);
+  let j = merge ? last : 0;
+  while (merge ? j > mid : j < mid) {
+    j += merge ? -1 : 1;
+    const p = r.pts[j], q = pointAt(track, b.mapS[j]);
+    if (Math.hypot(p.x - q.x, p.y - q.y) * scale >= MAP_PARTED) break;
+  }
+  // The branch in its own direction, then the main road against its own.
+  for (let i = merge ? j : 0; i <= (merge ? last : j); i++) add(r.pts[i]);
+  const s0 = merge ? b.mapS[j] : b.s0, s1 = merge ? b.s1 : b.mapS[j];
+  if (!merge) add(pointAt(track, s1));
+  for (let i = track.pts.length - 1; i >= 0; i--) if (track.cum[i] > s0 && track.cum[i] < s1) add(track.pts[i]);
+  if (merge) add(pointAt(track, s0));
+  return out;
+}
+
+/**
+ * The two lines of a mouth part once (BR-MAP). On a slant the steps of a branch's line and of the
+ * main road's can shut a pixel or two of the casing in between them, before the casing between
+ * them opens for good: a hole in the line. Inside a mouth's outline (mouthOutline; a pixel is
+ * inside when its middle is) whatever is not the line's tone and is not joined, through pixels'
+ * sides, to a pixel outside the outline that is not the line's either, takes the line's tone. The
+ * outline's sides but its opening are centrelines, which the line covers (a gap or a split there
+ * aside), so the opening is the way out. Where nothing is shut in this changes no pixel.
+ */
+function mouthPockets(px: Uint32Array, outline: number[], line: number): void {
+  const n = outline.length >> 1;
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (let i = 0; i < n; i++) {
+    x0 = Math.min(x0, outline[2 * i]); x1 = Math.max(x1, outline[2 * i]);
+    y0 = Math.min(y0, outline[2 * i + 1]); y1 = Math.max(y1, outline[2 * i + 1]);
+  }
+  // The box of pixels to look at, with a pixel of air (a way out lies a pixel outside the outline), inside the frame.
+  const u0 = Math.max(1, Math.floor(x0) - 1), v0 = Math.max(1, Math.floor(y0) - 1), u1 = Math.min(MAP - 2, Math.ceil(x1) + 1), v1 = Math.min(MAP - 2, Math.ceil(y1) + 1);
+  const w = u1 - u0 + 1, h = v1 - v0 + 1;
+  if (w <= 0 || h <= 0) return;
+  // 1 = inside the outline and not the line's tone (even-odd, at the pixel's middle); 2 = ... and joined to the opening.
+  const state = new Uint8Array(w * h);
+  for (let v = v0; v <= v1; v++) {
+    for (let u = u0; u <= u1; u++) {
+      if (px[v * MAP + u] === line) continue;
+      const x = u + 0.5, y = v + 0.5;
+      let inside = false;
+      for (let i = 0, j = n - 1; i < n; j = i++) {
+        const xi = outline[2 * i], yi = outline[2 * i + 1], xj = outline[2 * j], yj = outline[2 * j + 1];
+        if (yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) inside = !inside;
+      }
+      if (inside) state[(v - v0) * w + (u - u0)] = 1;
+    }
+  }
+  // From every pixel inside that has a way out beside it (a pixel outside the outline that is not the line's), through sides.
+  const todo: number[] = [];
+  const out = (u: number, v: number) => u < u0 || u > u1 || v < v0 || v > v1 || (px[v * MAP + u] !== line && state[(v - v0) * w + (u - u0)] === 0);
+  const reach = (u: number, v: number) => {
+    if (u < u0 || u > u1 || v < v0 || v > v1 || state[(v - v0) * w + (u - u0)] !== 1) return;
+    state[(v - v0) * w + (u - u0)] = 2;
+    todo.push(u, v);
+  };
+  for (let v = v0; v <= v1; v++) {
+    for (let u = u0; u <= u1; u++) {
+      if (state[(v - v0) * w + (u - u0)] === 1 && (out(u + 1, v) || out(u - 1, v) || out(u, v + 1) || out(u, v - 1))) reach(u, v);
+    }
+  }
+  while (todo.length) {
+    const v = todo.pop()!, u = todo.pop()!;
+    reach(u + 1, v); reach(u - 1, v); reach(u, v + 1); reach(u, v - 1);
+  }
+  for (let v = v0; v <= v1; v++) for (let u = u0; u <= u1; u++) if (state[(v - v0) * w + (u - u0)] === 1) px[v * MAP + u] = line;
+}
+
+/**
  * The minimap of a track, baked once: the box with its frame, the track as a 2 px line in a
  * dark casing (broken where the road has a gap, for the gap's whole length), and the start
  * line as a tick across it. Hard pixels: the line is stamped along the centreline, not stroked.
@@ -461,6 +585,17 @@ function word(hex: string): number {
  * together into the one, over MAP_FORK of road (where the road widens and narrows again), or
  * over MAP_FORK_MIN px of the map when that is longer. A track without an island is stamped as
  * it always was, pixel for pixel.
+ *
+ * Shortcut roads (BR-MAP; shared/track.ts PlacedBranch). A branch is one more road on the map, in
+ * the main road's line and casing: the track is fitted with its branches' points, and each branch
+ * is stamped along its own centreline (where its cars' dots are drawn), from its fork to its merge.
+ * Both of those lie on the main centreline, so the two lines are one there and part as the roads
+ * do; all the casings are stamped before any line, so no road's casing lies over another's line.
+ * Where the two lines part they part once: a pixel or two of casing that their steps shut in
+ * between them, on a slant, takes the line's tone (mouthPockets).
+ * A branch is an open road: nothing on it wraps, it breaks at its own gaps as the main road does
+ * (its two ends at the main road are not cut flat) and splits round its own islands. A track
+ * without a branch is stamped as it always was, pixel for pixel.
  */
 function miniOf(k: Kit, track: Track): Mini {
   let m = k.minis.get(track);
@@ -469,6 +604,12 @@ function miniOf(k: Kit, track: Track): Mini {
   for (const p of track.pts) {
     minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
     minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y);
+  }
+  for (const b of track.branches) {
+    for (const p of b.road.pts) {
+      minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
+      minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y);
+    }
   }
   const scale = MAP_FIT / Math.max(maxX - minX, maxY - minY);
   const ox = VIEW_W - 10 - MAP_FIT + (MAP_FIT - (maxX - minX) * scale) / 2 - minX * scale;
@@ -516,29 +657,39 @@ function miniOf(k: Kit, track: Track): Mini {
     e.need = (Math.abs(e.dx) + Math.abs(e.dy)) / 2;
   };
   const REACH = 4; // a casing stamp is 4 px wide: further from an end than this, nothing can cross it
-  const runs = groundRuns(track);
-  const closed = !track.gaps.length;
-  // Split lanes. At a distance s along the track: the middles of the two lanes (l, r) and the
+  // The roads to stamp: the main road, then every branch (BR-MAP), each as its runs of ground.
+  const roads: MapRoad[] = [{ road: track, runs: mainRuns(track) }];
+  for (const b of track.branches) roads.push({ road: b.road, runs: branchRuns(b.road) });
+  // Split lanes. At a distance s along a road: the middles of the two lanes (l, r) and the
   // island's two sides (il, ir), in map pixels across the road (+ = right of travel); `apart`,
   // 0..1, is how far the lanes have parted there (1 beside the island, less in a fork);
   // `isle`: beside the island.
-  const isles = track.islands;
   const fork = Math.max(MAP_FORK, MAP_FORK_MIN / scale); // units of road
   const lane = { l: 0, r: 0, il: 0, ir: 0, apart: 0, isle: false };
-  /** Fill `lane` for the distance s along the track; false = no island near, the road is one line there. */
-  const lanesAt = (s: number): boolean => {
+  /** Fill `lane` for the distance s along a road; false = no island near, the road is one line there. */
+  const lanesAt = (road: Track, s: number): boolean => {
+    const isles = road.islands, open = road.roadNo > 0;
     lane.apart = 0;
     for (let i = 0; i < isles.length; i++) {
       const isle = isles[i], long = isle.s1 - isle.s0;
-      const past = (((s - isle.s0) % track.length) + track.length) % track.length; // of the island's start, going round
-      const before = track.length - past, after = past - long;
-      const d = past <= long ? 0 : Math.min(before, after); // how far outside the island
+      // How far outside the island (d), and which of its ends is the nearer (a fork leads to the lanes there).
+      let d: number, first: boolean;
+      if (open) {
+        // A branch's road: s does not wrap, an island is before, beside or after it.
+        first = s < isle.s0;
+        d = first ? isle.s0 - s : s > isle.s1 ? s - isle.s1 : 0;
+      } else {
+        const past = (((s - isle.s0) % road.length) + road.length) % road.length; // of the island's start, going round
+        const before = road.length - past, after = past - long;
+        d = past <= long ? 0 : Math.min(before, after);
+        first = before < after;
+      }
       const apart = 1 - d / fork;
       if (apart <= lane.apart) continue;
-      const at = d === 0 ? s : before < after ? isle.s0 : isle.s1; // a fork leads to the lanes at the island's end
+      const at = d === 0 ? s : first ? isle.s0 : isle.s1;
       const mid = ((isle.lat0 + isle.lat1) / 2) * scale, wide = Math.max(MAP_ISLE_MIN, (isle.lat1 - isle.lat0) * scale);
-      lane.l = ((isle.lat0 - halfAt(track, at, -1)) / 2) * scale;
-      lane.r = ((isle.lat1 + halfAt(track, at, 1)) / 2) * scale;
+      lane.l = ((isle.lat0 - halfAt(road, at, -1)) / 2) * scale;
+      lane.r = ((isle.lat1 + halfAt(road, at, 1)) / 2) * scale;
       lane.il = mid - wide / 2;
       lane.ir = mid + wide / 2;
       lane.apart = apart;
@@ -546,70 +697,78 @@ function miniOf(k: Kit, track: Track): Mini {
     }
     return lane.apart > 0;
   };
-  // Three passes, so that nothing lies over a line: the casing, then what is between two lanes
-  // (the island, and the casing's tone in a fork), then the line.
+  // Three passes over every road, so that nothing lies over a line: the casing, then what is
+  // between two lanes (the island, and the casing's tone in a fork), then the line.
   for (let pass = 0; pass < 3; pass++) {
-    if (pass === 1 && !isles.length) continue;
     const casing = pass === 0;
     const colour = word(casing ? MAP_CASING : MAP_ROAD), between = word(MAP_CASING), island = word(MAP_ISLE);
-    for (let ri = 0; ri < runs.length; ri++) {
-      const run = runs[ri];
-      const n = closed ? run.length : run.length - 1;
-      let total = 0;
-      for (let i = 0; i < n; i++) {
-        const a = run[i], b = run[(i + 1) % run.length];
-        total += Math.hypot(b.x - a.x, b.y - a.y) * scale;
-      }
-      if (!closed) {
-        // The road's direction at each end, from the nearest point of the run that is not the end itself.
-        const first = run[0], last = run[run.length - 1];
-        let i = 1, j = run.length - 2;
-        while (i < run.length - 1 && run[i].x === first.x && run[i].y === first.y) i++;
-        while (j > 0 && run[j].x === last.x && run[j].y === last.y) j--;
-        head.x = mx + first.x * scale;
-        head.y = my + first.y * scale;
-        end(head, first, run[i]);
-        tail.x = mx + last.x * scale;
-        tail.y = my + last.y * scale;
-        end(tail, run[j], last);
-      }
-      const from = closed ? 0 : track.gaps[ri].s1; // where the run starts, along the track (groundRuns: a run a gap, from its end)
-      let done = 0;
-      for (let i = 0; i < n; i++) {
-        const a = run[i], b = run[(i + 1) % run.length];
-        const ax = mx + a.x * scale, ay = my + a.y * scale, bx = mx + b.x * scale, by = my + b.y * scale;
-        const len = Math.hypot(bx - ax, by - ay);
-        const steps = Math.max(1, Math.ceil(len * 2));
-        for (let k = 0; k <= steps; k++) {
-          const along = done + (len * k) / steps;
-          const x = ax + ((bx - ax) * k) / steps, y = ay + ((by - ay) * k) / steps;
-          const atHead = !closed && along < REACH, atTail = !closed && total - along < REACH;
-          if (!isles.length || len === 0 || !lanesAt(from + along / scale)) {
-            if (pass !== 1) dot(x, y, casing, colour, atHead, atTail);
-            continue;
-          }
-          // Two lanes. (nx, ny) is a pixel to the right of travel; a stamped line reaches `half`
-          // either side of its middle across the road (1 px along an axis, more on a slant).
-          // Each line on its lane's middle, or further out where that would leave the island
-          // less than its width.
-          const nx = -(by - ay) / len, ny = (bx - ax) / len, half = Math.abs(nx) + Math.abs(ny);
-          const l = lane.apart * Math.min(lane.l, lane.il - half), r = lane.apart * Math.max(lane.r, lane.ir + half);
-          if (pass === 1) {
-            // Between the two lines' inner edges, a dot a pixel at most from the next.
-            const o0 = l + 2 * half, o1 = r - 2 * half;
-            const m = o1 <= o0 ? 0 : Math.ceil(o1 - o0);
-            for (let q = 0; q <= m; q++) {
-              const o = m ? o0 + ((o1 - o0) * q) / m : (l + r) / 2;
-              dot(x + nx * o, y + ny * o, false, lane.isle ? island : between, atHead, atTail);
-            }
-          } else {
-            dot(x + nx * l, y + ny * l, casing, colour, atHead, atTail);
-            dot(x + nx * r, y + ny * r, casing, colour, atHead, atTail);
-          }
+    for (let oi = 0; oi < roads.length; oi++) {
+      const road = roads[oi].road, runs = roads[oi].runs, isles = road.islands;
+      if (pass === 1 && !isles.length) continue;
+      for (let ri = 0; ri < runs.length; ri++) {
+        const run = runs[ri].pts, loop = runs[ri].loop, cutHead = runs[ri].head, cutTail = runs[ri].tail;
+        const n = loop ? run.length : run.length - 1;
+        let total = 0;
+        for (let i = 0; i < n; i++) {
+          const a = run[i], b = run[(i + 1) % run.length];
+          total += Math.hypot(b.x - a.x, b.y - a.y) * scale;
         }
-        done += len;
+        if (cutHead || cutTail) {
+          // The road's direction at each end, from the nearest point of the run that is not the end itself.
+          const first = run[0], last = run[run.length - 1];
+          let i = 1, j = run.length - 2;
+          while (i < run.length - 1 && run[i].x === first.x && run[i].y === first.y) i++;
+          while (j > 0 && run[j].x === last.x && run[j].y === last.y) j--;
+          head.x = mx + first.x * scale;
+          head.y = my + first.y * scale;
+          end(head, first, run[i]);
+          tail.x = mx + last.x * scale;
+          tail.y = my + last.y * scale;
+          end(tail, run[j], last);
+        }
+        const from = runs[ri].from; // where the run starts, along its road
+        let done = 0;
+        for (let i = 0; i < n; i++) {
+          const a = run[i], b = run[(i + 1) % run.length];
+          const ax = mx + a.x * scale, ay = my + a.y * scale, bx = mx + b.x * scale, by = my + b.y * scale;
+          const len = Math.hypot(bx - ax, by - ay);
+          const steps = Math.max(1, Math.ceil(len * 2));
+          for (let k = 0; k <= steps; k++) {
+            const along = done + (len * k) / steps;
+            const x = ax + ((bx - ax) * k) / steps, y = ay + ((by - ay) * k) / steps;
+            const atHead = cutHead && along < REACH, atTail = cutTail && total - along < REACH;
+            if (!isles.length || len === 0 || !lanesAt(road, from + along / scale)) {
+              if (pass !== 1) dot(x, y, casing, colour, atHead, atTail);
+              continue;
+            }
+            // Two lanes. (nx, ny) is a pixel to the right of travel; a stamped line reaches `half`
+            // either side of its middle across the road (1 px along an axis, more on a slant).
+            // Each line on its lane's middle, or further out where that would leave the island
+            // less than its width.
+            const nx = -(by - ay) / len, ny = (bx - ax) / len, half = Math.abs(nx) + Math.abs(ny);
+            const l = lane.apart * Math.min(lane.l, lane.il - half), r = lane.apart * Math.max(lane.r, lane.ir + half);
+            if (pass === 1) {
+              // Between the two lines' inner edges, a dot a pixel at most from the next.
+              const o0 = l + 2 * half, o1 = r - 2 * half;
+              const m = o1 <= o0 ? 0 : Math.ceil(o1 - o0);
+              for (let q = 0; q <= m; q++) {
+                const o = m ? o0 + ((o1 - o0) * q) / m : (l + r) / 2;
+                dot(x + nx * o, y + ny * o, false, lane.isle ? island : between, atHead, atTail);
+              }
+            } else {
+              dot(x + nx * l, y + ny * l, casing, colour, atHead, atTail);
+              dot(x + nx * r, y + ny * r, casing, colour, atHead, atTail);
+            }
+          }
+          done += len;
+        }
       }
     }
+  }
+  // BR-MAP: the two lines of a mouth part once (mouthPockets).
+  for (const b of track.branches) {
+    mouthPockets(px, mouthOutline(track, b, false, mx, my, scale), word(MAP_ROAD));
+    mouthPockets(px, mouthOutline(track, b, true, mx, my, scale), word(MAP_ROAD));
   }
   // The start line: a bright tick across the track, 3 px either side of its middle.
   const s = pointAt(track, 0);
