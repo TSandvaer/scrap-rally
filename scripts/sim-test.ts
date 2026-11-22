@@ -11187,8 +11187,11 @@ function splitWalls(): void {
     diff === 0 && n > 3000,
     `${n} queries, ${diff} differ`,
   );
-  // The test tracks: halfOf / wallOf are halfAt / wallAt at the query's s and side (one function: the
-  // drawing and the minimap read it too), and buildTrack's per-sample arrays are its values at the samples.
+  // The test tracks: halfOf / wallOf are the walls as the bake draws them (client/gfx/world.ts): each
+  // centreline segment's widening at its two ends (widenAt), linear in the query's place along it;
+  // buildTrack's halfL / halfR / wallL / wallR are the per-sample values. And the bake's own rule re-done
+  // round every widen (tools/debug/split-tune.ts drawnGaps): the physics wall and kerb are where the
+  // drawing has them (the exact taper, widenAt at the query's s, was off by up to ~4.8 units).
   let m = 0, off = 0, arr = 0;
   for (const d of TEST_TRACKS) {
     const t = testTrack(d.id)!;
@@ -11196,20 +11199,24 @@ function splitWalls(): void {
       for (let s = w.s0 - 40; s <= w.s1 + 40; s += 3.1) {
         for (const lat of [-170, -90, -30, 30, 90, 170]) {
           const q = splitQuery(t, s, lat);
+          const k = (q.s - t.cum[q.seg]) / (t.cum[q.seg + 1] - t.cum[q.seg]);
+          const w0 = splitTrack.widenAt(t, t.cum[q.seg], q.side), w1 = splitTrack.widenAt(t, t.cum[q.seg + 1], q.side);
+          const drawn = t.def.halfWidth + w0 + (w1 - w0) * k;
           m++;
-          if (!Object.is(splitTrack.halfOf(t, q), splitTrack.halfAt(t, q.s, q.side)) || !Object.is(splitTrack.wallOf(t, q), splitTrack.wallAt(t, q.s, q.side))) off++;
+          if (Math.abs(splitTrack.halfOf(t, q) - drawn) > 1e-9 || Math.abs(splitTrack.wallOf(t, q) - (drawn + t.def.verge)) > 1e-9) off++;
         }
       }
     }
     t.pts.forEach((_, i) => {
-      if (!Object.is(t.halfL[i], splitTrack.halfOn(t, i, t.cum[i], -1)) || !Object.is(t.halfR[i], splitTrack.halfOn(t, i, t.cum[i], 1)) ||
+      if (!Object.is(t.halfL[i], splitTrack.halfAt(t, t.cum[i], -1)) || !Object.is(t.halfR[i], splitTrack.halfAt(t, t.cum[i], 1)) ||
           !Object.is(t.wallL[i], t.halfL[i] + t.def.verge) || !Object.is(t.wallR[i], t.halfR[i] + t.def.verge)) arr++;
     });
   }
+  const gaps = splitTune.drawnGaps();
   check(
-    "split walls: on the test tracks halfOf / wallOf (through the segment's widens) are halfAt / wallAt at the query's s and side, and halfL / halfR / wallL / wallR are that function at the samples",
-    off === 0 && arr === 0 && m > 2000,
-    `${m} queries round the widens, ${off} differ; ${arr} samples differ`,
+    "split walls: on the test tracks halfOf / wallOf are the walls the bake draws (each segment's widening at its ends, linear along it; halfL / halfR / wallL / wallR the per-sample values), and round every widen the bake's own rule puts the wall and the kerb where the physics does (<= 0.01; the exact taper was further off)",
+    off === 0 && arr === 0 && m > 2000 && gaps.length === 5 && gaps.every((g) => g.now <= 0.01 && g.points > 4000) && Math.max(...gaps.map((g) => g.exact)) > 2,
+    `${m} queries round the widens, ${off} differ; ${arr} samples differ; drawn vs physics per widen: ${gaps.map((g) => `${g.track} ${g.widen.split(" ")[0]} ${g.now.toFixed(4)} (exact taper ${g.exact.toFixed(2)})`).join(", ")}`,
   );
   // Driven: a car steered into the left wall beside island A (widened 48) stops at the widened wall
   // less half a car, and the client's wall cue hears it; on the bare loop it stops at track.wall - 8.
@@ -11681,7 +11688,7 @@ function splitBots(): void {
   check("split bots: on the shipped tracks there is no island and splitFor is null (the bots drive as before)", none);
 }
 /** The most island-contact ticks a bot may have in 3 laps of the Split Yard with weapons on (spun by a mine or rivets). */
-const SPLIT_HIT_BOUND = 20;
+const SPLIT_HIT_BOUND = 8;
 
 function splitParity(): void {
   // stepRaceCar on a clone equals the server's pose bit for bit every tick: a lone server bot of each

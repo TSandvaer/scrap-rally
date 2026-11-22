@@ -48,7 +48,7 @@
 
 import { CARS, DEFAULT_CAR, type CarType } from "./cars";
 import { angleDiff, CAR_LENGTH, CAR_RADIUS, CAR_WIDTH, clamp, DT, speedOf, type CarState, type CarStats } from "./physics";
-import { halfOf, halfOn, islandAt, LIP_ZONE, pointAt, queryTrackNear, SURF_DIRT, SURF_WATER, wallOf, type PlacedIsland, type Ramp, type Surface, type Track } from "./track";
+import { halfOf, halfOn, islandAt, ISLAND_NOSE, LIP_ZONE, pointAt, queryTrackNear, SURF_DIRT, SURF_WATER, wallOf, type PlacedIsland, type Ramp, type Surface, type Track } from "./track";
 import { airTicksFor, MIN_TAKEOFF_SPEED, MINE_ARM_TICKS, RIVET_RADIUS, RIVET_RANGE, RIVET_SPEED, WEAPONS_ARM_MS } from "./weapons";
 
 export type BotLevel = "easy" | "normal" | "hard";
@@ -219,6 +219,13 @@ export interface BotMem {
   wakeRest: number;
   /** Hard: the race step it last dropped a mine (-Infinity: none this race). */
   lastMine: number;
+  /** Split lanes: steps left backing off an island it was pressed against or nosing into (at most SPLIT.backMax) ... */
+  islandBack: number;
+  /** ... which way (BACK_SIDE, BACK_NOSE) and toward which lane (-1 left, +1 right) ... */
+  islandKind: number;
+  islandSide: number;
+  /** ... and steps left with the nose's back-off off (SPLIT.cool). */
+  islandCool: number;
 }
 
 /**
@@ -226,7 +233,7 @@ export interface BotMem {
  * lane); server seats pass one by seat so two bots on mirrored lanes do not drop together.
  */
 export function newBotMem(lateral: number, level: BotLevel = "normal", mineOffset = Math.round(Math.abs(lateral) * 7) % 480): BotMem {
-  return { level, lateral, weapons: level !== "easy", mineOffset, slow: 0, reversing: 0, backup: null, backedUpFor: -1, useWake: level !== "easy", wake: null, wakeRest: 0, lastMine: -Infinity };
+  return { level, lateral, weapons: level !== "easy", mineOffset, slow: 0, reversing: 0, backup: null, backedUpFor: -1, useWake: level !== "easy", wake: null, wakeRest: 0, lastMine: -Infinity, islandBack: 0, islandKind: 0, islandSide: 0, islandCool: 0 };
 }
 
 /** Forget the race (between races): the settings stay. */
@@ -238,6 +245,10 @@ export function resetBotMem(mem: BotMem): void {
   mem.wake = null;
   mem.wakeRest = 0;
   mem.lastMine = -Infinity;
+  mem.islandBack = 0;
+  mem.islandKind = 0;
+  mem.islandSide = 0;
+  mem.islandCool = 0;
 }
 
 /** Distance from `from` forward to `to` along the track, in [0, length). */
@@ -392,14 +403,6 @@ export function laneFor(
   // The side locks (MOUNDS), nearest first: each keeps the lane on the car's side of its mound
   // unless that leaves no lane with the nearer ones.
   let holdLo = -Infinity, holdHi = Infinity;
-  const lock = (m: { lat: number; r: number }) => {
-    const lo = lat < m.lat ? holdLo : Math.max(holdLo, m.lat + m.r + HOLE_CLEARANCE);
-    const hi = lat < m.lat ? Math.min(holdHi, m.lat - m.r - HOLE_CLEARANCE) : holdHi;
-    if (lo <= hi) {
-      holdLo = lo;
-      holdHi = hi;
-    }
-  };
   const nT = tyres.length;
   if (nT > 0) {
     const k0 = track.tyresFrom[seg] ?? nT;
@@ -409,12 +412,17 @@ export function laneFor(
       if (d < -L / 2) d += L;
       else if (d >= L / 2) d -= L;
       // Behind once the car's rear is past it (a hole stays in view r + 30: a fall costs more); held a while longer.
-      if (d < -(m.r + MOUND_BEHIND)) {
-        if (d >= -(m.r + MOUNDS.hold)) lock(m);
-        continue;
+      const locked = d < -(m.r + MOUND_BEHIND) ? d >= -(m.r + MOUNDS.hold) : d < MOUNDS.commit;
+      if (locked) {
+        const lo = lat < m.lat ? holdLo : Math.max(holdLo, m.lat + m.r + HOLE_CLEARANCE);
+        const hi = lat < m.lat ? Math.min(holdHi, m.lat - m.r - HOLE_CLEARANCE) : holdHi;
+        if (lo <= hi) {
+          holdLo = lo;
+          holdHi = hi;
+        }
       }
+      if (d < -(m.r + MOUND_BEHIND)) continue;
       if (d > look + 2 * m.r + 60) break; // in order round the lap: the rest are further
-      if (d < MOUNDS.commit) lock(m);
       if (d < look) (mounds ??= []).push({ lat: m.lat, r: m.r, d });
     }
   }
@@ -509,7 +517,69 @@ export const SPLIT = {
   commit: 60,
   /** The island stays in view until the car's centre is this far past its tail (its rear clear of the nose). */
   past: 24,
+  /**
+   * An island comes into view this far ahead plus lookPerSpeed x the speed (~620 at 400 u/s; the lane
+   * search's own look is 140 + 0.6 v): the bot heads for its lane early, so two bots swapping sides
+   * have room to get past each other before the nose.
+   */
+  look: 140,
+  lookPerSpeed: 1.2,
+  /**
+   * Backing off (after a spin or a bump; BotMem.islandBack). At low speed a car turns slowly: driving
+   * on it would scrape along an island's side, or bounce off its nose again and again.
+   * - Pressed against a side with its heading turned into it more than `into` (radians): brake and
+   *   reverse with full lock toward its lane (rolling backwards the nose swings away from the
+   *   island) for at least `backMin` steps and until it is turned in less than `into` / 2 or 12 off
+   *   the side.
+   * - In front of a nose (`nose` plus its braking distance) inside the island's width (plus half a
+   *   car), on a heading that does not take it into its lane before its front reaches the nose: brake
+   *   and reverse straight back along the
+   *   track (as a ramp's back-up) until the head is `noseClear` ahead, then drive on; the nose's back-
+   *   off is off for `cool` steps after (it turns out, or clips the nose's rounded corner once).
+   * At most `backMax` steps either way.
+   */
+  into: 0.35,
+  nose: 34,
+  noseClear: 70,
+  backMin: 15,
+  backMax: 60,
+  cool: 90,
 };
+
+/** How far ahead of s island `isle`'s head is (the nearer way round the lap; < 0 = past it). */
+function headAhead(track: Track, isle: PlacedIsland, s: number): number {
+  let d0 = isle.s0 - s;
+  const L = track.length;
+  if (d0 < -L / 2) d0 += L;
+  else if (d0 >= L / 2) d0 -= L;
+  return d0;
+}
+
+/** Backing-off kinds (BotMem.islandKind). */
+const BACK_SIDE = 1, BACK_NOSE = 2;
+
+/**
+ * Should a bot back off island `isle`, taking the lane on `side` (-1 left, +1 right) of it, at
+ * (s, lat) with heading dh off the track's (+ = turned right) and speed vf along it? BACK_NOSE in
+ * front of its nose (SPLIT.nose plus its braking distance) on a heading that does not take it into the
+ * lane first (unless `noNose`), BACK_SIDE pressed against its side turned into it, 0 neither.
+ */
+function islandPinned(track: Track, isle: PlacedIsland, side: number, s: number, lat: number, dh: number, noNose: boolean, vf: number): number {
+  const d0 = headAhead(track, isle, s);
+  const lo = isle.lat0 - CAR_WIDTH / 2, hi = isle.lat1 + CAR_WIDTH / 2;
+  // Within SPLIT.nose of the head, plus the braking distance at its speed along the track (stepCar's BRAKE 900).
+  const reach = SPLIT.nose + (Math.max(0, vf) ** 2) / (2 * 900);
+  if (d0 > -ISLAND_NOSE / 2 && d0 < reach && lat > lo - 2 && lat < hi + 2) {
+    if (noNose) return 0;
+    // Does its heading take the car's centre past the side's limit before its front reaches the nose?
+    const need = side < 0 ? lat - lo + 2 : hi - lat + 2;
+    const room = d0 - CAR_LENGTH / 2;
+    return room > 0 && room * Math.tan(clamp(side * dh, 0, 1.2)) >= need ? 0 : BACK_NOSE;
+  }
+  const along = -d0; // past the head
+  if (along < ISLAND_NOSE / 2 || along > isle.s1 - isle.s0 - ISLAND_NOSE / 2) return 0;
+  return (Math.abs(lat - lo) < 1 && dh > SPLIT.into) || (Math.abs(lat - hi) < 1 && dh < -SPLIT.into) ? BACK_SIDE : 0;
+}
 
 /**
  * Which lane round `isle` (-1 the left, +1 the right) a bot of car type `stats` with racing line
@@ -551,7 +621,11 @@ export function splitFor(track: Track, s: number, seg: number, lat: number, look
     else if (d0 >= L / 2) d0 -= L;
     if (d0 + (isle.s1 - isle.s0) < -SPLIT.past) continue; // past it
     if (d0 > look) break; // in order round the lap: the rest are further
-    const side = d0 > SPLIT.commit ? splitSide(isle, stats, lateral) : lat < isle.mid ? -1 : 1;
+    // The planned lane until SPLIT.commit before the head; then the lane the car is in, beside the
+    // island's width (or alongside it); in front of the nose, inside its width, still the planned one
+    // (so a bot knocked there does not swing from side to side).
+    const inFront = d0 > 0 && lat > isle.lat0 && lat < isle.lat1;
+    const side = d0 > SPLIT.commit || inFront ? splitSide(isle, stats, lateral) : lat < isle.mid ? -1 : 1;
     const lo = side < 0 ? -isle.outL + SPLIT.edge : isle.lat1 + SPLIT.clear;
     const hi = side < 0 ? isle.lat0 - SPLIT.clear : isle.outR - SPLIT.edge;
     // The seat's racing line, scaled from the road into the lane.
@@ -842,7 +916,7 @@ export function botControls(view: BotView, mem: BotMem): BotControls {
   // among them. Water and dirt: the cheapest lane for its car type (laneFor). With none of them
   // ahead the bot holds its own racing line (mem.lateral).
   // Split lanes (M4-SURF part 2): an island ahead or beside it: the lane it takes round it (null on a plain track).
-  const split = splitFor(track, q.s, q.seg, lat, 140 + v * 0.6, mem.lateral, view.stats);
+  const split = splitFor(track, q.s, q.seg, lat, SPLIT.look + v * SPLIT.lookPerSpeed, mem.lateral, view.stats);
   const pref = split ? clamp(lat, split.racing - 24, split.racing + 24) : clamp(lat, mem.lateral - 24, mem.lateral + 24);
   const hole = laneFor(track, q.s, q.seg, 140 + v * 0.6, pref, mem.lateral, view.stats, split, lat);
   let lane = hole.holes || hole.dodge ? hole.lane : mem.lateral;
@@ -936,6 +1010,41 @@ export function botControls(view: BotView, mem: BotMem): BotControls {
       steer = clamp(angleDiff(c.h, dir) * 2 * (rolling < 0 ? -1 : 1), -1, 1);
       return { throttle: -1, steer, fire: false, mine: false };
     }
+  }
+
+  // Split lanes: pressed against an island or nosing into one (a spin, a bump): back off, then go.
+  if (split && view.raceOn) {
+    const dh = angleDiff(dir, c.h);
+    if (mem.islandCool > 0) mem.islandCool--;
+    if (mem.islandBack === 0) {
+      mem.islandKind = islandPinned(track, split.isle, split.side, q.s, lat, dh, mem.islandCool > 0, vf);
+      if (mem.islandKind) {
+        mem.islandBack = SPLIT.backMax;
+        mem.islandSide = split.side;
+      }
+    } else if (mem.islandKind === BACK_NOSE) {
+      if (headAhead(track, split.isle, q.s) >= SPLIT.noseClear) mem.islandBack = 0; // room to turn out
+    } else if (mem.islandBack <= SPLIT.backMax - SPLIT.backMin) {
+      // A side: released once 12 off it or turned in less than into / 2 (+ = into it).
+      const face = mem.islandSide < 0 ? split.isle.lat0 - CAR_WIDTH / 2 : split.isle.lat1 + CAR_WIDTH / 2;
+      if (Math.abs(lat - face) >= 12 || -mem.islandSide * dh <= SPLIT.into / 2) mem.islandBack = 0;
+    }
+    if (mem.islandBack > 0) {
+      mem.islandBack--;
+      if (mem.islandBack === 0 && mem.islandKind === BACK_NOSE) mem.islandCool = SPLIT.cool;
+      const rolling = c.vx * Math.cos(c.h) + c.vy * Math.sin(c.h);
+      throttle = -1;
+      // A side: full lock toward the lane (mirrored rolling backwards: the nose swings away from the
+      // island). A nose: straight back along the track (the heading kept on the track's, mirrored).
+      steer = mem.islandKind === BACK_SIDE ? (rolling < 0 ? -mem.islandSide : mem.islandSide) : clamp(angleDiff(c.h, dir) * 2 * (rolling < 0 ? -1 : 1), -1, 1);
+    } else if (mem.islandKind === BACK_NOSE) {
+      mem.islandKind = 0;
+      mem.islandCool = SPLIT.cool;
+    }
+  } else {
+    mem.islandBack = 0;
+    mem.islandKind = 0;
+    mem.islandCool = 0;
   }
 
   // Spun into a wall after a mine: back out for a moment.
