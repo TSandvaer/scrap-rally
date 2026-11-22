@@ -1,10 +1,27 @@
 <!doctype html>
-<html lang="en">
+<!-- translate="no" and the "google" meta (a direct child of head): no translate offer, no part of
+     the game machine-translated (NOSELECT-1). -->
+<html lang="en" translate="no">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="google" content="notranslate" />
     <title>Scrap Rally</title>
     <link rel="stylesheet" href="/client/style.css" />
+    <!-- NOSELECT-1: no browser context menu (right-click, a long press) on the game, the canvas and
+         the panels alike; text fields keep theirs, for paste. Selection: client/style.css. -->
+    <script type="module">
+      const TEXT_TYPES = new Set(["text", "search", "email", "url", "tel", "password", "number"]);
+      // The same set as style.css's selectable fields: a typed-in input (no type is "text"), a
+      // textarea, contenteditable.
+      const isTextField = (t) =>
+        t instanceof HTMLTextAreaElement ||
+        (t instanceof HTMLInputElement && TEXT_TYPES.has(t.type)) ||
+        (t instanceof HTMLElement && t.isContentEditable);
+      document.addEventListener("contextmenu", (e) => {
+        if (!isTextField(e.target)) e.preventDefault();
+      });
+    </script>
   </head>
   <body>
     <main id="stage">

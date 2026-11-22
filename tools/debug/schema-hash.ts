@@ -17,6 +17,16 @@
 //             scraping along it), 45 ticks each through stepRaceCar: every tick's car state and
 //             the client's wallHitSpeed (a 1e-6 change to the wall bounce shows here directly).
 // Each part is run twice and must hash the same (the tool's own determinism).
+// BR-SCHEMA (PLAN-BRANCH advisor change 8): test tracks with branches (Branch Yard) are hashed too, as
+// `built` and `queries` (their main road, as above) and `branches`, a part emitted only for a track whose
+// branches are not empty: every branch's built road (its samples, walls, features, buckets with the gores'
+// noses, recovery points), its gores and mapS, the track's mouthAt and its cells (the branch cells after the
+// main road's), and the branch queries over dense points round each branch: queryRoads without a hint and
+// with hints >= n (on the branch) and on the main road beside it, each query's road, global segment and
+// mainS; pointAt and recoveryAt / recoveryFor along each branch (clamped and past its ends). Bots and rooms
+// do not drive a branch yet (BR-PHYS, BR-BOTS): no botsDirect, room or walls part for these.
+// --check prints SAME, DIFF, NEW (a part the golden file does not have yet) or GONE (one it has that is not
+// made any more); DIFF and GONE fail it, NEW does not (record it with --write).
 //
 //   npx tsx tools/debug/schema-hash.ts            print the hashes
 //   npx tsx tools/debug/schema-hash.ts --write    record them in tools/debug/schema-hash.golden.json
@@ -31,9 +41,16 @@ import { draftsFor } from "../../shared/catchup";
 import { BASE_STATS, collideCars, wallLimit, type CarState } from "../../shared/physics";
 import type { ServerMsg } from "../../shared/protocol";
 import { statsFor } from "../../shared/shop";
+import { BRANCH_YARD } from "../../shared/testtracks";
 import {
   buildTrack,
   gapAt,
+  globalSeg,
+  mainS,
+  queryRoads,
+  recoveryFor,
+  roadOf,
+  segCount,
   gridSlot,
   holeAt,
   lipAt,
@@ -97,6 +114,67 @@ function hashBuilt(t: Track): string {
   for (const o of t.holes) h.f(o.s, o.lat, o.r, o.x, o.y);
   for (const c of t.cells) { h.f(c.s, c.lat, c.x, c.y, c.seg); h.s(String(!!c.air)); }
   h.f(...t.recovery);
+  return h.hex();
+}
+
+/**
+ * BR-SCHEMA: the branches (only for a track that has them): their built roads, gores, mapS, the track's
+ * mouthAt and cells, and the branch queries (queryRoads without a hint and with hints >= n).
+ */
+function hashBranches(t: Track): string {
+  const h = new Hasher();
+  const n = t.pts.length;
+  h.f(...t.mouthAt);
+  for (const c of t.cells) { h.f(c.s, c.lat, c.x, c.y, c.seg, c.road ?? 0); h.s(String(!!c.air)); }
+  for (const b of t.branches) {
+    const r = b.road;
+    h.f(b.base, b.s0, b.s1, b.side, r.roadNo, r.length, r.wall, segCount(r));
+    h.s(r.def.id);
+    for (const p of r.pts) h.f(p.x, p.y);
+    h.f(...r.cum, ...r.halfL, ...r.halfR, ...r.wallL, ...r.wallR, ...b.mapS, ...r.recovery);
+    for (const w of r.widens) h.f(w.s0, w.s1, w.left, w.right);
+    for (const g of [b.forkGore, b.mergeGore]) {
+      if (!g) { h.s("no gore"); continue; }
+      h.f(g.u, g.s, g.x, g.y, g.angle);
+      for (const m of [g.noseMain, g.noseBranch]) h.f(m.s, m.lat, m.r, m.x, m.y, m.seg);
+    }
+    for (const x of r.ramps) h.f(x.s, x.len);
+    for (const x of r.gaps) h.f(x.s0, x.s1);
+    for (const x of r.holes) h.f(x.s, x.lat, x.r, x.x, x.y);
+    for (const x of [...r.water, ...r.dirt]) h.f(x.s0, x.s1, x.lat0, x.lat1);
+    for (const x of r.tyres) h.f(x.s, x.lat, x.r, x.x, x.y, x.seg);
+    for (const road of [t, r]) {
+      for (let i = 0; i < segCount(road); i++) {
+        h.f(i, road.surfAt[i].length, road.tyresAt[i].length, road.islandsAt[i].length, road.barrelsAt[i].length, road.pressesAt[i].length, road.trucksAt[i].length);
+        for (const m of road.tyresAt[i]) h.f(m.x, m.y, m.r);
+      }
+    }
+    // Queries round the branch: every sample (and a third of the way along each segment), across both
+    // roads and past their walls; without a hint, with the branch's own global segment and two either
+    // side (hints >= n), and with the main road's segment beside it.
+    for (let i = 0; i < r.pts.length; i++) {
+      for (const frac of [0, 0.37]) {
+        if (i === r.pts.length - 1 && frac > 0) continue;
+        const u = r.cum[i] + frac * ((r.cum[i + 1] ?? r.cum[i]) - r.cum[i]);
+        const at = pointAt(r, u);
+        const mainSeg = pointAt(t, b.mapS[i]).seg;
+        for (let lat = -2.6 * t.wall; lat <= 2.6 * t.wall; lat += 11.5) {
+          const x = at.x - Math.sin(at.h) * lat, y = at.y + Math.cos(at.h) * lat;
+          for (const hint of [-1, b.base + at.seg, b.base + Math.max(0, at.seg - 2), b.base + Math.min(segCount(r) - 1, at.seg + 2), mainSeg]) {
+            const q = queryRoads(t, x, y, hint);
+            query(h, q);
+            h.f(q.side, q.road, globalSeg(t, q), mainS(t, q), globalSeg(t, q) >= n ? 1 : 0);
+          }
+        }
+      }
+    }
+    for (let u = -60; u < r.length + 60; u += 5.3) {
+      const p = pointAt(r, u);
+      const rf = recoveryFor(t, r.roadNo, u);
+      h.f(p.x, p.y, p.h, p.seg, recoveryAt(r, u), rf.road, rf.s);
+    }
+    h.f(roadOf(t, r.roadNo).length);
+  }
   return h.hex();
 }
 
@@ -257,7 +335,7 @@ function hashWalls(t: Track): { hash: string; contacts: number } {
   return { hash: h.hex(), contacts };
 }
 
-type Hashes = Record<string, { built: string; queries: string; botsDirect: string; room: string; walls: string }>;
+type Hashes = Record<string, Record<string, string>>;
 
 function run(): { hashes: Hashes; notes: string[]; stable: boolean } {
   const hashes: Hashes = {};
@@ -276,6 +354,16 @@ function run(): { hashes: Hashes; notes: string[]; stable: boolean } {
     hashes[e.id] = { built: built[0], queries: queries[0], botsDirect: direct[0].hash, room: room[0].hash, walls: walls[0].hash };
     notes.push(`${e.id}: botsDirect ${direct[0].ticks} ticks; room race ${room[0].ticks} ticks (${room[0].finish}); walls ${walls[0].contacts} wall-hit ticks; rerun ${same ? "identical" : `DIFFERS (${diff.join(", ")})`}`);
   }
+  // BR-SCHEMA: the test tracks with branches (their main road's built arrays and queries, and the branches).
+  for (const def of [BRANCH_YARD]) {
+    const t1 = buildTrack(def), t2 = buildTrack(def);
+    const parts: Record<string, string[]> = { built: [hashBuilt(t1), hashBuilt(t2)], queries: [hashQueries(t1), hashQueries(t2)] };
+    if (t1.branches.length > 0) parts.branches = [hashBranches(t1), hashBranches(t2)];
+    const diff = Object.keys(parts).filter((k) => parts[k][0] !== parts[k][1]);
+    stable &&= diff.length === 0;
+    hashes[def.id] = Object.fromEntries(Object.entries(parts).map(([k, v]) => [k, v[0]]));
+    notes.push(`${def.id}: ${t1.branches.length} branch(es); rerun ${diff.length === 0 ? "identical" : `DIFFERS (${diff.join(", ")})`}`);
+  }
   return { hashes, notes, stable };
 }
 
@@ -293,10 +381,11 @@ if (process.argv.includes("--write")) {
   const golden = JSON.parse(readFileSync(GOLDEN, "utf8")) as Hashes;
   let bad = 0;
   for (const id of new Set([...Object.keys(golden), ...Object.keys(hashes)])) {
-    for (const part of ["built", "queries", "botsDirect", "room", "walls"] as const) {
-      const ok = golden[id]?.[part] === hashes[id]?.[part];
-      if (!ok) bad++;
-      console.log(`${ok ? "SAME" : "DIFF"}  ${id} ${part}`);
+    for (const part of new Set([...Object.keys(golden[id] ?? {}), ...Object.keys(hashes[id] ?? {})])) {
+      const was = golden[id]?.[part], now = hashes[id]?.[part];
+      const verdict = was === undefined ? "NEW " : now === undefined ? "GONE" : was === now ? "SAME" : "DIFF";
+      if (verdict === "DIFF" || verdict === "GONE") bad++;
+      console.log(`${verdict}  ${id} ${part}`);
     }
   }
   console.log(bad ? `FAIL: ${bad} hash(es) differ from ${GOLDEN}` : `all hashes match ${GOLDEN}`);

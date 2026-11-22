@@ -652,6 +652,21 @@ M4-TRACKS review APPROVE (ctx_ca6629690be1, released; F1 bench.ts quick-look thr
 bench.ts). M4-TRACKS MERGED c90ee9c; gate running. BR-SCHEMA told to merge main in its fix round (sim-test + golden conflicts). HARD-2:
 after its review, the author merges main and re-runs falls-0 on the new tracks (advisor 9) before the merge.
 User: HARD-2 merges on review APPROVE; tuning later (keep the :3009 SCRAP_DEV_BOTS copy up; pasted values -> HARD-3).
+M4-TRACKS gate on main c90ee9c: check 0, sim 907/907, build ok (index-D5zCxkUp.js), bots 142/143: FAIL 'breakers-mile over sockets ...
+hits them' (contacts 0; author/reviewer had press 1 tick) = timing flake in the new check. Fix sent to the M4-TRACKS author ctx_25b6cddb77d6
+(make it deterministic, 10x PASS); BR-SCHEMA + HARD-2 told it is known. No push until main is green.
+HARD-2 review APPROVE (ctx_8f7a8c933e4d kept for a delta look; nits: BOT TUNE button covers the speaker button; wide mistakes logged
+before the lane check). Range: knob max = Normal's pace alone (+5.18 % on Hard), mistake axis mild (~1.4 %/lap). Final round sent to the
+author: merge main, falls-0 on the 2 new tracks, both nits. Then merge.
+NOSELECT-1 done: 28b68ab (index.html + style.css; report tmp/noselect-1/NOSELECT-1-report.md). Opus reviewer ctx_f8c216751a4b
+(tmp/review-noselect-1.md). Active authors now: TH-LOOK-1, M4-TRACKS (flake fix), HARD-2 (final round), BR-SCHEMA (fix round) = 4, the
+three fix rounds short (cap rule allows a brief 4th).
+NOSELECT-1 review APPROVE (ctx_f8c216751a4b, released). MERGED c59d6f1; gate running (expect only the known breakers-mile flake).
+ClickUp ready for qa test; workspace removed. Note: the clipboard-failure fallback toast is unselectable (plain-http LAN or denied clipboard only).
+BR-SCHEMA fix round 1 done: 7fdd7ef (66eb911 sectionCrossings on branch roads + a new bend rule refusing the fold; nits; main merged;
+schema-hash 28/28; 946/946, bots 142-143/143 (known flake once)). Re-review sent to ctx_d7ef3257a313.
+NOSELECT-1 gate on main c59d6f1: check 0, sim 907/907, build ok (index-ByulflMS.js), bots 142/143 = only the known breakers-mile flake
+(2nd time on main; passed in BR-SCHEMA's run 2). Waiting on the M4-TRACKS author's fix before any push.
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
