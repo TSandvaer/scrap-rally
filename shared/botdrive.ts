@@ -96,7 +96,7 @@ import {
   pointAt,
   PRESS_DEPTH,
   pressDown,
-  queryMain,
+  queryTrackNear,
   roadOfSeg,
   segCount,
   SURF_DIRT,
@@ -1195,7 +1195,7 @@ export function wideLane(lateral: number, turn: number, halfWidth: number, h: Ha
 
 /** Track coordinates of a point near the track `de` (about) ahead of s: its s and lateral offset (+ = right of travel). */
 function trackCoords(track: Track, s: number, de: number, x: number, y: number): { s: number; lat: number; h: number; dist: number } {
-  const q = queryMain(track, x, y, pointAt(track, s + de).seg); // the road the bot drives (BR-BOTS: its route's ring on a track with branches)
+  const q = queryTrackNear(track, x, y, pointAt(track, s + de).seg); // the road the bot drives (BR-BOTS: its route's ring on a track with branches)
   const p = pointAt(track, q.s);
   return { s: q.s, lat: (x - p.x) * -Math.sin(p.h) + (y - p.y) * Math.cos(p.h), h: p.h, dist: q.dist };
 }
@@ -1251,7 +1251,7 @@ function rivetWouldHit(track: Track, s: number, c: CarState, slack: number): (o:
     // Over the road the whole way: halfway and where it meets the car.
     for (const f of [0.5, 1]) {
       const px = sx + wx * t * f, py = sy + wy * t * f;
-      const q = queryMain(track, px, py, pointAt(track, s + Math.hypot(px - c.x, py - c.y)).seg); // the road it drives (BR-BOTS: its route's ring)
+      const q = queryTrackNear(track, px, py, pointAt(track, s + Math.hypot(px - c.x, py - c.y)).seg); // the road it drives (BR-BOTS: its route's ring)
       if (q.dist > wallOf(track, q) - RIVET_RADIUS) return false;
       if (islandAt(track, q.seg, q.s, q.lat, RIVET_RADIUS)) return false; // an island in the way (M4-SURF part 2)
     }
@@ -1847,7 +1847,7 @@ function routeStep(view: BotView, mem: BotMem, c: CarState): typeof ROUTE_STEP {
     if (bs.length <= ROUTE_PREBUILD) for (let m = 0; m < 1 << bs.length; m++) routeOf(track, m);
   }
   let route = routeOf(track, mem.route);
-  let q = queryMain(route.ring, c.x, c.y, route.hint[c.seg]);
+  let q = queryTrackNear(route.ring, c.x, c.y, route.hint[c.seg]); // a ring has no branches: its own window
   const at = routeAt(track, route, q.s);
   const road = at.road, ms = at.ms;
   let mask = mem.route;
@@ -1883,7 +1883,7 @@ function routeStep(view: BotView, mem: BotMem, c: CarState): typeof ROUTE_STEP {
   if (mask !== mem.route) {
     mem.route = mask;
     route = routeOf(track, mask);
-    q = queryMain(route.ring, c.x, c.y, route.hint[c.seg]);
+    q = queryTrackNear(route.ring, c.x, c.y, route.hint[c.seg]);
     mem.backup = null;
     mem.backedUpFor = -1;
     mem.truckS = -1;
@@ -1929,10 +1929,10 @@ export function botControls(view: BotView, mem: BotMem): BotControls {
   }
   const track = view.track;
   // BR-BOTS: on a track with branches the bot drives its route's ring (routeStep): every look-ahead below
-  // walks the route. Without branches the ring is the track and the query today's (queryMain is
-  // queryTrackNear exactly there).
+  // walks the route (BR-PHYS's queryMain stopgaps are gone). Without branches the ring is the track and
+  // the query today's (queryTrackNear round the car's segment).
   let ring = track, route: Route | null = null, q: TrackQuery;
-  if (track.branches.length === 0) q = queryMain(track, c.x, c.y, c.seg);
+  if (track.branches.length === 0) q = queryTrackNear(track, c.x, c.y, c.seg);
   else {
     const rs = routeStep(view, mem, c);
     route = rs.route;
