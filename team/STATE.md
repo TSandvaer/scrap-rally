@@ -570,6 +570,14 @@ clean with main and touch-5. Only criterion 9 left (main.ts fx.rt = game.drawTic
 (tmp/review-m4-move.md) on part 1 now; criterion 9 = a delta review later; taste copy after criterion 9 (art static until then).
 TOUCH-5 re-review APPROVE (ctx_a0987104e2a7, released; tmp/touch-5/touch5-review-2.md; note: a turn pointed behind at 150-180 u/s
 never brakes now, uses more room). MERGED 56e6a45; gate running. MOVE told 'go for criterion 9' (merge main, fx.rt = game.drawTick()).
+TOUCH-5 gate green (861/861 + 128/128, build index-C6OiUqFq.js); ClickUp 123jpnbfgbc ready for qa test; author released, workspace
+touch-5 removed. PUSHED (user popup): origin/main = 8c61117 (TOUCH-5 + SURF-2). Expected live bundle after Manual Deploy: index-C6OiUqFq.js.
+MOVE criterion 9 done: 333fdfa (merge ac6eddf clean; fx.rt = game.drawTick(); barrels within 2.3 px of barrelLat, press slab shows
+exactly when down; 887/887 + 133/133 twice; shots in the m4-move workspace tmp/m4-move/shots/). MOVE part-1 review REQUEST_CHANGES
+(ctx_b64bf57fdff3; tmp/m4-move/m4-move-review-1.md): F1 press-island skip too wide (car trapped in the slab), F2 clearSpot respawn
+over a hole; F3 decided: band rivets pass that truck; F4 truck side-gap rule; notes: 2 seats jump vs comment, spectator rt < 0 in
+countdown. Fix round sent to ctx_ea8124df2107 (tmp/m4-move/review-1-fix.md); reviewer ctx_b64bf57fdff3 kept for the re-review
+(fixes + the criterion-9 delta ac6eddf/333fdfa). Move Yard taste copy after the fix round.
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
