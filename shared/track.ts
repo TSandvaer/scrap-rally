@@ -466,6 +466,8 @@ export const BELT_LEN_MIN = 48;
  * along the road out of it to stand clear of both, so a squeeze is only ever against a wall.
  */
 export const MOVER_CLEAR = 2 * SOLID_CLEAR;
+/** M4-MOVE: a press's side reaches the wall (or an island beside it) or leaves at least this much road (a car, 16 wide, and room). */
+export const PRESS_SIDE_GAP = 24;
 
 // ---- the traction area of a puddle (M4-WORLD; moved here from client/gfx/puddle-shape.ts by M4-SURF, unchanged) ----
 // User decisions 2026-11-21: "dirt and water puddles should not be square, it should read as a
@@ -1626,6 +1628,18 @@ function validateSchema(track: Track, errors: string[], zone: (what: string, lo:
     if (!(p.lat1 > p.lat0)) errors.push(`${what}: lat1 must be > lat0`);
     zone(what, p.s - PRESS_DEPTH / 2, p.s + PRESS_DEPTH / 2);
     inside(what, p.s - PRESS_DEPTH / 2, p.s + PRESS_DEPTH / 2, p.lat0, p.lat1);
+    // M4-MOVE: each side of it reaches the wall (or an island beside it) or leaves a car room to pass:
+    // a gap narrower than PRESS_SIDE_GAP would hold a car between the slab and the wall while it is down.
+    for (const s of samplesIn(track, p.s - PRESS_DEPTH / 2, p.s + PRESS_DEPTH / 2)) {
+      const isle = track.islands.find((i) => s >= i.s0 && s <= i.s1);
+      const left = isle && isle.lat1 <= p.lat0 ? p.lat0 - isle.lat1 : p.lat0 + wallAt(track, s, -1);
+      const right = isle && isle.lat0 >= p.lat1 ? isle.lat0 - p.lat1 : wallAt(track, s, 1) - p.lat1;
+      const bad = [left, right].find((g) => g > 1e-9 && g < PRESS_SIDE_GAP);
+      if (bad !== undefined) {
+        errors.push(`${what}: leaves a gap of ${f1(bad)} beside it at s=${f1(s)} (a side reaches the wall or an island, or leaves >= ${PRESS_SIDE_GAP})`);
+        break;
+      }
+    }
     solids.push(box(what, p.s - PRESS_DEPTH / 2, p.s + PRESS_DEPTH / 2, p.lat0, p.lat1));
   }
   for (const i of track.islands) {

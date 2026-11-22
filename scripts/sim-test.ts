@@ -12342,12 +12342,14 @@ function moveRespawn(): void {
   const nearTruck = errs([{ k: "truck", s: 5950, lat: 0, len: 110 }], [0, 5930]);
   const rowMound = errs([{ k: "barrels", s: 1000, n: 2, period: 200, speed: 100 }, { k: "tyres", s: 1060, lat: 30, r: 20 }]);
   const pressIsland = errs([{ k: "widen", s0: 5750, s1: 7050, left: 60, right: 60 }, { k: "island", s0: 5900, s1: 6900, lat0: -28, lat1: 28 }, { k: "press", s: 6500, lat0: 28, lat1: 124, period: 180, down: 60 }]);
+  const pressGap = errs([{ k: "press", s: 3000, lat0: -64, lat1: 95, period: 150, down: 40 }]), pressWall = errs([{ k: "press", s: 3000, lat0: -64, lat1: 108, period: 150, down: 40 }]);
   const rowIsland = errs([{ k: "widen", s0: 5750, s1: 7050, left: 60, right: 60 }, { k: "island", s0: 5900, s1: 6900, lat0: -28, lat1: 28 }, { k: "barrels", s: 6940, n: 2, period: 260, speed: 100 }]);
   check(
-    `move validate: a barrel row, a press or a truck within ${moveTrack.SOLID_CLEAR} of a recovery point is refused; a row within ${moveTrack.MOVER_CLEAR} along the track of a mound or an island is refused; a press beside an island is fine; the Move Yard is valid`,
+    `move validate: a barrel row, a press or a truck within ${moveTrack.SOLID_CLEAR} of a recovery point is refused; a row within ${moveTrack.MOVER_CLEAR} along the track of a mound or an island is refused; a press beside an island is fine; a press side short of the wall by less than ${moveTrack.PRESS_SIDE_GAP} is refused, one at the wall is fine; the Move Yard is valid`,
     nearRec.includes("from recovery point") && nearPress.includes("from recovery point") && nearTruck.includes("from recovery point") && rowMound.includes("along the track from tyres") &&
-      pressIsland === "" && rowIsland.includes("along the track from island") && validateTrack(moveYard()).length === 0 && moveW.validateRunUps(moveYard()).length === 0,
-    `row: ${nearRec}; press: ${nearPress}; truck: ${nearTruck}; row by a mound: ${rowMound}; press by an island: ${pressIsland || "valid"}; row past an island: ${rowIsland}`,
+      pressIsland === "" && rowIsland.includes("along the track from island") && pressGap.includes("leaves a gap of 13.0") && pressWall === "" &&
+      validateTrack(moveYard()).length === 0 && moveW.validateRunUps(moveYard()).length === 0,
+    `row: ${nearRec}; press: ${nearPress}; truck: ${nearTruck}; row by a mound: ${rowMound}; press by an island: ${pressIsland || "valid"}; row past an island: ${rowIsland}; press 13 short of the wall: ${pressGap}; press to the wall: ${pressWall || "valid"}`,
   );
 }
 
