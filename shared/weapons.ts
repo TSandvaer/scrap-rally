@@ -365,19 +365,21 @@ export function moveShot(s: Shot, track: Track, rt: number): boolean {
   const x0 = s.x, y0 = s.y;
   s.x += s.vx * DT;
   s.y += s.vy * DT;
-  s.travelled += Math.hypot(s.vx, s.vy) * DT;
+  const step = Math.hypot(s.vx, s.vy) * DT;
+  s.travelled += step;
   const q = queryTrackNear(track, s.x, s.y, s.seg);
   s.seg = q.seg;
   return s.travelled <= RIVET_RANGE && q.dist <= wallOf(track, q) && !shotIntoTyres(track.tyresAt[q.seg], x0, y0, s.x, s.y) && !shotIntoIslands(track, q, x0, y0, s.x, s.y) &&
-    !shotIntoMovers(track, q.seg, x0, y0, s.x, s.y, rt);
+    !shotIntoMovers(track, q.seg, x0, y0, s.x, s.y, rt, s.travelled - step);
 }
 
 /**
  * Did a rivet moving from (x0, y0) to (x1, y1) this tick (seg: its segment at the end) touch a barrel
  * at race tick rt, a press that is down at rt, or a truck's body (M4-MOVE: rivets die on solids)?
- * From the segment's buckets (empty on a track without any).
+ * From the segment's buckets (empty on a track without any). back: how far it flew before this tick
+ * (its flight is straight: it was fired from (x0, y0) less that much along its way).
  */
-function shotIntoMovers(track: Track, seg: number, x0: number, y0: number, x1: number, y1: number, rt: number): boolean {
+function shotIntoMovers(track: Track, seg: number, x0: number, y0: number, x1: number, y1: number, rt: number, back: number): boolean {
   const rows = track.barrelsAt[seg], gates = track.pressesAt[seg], trucks = track.trucksAt[seg];
   if (rows !== undefined && rows.length > 0) {
     const r = BARREL_R + RIVET_RADIUS;
@@ -399,26 +401,32 @@ function shotIntoMovers(track: Track, seg: number, x0: number, y0: number, x1: n
     }
   }
   if (trucks !== undefined && trucks.length > 0) {
-    // A rivet whose tick starts in a truck's ramp band (fired from a car riding it) passes that truck,
-    // as the car does (M4-MOVE review F3, the coordinator's call); every other one dies on its body.
-    for (const t of trucks) if (segSegDist(x0, y0, x1, y1, t) <= TRUCK_HALF + RIVET_RADIUS && !rivetInBand(t, x0, y0, x1, y1)) return true;
+    // A rivet FIRED in a truck's ramp band (from a car riding it) passes that truck, as the car does
+    // (M4-MOVE review F3, the coordinator's call); every other one dies on its body. Decided by where it
+    // was fired, not where this tick starts (review 2: one from behind could come round the body's round
+    // rear corner into the band untouched and then pass).
+    for (const t of trucks) {
+      if (segSegDist(x0, y0, x1, y1, t) > TRUCK_HALF + RIVET_RADIUS) continue;
+      const dx = x1 - x0, dy = y1 - y0, dl = Math.sqrt(dx * dx + dy * dy) || 1;
+      if (!rivetInBand(t, x0 - (dx / dl) * back, y0 - (dy / dl) * back, dx, dy)) return true;
+    }
   }
   return false;
 }
 
 /**
- * Does a rivet's tick from (x0, y0) to (x1, y1) start in truck t's ramp band, moving forward along it
- * (a rivet fired from a car riding the band)? In the truck's own frame (its axis from x0, y0 to x1, y1,
- * TRUCK_HALF in from either end): within TRUCK_BAND of the axis, along it from the rear to the front plus
- * the rivet's radius and a unit (a rivet just out past the cab still touches the front's round end).
+ * Was a rivet fired at (fx, fy), flying along (dx, dy), fired in truck t's ramp band moving forward along
+ * it (from a car riding the band)? In the truck's own frame (its axis from x0, y0 to x1, y1, TRUCK_HALF in
+ * from either end): within TRUCK_BAND of the axis, along it from the rear to the front plus the rivet's
+ * radius and a unit (a car at the end of the take-off zone fires from just past the cab).
  */
-function rivetInBand(t: PlacedTruck, x0: number, y0: number, x1: number, y1: number): boolean {
+function rivetInBand(t: PlacedTruck, fx: number, fy: number, dx: number, dy: number): boolean {
   const ex = t.x1 - t.x0, ey = t.y1 - t.y0;
   const l = Math.sqrt(ex * ex + ey * ey) || 1;
   const ux = ex / l, uy = ey / l;
-  if ((x1 - x0) * ux + (y1 - y0) * uy <= 0) return false; // not moving forward along the truck
-  const along = (x0 - t.x0) * ux + (y0 - t.y0) * uy + TRUCK_HALF; // from the rear
-  const across = -(x0 - t.x0) * uy + (y0 - t.y0) * ux;
+  if (dx * ux + dy * uy <= 0) return false; // not flying forward along the truck
+  const along = (fx - t.x0) * ux + (fy - t.y0) * uy + TRUCK_HALF; // from the rear
+  const across = -(fx - t.x0) * uy + (fy - t.y0) * ux;
   return along >= 0 && along <= t.len + RIVET_RADIUS + 1 && across >= -TRUCK_BAND && across <= TRUCK_BAND;
 }
 

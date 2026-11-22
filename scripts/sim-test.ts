@@ -13342,6 +13342,22 @@ function moveReview1(): void {
   };
   const band = [-10, 10, 40, 70].map((d) => fire(tk.s + d, tk.lat)); // a car on the band (rear +d)
   const behind = fire(tk.s - 80, tk.lat), side = fire(tk.s + 50, tk.lat + moveTrack.TRUCK_HALF + 16, -1.2);
+  // Review 2 (F3-edge): rivets fired from behind straight along the truck's axis, at every lane across
+  // -16..16 (truck frame, step 0.5) and 30 phases (100-115 behind its rear): none passes the truck (before
+  // the fix, ones at |across| 9.5-14 came round the body's round rear corner into the band and passed).
+  const ex = tk.x1 - tk.x0, ey = tk.y1 - tk.y0, el = Math.hypot(ex, ey), tux = ex / el, tuy = ey / el;
+  const rx = tk.x0 - tux * moveTrack.TRUCK_HALF, ry = tk.y0 - tuy * moveTrack.TRUCK_HALF; // the rear's middle
+  let edgePass = 0, edgeRuns = 0;
+  for (let c = -16; c <= 16; c += 0.5) {
+    for (let ph = 0; ph < 15; ph += 0.5) {
+      const back = 100 + ph, x = rx - tux * back - tuy * c, y = ry - tuy * back + tux * c;
+      const sh: moveW.Shot = { id: 1, owner: "x", x, y, vx: tux * 900, vy: tuy * 900, seg: queryTrackNear(yard, x, y, pointAt(yard, tk.s - back).seg).seg, travelled: 0 };
+      let k = 0;
+      while (k < 40 && moveW.moveShot(sh, yard, 100 + k)) k++;
+      edgeRuns++;
+      if ((sh.x - rx) * tux + (sh.y - ry) * tuy > tk.len + 10) edgePass++;
+    }
+  }
   // A rivet fired back at the truck's front from ahead of it, down the band's lane: dies on the truck.
   const ahead = (() => {
     const c = surfCar(yard, tk.s + tk.len + 60, tk.lat, 0, Math.PI);
@@ -13351,9 +13367,10 @@ function moveReview1(): void {
     return { k, s: splitSL(yard, sh).s };
   })();
   check(
-    "move review F3: a rivet fired from a car riding the truck's band passes the truck (from rear -10, +10, +40, +70 it flies its range); one fired from 80 behind, from a car nosing into its side, or back at its front from ahead dies on the truck",
-    band.every((b) => b.s > tk.s + tk.len + 20 && b.far > 300) && behind.k <= 6 && behind.s < tk.s + 15 && side.k <= 2 && ahead.k <= 6 && ahead.s > tk.s + tk.len - 15,
-    `band: ${band.map((b) => `${b.k} ticks to s=${b.s.toFixed(0)}`).join(", ")}; behind: ${behind.k} ticks to s=${behind.s.toFixed(0)}; side: ${side.k} ticks; back at its front from ahead: ${ahead.k} ticks to s=${ahead.s.toFixed(0)}`,
+    "move review F3: a rivet fired from a car riding the truck's band passes the truck (from rear -10, +10, +40, +70 it flies its range); one fired from 80 behind, from behind at any lane across -16..16 (the round rear corners: review 2), from a car nosing into its side, or back at its front from ahead dies on the truck",
+    band.every((b) => b.s > tk.s + tk.len + 20 && b.far > 300) && behind.k <= 6 && behind.s < tk.s + 15 && side.k <= 2 && ahead.k <= 6 && ahead.s > tk.s + tk.len - 15 &&
+      edgeRuns === 1950 && edgePass === 0,
+    `band: ${band.map((b) => `${b.k} ticks to s=${b.s.toFixed(0)}`).join(", ")}; behind: ${behind.k} ticks to s=${behind.s.toFixed(0)}; side: ${side.k} ticks; back at its front from ahead: ${ahead.k} ticks to s=${ahead.s.toFixed(0)}; from behind at every lane across -16..16 x 30 phases: ${edgePass}/${edgeRuns} pass`,
   );
   // F4: a truck whose side leaves a gap to the wall narrower than TRUCK_SIDE_GAP is refused (14, 6, 18);
   // one reaching the wall, or leaving 24, validates.
