@@ -35,7 +35,9 @@ import {
   queryMain,
   queryTrackNear,
   recoveryAt,
+  globalSeg,
   recoveryFor,
+  roadFor,
   roadOf,
   segDir,
   tractionRect,
@@ -239,7 +241,7 @@ export function stepRaceCar(c: CarState, input: Input, stats: CarStats, env: Rac
     // so a plain drive step is exactly stepCar. BR-PHYS: on the road the query is on (the
     // nearer one in a mouth): its lips, trucks, gaps and holes, its walls for "lost".
     const q = queryTrackNear(track, c.x, c.y, c.seg);
-    const road = q.road === 0 ? track : roadOf(track, q.road);
+    const road = roadFor(track, q);
     if (isLost(road, q)) {
       startFall(c);
       return "fall";
@@ -261,8 +263,8 @@ export function stepRaceCar(c: CarState, input: Input, stats: CarStats, env: Rac
   c.x += c.vx * DT;
   c.y += c.vy * DT;
   const q = queryTrackNear(track, c.x, c.y, c.seg);
-  const road = q.road === 0 ? track : roadOf(track, q.road);
-  c.seg = q.road === 0 ? q.seg : track.branches[q.road - 1].base + q.seg;
+  const road = roadFor(track, q);
+  c.seg = globalSeg(track, q);
   c.air = c.air! - 1;
   if (isLost(road, q) || (c.air === 0 && (q.dist > wallOf(road, q) || overHazard(road, c.x, c.y, q.s)))) {
     startFall(c);
@@ -305,13 +307,14 @@ export function recover(c: CarState, track: Track): void {
  * BR-PHYS: its global segment in c.seg), facing along the track, standing still.
  */
 function place(c: CarState, track: Track, road: number, s: number, lat = 0): void {
-  const p = pointAt(road === 0 ? track : roadOf(track, road), s);
+  const own = road === track.roadNo; // the track's own road (the main road on a track)
+  const p = pointAt(own ? track : roadOf(track, road), s);
   c.x = lat === 0 ? p.x : p.x - Math.sin(p.h) * lat;
   c.y = lat === 0 ? p.y : p.y + Math.cos(p.h) * lat;
   c.h = p.h;
   c.vx = 0;
   c.vy = 0;
-  c.seg = road === 0 ? p.seg : track.branches[road - 1].base + p.seg;
+  c.seg = own ? p.seg : track.branches[road - 1].base + p.seg;
   c.air = 0;
   c.fall = 0;
   c.boost = 0;
@@ -328,7 +331,7 @@ function place(c: CarState, track: Track, road: number, s: number, lat = 0): voi
 export function respawn(c: CarState, track: Track): void {
   const q = queryTrackNear(track, c.x, c.y, c.seg);
   // BR-PHYS: on its own road (the nearer one); a hazard there sends it to recoveryFor's point.
-  const road = q.road === 0 ? track : roadOf(track, q.road);
+  const road = roadFor(track, q);
   const p = pointAt(road, q.s);
   const back = overHazard(road, p.x, p.y, q.s) ? recoveryFor(track, q.road, q.s) : null;
   const at = clearSpotOn(track, back === null ? q.road : back.road, back === null ? q.s : back.s, 4, q.lat);
@@ -383,8 +386,8 @@ export function moveShot(s: Shot, track: Track, rt: number): boolean {
   s.travelled += step;
   const q = queryTrackNear(track, s.x, s.y, s.seg);
   // BR-PHYS: the road the rivet is over (the nearer one in a mouth), its global segment kept.
-  const road = q.road === 0 ? track : roadOf(track, q.road);
-  s.seg = q.road === 0 ? q.seg : track.branches[q.road - 1].base + q.seg;
+  const road = roadFor(track, q);
+  s.seg = globalSeg(track, q);
   return s.travelled <= RIVET_RANGE && q.dist <= wallOf(road, q) && !shotIntoTyres(road.tyresAt[q.seg], x0, y0, s.x, s.y) && !shotIntoIslands(road, q, x0, y0, s.x, s.y) &&
     !shotIntoMovers(road, q.seg, x0, y0, s.x, s.y, rt, s.travelled - step);
 }
@@ -733,24 +736,34 @@ function onCourse(track: Track, legs: readonly Leg[], road: number, s: number): 
   return NaN;
 }
 
-/** A query's course distance (on its road): of the legs on that road the reading nearest `prev`; NaN off the course. */
+/** A course leg reads a query only this far before or past its ends (a mouth, MOUTH_LEN_MAX 600, and room). */
+const LEG_REACH = 700;
+
+/**
+ * A query's course distance (on its road): each leg on that road reads it along the leg (on the main road
+ * both ways round the lap), counted only within LEG_REACH of the leg (a mouth's main road beside a fork or
+ * a merge) unless none is; of those, the reading nearest `prev`. NaN off the course's roads.
+ */
 function courseOf(track: Track, legs: readonly Leg[], q: TrackQuery, prev: number): number {
   const L = track.length;
-  let best = NaN, bestOff = Infinity;
+  let best = NaN, bestOff = Infinity, any = NaN, anyOff = Infinity;
   for (const g of legs) {
     if (g.road !== q.road) continue;
-    let a = q.s - g.s0;
-    if (g.road === 0) {
-      a = ((a % L) + L) % L;
-      if (a > L / 2) a -= L;
-    }
-    const d = g.at + a, off = Math.abs(d - prev);
-    if (off < bestOff) {
-      best = d;
-      bestOff = off;
+    const a0 = g.road === 0 ? (((q.s - g.s0) % L) + L) % L : q.s - g.s0;
+    for (let w = 0; w < (g.road === 0 ? 2 : 1); w++) {
+      const a = w === 0 ? a0 : a0 - L;
+      const d = g.at + a, off = Math.abs(d - prev);
+      if (off < anyOff) {
+        any = d;
+        anyOff = off;
+      }
+      if (a >= -LEG_REACH && a <= g.len + LEG_REACH && off < bestOff) {
+        best = d;
+        bestOff = off;
+      }
     }
   }
-  return best;
+  return best === best ? best : any;
 }
 
 /** runUpInput on a course: at the point 40 + speed / 4 ahead along it, on its road's hole-free lane (or the pool's middle). */
@@ -783,7 +796,7 @@ function courseRun(track: Track, legs: readonly Leg[], d0: number, end: number, 
     const q = queryTrackNear(track, c.x, c.y, c.seg);
     const nd = courseOf(track, legs, q, d);
     if (nd === nd) d = nd; // NaN: off the course's roads (never: there are two), keep the last
-    const road = roadOf(track, q.road);
+    const road = roadFor(track, q);
     const where = q.road === 0 ? `s=${q.s.toFixed(1)}` : `u=${q.s.toFixed(1)} on branch ${q.road}`;
     if (ev === "takeoff") tookOff = v0;
     const jump = tookOff >= 0 ? ` (took off at ${tookOff.toFixed(0)} u/s)` : "";
@@ -846,10 +859,11 @@ function branchRunUps(track: Track, stats: CarStats, errors: string[]): void {
     // From the main road's recovery point at or before the fork, through the branch, past the merge.
     const r0 = recoveryAt(track, b.s0);
     const A = (((b.s0 - r0) % L) + L) % L;
-    const through: Leg[] = [{ road: 0, s0: r0, len: A, at: 0 }, { road, s0: 0, len, at: A }, { road: 0, s0: b.s1, len: Infinity, at: A + len }];
+    // The last leg: the main road past the merge (the run ends a car's length past it; a leg's reach is finite).
+    const through: Leg[] = [{ road: 0, s0: r0, len: A, at: 0 }, { road, s0: 0, len, at: A }, { road: 0, s0: b.s1, len: 2 * LEG_REACH, at: A + len }];
     courseRuns(track, through, 0, A + len, stats, `run-up from main recovery point s=${r0.toFixed(1)} through branch ${road} (fork s=${b.s0.toFixed(1)}, merge s=${b.s1.toFixed(1)})`, errors);
     // From each of the branch's recovery points, past its hazards before the next one.
-    const legs: Leg[] = [{ road, s0: 0, len, at: 0 }, { road: 0, s0: b.s1, len: Infinity, at: len }];
+    const legs: Leg[] = [{ road, s0: 0, len, at: 0 }, { road: 0, s0: b.s1, len: 2 * LEG_REACH, at: len }];
     r.recovery.forEach((u, i) => {
       const until = i + 1 < r.recovery.length ? r.recovery[i + 1] : len;
       let start = Infinity, end = -Infinity;
@@ -984,7 +998,7 @@ function flyOff(track: Track, lip: number, lane: number, v: number, stats: CarSt
     const at = q.road === 0 ? `s=${q.s.toFixed(1)}` : `u=${q.s.toFixed(1)} on branch ${q.road}`;
     if (ev === "fall") return `falls at ${at}, ${q.dist.toFixed(1)} from the centerline`;
     if (i === 0 && ev !== "takeoff") return "does not take off";
-    if (wasAir && c.air === 0) return onAsphalt && q.dist > halfOf(q.road === 0 ? track : roadOf(track, q.road), q) ? `lands off the asphalt at ${at} (${q.dist.toFixed(1)} from the centerline)` : "";
+    if (wasAir && c.air === 0) return onAsphalt && q.dist > halfOf(roadFor(track, q), q) ? `lands off the asphalt at ${at} (${q.dist.toFixed(1)} from the centerline)` : "";
   }
   return "still in the air";
 }

@@ -1195,9 +1195,9 @@ export function clearSpot(track: Track, s: number, margin = 4, prefer = 0): { s:
  * its lane, on that point's road.
  */
 export function clearSpotOn(track: Track, road: number, s: number, margin = 4, prefer = 0): { road: number; s: number; lat: number } {
-  if (road === 0) {
+  if (road === track.roadNo) {
     const a = clearSpot(track, s, margin, prefer);
-    return { road: 0, s: a.s, lat: a.lat };
+    return { road, s: a.s, lat: a.lat };
   }
   const at = spotNear(track.branches[road - 1].road, s, margin, prefer);
   if (at !== null) return { road, s: at.s, lat: at.lat };
@@ -2461,9 +2461,20 @@ export function localSeg(track: Track, g: number): number {
   return r === 0 ? g : g - track.branches[r - 1].base;
 }
 
-/** A query's segment as a global one (the seg hint CarState stores). */
+/**
+ * A query's segment as a global one (the seg hint CarState stores). BR-PHYS: relative to the track queried:
+ * a query of a road on its own (a branch's road stepped as its own track) keeps its segment.
+ */
 export function globalSeg(track: Track, q: TrackQuery): number {
-  return q.road === 0 ? q.seg : track.branches[q.road - 1].base + q.seg;
+  return q.road === track.roadNo ? q.seg : track.branches[q.road - 1].base + q.seg;
+}
+
+/**
+ * The road a query of `track` is on (BR-PHYS): the track itself for its own road (always on a track without
+ * branches), else the branch's road (PlacedBranch.road). Every per-segment lookup of a query reads this.
+ */
+export function roadFor(track: Track, q: TrackQuery): Track {
+  return q.road === track.roadNo ? track : track.branches[q.road - 1].road;
 }
 
 /**
@@ -2484,7 +2495,7 @@ export function mainS(track: Track, q: TrackQuery): number {
  * u, and when there is none, the main road's recovery point at or before the fork (s0).
  */
 export function recoveryFor(track: Track, road: number, s: number): { road: number; s: number } {
-  if (road === 0) return { road: 0, s: recoveryAt(track, s) };
+  if (road === track.roadNo) return { road, s: recoveryAt(track, s) }; // BR-PHYS: the track's own road (0 on a track)
   const b = track.branches[road - 1];
   const r = recoveryAt(b.road, s);
   return r >= 0 ? { road, s: r } : { road: 0, s: recoveryAt(track, b.s0) };

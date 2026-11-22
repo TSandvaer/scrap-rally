@@ -13,7 +13,8 @@ import {
   PRESS_DEPTH,
   pressDown,
   queryTrackNear,
-  roadOf,
+  globalSeg,
+  roadFor,
   segDir,
   SURF_BELT,
   SURF_DIRT,
@@ -185,8 +186,8 @@ export function stepCar(c: CarState, input: Input, stats: CarStats, track: Track
   const q = queryTrackNear(track, c.x, c.y, c.seg);
   // BR-PHYS (PLAN-BRANCH 2.2): the road the car is on (the track itself without branches) holds every
   // per-segment lookup below; c.seg keeps the global segment (the hint), q.seg is on the road.
-  const road = q.road === 0 ? track : roadOf(track, q.road);
-  c.seg = q.road === 0 ? q.seg : track.branches[q.road - 1].base + q.seg;
+  const road = roadFor(track, q);
+  c.seg = globalSeg(track, q);
   // M4-MOVE: what moves and the trucks near the car (empty lists on a track without any), and the
   // truck whose ramp it rides this tick (by the start-of-tick pose, as stepRaceCar's take-off).
   const rows = road.barrelsAt[q.seg], gates = road.pressesAt[q.seg], trucks = road.trucksAt[q.seg];
@@ -594,8 +595,8 @@ export function wallLimit(track: Track, q?: TrackQuery): number {
 function collideWalls(c: CarState, track: Track): void {
   const q = queryTrackNear(track, c.x, c.y, c.seg);
   // BR-PHYS: the nearer road's wall (in a mouth the union of the two corridors, PLAN-BRANCH 2.3).
-  const road = q.road === 0 ? track : roadOf(track, q.road);
-  c.seg = q.road === 0 ? q.seg : track.branches[q.road - 1].base + q.seg;
+  const road = roadFor(track, q);
+  c.seg = globalSeg(track, q);
   const isles = road.islandsAt[q.seg];
   if (isles !== undefined && isles.length > 0) collideIslands(c, q, isles);
   const limit = wallLimit(road, q);

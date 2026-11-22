@@ -18,14 +18,15 @@
 //   reached only flying) a window can find a farther point of its own road than the other road's
 //   nearest: counted apart (`far`), not a disagreement: no wall is there, both verdicts say "pushed".
 // A pushed car must end inside the union (on its edge, within 0.01). Exit code 1 if anything disagrees.
-// branchWalls is used by scripts/sim-test.ts.
+// branchWalls is used by scripts/sim-test.ts; RouteDriver (a scripted driver that takes the shortcuts:
+// the server bots keep the main road until BR-BOTS) by scripts/sim-test.ts and scripts/bots.ts.
 //
 //   npx tsx tools/debug/branch-walls.ts                    Branch Yard (shared/testtracks.ts)
 //   npx tsx tools/debug/branch-walls.ts --track <id>       another test track with branches
 //   npx tsx tools/debug/branch-walls.ts --step 2           a finer grid
 
-import { BASE_STATS, CAPSULE_HALF, CAPSULE_R, CAR_WIDTH, NO_INPUT, stepCar, wallLimit, type CarState } from "../../shared/physics";
-import { BRANCH_GUIDE, halfOn, LOCAL_WINDOW, pointAt, queryRoads, queryTrack, queryTrackNear, roadOf, segCount, type Track } from "../../shared/track";
+import { angleDiff, BASE_STATS, CAPSULE_HALF, CAPSULE_R, CAR_WIDTH, clamp, NO_INPUT, speedOf, stepCar, wallLimit, type CarState } from "../../shared/physics";
+import { BRANCH_GUIDE, halfOn, LOCAL_WINDOW, mainS, pointAt, queryRoads, queryTrack, queryTrackNear, roadOf, segCount, type Track } from "../../shared/track";
 import { BRANCH_YARD, TEST_TRACKS, testTrack } from "../../shared/testtracks";
 
 const f1 = (v: number) => v.toFixed(1);
@@ -158,6 +159,116 @@ export function branchWalls(t: Track, step = 4): WallsReport {
     }
   });
   return rep;
+}
+
+/** One leg of a route: road `road` (0 = the main road) from s0 on it, len long, starting at route distance `at` (within a lap). */
+interface Leg { road: number; s0: number; len: number; at: number }
+
+/** A route leg reads a pose only this far before or past its ends (a mouth, MOUTH_LEN_MAX, and room). */
+const LEG_REACH = 700;
+
+/** How far either side of a hole the route driver keeps clear of it (its lanes for two holes 250 apart never overlap). */
+const HOLE_REACH = 100;
+
+/**
+ * A scripted driver along a route (BR-PHYS tests): the main road from the start line, onto each branch
+ * in `take` (branch numbers, 1 = the first) at its fork and back onto the main road at its merge, lap
+ * after lap. It steers at the point 40 + v / 4 ahead along the ROUTE (not along the queried road, so a
+ * mouth's road choice never turns it), `lane` units right of the centreline or, near a hole, on the
+ * nearest lane that keeps its centre HOLE_REACH-clear of it; full throttle up to `top` u/s, then coasting.
+ * Pure: the same poses give the same controls (server-side or on a client's predicted car).
+ */
+export class RouteDriver {
+  readonly legs: Leg[] = [];
+  /** The route's length a lap. */
+  readonly lap: number;
+  /** Route distance of the last pose (NaN before the first). */
+  d = NaN;
+  constructor(readonly track: Track, take: readonly number[], readonly lane = 0, readonly top = Infinity) {
+    let s = 0, at = 0;
+    const bs = [...new Set(take)].sort((a, b) => track.branches[a - 1].s0 - track.branches[b - 1].s0);
+    for (const k of bs) {
+      const b = track.branches[k - 1];
+      this.legs.push({ road: 0, s0: s, len: b.s0 - s, at });
+      at += b.s0 - s;
+      this.legs.push({ road: k, s0: 0, len: b.road.length, at });
+      at += b.road.length;
+      s = b.s1;
+    }
+    this.legs.push({ road: 0, s0: s, len: track.length - s, at });
+    this.lap = at + track.length - s;
+  }
+
+  /** The road and s at route distance d (any lap). */
+  at(d: number): { road: number; s: number } {
+    const k = Math.floor(d / this.lap), w = d - k * this.lap;
+    let g = this.legs[0];
+    for (const x of this.legs) if (w >= x.at) g = x;
+    return { road: g.road, s: g.s0 + (w - g.at) };
+  }
+
+  /**
+   * The route distance of a pose: of the readings of its query (on its road) on that road's legs, the one
+   * nearest the last. On a branch the route does not take (a mouth's query can land there): its mainS on
+   * the main road's legs.
+   */
+  progress(c: CarState): number {
+    const t = this.track, L = t.length;
+    const q0 = queryTrackNear(t, c.x, c.y, c.seg);
+    const q = this.legs.some((g) => g.road === q0.road) ? { road: q0.road, s: q0.s } : { road: 0, s: mainS(t, q0) };
+    const lap = Number.isNaN(this.d) ? 0 : Math.floor(this.d / this.lap);
+    const ref = Number.isNaN(this.d) ? 0 : this.d;
+    // Each leg on the query's road reads it as a along the leg (on the main road both ways round the lap);
+    // a reading counts only within MOUTH_LEN_MAX + 100 of the leg (a mouth's main road beside a branch's
+    // fork or merge), unless none does. Of those, the one nearest the last.
+    let best = NaN, off = Infinity, bestAny = NaN, offAny = Infinity;
+    for (let k = lap - 1; k <= lap + 1; k++) {
+      for (const g of this.legs) {
+        if (g.road !== q.road) continue;
+        const a0 = g.road === 0 ? (((q.s - g.s0) % L) + L) % L : q.s - g.s0;
+        for (const a of g.road === 0 ? [a0, a0 - L] : [a0]) {
+          const d = k * this.lap + g.at + a, o = Math.abs(d - ref);
+          if (o < offAny) {
+            offAny = o;
+            bestAny = d;
+          }
+          if (a >= -LEG_REACH && a <= g.len + LEG_REACH && o < off) {
+            off = o;
+            best = d;
+          }
+        }
+      }
+    }
+    const d = Number.isNaN(best) ? bestAny : best;
+    if (!Number.isNaN(d)) this.d = d;
+    return this.d;
+  }
+
+  /** The lane at (road, s): `lane`, or near a hole the nearest one clear of it, inside the asphalt less 10. */
+  laneAt(road: number, s: number): number {
+    const r = roadOf(this.track, road);
+    const near = r.holes.filter((h) => Math.abs(h.s - s) < h.r + HOLE_REACH);
+    if (near.length === 0) return this.lane;
+    const max = r.def.halfWidth - 10;
+    for (let k = 0; k <= 2 * max; k += 2) {
+      for (const lat of k === 0 ? [this.lane] : [this.lane + k, this.lane - k]) {
+        if (Math.abs(lat) > max) continue;
+        if (near.every((h) => Math.abs(lat - h.lat) > h.r + 12)) return lat;
+      }
+    }
+    return this.lane;
+  }
+
+  controls(c: CarState): { throttle: number; steer: number } {
+    const d = this.progress(c);
+    const v = speedOf(c);
+    const aim = this.at(d + 40 + v * 0.25);
+    const r = roadOf(this.track, aim.road);
+    const p = pointAt(r, aim.s);
+    const lat = this.laneAt(aim.road, aim.s);
+    const tx = p.x - Math.sin(p.h) * lat, ty = p.y + Math.cos(p.h) * lat;
+    return { throttle: v < this.top ? 1 : 0, steer: clamp(angleDiff(c.h, Math.atan2(ty - c.y, tx - c.x)) * 2.2, -1, 1) };
+  }
 }
 
 function main(): void {
