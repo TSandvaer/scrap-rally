@@ -123,14 +123,16 @@ export function mountTouchTune(pad: TouchPad, stage: HTMLElement): void {
   head.append(close);
   panel.append(head);
 
-  // The Mode switch (TOUCH-5): point or rate, live; the sliders of the other mode hide.
+  // The Mode switch (TOUCH-5): point or rate, live; the sliders of the other mode hide. Two radio
+  // buttons with the lobby music switch's lamp (lit on the mode in use).
   const modeRow = el("div", "tune-buttons");
-  modeRow.setAttribute("role", "group");
+  modeRow.setAttribute("role", "radiogroup");
   modeRow.setAttribute("aria-label", "Steering mode");
   const modeBtns = new Map<StickMode, HTMLButtonElement>();
   for (const m of MODES) {
-    const b = el("button", "btn small", m === "point" ? "Point" : "Rate");
+    const b = el("button", "btn small music-switch", m === "point" ? "Point" : "Rate");
     b.type = "button";
+    b.setAttribute("role", "radio");
     b.dataset.mode = m;
     b.addEventListener("click", () => {
       if (pad.stickParams().mode === m) return;
@@ -186,10 +188,7 @@ export function mountTouchTune(pad: TouchPad, stage: HTMLElement): void {
   /** The sliders, their values and the text from the TouchPad's values; stored. */
   function render(): void {
     const p = pad.stickParams();
-    for (const [m, b] of modeBtns) {
-      b.classList.toggle("primary", m === p.mode);
-      b.setAttribute("aria-pressed", String(m === p.mode));
-    }
+    for (const [m, b] of modeBtns) b.setAttribute("aria-checked", String(m === p.mode));
     for (const s of SLIDERS) {
       inputs.get(s.key)!.value = String(p[s.key]);
       outs.get(s.key)!.textContent = s.show(p[s.key], p);
