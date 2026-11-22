@@ -655,6 +655,9 @@ User: HARD-2 merges on review APPROVE; tuning later (keep the :3009 SCRAP_DEV_BO
 M4-TRACKS gate on main c90ee9c: check 0, sim 907/907, build ok (index-D5zCxkUp.js), bots 142/143: FAIL 'breakers-mile over sockets ...
 hits them' (contacts 0; author/reviewer had press 1 tick) = timing flake in the new check. Fix sent to the M4-TRACKS author ctx_25b6cddb77d6
 (make it deterministic, 10x PASS); BR-SCHEMA + HARD-2 told it is known. No push until main is green.
+HARD-2 review APPROVE (ctx_8f7a8c933e4d kept for a delta look; nits: BOT TUNE button covers the speaker button; wide mistakes logged
+before the lane check). Range: knob max = Normal's pace alone (+5.18 % on Hard), mistake axis mild (~1.4 %/lap). Final round sent to the
+author: merge main, falls-0 on the 2 new tracks, both nits. Then merge.
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
