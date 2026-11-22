@@ -718,7 +718,8 @@ Flake-fix gate on 45383dd FULLY GREEN (1022/1022 + 145/145, build index-QaMhT72h
 BR-PHYS done: 0890198 (cars drive branch roads; 0/2.26M wall probe pairs disagree; cp/lap identical per route; parity 0/10422; lagged
 median 0.005; shipped schema-hash SAME, branch-yard queries re-recorded; 1046/1046 + 150/150 x2; small botdrive fixes; report
 tmp/br-phys/BR-PHYS-report.md). Opus reviewer ctx_63fc3d9518d9 (tmp/review-br-phys.md). README-only conflicts with br-bake, marshals-1.
-Next after it merges: BR-BOTS (Opus) + BR-MAP (Fable, after BR-BAKE? no: needs BR-SCHEMA data only; hud.ts free) in parallel.
+BR-MAP 123jpnbfghd (Fable) in flight early (needs only BR-SCHEMA's data; hud.ts free): ctx_7fe9b95cd759 (~/orca/workspaces/scrap-rally/br-map,
+:3017; spec tmp/spec-br-map.md). Active authors: BR-BAKE, MARSHALS-1, BR-MAP (BR-PHYS idle in review). BR-BOTS after BR-PHYS merges.
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).

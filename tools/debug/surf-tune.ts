@@ -18,7 +18,7 @@ import { CAPSULE_R, collideTyres, speedOf, type CarState } from "../../shared/ph
 import type { ServerMsg } from "../../shared/protocol";
 import { statsFor } from "../../shared/shop";
 import { SURF_YARD } from "../../shared/testtracks";
-import { buildTrack, pointAt, queryTrackNear, surfaceAt, SURF_BELT, SURF_DIRT, SURF_WATER, type Feature, type Track } from "../../shared/track";
+import { buildTrack, localSeg, pointAt, queryTrackNear, roadOf, roadOfSeg, surfaceAt, SURF_BELT, SURF_DIRT, SURF_WATER, type Feature, type Track } from "../../shared/track";
 import { CAR_HP, raceEnv, stepRaceCar } from "../../shared/weapons";
 import { angleDiff, clamp } from "../../shared/physics";
 import type { BotLevel } from "../../shared/botdrive";
@@ -110,10 +110,15 @@ export function surfRace(level: BotLevel, laps = 3, trackId = SURF_YARD.id, leve
   }
 }
 
+/** The tyre bucket of a car's segment hint (BR-PHYS: a global segment, on its road; the track's own without branches). */
+function tyresOf(t: Track, g: number) {
+  return roadOf(t, roadOfSeg(t, g)).tyresAt[localSeg(t, g)];
+}
+
 /** Does the car's capsule touch a tyre mound (at most 0.01 apart: collideTyres pushes it out to touching)? */
 export function touchesMound(t: Track, c: CarState): boolean {
   const ux = Math.cos(c.h), uy = Math.sin(c.h);
-  return (t.tyresAt[c.seg] ?? []).some((m) => {
+  return (tyresOf(t, c.seg) ?? []).some((m) => {
     const k = clamp((m.x - c.x) * ux + (m.y - c.y) * uy, -7.5, 7.5);
     return Math.hypot(c.x + ux * k - m.x, c.y + uy * k - m.y) <= m.r + CAPSULE_R + 0.01;
   });
@@ -204,7 +209,7 @@ export function waterNumbers(): string[] {
       const before = { ...c };
       stepRaceCar(c, { throttle: 0, steer: 0 }, statsFor("sport", { engine: 0, tyres: 0, welder: 0 }), raceEnv(yard));
       const probe = { ...before };
-      if (collideTyres(probe, yard.tyresAt[c.seg]) > 0 || Math.hypot(c.vx - before.vx, c.vy - before.vy) > 50) hit = speedOf(before);
+      if (collideTyres(probe, tyresOf(yard, c.seg)) > 0 || Math.hypot(c.vx - before.vx, c.vy - before.vy) > 50) hit = speedOf(before);
     }
     out.push(`mound (r 24) head-on, coasting at ${v} u/s: hit at ${f1(hit)} u/s, bounced back at ${f1(speedOf(c))} u/s (vx along the road ${f1(c.vx * Math.cos(p.h) + c.vy * Math.sin(p.h))})`);
   }

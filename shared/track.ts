@@ -1182,6 +1182,31 @@ function laneAt(track: Track, s: number, margin: number, prefer: number): number
  * SOLID_CLEAR from it). On a track without barrels, presses and trucks: s and clearLaneAt(s), exactly.
  */
 export function clearSpot(track: Track, s: number, margin = 4, prefer = 0): { s: number; lat: number } {
+  const at = spotNear(track, s, margin, prefer);
+  if (at !== null) return at;
+  const r = recoveryAt(track, s);
+  return { s: r, lat: clearLaneAt(track, r, margin, prefer) };
+}
+
+/**
+ * clearSpot on road `road` of a track (BR-PHYS, PLAN-BRANCH 2.5): on the main road (0) clearSpot exactly;
+ * on a branch its search on the branch's road, and where that finds no lane the recovery point recoveryFor
+ * gives (the branch's last one at or before s, else the main road's before the fork: user decision 6) and
+ * its lane, on that point's road.
+ */
+export function clearSpotOn(track: Track, road: number, s: number, margin = 4, prefer = 0): { road: number; s: number; lat: number } {
+  if (road === track.roadNo) {
+    const a = clearSpot(track, s, margin, prefer);
+    return { road, s: a.s, lat: a.lat };
+  }
+  const at = spotNear(track.branches[road - 1].road, s, margin, prefer);
+  if (at !== null) return { road, s: at.s, lat: at.lat };
+  const rf = recoveryFor(track, road, s);
+  return { road: rf.road, s: rf.s, lat: clearLaneAt(roadOf(track, rf.road), rf.s, margin, prefer) };
+}
+
+/** clearSpot's search on one road: the spot at s or just behind what is in the way, or null (the recovery point's turn). */
+function spotNear(track: Track, s: number, margin: number, prefer: number): { s: number; lat: number } | null {
   let at = s;
   for (let k = 0; k < 3; k++) {
     const lat = laneAt(track, at, margin, prefer);
@@ -1200,8 +1225,7 @@ export function clearSpot(track: Track, s: number, margin = 4, prefer = 0): { s:
     const p = pointAt(track, at), q = laneAt(track, at, margin, prefer);
     if (q !== null && overHazard(track, p.x - Math.sin(p.h) * q, p.y + Math.cos(p.h) * q, at)) break;
   }
-  const r = recoveryAt(track, s);
-  return { s: r, lat: clearLaneAt(track, r, margin, prefer) };
+  return null;
 }
 
 /** The world point `lat` units sideways (+ = right of travel) of the centerline at s, and its segment. */
@@ -1244,7 +1268,9 @@ export function wallAt(track: Track, s: number, side: number): number {
  * Without a widen on the track: def.halfWidth, exactly.
  */
 export function halfOf(track: Track, q: TrackQuery): number {
-  return track.widens.length === 0 ? track.def.halfWidth : halfOn(track, q.seg, q.s, q.side);
+  // BR-PHYS: a query of a track with branches may be on a branch: its road's (roadFor); the track's own otherwise.
+  const r = q.road === track.roadNo ? track : track.branches[q.road - 1].road;
+  return r.widens.length === 0 ? r.def.halfWidth : halfOn(r, q.seg, q.s, q.side);
 }
 
 /**
@@ -1267,7 +1293,8 @@ export function halfOn(track: Track, seg: number, s: number, side: number): numb
 
 /** The wall's distance from the centerline where a query is (its side, its s): halfOf plus the verge; track.wall without a widen, exactly. */
 export function wallOf(track: Track, q: TrackQuery): number {
-  return track.widens.length === 0 ? track.wall : halfOf(track, q) + track.def.verge;
+  const r = q.road === track.roadNo ? track : track.branches[q.road - 1].road; // BR-PHYS: the query's road (halfOf)
+  return r.widens.length === 0 ? r.wall : halfOf(r, q) + r.def.verge;
 }
 
 /**
@@ -1365,10 +1392,49 @@ export function queryTrack(track: Track, x: number, y: number): TrackQuery {
 /**
  * Nearest point searched only around `hint` (the car's last segment), so a car is never
  * snapped to a different part of the track that happens to pass close by.
+ * BR-PHYS (PLAN-BRANCH 2.2): on a track with branches the hint is a GLOBAL segment (CarState.seg:
+ * the main road's 0..n-1, then each branch's from its base; globalSeg): the hint's road is searched
+ * round it (LOCAL_WINDOW either side, clamped on a branch's open road) and, where that window touches
+ * a mouth (mouthAt), the other road round its segment there too; the nearer centreline wins, on a tie
+ * the hint's road (deterministic). The query's s and seg are on its road (q.road: roadOf). Without
+ * branches: today's call, byte for byte.
  */
 export function queryTrackNear(track: Track, x: number, y: number, hint: number): TrackQuery {
   // No global fallback: at a crossing that would snap a car onto the other road. A point
   // further than 2 * wall from its own section is lost (see isLost): a car falls, a shot dies.
+  if (track.branches.length === 0) return nearest(track, x, y, hint - LOCAL_WINDOW, LOCAL_WINDOW * 2 + 1);
+  return nearRoads(track, x, y, hint);
+}
+
+/** queryTrackNear on a track with branches (see above): the hint's road, and the other road in a mouth. */
+function nearRoads(track: Track, x: number, y: number, hint: number): TrackQuery {
+  const bs = track.branches;
+  const r = roadOfSeg(track, hint);
+  const road = r === 0 ? track : bs[r - 1].road;
+  let q = nearest(road, x, y, (r === 0 ? hint : hint - bs[r - 1].base) - LOCAL_WINDOW, LOCAL_WINDOW * 2 + 1);
+  const other = track.mouthAt[hint];
+  if (other !== undefined && other >= 0) {
+    const r2 = roadOfSeg(track, other);
+    const q2 = nearest(r2 === 0 ? track : bs[r2 - 1].road, x, y, (r2 === 0 ? other : other - bs[r2 - 1].base) - LOCAL_WINDOW, LOCAL_WINDOW * 2 + 1);
+    if (q2.dist < q.dist) q = q2;
+  }
+  return q;
+}
+
+/**
+ * The main road's query round a global hint, never a branch's (BR-PHYS: the server bots keep the main
+ * road until BR-BOTS gives them a route; a bot the physics put on a branch in a mouth still reads the
+ * main road). A branch hint goes to the main segment at its mapS. Without branches: queryTrackNear exactly.
+ */
+export function queryMain(track: Track, x: number, y: number, hint: number): TrackQuery {
+  if (track.branches.length > 0 && hint >= track.pts.length) {
+    const r = roadOfSeg(track, hint);
+    if (r > 0) {
+      const b = track.branches[r - 1];
+      const j = Math.max(0, Math.min(b.mapS.length - 1, hint - b.base));
+      hint = pointAt(track, b.mapS[j]).seg;
+    }
+  }
   return nearest(track, x, y, hint - LOCAL_WINDOW, LOCAL_WINDOW * 2 + 1);
 }
 
@@ -1381,14 +1447,14 @@ export function isLost(track: Track, q: TrackQuery): boolean {
 }
 
 /** Wrap a distance along the track into [0, length) (exactly s when already inside); on an open road (BR-SCHEMA) clamp it to [0, length]. */
-function wrapS(track: Track, s: number): number {
+export function wrapS(track: Track, s: number): number {
   const L = track.length;
   if (track.roadNo > 0) return s < 0 ? 0 : s > L ? L : s;
   return s >= 0 && s < L ? s : ((s % L) + L) % L;
 }
 
 /** How far apart two places ds apart in s are along the road: the nearer way round a closed road (BR-SCHEMA: just ds on an open one). */
-function alongGap(track: Track, ds: number): number {
+export function alongGap(track: Track, ds: number): number {
   return track.roadNo > 0 ? ds : Math.min(ds, track.length - ds);
 }
 
@@ -2398,9 +2464,20 @@ export function localSeg(track: Track, g: number): number {
   return r === 0 ? g : g - track.branches[r - 1].base;
 }
 
-/** A query's segment as a global one (the seg hint CarState stores). */
+/**
+ * A query's segment as a global one (the seg hint CarState stores). BR-PHYS: relative to the track queried:
+ * a query of a road on its own (a branch's road stepped as its own track) keeps its segment.
+ */
 export function globalSeg(track: Track, q: TrackQuery): number {
-  return q.road === 0 ? q.seg : track.branches[q.road - 1].base + q.seg;
+  return q.road === track.roadNo ? q.seg : track.branches[q.road - 1].base + q.seg;
+}
+
+/**
+ * The road a query of `track` is on (BR-PHYS): the track itself for its own road (always on a track without
+ * branches), else the branch's road (PlacedBranch.road). Every per-segment lookup of a query reads this.
+ */
+export function roadFor(track: Track, q: TrackQuery): Track {
+  return q.road === track.roadNo ? track : track.branches[q.road - 1].road;
 }
 
 /**
@@ -2421,7 +2498,7 @@ export function mainS(track: Track, q: TrackQuery): number {
  * u, and when there is none, the main road's recovery point at or before the fork (s0).
  */
 export function recoveryFor(track: Track, road: number, s: number): { road: number; s: number } {
-  if (road === 0) return { road: 0, s: recoveryAt(track, s) };
+  if (road === track.roadNo) return { road, s: recoveryAt(track, s) }; // BR-PHYS: the track's own road (0 on a track)
   const b = track.branches[road - 1];
   const r = recoveryAt(b.road, s);
   return r >= 0 ? { road, s: r } : { road: 0, s: recoveryAt(track, b.s0) };
@@ -2445,16 +2522,8 @@ export function queryRoads(track: Track, x: number, y: number, hint = -1): Track
     }
     return best;
   }
-  if (bs.length === 0) return queryTrackNear(track, x, y, hint);
-  const r = roadOfSeg(track, hint);
-  let q = queryTrackNear(roadOf(track, r), x, y, r === 0 ? hint : hint - bs[r - 1].base);
-  const other = track.mouthAt[hint];
-  if (other !== undefined && other >= 0) {
-    const r2 = roadOfSeg(track, other);
-    const q2 = queryTrackNear(roadOf(track, r2), x, y, r2 === 0 ? other : other - bs[r2 - 1].base);
-    if (q2.dist < q.dist) q = q2;
-  }
-  return q;
+  // BR-PHYS: the hinted rule is queryTrackNear's own (physics), so the two can never part.
+  return queryTrackNear(track, x, y, hint);
 }
 
 /** Advisor change 7: a main-road feature lo..hi in a mouth or within MOUTH_CLEAR past its gore (validateTrack's zone). */
