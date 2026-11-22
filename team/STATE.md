@@ -596,6 +596,8 @@ tmp/m4-move/m4-move-review-2.md). 2nd round -> user popup: send back. Fix round 
 PLAN-BRANCH approved (user popup, recommended answers; Fable "sound with changes", 9 binding). Tickets (all 'to do', start after
 M4-TRACKS): BR-SCHEMA 123jpnbfgh9 -> BR-PHYS 123jpnbfgha + BR-BAKE 123jpnbfghb (Fable) -> BR-BOTS 123jpnbfghc + BR-MAP 123jpnbfghd
 (Fable) -> Branch Yard taste -> BR-TRACKS 123jpnbfghe.
+MOVE F3-edge fixed: 76719f1 (probe 128/3900 -> 0/3900; 893/893 + 133/133 x2); re-check sent to ctx_178052ad9776. Themes (desert, city,
+jungle + scrapyard; looks + surfaces; fixed per track): an Opus Plan agent drafts PLAN-THEMES (then Fable review, user approval).
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
