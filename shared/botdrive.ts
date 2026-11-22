@@ -65,7 +65,7 @@
 // and then a late brake into a bend (the brake trigger's lookahead shortened, then braking below the
 // bend's speed: it arrives fast and scrubs), a wide line (the apex bias turned to the outside), a
 // wobble after a landing (a few ticks of over-correcting steer, decaying) and a hesitation after an
-// overtake (a short lift). Drawn from a hash of (BotMem.seed, BotView.lap, the segment, the kind of
+// overtake or a hit (a short lift: BotView.hp, fed by both adapters). Drawn from a hash of (BotMem.seed, BotView.lap, the segment, the kind of
 // moment), never Math.random or the random id, so a rerun is identical; latched for the bend (or the
 // few ticks) in BotMem.mistake. Only on its own racing line, with no hole, mound, surface, ramp, gap,
 // island, truck or mover within MISTAKE_LOOK (longer than RAMP_APPROACH plus a mistake's length), and
@@ -319,6 +319,8 @@ export interface BotView {
   rt?: number;
   /** Laps the car has completed (HARD-2: a mistake's draw). Absent: 0. */
   lap?: number;
+  /** The car's hit points (HARD-2: a drop is a hit, a moment a hesitation may follow). Absent: no hits seen. */
+  hp?: number;
 }
 
 /** HARD-2: the kinds of Hard's mistakes (see the top of this file). */
@@ -329,7 +331,9 @@ export const MISTAKE_KINDS: readonly MistakeKind[] = ["late-brake", "wide", "wob
 export interface Mistake {
   kind: MistakeKind;
   size: number; // 0..1
+  from: number; // the s it began at
   end: number; // the s it ends at (or earlier: after n steps, or when an exclusion comes up)
+  delay: number; // a late brake: how far past `from` the bend is seen (0 for the others)
   t: number; // steps since it began
   n: number; // steps it lasts at most
   sign: number; // a wobble's first swing (+1 right)
@@ -373,8 +377,10 @@ export interface BotMem {
   mistake: Mistake | null;
   /** HARD-2: in a bend (the bend-entry latch's hysteresis) ... */
   inBend: boolean;
-  /** ... and in the air last step (a landing: the c.air edge). */
+  /** ... and in the air last step (a landing: the c.air edge) ... */
   flew: boolean;
+  /** ... and its hit points last step (BotView.hp; -1: none seen yet), for a hit's edge. */
+  hp: number;
   /** HARD-2: told of each mistake as it begins (the dev flag's server log; the tests), or null. */
   onMistake: ((kind: MistakeKind, size: number, s: number, lap: number) => void) | null;
 }
@@ -390,7 +396,7 @@ export function newBotMem(
   return {
     level, lateral, weapons: level !== "easy", mineOffset, slow: 0, reversing: 0, backup: null, backedUpFor: -1, useWake: level !== "easy", wake: null, wakeRest: 0, lastMine: -Infinity,
     islandBack: 0, islandKind: 0, islandSide: 0, islandCool: 0, truckS: -1, truckJump: false,
-    seed, hard: HARD, mistake: null, inBend: false, flew: false, onMistake: null,
+    seed, hard: HARD, mistake: null, inBend: false, flew: false, hp: -1, onMistake: null,
   };
 }
 
@@ -412,6 +418,7 @@ export function resetBotMem(mem: BotMem): void {
   mem.mistake = null;
   mem.inBend = false;
   mem.flew = false;
+  mem.hp = -1;
 }
 
 /** Distance from `from` forward to `to` along the track, in [0, length). */
@@ -985,7 +992,7 @@ function headingIntoHole(track: Track, x: number, y: number, vx: number, vy: num
   return false;
 }
 
-/** HARD-2: set by wakeLane when a pass is done this step (botControls clears it before the call, for Hard with mistakes on). */
+/** HARD-2: set by wakeLane when a pass is done or given up this step (botControls clears it before the call, for Hard with mistakes on). */
 const PASS = { done: false };
 
 /**
@@ -1028,7 +1035,10 @@ function wakeLane(
         return null;
       }
       const lane = olat + w.side * WAKE_SIDE;
-      if (w.steps > WAKE_PASS_MAX || a > WAKE_TO || !mineFree(lane)) return giveUp();
+      if (w.steps > WAKE_PASS_MAX || a > WAKE_TO || !mineFree(lane)) {
+        PASS.done = true; // HARD-2: an overtake given up, a moment a hesitation may follow too
+        return giveUp();
+      }
       return { lane, coast: false };
     }
     if (bend > WAKE_STRAIGHT || a < 0 || a > WAKE_TO + 20 || !leads(o)) {
@@ -1114,15 +1124,15 @@ export function apexLane(lateral: number, turn: number, halfWidth: number, h: Ha
 
 /**
  * HARD-2: a wide line, the apex bias turned to the outside of the bend: the racing line moved away
- * from the inside by (0.25 + 1.25 x size) x HARD.apex at full strength (as apexLane's ramp-up: size 0
- * misses the apex, size 1 runs 1.5 apex biases wide), kept 6 units inside the asphalt edge.
+ * from the inside by (0.25 + 1.75 x size) x HARD.apex at full strength (as apexLane's ramp-up: size 0
+ * misses the apex, size 1 runs two apex biases wide), kept 6 units inside the asphalt edge.
  */
 export function wideLane(lateral: number, turn: number, halfWidth: number, h: HardParams, size: number): number {
   const bend = Math.abs(turn);
   if (bend <= h.apexFrom) return lateral;
   const k = Math.min(1, (bend - h.apexFrom) / (h.apexFull - h.apexFrom));
   const max = halfWidth - CAR_WIDTH / 2 - 6;
-  return clamp(lateral - Math.sign(turn) * h.apex * (0.25 + 1.25 * size) * k, -max, max);
+  return clamp(lateral - Math.sign(turn) * h.apex * (0.25 + 1.75 * size) * k, -max, max);
 }
 
 /** Track coordinates of a point near the track `de` (about) ahead of s: its s and lateral offset (+ = right of travel). */
@@ -1247,13 +1257,20 @@ const MISTAKE_BEHIND = CAR_LENGTH / 2 + 4;
 /** The bend-entry latch: a bend begins when the bend lookahead turns more than BEND_ON, ends below BEND_OFF. */
 const BEND_ON = 0.5;
 const BEND_OFF = 0.3;
-/** Late brake: the brake trigger's lookahead shortened by this x size, then the bend's speed lowered by LATE_SCRUB x size. */
+/**
+ * Late brake: the brake trigger late by this x size of the bend lookahead (the bend is seen that far
+ * past its entry, still before the bend: the lookahead shortened for its trigger), then on the brakes
+ * too hard: down to the bend's speed less LATE_SCRUB x size, held through the bend. (Seen late alone it
+ * would gain time: the shipped bends take more speed than Hard asks for.)
+ */
 const LATE_LOOK = 0.6;
-const LATE_SCRUB = 0.25;
+const LATE_SCRUB = 0.4;
 /** Wobble: an added steer of WOBBLE_AMP0 + WOBBLE_AMP x size, swinging with this period (steps), decaying over 30 + 40 x size steps. */
 const WOBBLE_AMP0 = 0.3;
 const WOBBLE_AMP = 0.5;
 const WOBBLE_PERIOD = 24;
+/** ... and the throttle held to 1 - WOBBLE_LIFT x size for its first half. */
+const WOBBLE_LIFT = 0.5;
 /** The speed the lap's bends are counted at (mistakeSpots). */
 const SPOT_V = 400;
 
@@ -1340,10 +1357,12 @@ export function mistakeSpots(track: Track, bendLook: number): number {
 /**
  * One step of Hard's mistakes (mistakeRate > 0 only): the one under way goes on (ended when `free`
  * is false, after its steps or past its end), the bend-entry latch moves, and at a bend entry, a
- * landing or a pass done, with `free` and none under way, a new one may begin (mistakeDraw against
+ * landing, a pass done or given up, or a hit, with `free` and none under way, a new one may begin (mistakeDraw against
  * the rate's chance, then mistakeClear): {kind, size, end} latched in mem.mistake.
  */
-function mistakeStep(view: BotView, mem: BotMem, s: number, seg: number, v: number, bend: number, free: boolean, landed: boolean, passed: boolean): Mistake | null {
+function mistakeStep(
+  view: BotView, mem: BotMem, s: number, seg: number, v: number, bend: number, free: boolean, landed: boolean, passed: boolean, hit: boolean,
+): Mistake | null {
   const track = view.track, hp = mem.hard;
   let m = mem.mistake;
   if (m !== null) {
@@ -1354,19 +1373,20 @@ function mistakeStep(view: BotView, mem: BotMem, s: number, seg: number, v: numb
   if (bend > BEND_ON) mem.inBend = true;
   else if (bend < BEND_OFF) mem.inBend = false;
   if (m !== null || !free) return m;
-  const what = entered ? 1 : landed ? 2 : passed ? 3 : 0;
+  const what = entered ? 1 : landed ? 2 : passed ? 3 : hit ? 4 : 0;
   if (what === 0) return null;
   const lap = view.lap ?? 0;
   const spots = mistakeSpots(track, hp.bendLook);
   const chance = spots > 0 ? Math.min(1, hp.mistakeRate / spots) : 0;
   if (mistakeDraw(mem.seed, lap, seg, 4 * what) >= chance || !mistakeClear(track, s)) return null;
-  const kind: MistakeKind = what === 1 ? (mistakeDraw(mem.seed, lap, seg, 4 * what + 1) < 0.5 ? "late-brake" : "wide") : what === 2 ? "wobble" : "hesitate";
+  const kind: MistakeKind = what === 1 ? (mistakeDraw(mem.seed, lap, seg, 4 * what + 1) < 0.5 ? "late-brake" : "wide") : what === 2 ? "wobble" : "hesitate"; // 3, 4: a pass, a hit
   const size = Math.min(1, hp.mistakeSize * (0.75 + 0.5 * mistakeDraw(mem.seed, lap, seg, 4 * what + 2)));
   // A bend's: on through the bend seen at its entry (its lookahead) and a little past; a wobble or a
   // hesitation: a few steps.
   const len = what === 1 ? Math.min(MISTAKE_MAX, 20 + Math.max(120, v * 0.9) * hp.bendLook + 150) : MISTAKE_MAX;
   const n = what === 1 ? 360 : what === 2 ? Math.round(30 + 40 * size) : Math.round(12 + 36 * size);
-  m = mem.mistake = { kind, size, end: s + len, t: 0, n, sign: mistakeDraw(mem.seed, lap, seg, 4 * what + 3) < 0.5 ? -1 : 1 };
+  const delay = kind === "late-brake" ? LATE_LOOK * size * (20 + Math.max(120, v * 0.9) * hp.bendLook) : 0;
+  m = mem.mistake = { kind, size, from: s, end: s + len, delay, t: 0, n, sign: mistakeDraw(mem.seed, lap, seg, 4 * what + 3) < 0.5 ? -1 : 1 };
   mem.onMistake?.(kind, size, s, lap);
   return m;
 }
@@ -1395,10 +1415,13 @@ export function botControls(view: BotView, mem: BotMem): BotControls {
   const hp = mem.hard; // Hard's constants for this race (HARD itself unless a room's dev tune)
   // HARD-2: Hard's mistakes (mistakeRate 0, the default: none of the mistake code runs).
   const errs = hard && hp.mistakeRate > 0;
-  let landed = false;
+  let landed = false, hit = false;
   if (errs) {
     landed = mem.flew;
     mem.flew = false;
+    const hp = view.hp ?? -1;
+    hit = hp >= 0 && mem.hp >= 0 && hp < mem.hp;
+    mem.hp = hp;
   }
   const track = view.track;
   const q = queryTrackNear(track, c.x, c.y, c.seg);
@@ -1487,7 +1510,7 @@ export function botControls(view: BotView, mem: BotMem): BotControls {
   if (errs) {
     const free = view.raceOn && view.raceSteps > MISTAKE_FROM && !hole.holes && !hole.dodge && !ramp && !jump && !tk && !split && movers === 0 &&
       !mem.wake && !cell && !mem.backup && mem.reversing === 0 && mem.islandBack === 0;
-    err = mistakeStep(view, mem, q.s, q.seg, v, bend, free, landed, PASS.done);
+    err = mistakeStep(view, mem, q.s, q.seg, v, bend, free, landed, PASS.done, hit);
     if (err !== null && err.kind === "wide") {
       // Running wide: the lane must cost nothing (laneFor from it, as its racing line) and pass no mine.
       const wide = wideLane(mem.lateral, turn, track.def.halfWidth, hp, err.size);
@@ -1513,24 +1536,23 @@ export function botControls(view: BotView, mem: BotMem): BotControls {
     const amp = (WOBBLE_AMP0 + WOBBLE_AMP * err.size) * (1 - err.t / err.n);
     steer = clamp(steer + err.sign * amp * Math.sin((2 * Math.PI * err.t) / WOBBLE_PERIOD), -1, 1);
   }
-  // HARD-2 late brake: only the brake trigger looks shorter (the bend is seen late); `bend` (the
-  // slipstream, the apex, the bend latch) keeps the full lookahead.
+  // HARD-2 late brake: only the brake trigger is late (the bend is seen err.delay after its entry);
+  // `bend` (the slipstream, the apex, the bend latch) is unchanged.
   let tb = bend;
-  if (err !== null && err.kind === "late-brake") {
-    tb = Math.abs(angleDiff(near, pointAt(track, q.s + 20 + Math.max(120, v * 0.9) * hp.bendLook * (1 - LATE_LOOK * err.size)).h));
-  }
+  if (err !== null && err.kind === "late-brake" && ahead(track, err.from, q.s) < err.delay) tb = 0;
   let target = tb > 1.4 ? 200 : tb > 0.9 ? 260 : tb > 0.5 ? 330 : 1000;
   const scale = CORNER_SCALE[view.carType ?? DEFAULT_CAR];
   if (scale !== 1) target *= scale;
   if (easy) target *= EASY_CORNER;
   if (hard) target *= hp.corner;
-  if (err !== null && err.kind === "late-brake" && tb > 0.5) target *= 1 - LATE_SCRUB * err.size; // seen late: on the brakes too hard
+  if (err !== null && err.kind === "late-brake" && tb > 0.5) target *= 1 - LATE_SCRUB * err.size;
   // Among holes and mounds: slow enough to weave. What moves and the trucks only steer the lane (M4-MOVE).
   if (hole.holes > movers) target = Math.min(target, HOLE_SPEED);
   let throttle = v > target + (hard ? hp.brakeBand : 25) ? -1 : v > target ? 0 : 1;
   // No ramming; never on a ramp approach (the jump needs the speed: a bump costs less than a fall).
   if (!ramp && !jump && (coast || (mem.useWake && !easy && closingOnCar(view, c, dir))) && throttle > 0) throttle = 0;
   if (err !== null && err.kind === "hesitate" && throttle > 0) throttle = 0; // HARD-2: a short lift (a ramp below still wins)
+  else if (err !== null && err.kind === "wobble" && err.t < err.n / 2 && throttle > 1 - WOBBLE_LIFT * err.size) throttle = 1 - WOBBLE_LIFT * err.size; // and off the gas a little while it swings
   if (ramp || jump) throttle = 1; // Easy too: the cap would leave it short of some jumps (a truck's: the band would be solid)
   else if (easy && throttle > EASY_THROTTLE) throttle = EASY_THROTTLE;
   // A press that will be down as the bot gets there, across its lane (no open one in reach): brake and

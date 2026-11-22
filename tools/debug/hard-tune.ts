@@ -36,11 +36,14 @@ import type { Transport } from "../../client/net";
 import { botTrace } from "../../server/bots";
 import { Room, Rooms, type Player, type Session } from "../../server/room";
 import { newBotSeat } from "../../server/bots";
-import { CORNER_SCALE, HARD, type BotLevel } from "../../shared/botdrive";
+import { CORNER_SCALE, HARD, MISTAKE_KINDS, type BotLevel, type BotTune, type MistakeKind } from "../../shared/botdrive";
 import { CAR_TYPES, type CarType } from "../../shared/cars";
 import { wallLimit, type CarState } from "../../shared/physics";
 import { decode, encode, type ClientMsg, type GameEvent, type ServerMsg } from "../../shared/protocol";
-import { queryTrackNear } from "../../shared/track";
+import { BARREL_R, PRESS_DEPTH, queryTrackNear, type Track } from "../../shared/track";
+import { islandContact } from "./split-tune";
+import { moveContact } from "./move-tune";
+import { touchesMound } from "./surf-tune";
 import { CAR_HP } from "../../shared/weapons";
 import { botShopping } from "../../shared/botshop";
 import { BotDriver } from "../../scripts/bot-ai";
@@ -78,7 +81,7 @@ export interface GoldenRun {
  * retires at GO each time). Hash of every tick's controls (by add order) and car states, and the
  * wallets after adding and after every race.
  */
-export function goldenServer(track: string, levels: BotLevel[], races = 2, laps = 3): GoldenRun {
+export function goldenServer(track: string, levels: BotLevel[], races = 2, laps = 3, tune?: BotTune): GoldenRun {
   const h = createHash("sha256");
   const room = new Room("GOLD", laps, CAR_HP);
   let now = 1000, tick = 0;
@@ -108,8 +111,10 @@ export function goldenServer(track: string, levels: BotLevel[], races = 2, laps 
       for (const b of bots) feed(h, carVals(b.car));
     };
     for (let r = 0; r < races; r++) {
-      const e = room.start(host, now);
+      // HARD-2: with a tune, the host sets it through the dev message (the flag on) and the race begins with it.
+      const e = tune ? withDevBots(() => room.setBotTune(host, tune) ?? room.start(host, now)) : room.start(host, now);
       if (e) throw new Error(e);
+      if (tune) for (const b of bots) b.bot!.mem.onMistake = null; // no server log lines
       while (room.phase !== "racing") step();
       if (room.retire(host)) throw new Error("retire");
       for (let n = 0; room.phase === "racing" && n < 60 * 600; n++) step();
@@ -269,6 +274,12 @@ export interface CarRow {
   mines: number; // dropped
   mineHits: number; // ... that hit someone
   wallet: string; // after the last race
+  // HARD-2:
+  mistakes: Record<MistakeKind, number>; // begun, by kind
+  mistakeSteps: number; // steps with a mistake under way
+  mistakeFalls: number; // falls begun while a mistake was under way or within 3 s of one
+  badZone: number; // ... of them in an excluded zone (zoneBusy: a feature near, or the slipstream, a back-up, reversing, backing off an island)
+  obstacles: number; // contacts begun with a tyre mound, an island, a barrel, a press or a truck
 }
 
 export interface RaceOpts {
@@ -280,6 +291,7 @@ export interface RaceOpts {
   races?: number; // races in one room, the bots shopping between (default 1)
   hostBot?: BotLevel; // the host drives as a sixth bot of this level (seat 5: lane -36); else it retires at GO
   weapons?: boolean; // default true
+  tune?: BotTune; // HARD-2: the room's Bot tune knob (set by the host's dev message, the flag on for it)
 }
 
 /** Races of server bots on the sim clock (deterministic). */
@@ -298,7 +310,8 @@ export function runRaces(o: RaceOpts): CarRow[] {
   let now = 1000, tick = 0;
   const host = room.addPlayer("Host", { conn, room: null, player: null } as Session, now) as Player;
   if (room.trackId !== o.track) {
-    const e = room.setTrack(host, o.track);
+    // A test track (surf-yard, split-yard, move-yard) needs the dev track flag to be picked.
+    const e = withEnv("SCRAP_DEV_TRACK", TEST_TRACK_IDS.has(o.track) ? o.track : process.env.SCRAP_DEV_TRACK, () => room.setTrack(host, o.track));
     if (e) throw new Error(e);
   }
   const bots = o.levels.map((l, i) => {
@@ -314,7 +327,9 @@ export function runRaces(o: RaceOpts): CarRow[] {
   const rows: CarRow[] = field.map((p) => ({
     name: p.name, level: p.bot?.level ?? o.hostBot!, car: p.carType, lapTicks: [], finish: [], place: [], earned: [],
     falls: 0, hitFalls: 0, walls: 0, mineWalls: 0, dirt: 0, wrecks: 0, rivets: 0, rivetHits: 0, mines: 0, mineHits: 0, wallet: "",
+    mistakes: { "late-brake": 0, wide: 0, wobble: 0, hesitate: 0 }, mistakeSteps: 0, mistakeFalls: 0, badZone: 0, obstacles: 0,
   }));
+  const spans = featureSpans(room.track);
   const idx = new Map(field.map((p, k) => [p.id, k]));
   const wall = wallLimit(room.track);
   const step = () => {
@@ -323,8 +338,12 @@ export function runRaces(o: RaceOpts): CarRow[] {
     room.tick(tick, now);
   };
   for (let r = 0; r < (o.races ?? 1); r++) {
-    const e = room.start(host, now);
+    const e = o.tune ? withDevBots(() => room.setBotTune(host, o.tune) ?? room.start(host, now)) : room.start(host, now);
     if (e) throw new Error(e);
+    // HARD-2: count each bot's mistakes (in place of the dev flag's server log).
+    field.forEach((p, k) => {
+      if (p.bot) p.bot.mem.onMistake = (kind) => void rows[k].mistakes[kind]++;
+    });
     if (o.hostBot) {
       // The host's seat drives as a bot from the grid on (a tool-only trick: a room seats 6 with its host).
       host.bot = newBotSeat(o.hostBot, 5, 99);
@@ -332,7 +351,7 @@ export function runRaces(o: RaceOpts): CarRow[] {
     }
     while (room.phase !== "racing") step();
     if (!o.hostBot && room.retire(host)) throw new Error("retire");
-    const prev = field.map(() => ({ fall: 0, wreck: 0, lap: 0, lapAt: 0, wall: false }));
+    const prev = field.map(() => ({ fall: 0, wreck: 0, lap: 0, lapAt: 0, wall: false, obstacle: false, err: -Infinity }));
     const spun = new Map<string, number>();
     const hitAt = new Map<string, number>();
     const ammo = field.map((p) => ({ ...p.wallet.ammo }));
@@ -359,8 +378,10 @@ export function runRaces(o: RaceOpts): CarRow[] {
       field.forEach((p, k) => {
         const c = p.car, pr = p.progress, was = prev[k];
         if (!c || !pr) return;
+        if (p.bot?.mem.mistake) was.err = rt;
         if (c.fall > 0 && was.fall === 0) {
           rows[k].falls++;
+          if (rt - was.err <= 180) rows[k].mistakeFalls++;
           if (rt - (hitAt.get(p.id) ?? -Infinity) <= 180) rows[k].hitFalls++;
         }
         if (c.wreck > 0 && was.wreck === 0) rows[k].wrecks++;
@@ -375,6 +396,15 @@ export function runRaces(o: RaceOpts): CarRow[] {
             else rows[k].walls++;
           }
           was.wall = atWall;
+          const hit = touchesMound(room.track, c) || islandContact(room.track, c) !== null || moveContact(room.track, c, room.rt) !== null;
+          if (hit && !was.obstacle) rows[k].obstacles++;
+          was.obstacle = hit;
+        }
+        const m = p.bot?.mem;
+        if (m && m.mistake !== null) {
+          rows[k].mistakeSteps++;
+          const s = queryTrackNear(room.track, c.x, c.y, c.seg).s;
+          if (m.wake || m.backup || m.reversing > 0 || m.islandBack > 0 || zoneBusy(room.track, spans, s)) rows[k].badZone++;
         }
         if (pr.lap > was.lap) {
           rows[k].lapTicks.push(rt - was.lapAt);
@@ -394,6 +424,118 @@ export function runRaces(o: RaceOpts): CarRow[] {
   }
   field.forEach((p, k) => (rows[k].wallet = `${p.wallet.scrap} scrap, engine ${p.wallet.levels.engine} tyres ${p.wallet.levels.tyres} welder ${p.wallet.levels.welder}, ${p.wallet.ammo.rivets} rivets ${p.wallet.ammo.mines} mines`));
   return rows;
+}
+
+
+// ---- HARD-2: Hard's mistakes and the Bot tune knob ------------------------------------------
+
+/** The tracks HARD-2's falls-0 gate drives: the shipped ones and the three test tracks (advisor change 10). */
+export const TEST_TRACK_IDS = new Set(["surf-yard", "split-yard", "move-yard"]);
+export const MISTAKE_TRACKS = [...HARD_TRACKS, ...TEST_TRACK_IDS];
+
+/** Run fn with env `name` set to `value` (undefined = unset), then put it back. */
+export function withEnv<T>(name: string, value: string | undefined, fn: () => T): T {
+  const old = process.env[name];
+  if (value === undefined) delete process.env[name];
+  else process.env[name] = value;
+  try {
+    return fn();
+  } finally {
+    if (old === undefined) delete process.env[name];
+    else process.env[name] = old;
+  }
+}
+
+/** Run fn with the dev flag SCRAP_DEV_BOTS=1 (server/room.ts devBotsOn). */
+export function withDevBots<T>(fn: () => T): T {
+  return withEnv("SCRAP_DEV_BOTS", "1", fn);
+}
+
+/**
+ * Every feature of a track as an s span, written apart from botdrive's mistakeClear (an independent
+ * check): ramps (to the lip), gaps, holes, tyre mounds, surfaces, widens, islands, trucks, barrel
+ * rows and presses.
+ */
+export function featureSpans(t: Track): [number, number][] {
+  const out: [number, number][] = [];
+  for (const r of t.ramps) out.push([r.s, r.s + r.len]);
+  for (const g of t.gaps) out.push([g.s0, g.s1]);
+  for (const h of t.holes) out.push([h.s - h.r, h.s + h.r]);
+  for (const m of t.tyres) out.push([m.s - m.r, m.s + m.r]);
+  for (const f of t.surfaces) out.push([f.s0, f.s1]);
+  for (const w of t.widens) out.push([w.s0, w.s1]);
+  for (const i of t.islands) out.push([i.s0, i.s1]);
+  for (const k of t.trucks) out.push([k.s, k.s + k.len]);
+  for (const b of t.barrels) out.push([b.s - BARREL_R, b.s + BARREL_R]);
+  for (const g of t.presses) out.push([g.s - PRESS_DEPTH / 2, g.s + PRESS_DEPTH / 2]);
+  return out;
+}
+
+/** The excluded zone of HARD-2's test: a feature from 15 behind s to 650 ahead (RAMP_APPROACH: a ramp in view; every hole within the lane search's look). */
+export function zoneBusy(t: Track, spans: readonly [number, number][], s: number): boolean {
+  const L = t.length, from = s - 15, len = 15 + 650;
+  const ahead = (a: number, b: number) => (((b - a) % L) + L) % L;
+  return spans.some(([a, b]) => ahead(from, a) <= len || ahead(a, from) <= b - a);
+}
+
+/** A tally of mistakes by kind over rows. */
+export function mistakeCounts(rows: readonly CarRow[]): Record<MistakeKind, number> {
+  const out = { "late-brake": 0, wide: 0, wobble: 0, hesitate: 0 } as Record<MistakeKind, number>;
+  for (const r of rows) for (const k of MISTAKE_KINDS) out[k] += r.mistakes[k];
+  return out;
+}
+
+/** A knob: today's Hard with these values set. */
+export function tuneOf(t: Partial<BotTune>): BotTune {
+  return { rate: HARD.mistakeRate, size: HARD.mistakeSize, pace: 1, aim: HARD.rivetSlack, ...t };
+}
+
+/** One configuration's traffic numbers (3 Hard bots, 3 laps, every car set, per track list). */
+export interface TuneRow {
+  label: string;
+  lap: number; // mean lap over every bot, lap and race (ticks)
+  falls: number;
+  walls: number;
+  dirt: number;
+  obstacles: number;
+  mistakes: Record<MistakeKind, number>;
+  perLap: number; // mistakes begun per bot per lap
+  badZone: number;
+  mistakeFalls: number;
+  hitFalls: number; // falls within 3 s of the car being hit (a rivet or a mine)
+  laps: number;
+  wrecks: number;
+}
+
+/** 3 Hard bots in traffic (weapons on) with `tune` on `tracks`, every car set (mix, all Sport, all Racer, all Truck): summed. */
+export function tuneTraffic(
+  label: string, tune: BotTune | undefined, tracks: readonly string[] = HARD_TRACKS, levels: BotLevel[] = ["hard", "hard", "hard"], weapons = true,
+): { row: TuneRow; runs: { key: string; rows: CarRow[] }[] } {
+  const runs: { key: string; rows: CarRow[] }[] = [];
+  for (const track of tracks) {
+    for (const cars of [undefined, ...CAR_TYPES.map((t) => [t, t, t, t, t])]) {
+      runs.push({ key: `${track} ${cars ? cars[0] : "mix"}`, rows: runRaces({ track, levels, cars: cars?.slice(0, levels.length), tune, weapons }) });
+    }
+  }
+  const all = runs.flatMap((r) => r.rows.filter((x) => x.level === "hard"));
+  const laps = all.reduce((a, r) => a + r.lapTicks.length, 0);
+  const mistakes = mistakeCounts(all);
+  return {
+    runs,
+    row: {
+      label, laps, lap: all.reduce((a, r) => a + r.lapTicks.reduce((x, y) => x + y, 0), 0) / Math.max(1, laps),
+      falls: sum(all, (r) => r.falls), walls: sum(all, (r) => r.walls), dirt: sum(all, (r) => r.dirt), obstacles: sum(all, (r) => r.obstacles),
+      mistakes, perLap: MISTAKE_KINDS.reduce((a, k) => a + mistakes[k], 0) / Math.max(1, laps), badZone: sum(all, (r) => r.badZone), wrecks: sum(all, (r) => r.wrecks),
+      mistakeFalls: sum(all, (r) => r.mistakeFalls), hitFalls: sum(all, (r) => r.hitFalls),
+    },
+  };
+}
+
+/** A table line: lap time and its loss against `base`, falls, contacts, mistakes by kind. */
+export function tuneLine(r: TuneRow, base: TuneRow): string {
+  const loss = ((r.lap / base.lap - 1) * 100).toFixed(2);
+  return `${r.label.padEnd(26)} lap ${(r.lap / 60).toFixed(2)} s (${Number(loss) >= 0 ? "+" : ""}${loss}%)  falls ${r.falls} (${r.hitFalls} after a hit, ${r.mistakeFalls} within 3 s of a mistake)  walls ${r.walls}  obstacles ${r.obstacles}  dirt ${r.dirt}  wrecks ${r.wrecks}  ` +
+    `mistakes ${r.perLap.toFixed(2)}/lap (late ${r.mistakes["late-brake"]}, wide ${r.mistakes.wide}, wobble ${r.mistakes.wobble}, hesitate ${r.mistakes.hesitate}; in an excluded zone: ${r.badZone} steps)`;
 }
 
 const median = (xs: number[]) => {
