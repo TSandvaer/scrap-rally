@@ -52,7 +52,7 @@
 // The scrapyard is the theme every shipped track has: its tiles are what they were, bit for bit.
 
 import { MAX_PLAYERS } from "../../shared/protocol";
-import { BARREL_R, gapAt, gridSlot, holeAt, pointAt, PRESS_DEPTH, PUDDLE_TRACTION_INSET, queryTrack, TRUCK_BAND, TRUCK_CAB, TRUCK_HALF, wallAt, widenAt, type Track, type Vec } from "../../shared/track";
+import { BARREL_R, gapAt, gridSlot, halfOn, holeAt, pointAt, PRESS_DEPTH, PUDDLE_TRACTION_INSET, queryMain, queryRoads, queryTrack, TRUCK_BAND, TRUCK_CAB, TRUCK_HALF, wallAt, widenAt, type Gap, type Track, type Vec } from "../../shared/track";
 import type { CarView } from "../render";
 import { BAYER4, PALETTE, type PaletteName } from "./palette";
 import { KEEP_OFF, sceneryFor, sceneryOf, type Scenery } from "./theme";
@@ -349,9 +349,21 @@ interface Art {
   dash0: Float64Array; // distance from the start of its stretch of ground (the kerb and line dashes)
   groove0: Float64Array; // the racing line's offset from the centreline at a and at b
   groove1: Float64Array;
-  gap: Int16Array; // -1 = ground, else the index of its gap
+  // -1 = ground, else the index of its gap (in `gaps`). Ground of a shortcut road (BR-BAKE) is
+  // -1 less its road number: -2 on the first branch's road, -3 on the second's. A run of
+  // neighbours ends where this changes, so it ends where the road does.
+  gap: Int16Array;
   capA: Uint8Array; // the piece ends flat here (a gap begins or ends), no round join
   capB: Uint8Array;
+  // BR-BAKE (PLAN-BRANCH.md 2.7): the shortcut roads' pieces come after the main road's.
+  road: Uint8Array; // the road a piece is on: 0 the main road, k the road of branch k - 1
+  roads: Track[]; // the main road, then each branch's road
+  // What a road's distances have added to them here (0 on the main road): a piece's s0, a
+  // feature's s, a gap's ends. A shortcut's own distance u is then never taken for the main
+  // road's s, and every test of the bake that compares the two stays as it is.
+  sBase: Float64Array;
+  gaps: readonly Gap[]; // every road's gaps (the track's own list without a branch), distances as the pieces'
+  mouths: Mouth[]; // what is painted where a shortcut leaves and rejoins (empty without a branch)
   junk: Junk[]; // heaps outside the walls, far ones first
   piles: Junk[][]; // per gap: the scrap that fills it (empty unless gap.scrap)
   stains: Blob[]; // on the dirt
@@ -360,12 +372,19 @@ interface Art {
   patches: { s0: number; s1: number; l0: number; l1: number }[]; // repairs, by distance and lateral offset
   posts: Int32Array; // barrier posts: x, y of each one's top-left pixel
   holes: { x: number; y: number; r: number; rim: Float64Array; cracks: Float64Array[] }[];
-  ramps: { s0: number; s1: number; frame: Frame; reach: number; chevrons: Float64Array[][] }[]; // chevrons: [outline, inside] per arrow
-  ends: { gap: number; s: number; dir: number; frame: Frame }[]; // a gap's two ends on the road
+  // w: how far a ramp's plate reaches either side of the centreline (its road's wall less 1).
+  ramps: { s0: number; s1: number; w: number; frame: Frame; reach: number; chevrons: Float64Array[][] }[]; // chevrons: [outline, inside] per arrow
+  // hw: its road's asphalt half-width there (the hazard stripes lie on the asphalt and the kerb).
+  ends: { gap: number; s: number; dir: number; hw: number; frame: Frame }[]; // a gap's two ends on the road
   start: Frame;
   marks: Float64Array[]; // grid slot marks: quads (x, y pairs)
-  recX: Float64Array; // the recovery points, world units
+  recX: Float64Array; // the main road's recovery points, world units
   recY: Float64Array;
+  // Per road (index 0 unused): a shortcut's own recovery points, and the main road's recovery
+  // point a fall before the first of them goes back to (shared/track.ts recoveryFor).
+  recRoadX: Float64Array[];
+  recRoadY: Float64Array[];
+  recBack: Int32Array;
   // M4-WORLD. A widened road (a split's): the bands of the road are measured from the widened
   // edge, so per piece the extra width at a and at b, left and right of travel (world units).
   wide: boolean; // some widen on the track
@@ -378,6 +397,40 @@ interface Art {
   flats: Flat[]; // what is painted flat on the road, in the order it is painted
   things: Thing[]; // what stands on it, the order it is drawn in
 }
+
+/**
+ * What is painted on the road where a shortcut leaves the main road or rejoins it (BR-BAKE;
+ * PLAN-BRANCH.md 2.7, user decision 4: painted arrows, no text). One per gore.
+ * - The wedge: worn stripes on the asphalt the two roads share, between them, from where their
+ *   centrelines are 2 * MOUTH_LANE apart (its tip) to where their kerbs begin (the tip of the
+ *   gravel between them): what is further than MOUTH_LANE from both centrelines. A pixel knows
+ *   its own road and its distance from it (classify), so the wedge is told by those: on the main
+ *   road's stretch m0..m1 on the side `sideM` of it, on the shortcut's b0..b1 (distances as its
+ *   pieces') on its side `sideB`. `frame`: at the tip, pointing at the gravel's tip `len` away.
+ * - The arrows (a fork only): one down each road, polygons in view pixels.
+ */
+interface Mouth {
+  x0: number; // the box the wedge is painted in, view pixels (x1, y1 exclusive)
+  y0: number;
+  x1: number;
+  y1: number;
+  road: number; // the shortcut's road
+  m0: number;
+  m1: number;
+  b0: number;
+  b1: number;
+  sideM: number;
+  sideB: number;
+  frame: Frame;
+  len: number;
+  arrows: Float64Array[];
+}
+
+const MOUTH_LANE = 40; // the wedge's edge runs this far from either road's centreline
+const MOUTH_STRIPE = 7; // its stripes and the room between them, world units
+const MOUTH_ARROW_AT = 40; // the arrows stand where the two centrelines are this far apart ...
+const MOUTH_ARROW_LAT = 32; // ... each this far from its road's centreline, on the side away from the other road
+const MOUTH_ARROW = 64; // an arrow's length
 
 // The road's furniture (M4-WORLD): see furniture() for how each is drawn.
 const F_DIRT = 0, F_WATER = 1, F_BELT = 2, F_ROW = 3, F_BED = 4, F_ISLAND = 5;
@@ -488,16 +541,37 @@ function buildArt(track: Track, scenery: Scenery): Art {
   const hw = track.def.halfWidth;
   const R = wall + BARRIER;
   const wrap = (s: number) => ((s % L) + L) % L;
+  // BR-BAKE: the roads, the main one first. A shortcut's road is open (it runs from the fork to
+  // the merge and stops) and has distances of its own, u from 0 at the fork. Here they get the
+  // road's base added (Art.sBase): a power of two beyond every road's length, times its number.
+  const branches = track.branches;
+  const roads: Track[] = [track];
+  for (const b of branches) roads.push(b.road);
+  const branchy = roads.length > 1;
+  let span = 0;
+  if (branchy) {
+    span = 4096;
+    for (const r of roads) while (span < r.length + 2048) span *= 2;
+  }
+  const sBase = Float64Array.from(roads, (_, k) => k * span);
   // A widened road (a split): how much wider it is at s on a side, and how far a point is from
   // the centreline less that (so the track's bands and the yard's clearances hold beside it).
+  // Every road is asked (BR-BAKE): a shortcut's width is its own, taken as extra to the main road's.
   const wide = track.widens.length > 0;
   const away = (x: number, y: number): number => {
     const q = queryTrack(track, x, y);
-    return wide ? q.dist - widenAt(track, q.s, q.side) : q.dist;
+    let d = wide ? q.dist - widenAt(track, q.s, q.side) : q.dist;
+    for (let k = 1; k < roads.length; k++) {
+      const r = roads[k], o = queryTrack(r, x, y);
+      const e = o.dist - (halfOn(r, o.seg, o.s, o.side) - hw);
+      if (e < d) d = e;
+    }
+    return d;
   };
 
-  // The pieces: every centreline segment, cut where a gap begins or ends.
-  const cuts: { a: Vec; b: Vec; s0: number; s1: number; gap: number; capA: boolean; capB: boolean }[] = [];
+  // The pieces: every centreline segment, cut where a gap begins or ends. (u0, u1: a piece's
+  // ends in its own road's distances; seg: the segment it is cut from.)
+  const cuts: { a: Vec; b: Vec; s0: number; s1: number; gap: number; capA: boolean; capB: boolean; road: number; seg: number; u0: number; u1: number }[] = [];
   const edge = (s: number) => track.gaps.some((g) => g.s0 === s || g.s1 === s);
   for (let i = 0; i < pts.length; i++) {
     const a = pts[i], b = pts[(i + 1) % pts.length];
@@ -512,7 +586,34 @@ function buildArt(track: Track, scenery: Scenery): Art {
     for (let k = 0; k + 1 < at.length; k++) {
       if (at[k + 1] - at[k] < 1e-6) continue;
       const g = gapAt(track, (at[k] + at[k + 1]) / 2);
-      cuts.push({ a: pt(at[k]), b: pt(at[k + 1]), s0: at[k], s1: at[k + 1], gap: g ? track.gaps.indexOf(g) : -1, capA: edge(at[k]), capB: edge(at[k + 1]) });
+      cuts.push({ a: pt(at[k]), b: pt(at[k + 1]), s0: at[k], s1: at[k + 1], gap: g ? track.gaps.indexOf(g) : -1, capA: edge(at[k]), capB: edge(at[k + 1]), road: 0, seg: i, u0: at[k], u1: at[k + 1] });
+    }
+  }
+  const nMain = cuts.length;
+  // The shortcuts' pieces after them, road by road: an open road has no piece from its last
+  // sample back to its first. Their gaps follow the main road's in one list.
+  const gaps: Gap[] = branchy ? [...track.gaps] : track.gaps;
+  const gapBase = [0];
+  for (let k = 1; k < roads.length; k++) {
+    const r = roads[k], base = sBase[k], g0 = gaps.length;
+    gapBase.push(g0);
+    for (const g of r.gaps) gaps.push({ ...g, s0: g.s0 + base, s1: g.s1 + base });
+    const ends = (u: number) => r.gaps.some((g) => g.s0 === u || g.s1 === u);
+    for (let i = 0; i + 1 < r.pts.length; i++) {
+      const a = r.pts[i], b = r.pts[i + 1];
+      const u0 = r.cum[i], u1 = r.cum[i + 1];
+      const at = [u0, u1];
+      for (const g of r.gaps) for (const c of [g.s0, g.s1]) if (c > u0 && c < u1) at.push(c);
+      at.sort((p, q) => p - q);
+      const pt = (u: number): Vec => {
+        const t = (u - u0) / (u1 - u0 || 1);
+        return { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t };
+      };
+      for (let j = 0; j + 1 < at.length; j++) {
+        if (at[j + 1] - at[j] < 1e-6) continue;
+        const g = gapAt(r, (at[j] + at[j + 1]) / 2);
+        cuts.push({ a: pt(at[j]), b: pt(at[j + 1]), s0: at[j] + base, s1: at[j + 1] + base, gap: g ? g0 + r.gaps.indexOf(g) : -1 - k, capA: ends(at[j]), capB: ends(at[j + 1]), road: k, seg: i, u0: at[j], u1: at[j + 1] });
+      }
     }
   }
   const n = cuts.length;
@@ -521,21 +622,44 @@ function buildArt(track: Track, scenery: Scenery): Art {
     tiles: new Map(), track, scenery, dress, n,
     ax: f64(), ay: f64(), ex: f64(), ey: f64(), inv: f64(), nx: f64(), ny: f64(), s0: f64(), ds: f64(), dash0: f64(), groove0: f64(), groove1: f64(),
     gap: new Int16Array(n), capA: new Uint8Array(n), capB: new Uint8Array(n),
+    road: new Uint8Array(n), roads, sBase, gaps, mouths: [],
     junk: [], piles: [], stains: [], ruts: [], oil: [], patches: [], posts: new Int32Array(0), holes: [], ramps: [], ends: [],
     start: frameAt(track, 0), marks: [],
     recX: Float64Array.from(track.recovery, (s) => pointAt(track, s).x),
     recY: Float64Array.from(track.recovery, (s) => pointAt(track, s).y),
-    wide, wallMax: wall, wL0: f64(), wL1: f64(), wR0: f64(), wR1: f64(),
+    recRoadX: roads.map((r, k) => (k ? Float64Array.from(r.recovery, (s) => pointAt(r, s).x) : new Float64Array(0))),
+    recRoadY: roads.map((r, k) => (k ? Float64Array.from(r.recovery, (s) => pointAt(r, s).y) : new Float64Array(0))),
+    recBack: new Int32Array(roads.length),
+    wide: wide || branchy, wallMax: wall, wL0: f64(), wL1: f64(), wR0: f64(), wR1: f64(),
     furnished: false, flats: [], things: [],
   };
   if (wide) {
     for (let i = 0; i < pts.length; i++) art.wallMax = Math.max(art.wallMax, track.wallL[i], track.wallR[i]);
-    cuts.forEach((c, i) => {
+    for (let i = 0; i < nMain; i++) {
+      const c = cuts[i];
       art.wL0[i] = widenAt(track, c.s0, -1);
       art.wL1[i] = widenAt(track, c.s1, -1);
       art.wR0[i] = widenAt(track, c.s0, 1);
       art.wR1[i] = widenAt(track, c.s1, 1);
-    });
+    }
+  }
+  // A shortcut's width is its own: the main road's in its mouths, tapering to its own between
+  // them. Per piece what that is more (or less) than the main road's plain width, at its two
+  // ends, read as the physics reads it (halfOn: the samples' widths, linear along the segment).
+  for (let i = nMain; i < n; i++) {
+    const c = cuts[i], r = roads[c.road];
+    art.wL0[i] = halfOn(r, c.seg, c.u0, -1) - hw;
+    art.wL1[i] = halfOn(r, c.seg, c.u1, -1) - hw;
+    art.wR0[i] = halfOn(r, c.seg, c.u0, 1) - hw;
+    art.wR1[i] = halfOn(r, c.seg, c.u1, 1) - hw;
+  }
+  for (let k = 1; k < roads.length; k++) {
+    const r = roads[k];
+    for (let i = 0; i < r.pts.length; i++) art.wallMax = Math.max(art.wallMax, r.wallL[i], r.wallR[i]);
+    // A fall on it before its first recovery point goes back to the main road's before the fork.
+    let back = track.recovery.length - 1;
+    for (let j = 0; j < track.recovery.length; j++) if (track.recovery[j] <= branches[k - 1].s0) back = j;
+    art.recBack[k] = back;
   }
   // A stretch of ground starts where the gap before it ends; a track without gaps at s = 0.
   const runStart = (s: number): number => {
@@ -546,6 +670,47 @@ function buildArt(track: Track, scenery: Scenery): Art {
   // The racing line swings a little from side to side, a whole number of times a lap.
   const swings = Math.max(1, Math.round(L / 1640));
   const groove = (s: number) => 16 * Math.sin((2 * Math.PI * swings * s) / L);
+  // What is counted along a shortcut (the kerb's stripes, the centre line's dashes, a wall's
+  // joints) and its racing line, so that both run on from the main road's at the fork and meet
+  // them again at the merge: where the two roads lie on each other, a pixel of either is the same.
+  const whole = (v: number) => (Number.isInteger(v) && v > 0 ? v : 1);
+  const gcd = (a: number, b: number): number => (b ? gcd(b, a % b) : a);
+  const lcm = (a: number, b: number) => (whole(a) / gcd(whole(a), whole(b))) * whole(b);
+  const stripes = lcm(dress.kerbPeriod, 44); // the kerb's two paints and the centre line's dashes come round together after this ...
+  const joints = lcm(stripes, dress.block); // ... and a wall's joints with them after this
+  const dashOn: ((u: number) => number)[] = [(s) => wrap(s - runStart(s))];
+  const grooveOn: ((u: number) => number)[] = [groove];
+  branches.forEach((b) => {
+    const r = b.road, len = r.length, rg = r.gaps;
+    const d0 = dashOn[0](b.s0), d1 = dashOn[0](b.s1);
+    if (rg.length === 0) {
+      // One stretch of ground from fork to merge: its count runs a little fast or slow, so that
+      // it ends on the main road's (under 3 % off for the stripes and the dashes both, else for the kerb alone).
+      const p = stripes / 2 <= 0.03 * len ? stripes : dress.kerbPeriod;
+      let c = (((d1 - d0 - len) % p) + p) % p;
+      if (c > p / 2) c -= p;
+      dashOn.push((u) => d0 + u + (c * u) / len);
+    } else {
+      // The first stretch counts on from the fork, the last one back from the merge, one between two gaps from its start.
+      const first = rg[0].s0, last = rg[rg.length - 1].s1;
+      const back = d1 - len + Math.ceil(Math.max(0, len - d1) / joints) * joints;
+      dashOn.push((u) => {
+        if (u <= first) return d0 + u;
+        if (u >= last) return back + u;
+        let from = 0;
+        for (const g of rg) if (g.s1 <= u) from = g.s1;
+        return u - from;
+      });
+    }
+    // Its racing line: the main road's at either end, fading to a swing of its own over the mouth.
+    const in0 = b.forkGore ? b.forkGore.u : len / 2, in1 = b.mergeGore ? len - b.mergeGore.u : len / 2;
+    const g0 = groove(b.s0), g1 = groove(b.s1);
+    const amp = Math.max(0, Math.min(16, r.def.halfWidth - 24)), turns = Math.max(1, Math.round(len / 1640));
+    grooveOn.push((u) => {
+      const w0 = Math.max(0, 1 - u / (in0 || 1)), w1 = Math.max(0, 1 - (len - u) / (in1 || 1));
+      return g0 * w0 + g1 * w1 + amp * Math.max(0, 1 - w0 - w1) * Math.sin((2 * Math.PI * turns * u) / len);
+    });
+  });
   cuts.forEach((c, i) => {
     const ex = (c.b.x - c.a.x) * ZOOM, ey = (c.b.y - c.a.y) * ZOOM;
     const len = Math.hypot(ex, ey) || 1;
@@ -558,167 +723,234 @@ function buildArt(track: Track, scenery: Scenery): Art {
     art.ny[i] = ex / len;
     art.s0[i] = c.s0;
     art.ds[i] = c.s1 - c.s0;
-    art.dash0[i] = wrap(c.s0 - runStart(c.s0));
-    art.groove0[i] = groove(c.s0);
-    art.groove1[i] = groove(c.s1);
+    art.dash0[i] = dashOn[c.road](c.u0);
+    art.groove0[i] = grooveOn[c.road](c.u0);
+    art.groove1[i] = grooveOn[c.road](c.u1);
     art.gap[i] = c.gap;
     art.capA[i] = c.capA ? 1 : 0;
     art.capB[i] = c.capB ? 1 : 0;
+    art.road[i] = c.road;
   });
 
-  // Is the stretch [a, b] of the track clear of every feature, with `more` to spare?
-  const clear = (a: number, b: number, more: number): boolean => {
-    for (const r of track.ramps) if (b > r.s - more && a < r.s + r.len + more) return false;
-    for (const g of track.gaps) if (b > g.s0 - more && a < g.s1 + more) return false;
-    for (const h of track.holes) if (b > h.s - h.r - more && a < h.s + h.r + more) return false;
+  // A road's mouths, as from, to pairs in its own distances: where a shortcut and the main road
+  // lie on each other. Nothing is laid out there: a pixel has the wear of the nearer road, and a
+  // repair would be cut off where the other road's pixels begin.
+  const mouthsOf: number[][] = roads.map(() => []);
+  branches.forEach((b, j) => {
+    const fg = b.forkGore, mg = b.mergeGore, len = b.road.length;
+    if (fg && mg) {
+      mouthsOf[0].push(b.s0, fg.s, mg.s, b.s1);
+      mouthsOf[j + 1].push(0, fg.u, mg.u, len);
+    } else {
+      mouthsOf[0].push(b.s0, b.s1);
+      mouthsOf[j + 1].push(0, len);
+    }
+  });
+  // Is the stretch [a, b] of road k clear of every feature (and mouth), with `more` to spare?
+  const clear = (k: number, a: number, b: number, more: number): boolean => {
+    const r = roads[k];
+    for (const x of r.ramps) if (b > x.s - more && a < x.s + x.len + more) return false;
+    for (const g of r.gaps) if (b > g.s0 - more && a < g.s1 + more) return false;
+    for (const h of r.holes) if (b > h.s - h.r - more && a < h.s + h.r + more) return false;
+    const m = mouthsOf[k];
+    for (let q = 0; q < m.length; q += 2) if (b > m[q] - more && a < m[q + 1] + more) return false;
     return true;
   };
-  const offset = (s: number, lat: number): Vec => {
-    const p = pointAt(track, s);
+  const offsetOn = (r: Track, s: number, lat: number): Vec => {
+    const p = pointAt(r, s);
     return { x: p.x - Math.sin(p.h) * lat, y: p.y + Math.cos(p.h) * lat };
   };
+  const offset = (s: number, lat: number): Vec => offsetOn(track, s, lat);
 
   // Junk outside the barriers, in small heaps; seeded, so every client sees the same yard.
+  // Along every road, and off every road (`away`): a heap by the main road never stands on a shortcut.
   {
-    const rnd = mulberry32(7);
     const paints = [RUST1, RUST2, RUST0, HAZ0, STEEL1, RUST1, STEEL2];
     const heaps: Vec[] = [];
-    const want = Math.round(L / 150);
-    for (let tries = 0; heaps.length < want && tries < 2500; tries++) {
-      const s = rnd() * L;
-      const side = rnd() < 0.5 ? -1 : 1;
-      const at = offset(s, side * (wall + 40 + rnd() * 150));
-      if (away(at.x, at.y) < R + 34) continue;
-      if (heaps.some((h) => Math.hypot(h.x - at.x, h.y - at.y) < 90)) continue; // heaps stand apart
-      heaps.push(at);
-      for (let count = 2 + Math.floor(rnd() * 3), k = 0; k < count; k++) {
-        const x = at.x + (rnd() - 0.5) * 52, y = at.y + (rnd() - 0.5) * 40;
-        const pick = rnd(), r = 9 + rnd() * 8, a = rnd() * Math.PI, c = paints[Math.floor(rnd() * paints.length)];
-        if (away(x, y) < R + 16) continue;
-        const kind = desert ? propKind(pick) : pick < 0.3 ? K_CUBE : pick < 0.46 ? K_DRUM : pick < 0.62 ? K_TYRES : pick < 0.72 ? K_PLATE : pick < 0.82 ? K_PALLET : pick < 0.92 ? K_ENGINE : K_COIL;
-        art.junk.push({ kind, x: x * ZOOM, y: y * ZOOM, r: r * ZOOM, a, c: desert ? propPaint(kind, c) : c });
-      }
-      // Half the heaps have leaked: a dark stain in the dirt beside them.
-      if (rnd() < 0.5) art.stains.push({ x: (at.x + (rnd() - 0.5) * 40) * ZOOM, y: (at.y + 14 + rnd() * 14) * ZOOM, r: (10 + rnd() * 9) * ZOOM });
-    }
-    art.junk.sort((p, q) => p.y - q.y);
-
-    // Wheel ruts in the dirt, running along the track for a while outside the wall.
-    for (let k = 0, count = Math.round(L / 700); k < count; k++) {
-      const from = rnd() * L, len = 140 + rnd() * 220, side = rnd() < 0.5 ? -1 : 1;
-      const base = wall + 34 + rnd() * 90, swing = 6 + rnd() * 14, wave = 50 + rnd() * 60;
-      for (const half of [-6.5, 6.5]) {
-        const line: number[] = [];
-        for (let u = 0; u <= len; u += 6) {
-          const q = offset(from + u, side * (base + half + swing * Math.sin(u / wave)));
-          // A rut stops where another part of the track comes near.
-          if (away(q.x, q.y) < R + 14) break;
-          line.push(q.x * ZOOM, q.y * ZOOM);
+    roads.forEach((r, k) => {
+      const rnd = mulberry32(7 + 7919 * k);
+      const len = r.length, open = k > 0;
+      const want = heaps.length + Math.round(len / 150);
+      for (let tries = 0; heaps.length < want && tries < 2500; tries++) {
+        const s = rnd() * len;
+        const side = rnd() < 0.5 ? -1 : 1;
+        const at = offsetOn(r, s, side * (r.wall + 40 + rnd() * 150));
+        if (away(at.x, at.y) < R + 34) continue;
+        if (heaps.some((h) => Math.hypot(h.x - at.x, h.y - at.y) < 90)) continue; // heaps stand apart
+        heaps.push(at);
+        for (let count = 2 + Math.floor(rnd() * 3), j = 0; j < count; j++) {
+          const x = at.x + (rnd() - 0.5) * 52, y = at.y + (rnd() - 0.5) * 40;
+          const pick = rnd(), rad = 9 + rnd() * 8, a = rnd() * Math.PI, c = paints[Math.floor(rnd() * paints.length)];
+          if (away(x, y) < R + 16) continue;
+          const kind = desert ? propKind(pick) : pick < 0.3 ? K_CUBE : pick < 0.46 ? K_DRUM : pick < 0.62 ? K_TYRES : pick < 0.72 ? K_PLATE : pick < 0.82 ? K_PALLET : pick < 0.92 ? K_ENGINE : K_COIL;
+          art.junk.push({ kind, x: x * ZOOM, y: y * ZOOM, r: rad * ZOOM, a, c: desert ? propPaint(kind, c) : c });
         }
-        if (line.length >= 8) art.ruts.push(Float32Array.from(line));
+        // Half the heaps have leaked: a dark stain in the dirt beside them.
+        if (rnd() < 0.5) art.stains.push({ x: (at.x + (rnd() - 0.5) * 40) * ZOOM, y: (at.y + 14 + rnd() * 14) * ZOOM, r: (10 + rnd() * 9) * ZOOM });
       }
-    }
+
+      // Wheel ruts in the dirt, running along the road for a while outside the wall.
+      for (let j = 0, count = Math.round(len / 700); j < count; j++) {
+        const from = rnd() * len, run = 140 + rnd() * 220, side = rnd() < 0.5 ? -1 : 1;
+        const base = r.wall + 34 + rnd() * 90, swing = 6 + rnd() * 14, wave = 50 + rnd() * 60;
+        for (const half of [-6.5, 6.5]) {
+          const line: number[] = [];
+          for (let u = 0; u <= run; u += 6) {
+            if (open && from + u > len) break; // an open road ends
+            const q = offsetOn(r, from + u, side * (base + half + swing * Math.sin(u / wave)));
+            // A rut stops where another part of the track comes near.
+            if (away(q.x, q.y) < R + 14) break;
+            line.push(q.x * ZOOM, q.y * ZOOM);
+          }
+          if (line.length >= 8) art.ruts.push(Float32Array.from(line));
+        }
+      }
+    });
+    art.junk.sort((p, q) => p.y - q.y);
   }
 
   // Scrap filling a gap (drawing only: it is not solid), laid out from the gap's start.
-  art.piles = track.gaps.map((g, i) => {
-    if (!g.scrap) return [];
-    const rnd = mulberry32(101 + i);
-    const paints = [RUST1, RUST2, RUST0, HAZ0, STEEL1, STEEL2];
-    const out: Junk[] = [];
-    const W = wall - 4;
-    for (let s = g.s0 + 9; s < g.s1 - 6; s += 14) {
-      for (let lat = -W + 6; lat < W - 4; lat += 16) {
-        const p = offset(s + (rnd() - 0.5) * 8, lat + (rnd() - 0.5) * 9);
-        const pick = rnd(), r = 7 + rnd() * 6, a = rnd() * Math.PI, c = paints[Math.floor(rnd() * paints.length)];
-        // The desert fills a gap with boulders, a car shell among them now and then.
-        const kind = desert ? (pick < 0.88 ? K_ROCK : K_SHELL) : pick < 0.34 ? K_CUBE : pick < 0.5 ? K_DRUM : pick < 0.66 ? K_TYRES : pick < 0.78 ? K_PLATE : pick < 0.86 ? K_PALLET : pick < 0.94 ? K_ENGINE : K_COIL;
-        out.push({ kind, x: p.x * ZOOM, y: p.y * ZOOM, r: r * ZOOM, a, c: desert ? propPaint(kind, c) : c });
+  roads.forEach((r) => {
+    for (const g of r.gaps) {
+      const i = art.piles.length;
+      if (!g.scrap) {
+        art.piles.push([]);
+        continue;
       }
+      const rnd = mulberry32(101 + i);
+      const paints = [RUST1, RUST2, RUST0, HAZ0, STEEL1, STEEL2];
+      const out: Junk[] = [];
+      const W = r.wall - 4;
+      for (let s = g.s0 + 9; s < g.s1 - 6; s += 14) {
+        for (let lat = -W + 6; lat < W - 4; lat += 16) {
+          const p = offsetOn(r, s + (rnd() - 0.5) * 8, lat + (rnd() - 0.5) * 9);
+          const pick = rnd(), rad = 7 + rnd() * 6, a = rnd() * Math.PI, c = paints[Math.floor(rnd() * paints.length)];
+          // The desert fills a gap with boulders, a car shell among them now and then.
+          const kind = desert ? (pick < 0.88 ? K_ROCK : K_SHELL) : pick < 0.34 ? K_CUBE : pick < 0.5 ? K_DRUM : pick < 0.66 ? K_TYRES : pick < 0.78 ? K_PLATE : pick < 0.86 ? K_PALLET : pick < 0.94 ? K_ENGINE : K_COIL;
+          out.push({ kind, x: p.x * ZOOM, y: p.y * ZOOM, r: rad * ZOOM, a, c: desert ? propPaint(kind, c) : c });
+        }
+      }
+      // From the top of the screen down, so lower items overlap the ones behind them.
+      art.piles.push(out.sort((p, q) => p.y - q.y));
     }
-    // From the top of the screen down, so lower items overlap the ones behind them.
-    return out.sort((p, q) => p.y - q.y);
   });
 
   // Wear on the road: repairs with a joint round them, and oil stains.
-  {
-    const rnd = mulberry32(31);
-    for (let s = 260 + rnd() * 300; s < L - 500; s += 520 + rnd() * 640) {
-      const len = 44 + rnd() * 50, width = 30 + rnd() * 26;
-      const l0 = -hw + 6 + rnd() * (2 * hw - 12 - width);
-      if (clear(s, s + len, 60)) art.patches.push({ s0: s, s1: s + len, l0, l1: l0 + width });
+  roads.forEach((r, k) => {
+    const rnd = mulberry32(31 + 7919 * k);
+    const len = r.length, half = r.def.halfWidth, base = sBase[k];
+    for (let s = 260 + rnd() * 300; s < len - 500; s += 520 + rnd() * 640) {
+      const run = 44 + rnd() * 50, width = 30 + rnd() * 26;
+      const l0 = -half + 6 + rnd() * (2 * half - 12 - width);
+      if (clear(k, s, s + run, 60)) art.patches.push({ s0: s + base, s1: s + run + base, l0, l1: l0 + width });
     }
-    for (let s = 150 + rnd() * 300; s < L - 120; s += 380 + rnd() * 520) {
-      const lat = (rnd() - 0.5) * (2 * hw - 44), r = 8 + rnd() * 8;
-      if (!clear(s - r, s + r, 30)) continue;
-      const p = offset(s, lat);
-      art.oil.push({ x: p.x * ZOOM, y: p.y * ZOOM, r: r * ZOOM });
+    for (let s = 150 + rnd() * 300; s < len - 120; s += 380 + rnd() * 520) {
+      const lat = (rnd() - 0.5) * (2 * half - 44), rad = 8 + rnd() * 8;
+      if (!clear(k, s - rad, s + rad, 30)) continue;
+      const p = offsetOn(r, s, lat);
+      art.oil.push({ x: p.x * ZOOM, y: p.y * ZOOM, r: rad * ZOOM });
     }
-  }
+  });
 
   // Barrier posts: one every 60 units on both sides of every stretch of ground.
   {
     const posts: number[] = [];
+    // Where two roads lie on each other (a mouth), a post of one would stand on the other's
+    // asphalt: a post stands only where its own road is the nearer one (BR-BAKE), which is on
+    // the wall of the two roads together.
+    const own = (k: number, q: Vec): boolean => !branchy || queryRoads(track, q.x, q.y).road === k;
     const runs = track.gaps.length ? track.gaps.map((g, i) => [g.s1, i + 1 < track.gaps.length ? track.gaps[i + 1].s0 : track.gaps[0].s0 + L]) : [[0, L]];
     for (const [from, to] of runs) {
       for (let s = from + 30; s < to; s += 60) {
         for (const side of [-1, 1]) {
           const q = offset(s, side * ((wide ? wallAt(track, s, side) : wall) + 3.2));
+          if (!own(0, q)) continue;
           posts.push(Math.round(q.x * ZOOM) - 1, Math.round(q.y * ZOOM) - 1);
         }
       }
     }
-    // An island's barrier has its posts too, inside its two long sides.
-    for (const isle of track.islands) {
-      for (let s = isle.s0 + NOSE + 20; s < isle.s1 - NOSE - 8; s += 60) {
-        for (const lat of [isle.lat0 + 3.2, isle.lat1 - 3.2]) {
-          const q = offset(s, lat);
-          posts.push(Math.round(q.x * ZOOM) - 1, Math.round(q.y * ZOOM) - 1);
+    roads.forEach((r, k) => {
+      if (k > 0) {
+        // A shortcut's stretches of ground, from its fork to its merge; along the first one the
+        // posts carry on the main road's count.
+        const b = branches[k - 1];
+        const stretches: number[][] = [];
+        let from = 0;
+        for (const g of r.gaps) {
+          stretches.push([from, g.s0]);
+          from = g.s1;
+        }
+        stretches.push([from, r.length]);
+        stretches.forEach(([a, z], j) => {
+          for (let u = j ? a + 30 : (((runStart(b.s0) + 30 - b.s0) % 60) + 60) % 60; u < z; u += 60) {
+            const p = pointAt(r, u);
+            for (const side of [-1, 1]) {
+              const lat = side * (halfOn(r, p.seg, u, side) + r.def.verge + 3.2);
+              const q = { x: p.x - Math.sin(p.h) * lat, y: p.y + Math.cos(p.h) * lat };
+              if (!own(k, q)) continue;
+              posts.push(Math.round(q.x * ZOOM) - 1, Math.round(q.y * ZOOM) - 1);
+            }
+          }
+        });
+      }
+      // An island's barrier has its posts too, inside its two long sides.
+      for (const isle of r.islands) {
+        for (let s = isle.s0 + NOSE + 20; s < isle.s1 - NOSE - 8; s += 60) {
+          for (const lat of [isle.lat0 + 3.2, isle.lat1 - 3.2]) {
+            const q = offsetOn(r, s, lat);
+            posts.push(Math.round(q.x * ZOOM) - 1, Math.round(q.y * ZOOM) - 1);
+          }
         }
       }
-    }
+    });
     art.posts = Int32Array.from(posts);
   }
 
   // Holes: a jagged rim and four cracks each, seeded.
-  art.holes = track.holes.map((hole, i) => {
-    const rnd = mulberry32(211 + i);
-    const corners = 15;
-    const rim = new Float64Array(corners * 2);
-    for (let k = 0; k < corners; k++) {
-      const a = (k / corners) * Math.PI * 2, r = hole.r * (1.1 + rnd() * 0.16);
-      rim[k * 2] = (hole.x + Math.cos(a) * r) * ZOOM;
-      rim[k * 2 + 1] = (hole.y + Math.sin(a) * r) * ZOOM;
-    }
-    const cracks: Float64Array[] = [];
-    for (let k = 0; k < 4; k++) {
-      const a = rnd() * Math.PI * 2;
-      let x = hole.x + Math.cos(a) * hole.r * 1.12, y = hole.y + Math.sin(a) * hole.r * 1.12;
-      const line = [x * ZOOM, y * ZOOM];
-      for (let j = 0; j < 3; j++) {
-        const b = a + (rnd() - 0.5) * 1.1, step = hole.r * (0.18 + rnd() * 0.22);
-        x += Math.cos(b) * step;
-        y += Math.sin(b) * step;
-        line.push(x * ZOOM, y * ZOOM);
+  roads.forEach((r, k) => {
+    r.holes.forEach((hole, i) => {
+      const rnd = mulberry32(211 + i + 7919 * k);
+      const corners = 15;
+      const rim = new Float64Array(corners * 2);
+      for (let j = 0; j < corners; j++) {
+        const a = (j / corners) * Math.PI * 2, rad = hole.r * (1.1 + rnd() * 0.16);
+        rim[j * 2] = (hole.x + Math.cos(a) * rad) * ZOOM;
+        rim[j * 2 + 1] = (hole.y + Math.sin(a) * rad) * ZOOM;
       }
-      cracks.push(Float64Array.from(line));
-    }
-    return { x: hole.x * ZOOM, y: hole.y * ZOOM, r: hole.r * ZOOM, rim, cracks };
+      const cracks: Float64Array[] = [];
+      for (let j = 0; j < 4; j++) {
+        const a = rnd() * Math.PI * 2;
+        let x = hole.x + Math.cos(a) * hole.r * 1.12, y = hole.y + Math.sin(a) * hole.r * 1.12;
+        const line = [x * ZOOM, y * ZOOM];
+        for (let q = 0; q < 3; q++) {
+          const b = a + (rnd() - 0.5) * 1.1, step = hole.r * (0.18 + rnd() * 0.22);
+          x += Math.cos(b) * step;
+          y += Math.sin(b) * step;
+          line.push(x * ZOOM, y * ZOOM);
+        }
+        cracks.push(Float64Array.from(line));
+      }
+      art.holes.push({ x: hole.x * ZOOM, y: hole.y * ZOOM, r: hole.r * ZOOM, rim, cracks });
+    });
   });
 
   // Ramps: the frame its stripes and chevrons are laid out in, and the three chevrons.
-  art.ramps = track.ramps.map((ramp) => {
-    const frame = frameAt(track, ramp.s + ramp.len / 2);
-    const w = wall - 1, d = Math.min(9, ramp.len * 0.18);
-    const chevrons = [-w * 0.58, 0, w * 0.58].map((lat) => [chevron(frame, d, lat, 3), chevron(frame, d, lat, 1.5)]);
-    return { s0: ramp.s, s1: ramp.s + ramp.len, frame, reach: ramp.len / 2 + wall + 4, chevrons };
+  roads.forEach((r, k) => {
+    for (const ramp of r.ramps) {
+      const frame = frameAt(r, ramp.s + ramp.len / 2);
+      const w = r.wall - 1, d = Math.min(9, ramp.len * 0.18);
+      const chevrons = [-w * 0.58, 0, w * 0.58].map((lat) => [chevron(frame, d, lat, 3), chevron(frame, d, lat, 1.5)]);
+      art.ramps.push({ s0: ramp.s + sBase[k], s1: ramp.s + ramp.len + sBase[k], w, frame, reach: ramp.len / 2 + r.wall + 4, chevrons });
+    }
   });
 
   // Each gap end: the ground lies before s0 and after s1; hazard stripes lie on its last 7 units.
-  art.ends = track.gaps.flatMap((g, i) => [
-    { gap: i, s: g.s0, dir: 1, frame: frameAt(track, g.s0 - 3.5) },
-    { gap: i, s: g.s1, dir: -1, frame: frameAt(track, g.s1 + 3.5) },
-  ]);
+  roads.forEach((r, k) => {
+    r.gaps.forEach((g, j) => {
+      const i = gapBase[k] + j, half = r.def.halfWidth;
+      art.ends.push({ gap: i, s: g.s0 + sBase[k], dir: 1, hw: half, frame: frameAt(r, g.s0 - 3.5) }, { gap: i, s: g.s1 + sBase[k], dir: -1, hw: half, frame: frameAt(r, g.s1 + 3.5) });
+    });
+  });
 
   // Grid slots: a worn bracket round each car's nose.
   for (let slot = 0; slot < MAX_PLAYERS; slot++) {
@@ -733,6 +965,73 @@ function buildArt(track: Track, scenery: Scenery): Art {
       art.marks.push(quad);
     }
   }
+
+  // What is painted in a shortcut's two mouths (Mouth): the wedge at each gore, the fork's arrows.
+  branches.forEach((b, j) => {
+    const k = j + 1, r = b.road, base = sBase[k];
+    for (const end of [0, 1]) {
+      const g = end ? b.mergeGore : b.forkGore;
+      if (!g) continue;
+      // Walk the shortcut from its end of the mouth to the gore: how far its centreline is from
+      // the main road's (the nearest point of it, searched round the last one's segment as a
+      // car's is; queryMain: the main road's own query, which in a mouth a car's is not), and
+      // the point between them that is as far from the one as from the other (looked for along
+      // the shortcut's normal, by halving: `lane` is that distance).
+      const from = end ? r.length : 0, dir = end ? -1 : 1, reach = Math.abs(g.u - from);
+      let hint = pointAt(track, end ? b.s1 : b.s0).seg;
+      let arrowsAt = -1, arrowsS = 0, tip: Vec | null = null, kerbs: Vec | null = null, sideM = 1, sideB = 1;
+      for (let d = 0; d <= reach && !kerbs; d += 2) {
+        const p = pointAt(r, from + dir * d);
+        const q = queryMain(track, p.x, p.y, hint);
+        hint = q.seg;
+        // The side of the shortcut the main road lies on: as a query's side, of the main road's nearest point.
+        const toward = Math.cos(p.h) * -q.ny - Math.sin(p.h) * -q.nx < 0 ? -1 : 1;
+        const nx = -Math.sin(p.h) * toward, ny = Math.cos(p.h) * toward;
+        let lo = 0, hi = q.dist;
+        for (let step = 0; step < 24; step++) {
+          const v = (lo + hi) / 2;
+          if (queryMain(track, p.x + nx * v, p.y + ny * v, hint).dist > v) lo = v;
+          else hi = v;
+        }
+        const lane = (lo + hi) / 2;
+        if (arrowsAt < 0 && q.dist >= MOUTH_ARROW_AT) {
+          arrowsAt = from + dir * d;
+          arrowsS = q.s;
+        }
+        if (!tip && lane >= MOUTH_LANE) {
+          tip = { x: p.x + nx * lane, y: p.y + ny * lane };
+          sideM = q.side;
+          sideB = toward;
+        }
+        if (lane >= hw) kerbs = { x: p.x + nx * lane, y: p.y + ny * lane };
+      }
+      if (!tip || !kerbs) continue;
+      const fx = kerbs.x - tip.x, fy = kerbs.y - tip.y, len = Math.hypot(fx, fy) || 1;
+      const frame: Frame = { x: tip.x * ZOOM, y: tip.y * ZOOM, cos: fx / len, sin: fy / len };
+      // Its box: the tip, and the gravel's tip with the wedge's width either side of it.
+      const across = hw - MOUTH_LANE + 3;
+      let x0 = tip.x, y0 = tip.y, x1 = tip.x, y1 = tip.y;
+      for (const v of [-across, across]) {
+        const x = kerbs.x - frame.sin * v, y = kerbs.y + frame.cos * v;
+        x0 = Math.min(x0, x);
+        x1 = Math.max(x1, x);
+        y0 = Math.min(y0, y);
+        y1 = Math.max(y1, y);
+      }
+      const arrows: Float64Array[] = [];
+      if (!end && arrowsAt >= 0) {
+        // The fork's two arrows, each down its own road on the side away from the other.
+        const pm = pointAt(track, arrowsS), pb = pointAt(r, arrowsAt);
+        arrows.push(arrow({ x: pm.x * ZOOM, y: pm.y * ZOOM, cos: Math.cos(pm.h), sin: Math.sin(pm.h) }, -sideM * MOUTH_ARROW_LAT));
+        arrows.push(arrow({ x: pb.x * ZOOM, y: pb.y * ZOOM, cos: Math.cos(pb.h), sin: Math.sin(pb.h) }, -sideB * MOUTH_ARROW_LAT));
+      }
+      art.mouths.push({
+        x0: Math.floor(x0 * ZOOM) - 2, y0: Math.floor(y0 * ZOOM) - 2, x1: Math.ceil(x1 * ZOOM) + 3, y1: Math.ceil(y1 * ZOOM) + 3,
+        road: k, m0: end ? g.s : b.s0, m1: end ? b.s1 : g.s, b0: base + (end ? g.u : 0), b1: base + (end ? r.length : g.u),
+        sideM, sideB, frame, len, arrows,
+      });
+    }
+  });
   furnish(art);
   return art;
 }
@@ -740,42 +1039,11 @@ function buildArt(track: Track, scenery: Scenery): Art {
 /**
  * The road's furniture of a track (M4-WORLD), laid out once: the rectangles painted flat on
  * the road and the things that stand on it, each with the box of view pixels it is drawn in.
+ * Every road's (BR-BAKE): a shortcut's lie along it, their distances as its pieces' (Art.sBase).
  */
 function furnish(art: Art): void {
-  const track = art.track, dress = art.dress;
+  const dress = art.dress;
   const desert = dress.props === PROPS_DESERT;
-  const offset = (s: number, lat: number): Vec => {
-    const p = pointAt(track, s);
-    return { x: p.x - Math.sin(p.h) * lat, y: p.y + Math.cos(p.h) * lat };
-  };
-  // The box of view pixels a rectangle of the track lies in, `pad` world units wider all round.
-  const flat = (kind: number, s0: number, s1: number, l0: number, l1: number, pad: number, flip = false): void => {
-    let x0 = BIG, y0 = BIG, x1 = -BIG, y1 = -BIG;
-    const steps = Math.max(1, Math.ceil((s1 - s0 + 2 * pad) / 12));
-    for (let k = 0; k <= steps; k++) {
-      const s = s0 - pad + ((s1 - s0 + 2 * pad) * k) / steps;
-      for (const lat of [l0 - pad, l1 + pad]) {
-        const q = offset(s, lat);
-        x0 = Math.min(x0, q.x * ZOOM);
-        x1 = Math.max(x1, q.x * ZOOM);
-        y0 = Math.min(y0, q.y * ZOOM);
-        y1 = Math.max(y1, q.y * ZOOM);
-      }
-    }
-    // A puddle's outline is its own, by the four numbers of its rectangle: the same on every client and in every bake.
-    const seed = Math.imul(Math.round(s0 * 4), 73856093) ^ Math.imul(Math.round(s1 * 4), 19349663) ^ Math.imul(Math.round(l0 * 4), 83492791) ^ Math.imul(Math.round(l1 * 4), 265443576);
-    const short = Math.min(s1 - s0, l1 - l0);
-    const rnd = mulberry32(seed);
-    // Its four corners: a tight one, a wide one and two between, dealt out by the seed, so no two are alike.
-    const radii = [0, 1, 2, 3].map((k) => PUDDLE_ROUND_MIN + ((PUDDLE_ROUND_MAX - PUDDLE_ROUND_MIN) * (k + 0.15 + 0.7 * rnd())) / 4);
-    for (let k = 3; k > 0; k--) {
-      const j = Math.floor(rnd() * (k + 1));
-      [radii[k], radii[j]] = [radii[j], radii[k]];
-    }
-    const round = Float64Array.from(radii, (r) => Math.min(short / 2, r));
-    const lobe = (side: number) => Math.max(60, Math.min(140, side / 2));
-    art.flats.push({ kind, s0, s1, l0, l1, x0: Math.floor(x0) - 2, y0: Math.floor(y0) - 2, x1: Math.ceil(x1) + 3, y1: Math.ceil(y1) + 3, flip, seed, round, swell: Math.min(1, short / 48), lobeS: lobe(s1 - s0), lobeL: lobe(l1 - l0) });
-  };
   // A thing's box, from the view-pixel box of what is drawn: room for its shadow down-right.
   const thing = (kind: number, x0: number, y0: number, x1: number, y1: number, more: Partial<Thing>): void => {
     art.things.push({ kind, x0: Math.floor(x0) - 2, y0: Math.floor(y0) - 2, x1: Math.ceil(x1) + 9, y1: Math.ceil(y1) + 10, tyres: new Float64Array(0), lie: new Float64Array(0), junk: null, truck: null, ...more });
@@ -803,81 +1071,137 @@ function furnish(art: Art): void {
     }
     thing(T_TYRES, x0, y0, x1, y1, { tyres: out, lie });
   };
-
-  // Painted flat, in this order: the surfaces first (they never overlap each other), then what
-  // may lie on one (the lane of a row of barrels, a press's bed), the islands last.
-  for (const d of track.dirt) flat(F_DIRT, d.s0, d.s1, d.lat0, d.lat1, 0);
-  for (const w of track.water) flat(F_WATER, w.s0, w.s1, w.lat0, w.lat1, 0);
-  for (const b of track.belts) flat(F_BELT, b.s0, b.s1, b.lat0, b.lat1, 0);
-  for (const b of track.barrels) flat(F_ROW, b.s - BARREL_R - ROW_JAMB, b.s + BARREL_R + ROW_JAMB, b.lat0 - BARREL_R - BARRIER, b.lat1 + BARREL_R + BARRIER, 0, b.speed < 0);
-  for (const p of track.presses) flat(F_BED, p.s - PRESS_DEPTH / 2, p.s + PRESS_DEPTH / 2, p.lat0, p.lat1, 0);
-  for (const i of track.islands) flat(F_ISLAND, i.s0, i.s1, i.lat0, i.lat1, GORE);
-
-  // Tyre mounds: rings of tyres one on the other up to a top one, the outer ring painted in the
-  // kerb's two colours, so the heap's edge shows on any ground.
-  track.tyres.forEach((m, k) => {
-    const rnd = mulberry32(601 + 13 * k);
+  /** A mound: rings of tyres one on the other up to a top one, the outer ring painted in the kerb's two colours, so the heap's edge shows on any ground. */
+  const mound = (x: number, y: number, r: number, rnd: () => number): void => {
     const list: number[] = [];
     const turn = rnd() * Math.PI * 2;
-    for (let ring = 0, rr = m.r - TYRE; rr >= TYRE * 0.8; ring++, rr -= TYRE * 1.45) {
+    for (let ring = 0, rr = r - TYRE; rr >= TYRE * 0.8; ring++, rr -= TYRE * 1.45) {
       let count = Math.max(3, Math.round((2 * Math.PI * rr) / (TYRE * 1.72)));
       if (!ring && count & 1) count++; // the outer ring: its two paints in turn, all the way round
       for (let j = 0; j < count; j++) {
         const a = turn + ring * 0.6 + (j / count) * Math.PI * 2 + (ring ? (rnd() - 0.5) * 0.18 : 0);
-        list.push(m.x + Math.cos(a) * rr, m.y + Math.sin(a) * rr, ring ? dress.moundInner : j & 1 ? RUST2 : BONE1);
+        list.push(x + Math.cos(a) * rr, y + Math.sin(a) * rr, ring ? dress.moundInner : j & 1 ? RUST2 : BONE1);
       }
     }
-    list.push(m.x, m.y, dress.moundTop); // the top of the heap
+    list.push(x, y, dress.moundTop); // the top of the heap
     heap(list);
-  });
+  };
 
-  // Islands: at either end a nose of tyre stacks, two rows across its whole width; between them
-  // a strip of the yard behind a barrier, with a piece of junk now and then where it is wide.
-  track.islands.forEach((isle, k) => {
-    const rnd = mulberry32(811 + 17 * k);
-    const width = isle.lat1 - isle.lat0, mid = (isle.lat0 + isle.lat1) / 2;
-    const across = Math.max(2, Math.round(width / (TYRE * 1.8)));
-    for (const end of [0, 1]) {
-      const list: number[] = [];
-      // From the body outward, so the stacks at the very end lie on top.
-      for (let row = 1; row >= 0; row--) {
-        const count = across - row;
-        const s = end ? isle.s1 - TYRE - row * TYRE * 1.9 : isle.s0 + TYRE + row * TYRE * 1.9;
-        for (let j = 0; j < count; j++) {
-          const q = offset(s, mid + (j - (count - 1) / 2) * ((width - 2 * TYRE) / Math.max(1, across - 1)));
-          list.push(q.x, q.y, (j + row) & 1 ? RUST2 : BONE1);
+  art.roads.forEach((track, road) => {
+    const base = art.sBase[road], seeds = 7919 * road;
+    const offset = (s: number, lat: number): Vec => {
+      const p = pointAt(track, s);
+      return { x: p.x - Math.sin(p.h) * lat, y: p.y + Math.cos(p.h) * lat };
+    };
+    // The box of view pixels a rectangle of the road lies in, `pad` world units wider all round.
+    const flat = (kind: number, s0: number, s1: number, l0: number, l1: number, pad: number, flip = false): void => {
+      let x0 = BIG, y0 = BIG, x1 = -BIG, y1 = -BIG;
+      const steps = Math.max(1, Math.ceil((s1 - s0 + 2 * pad) / 12));
+      for (let k = 0; k <= steps; k++) {
+        const s = s0 - pad + ((s1 - s0 + 2 * pad) * k) / steps;
+        for (const lat of [l0 - pad, l1 + pad]) {
+          const q = offset(s, lat);
+          x0 = Math.min(x0, q.x * ZOOM);
+          x1 = Math.max(x1, q.x * ZOOM);
+          y0 = Math.min(y0, q.y * ZOOM);
+          y1 = Math.max(y1, q.y * ZOOM);
         }
       }
-      heap(list);
-    }
-    const paints = [RUST1, RUST2, RUST0, HAZ0, STEEL1, STEEL2];
-    const room = width - 2 * BARRIER - 8; // the yard inside the barrier, less some air
-    if (room >= 14) {
-      for (let s = isle.s0 + NOSE + 34 + rnd() * 30; s < isle.s1 - NOSE - 30; s += 46 + rnd() * 70) {
-        const r = Math.min(room / 2.3, 7 + rnd() * 5);
-        const q = offset(s, mid + (rnd() - 0.5) * Math.max(0, room - r * 2.2));
-        const pick = rnd(), a = rnd() * Math.PI, c = paints[Math.floor(rnd() * paints.length)];
-        // (The desert's island: rocks, scrub and succulents; a car shell has no room.)
-        const kind = desert ? (pick < 0.5 ? K_ROCK : pick < 0.72 ? K_SCRUB : K_CACTUS) : pick < 0.3 ? K_CUBE : pick < 0.5 ? K_DRUM : pick < 0.66 ? K_TYRES : pick < 0.76 ? K_PLATE : pick < 0.86 ? K_PALLET : pick < 0.94 ? K_ENGINE : K_COIL;
-        const j: Junk = { kind, x: q.x * ZOOM, y: q.y * ZOOM, r: r * ZOOM, a, c: desert ? (kind === K_ROCK ? dress.stones[c === STEEL1 || c === STEEL2 ? 1 : 0] : 0) : c };
-        thing(T_JUNK, j.x - j.r * 1.5 - 4, j.y - j.r * 1.5 - 4, j.x + j.r * 1.5 + 4, j.y + j.r * 1.5 + 4, { junk: j });
+      // A puddle's outline is its own, by the four numbers of its rectangle: the same on every client and in every bake.
+      const seed = Math.imul(Math.round(s0 * 4), 73856093) ^ Math.imul(Math.round(s1 * 4), 19349663) ^ Math.imul(Math.round(l0 * 4), 83492791) ^ Math.imul(Math.round(l1 * 4), 265443576);
+      const short = Math.min(s1 - s0, l1 - l0);
+      const rnd = mulberry32(seed);
+      // Its four corners: a tight one, a wide one and two between, dealt out by the seed, so no two are alike.
+      const radii = [0, 1, 2, 3].map((k) => PUDDLE_ROUND_MIN + ((PUDDLE_ROUND_MAX - PUDDLE_ROUND_MIN) * (k + 0.15 + 0.7 * rnd())) / 4);
+      for (let k = 3; k > 0; k--) {
+        const j = Math.floor(rnd() * (k + 1));
+        [radii[k], radii[j]] = [radii[j], radii[k]];
       }
+      const round = Float64Array.from(radii, (r) => Math.min(short / 2, r));
+      const lobe = (side: number) => Math.max(60, Math.min(140, side / 2));
+      art.flats.push({ kind, s0: s0 + base, s1: s1 + base, l0, l1, x0: Math.floor(x0) - 2, y0: Math.floor(y0) - 2, x1: Math.ceil(x1) + 3, y1: Math.ceil(y1) + 3, flip, seed, round, swell: Math.min(1, short / 48), lobeS: lobe(s1 - s0), lobeL: lobe(l1 - l0) });
+    };
+
+    // Painted flat, in this order: the surfaces first (they never overlap each other), then what
+    // may lie on one (the lane of a row of barrels, a press's bed), the islands last.
+    for (const d of track.dirt) flat(F_DIRT, d.s0, d.s1, d.lat0, d.lat1, 0);
+    for (const w of track.water) flat(F_WATER, w.s0, w.s1, w.lat0, w.lat1, 0);
+    for (const b of track.belts) flat(F_BELT, b.s0, b.s1, b.lat0, b.lat1, 0);
+    for (const b of track.barrels) flat(F_ROW, b.s - BARREL_R - ROW_JAMB, b.s + BARREL_R + ROW_JAMB, b.lat0 - BARREL_R - BARRIER, b.lat1 + BARREL_R + BARRIER, 0, b.speed < 0);
+    for (const p of track.presses) flat(F_BED, p.s - PRESS_DEPTH / 2, p.s + PRESS_DEPTH / 2, p.lat0, p.lat1, 0);
+    for (const i of track.islands) flat(F_ISLAND, i.s0, i.s1, i.lat0, i.lat1, GORE);
+
+    // Tyre mounds.
+    track.tyres.forEach((m, k) => mound(m.x, m.y, m.r, mulberry32(601 + 13 * k + seeds)));
+
+    // Islands: at either end a nose of tyre stacks, two rows across its whole width; between them
+    // a strip of the yard behind a barrier, with a piece of junk now and then where it is wide.
+    track.islands.forEach((isle, k) => {
+      const rnd = mulberry32(811 + 17 * k + seeds);
+      const width = isle.lat1 - isle.lat0, mid = (isle.lat0 + isle.lat1) / 2;
+      const across = Math.max(2, Math.round(width / (TYRE * 1.8)));
+      for (const end of [0, 1]) {
+        const list: number[] = [];
+        // From the body outward, so the stacks at the very end lie on top.
+        for (let row = 1; row >= 0; row--) {
+          const count = across - row;
+          const s = end ? isle.s1 - TYRE - row * TYRE * 1.9 : isle.s0 + TYRE + row * TYRE * 1.9;
+          for (let j = 0; j < count; j++) {
+            const q = offset(s, mid + (j - (count - 1) / 2) * ((width - 2 * TYRE) / Math.max(1, across - 1)));
+            list.push(q.x, q.y, (j + row) & 1 ? RUST2 : BONE1);
+          }
+        }
+        heap(list);
+      }
+      const paints = [RUST1, RUST2, RUST0, HAZ0, STEEL1, STEEL2];
+      const room = width - 2 * BARRIER - 8; // the yard inside the barrier, less some air
+      if (room >= 14) {
+        for (let s = isle.s0 + NOSE + 34 + rnd() * 30; s < isle.s1 - NOSE - 30; s += 46 + rnd() * 70) {
+          const r = Math.min(room / 2.3, 7 + rnd() * 5);
+          const q = offset(s, mid + (rnd() - 0.5) * Math.max(0, room - r * 2.2));
+          const pick = rnd(), a = rnd() * Math.PI, c = paints[Math.floor(rnd() * paints.length)];
+          // (The desert's island: rocks, scrub and succulents; a car shell has no room.)
+          const kind = desert ? (pick < 0.5 ? K_ROCK : pick < 0.72 ? K_SCRUB : K_CACTUS) : pick < 0.3 ? K_CUBE : pick < 0.5 ? K_DRUM : pick < 0.66 ? K_TYRES : pick < 0.76 ? K_PLATE : pick < 0.86 ? K_PALLET : pick < 0.94 ? K_ENGINE : K_COIL;
+          const j: Junk = { kind, x: q.x * ZOOM, y: q.y * ZOOM, r: r * ZOOM, a, c: desert ? (kind === K_ROCK ? dress.stones[c === STEEL1 || c === STEEL2 ? 1 : 0] : 0) : c };
+          thing(T_JUNK, j.x - j.r * 1.5 - 4, j.y - j.r * 1.5 - 4, j.x + j.r * 1.5 + 4, j.y + j.r * 1.5 + 4, { junk: j });
+        }
+      }
+    });
+
+    // Ramp trucks: the frame of each (its rear end's middle, its heading) and its two arrows.
+    for (const t of track.trucks) {
+      const len = Math.hypot(t.x1 - t.x0, t.y1 - t.y0) || 1;
+      const cos = (t.x1 - t.x0) / len, sin = (t.y1 - t.y0) / len;
+      const rx = t.x0 - cos * TRUCK_HALF, ry = t.y0 - sin * TRUCK_HALF; // the rear end's middle
+      const lip = t.len - TRUCK_CAB, ramp = Math.min(42, lip * 0.5);
+      const at = (u: number): Frame => ({ x: (rx + cos * u) * ZOOM, y: (ry + sin * u) * ZOOM, cos, sin });
+      const chevrons = [ramp * 0.52, (ramp + lip - 3) / 2].map((u) => [chevron(at(u), 5.5, 0, 3), chevron(at(u), 5.5, 0, 1.5)]);
+      const reach = (t.len / 2 + TRUCK_HALF) * ZOOM;
+      const mx = (rx + (cos * t.len) / 2) * ZOOM, my = (ry + (sin * t.len) / 2) * ZOOM;
+      thing(T_TRUCK, mx - reach, my - reach, mx + reach, my + reach, { truck: { x: rx * ZOOM, y: ry * ZOOM, cos, sin, len: t.len, ramp, lip, chevrons } });
     }
   });
 
-  // Ramp trucks: the frame of each (its rear end's middle, its heading) and its two arrows.
-  for (const t of track.trucks) {
-    const len = Math.hypot(t.x1 - t.x0, t.y1 - t.y0) || 1;
-    const cos = (t.x1 - t.x0) / len, sin = (t.y1 - t.y0) / len;
-    const rx = t.x0 - cos * TRUCK_HALF, ry = t.y0 - sin * TRUCK_HALF; // the rear end's middle
-    const lip = t.len - TRUCK_CAB, ramp = Math.min(42, lip * 0.5);
-    const at = (u: number): Frame => ({ x: (rx + cos * u) * ZOOM, y: (ry + sin * u) * ZOOM, cos, sin });
-    const chevrons = [ramp * 0.52, (ramp + lip - 3) / 2].map((u) => [chevron(at(u), 5.5, 0, 3), chevron(at(u), 5.5, 0, 1.5)]);
-    const reach = (t.len / 2 + TRUCK_HALF) * ZOOM;
-    const mx = (rx + (cos * t.len) / 2) * ZOOM, my = (ry + (sin * t.len) / 2) * ZOOM;
-    thing(T_TRUCK, mx - reach, my - reach, mx + reach, my + reach, { truck: { x: rx * ZOOM, y: ry * ZOOM, cos, sin, len: t.len, ramp, lip, chevrons } });
-  }
+  // The nose at each gore of a shortcut (BR-BAKE; PLAN-BRANCH.md 2.3): a mound where the two
+  // roads' walls part, as large as the one a car meets there (shared/track.ts PlacedGore).
+  art.track.branches.forEach((b, k) => {
+    for (const g of [b.forkGore, b.mergeGore]) if (g) mound(g.x, g.y, g.noseMain.r, mulberry32(1601 + 13 * art.things.length + 7919 * k));
+  });
   art.furnished = art.flats.length + art.things.length > 0;
+}
+
+/** A painted arrow pointing along the frame, its middle `lat` to the right of the frame's line: a shaft and a head. */
+function arrow(f: Frame, lat: number): Float64Array {
+  const half = MOUTH_ARROW / 2, neck = half - 26, shaft = 5, head = 15;
+  const out = new Float64Array(14);
+  inFrame(f, -half, lat - shaft, out, 0);
+  inFrame(f, neck, lat - shaft, out, 2);
+  inFrame(f, neck, lat - head, out, 4);
+  inFrame(f, half, lat, out, 6);
+  inFrame(f, neck, lat + head, out, 8);
+  inFrame(f, neck, lat + shaft, out, 10);
+  inFrame(f, -half, lat + shaft, out, 12);
+  return out;
 }
 
 /** A chevron pointing along the frame, `half` wide either side of its line, with a mitred tip. */
@@ -944,8 +1268,19 @@ const OFF = KEEP_OFF;
 const cand = new Int16Array(1024); // pieces near the tile
 const fcand = new Int16Array(64); // flats near the tile (furniture)
 const tcand = new Int16Array(256); // things near the tile
+// What lies along the tile's pieces (wear): the repairs, the gaps' ends and the ramps whose stretch
+// of their road one of the tile's pieces is on. A pixel of the road is asked about these alone:
+// a track with shortcut roads has every road's repairs, ends and ramps in one list each
+// (BR-BAKE), and a pixel that asked about all of them paid for every road on the track.
+const pcand = new Int16Array(256);
+const ecand = new Int16Array(64);
+const rcand = new Int16Array(64);
 const near = new Int16Array(64); // ... near the block
 const nearD = new Float32Array(64); // ... and how far from its centre
+// For checks: the most pieces `near` and `cand` have held at a time since the page loaded (or
+// since bakePeaks(true)). A list that is full leaves pieces out: where two roads lie on each
+// other (a shortcut's mouth, BR-BAKE) a block has both roads' pieces near it.
+const PEAK = new Int32Array(2);
 const polyX = new Float64Array(32);
 const polyY = new Float64Array(32);
 const crossX = new Float64Array(32);
@@ -963,6 +1298,10 @@ const job = {
   sub: 0, // progress inside a step that is cut up further
   track: false, // any piece of the track near this tile?
   voids: false, // ... and one of a gap among them? (only then can a pixel be void)
+  wide: false, // ... and one whose road is wider or narrower than the plain width? (only then has a pixel's distance that to take off)
+  np: 0, // the repairs, gap ends and ramps along the tile's pieces (in pcand, ecand, rcand)
+  ne: 0,
+  nr: 0,
   patched: false, // any repair on this tile? (its joint is drawn at the end of the road pass)
   // The box the props of a theme lie in on this tile (x1, y1 exclusive; none while px1 <= px0):
   // their pixels take no marks (finish()).
@@ -1067,24 +1406,28 @@ function next(step = job.step + 1): void {
 /** Per pixel: the nearest ground of the track and the gap it lies in. A few rows of blocks per call. */
 function classify(): void {
   const art = job.art!, b = buffers();
-  const { ax, ay, ex, ey, inv, nx, ny, s0, ds, gap, capA, capB } = art;
+  const { ax, ay, ex, ey, inv, nx, ny, s0, ds, gap, capA, capB, road: roadOf } = art;
   const { bx, by } = job;
   const wall = art.track.wall;
   const reach = (art.wallMax + REACH) * ZOOM + 1; // view pixels
-  const wide = art.wide, wL0 = art.wL0, wL1 = art.wL1, wR0 = art.wR0, wR1 = art.wR1;
+  let wide = art.wide;
+  const wL0 = art.wL0, wL1 = art.wL1, wR0 = art.wR0, wR1 = art.wR1;
   if (job.sub === 0) {
     // The pieces that can reach into this tile.
-    let nc = 0, voids = false;
+    let nc = 0, voids = false, widened = false;
     for (let i = 0; i < art.n && nc < cand.length; i++) {
       const x0 = ax[i], y0 = ay[i], x1 = x0 + ex[i], y1 = y0 + ey[i];
       if (Math.max(x0, x1) < bx - reach || Math.min(x0, x1) > bx + S + reach) continue;
       if (Math.max(y0, y1) < by - reach || Math.min(y0, y1) > by + S + reach) continue;
       cand[nc++] = i;
       if (gap[i] >= 0) voids = true;
+      if (wide && (wL0[i] !== 0 || wL1[i] !== 0 || wR0[i] !== 0 || wR1[i] !== 0)) widened = true;
     }
     job.nc = nc;
     job.track = nc > 0;
     job.voids = voids;
+    job.wide = widened;
+    if (nc > PEAK[1]) PEAK[1] = nc;
     b.cls.fill(C_NONE);
     b.dist.fill(BIG);
     if (!nc) {
@@ -1096,6 +1439,7 @@ function classify(): void {
     b.patch.fill(0);
   }
   const nc = job.nc;
+  wide = job.wide; // of this tile's pieces: nothing to take off a pixel's distance where none is widened
   const reach2 = reach * reach;
   const gapR = (wall + BARRIER) * ZOOM;
   const blockReach = reach + BLOCK_R;
@@ -1120,6 +1464,7 @@ function classify(): void {
         }
         if (i !== last + 1 || (last >= 0 && gap[i] !== gap[last])) {
           // The run is complete: keep what is within a block's width of its nearest piece.
+          if (nb > PEAK[0]) PEAK[0] = nb;
           let keep = run;
           for (let q = run; q < nb; q++) {
             if (nearD[q] > runMin + 2 * BLOCK_R) continue;
@@ -1129,7 +1474,10 @@ function classify(): void {
           nb = run = keep;
           runMin = BIG;
         }
-        if (k === nc || nb === near.length) break;
+        if (k === nc || nb === near.length) {
+          if (nb > PEAK[0]) PEAK[0] = nb; // (full: the pieces after this one are left out)
+          break;
+        }
         last = i;
         near[nb] = i;
         nearD[nb++] = d;
@@ -1219,9 +1567,21 @@ function classify(): void {
             if (wide) b.dist[p] -= l < 0 ? wL0[gi] + (wL1[gi] - wL0[gi]) * gt : wR0[gi] + (wR1[gi] - wR0[gi]) * gt;
           }
           if (vi >= 0) {
-            b.gap[p] = gap[vi];
-            b.gapS[p] = s0[vi] + ds[vi] * vt;
-            b.gapLat[p] = ((px - ax[vi]) * nx[vi] + (py - ay[vi]) * ny[vi]) * UNIT;
+            const l = ((px - ax[vi]) * nx[vi] + (py - ay[vi]) * ny[vi]) * UNIT;
+            if (roadOf[vi] === 0) {
+              b.gap[p] = gap[vi];
+              b.gapS[p] = s0[vi] + ds[vi] * vt;
+              b.gapLat[p] = l;
+            } else {
+              // A shortcut's gap is as wide as the shortcut: the void ends at its own wall, and
+              // the offset across it is kept as the distance is, less what the road is wider there.
+              const w = l < 0 ? wL0[vi] + (wL1[vi] - wL0[vi]) * vt : wR0[vi] + (wR1[vi] - wR0[vi]) * vt;
+              if (Math.sqrt(bestV) * UNIT - w <= wall + BARRIER) {
+                b.gap[p] = gap[vi];
+                b.gapS[p] = s0[vi] + ds[vi] * vt;
+                b.gapLat[p] = l < 0 ? l + w : l - w;
+              }
+            }
           }
         }
       }
@@ -1492,6 +1852,52 @@ function yard(): void {
   COST[0] = cost;
 }
 
+/**
+ * The repairs, the gaps' ends and the ramps along the tile's pieces, into pcand, ecand and rcand
+ * (in their lists' order): those whose stretch one of the pieces touches. A pixel of the road is
+ * `s` along its own piece, so no other can be under it: road() asks about these alone, and what
+ * it paints is what it painted when it asked about all.
+ */
+function along(): void {
+  const art = job.art!;
+  const { s0, ds } = art;
+  const nc = job.nc;
+  const patches = art.patches, ends = art.ends, ramps = art.ramps;
+  let np = 0, ne = 0, nr = 0;
+  for (let q = 0; q < patches.length && np < pcand.length; q++) {
+    const pa = patches[q];
+    for (let k = 0; k < nc; k++) {
+      const i = cand[k];
+      if (s0[i] > pa.s1 || s0[i] + ds[i] < pa.s0) continue;
+      pcand[np++] = q;
+      break;
+    }
+  }
+  // An end: the 7 units before its edge (either side of it is asked: the nearer side costs nothing).
+  for (let q = 0; q < ends.length && ne < ecand.length; q++) {
+    const at = ends[q].s;
+    for (let k = 0; k < nc; k++) {
+      const i = cand[k];
+      if (s0[i] > at + 7 || s0[i] + ds[i] < at - 7) continue;
+      ecand[ne++] = q;
+      break;
+    }
+  }
+  // A ramp: its plate, and its lip's shadow on the 9 units beyond.
+  for (let q = 0; q < ramps.length && nr < rcand.length; q++) {
+    const rp = ramps[q];
+    for (let k = 0; k < nc; k++) {
+      const i = cand[k];
+      if (s0[i] > rp.s1 + 9 || s0[i] + ds[i] < rp.s0) continue;
+      rcand[nr++] = q;
+      break;
+    }
+  }
+  job.np = np;
+  job.ne = ne;
+  job.nr = nr;
+}
+
 /** The track itself: the void of a gap, then barrier, verge, kerb and tarmac with what is painted and worn on it. */
 function road(): void {
   const art = job.art!, b = buffers(), N = noiseTable();
@@ -1499,10 +1905,12 @@ function road(): void {
   const { idx, cls, dist, seg, tt, lat: latOf, gap: gapOf, gapS, gapLat, patch } = b;
   const track = art.track;
   const wall = track.wall, hw = track.def.halfWidth;
-  const R = wall + BARRIER, hw5 = hw + KERB, W = wall - 1;
+  const R = wall + BARRIER, hw5 = hw + KERB;
   const { s0, ds, dash0, groove0, groove1 } = art;
-  const gaps = track.gaps, ramps = art.ramps, ends = art.ends, patches = art.patches;
+  const gaps = art.gaps, ramps = art.ramps, ends = art.ends, patches = art.patches;
   const nc = job.nc, pieceGap = art.gap;
+  if (job.sub === 0) along();
+  const np = job.np, ne = job.ne, nr = job.nr;
   // The theme's dressing of the bands.
   const dress = art.dress;
   const WALL = dress.wall, RAIL = dress.rail, BLOCK = dress.block, JOINT = dress.joint;
@@ -1602,36 +2010,37 @@ function road(): void {
           // Worn along the racing line: more rubber and oil, fewer light specks.
           const worn = Math.abs(l - (groove0[i] + (groove1[i] - groove0[i]) * t)) < 17;
           c = n < (worn ? 77 : 13) ? TAR0 : n > (worn ? 252 : 238) ? TAR2 : TAR1;
-          for (let q = 0; q < patches.length; q++) {
-            const pa = patches[q];
+          for (let q = 0; q < np; q++) {
+            const pa = patches[pcand[q]];
             if (s < pa.s0 || s > pa.s1 || l < pa.l0 || l > pa.l1) continue;
             c = n < 77 ? TAR2 : n > 248 ? TAR0 : TAR1; // a repair: a lighter mix
-            patch[p] = q + 1;
+            patch[p] = pcand[q] + 1;
             job.patched = true;
           }
           if (Math.abs(l) < 1.25 && (dash0[i] + ds[i] * t) % 44 < 18) c = TAR3; // the centre line
         }
         // A gap's end on the road: hazard stripes, then the broken edge.
-        for (let q = 0; q < ends.length; q++) {
-          const en = ends[q];
+        for (let q = 0; q < ne; q++) {
+          const en = ends[ecand[q]];
           const back = (en.s - s) * en.dir; // how far before the edge
           if (back < 0 || back > 7) continue;
-          if (Math.abs(l) <= hw5) {
+          if (Math.abs(l) <= en.hw + KERB) {
             const f = en.frame;
             const rx = (X + 0.5 - f.x) * UNIT, ry = (Y + 0.5 - f.y) * UNIT;
             const u = rx * f.cos + ry * f.sin, v = -rx * f.sin + ry * f.cos;
-            c = Math.floor((u - v + 2 * (hw + 14) + 5) / 5) & 1 ? HAZ1 : SOOT2;
+            c = Math.floor((u - v + 2 * (en.hw + 14) + 5) / 5) & 1 ? HAZ1 : SOOT2;
           }
           if (back <= 2) c = GRAVEL2;
         }
-        for (let q = 0; q < ramps.length; q++) {
-          const rp = ramps[q];
+        for (let q = 0; q < nr; q++) {
+          const rp = ramps[rcand[q]];
+          // (rp.w: its road's wall less 1. A shortcut's ramp is as wide as the shortcut.)
           if (s > rp.s1) {
             // The lip's shadow on what lies beyond it.
-            if (s <= rp.s1 + 9 && l >= -W + 4 && l <= W + 4) c = SHADE_I[c];
+            if (s <= rp.s1 + 9 && l >= -rp.w + 4 && l <= rp.w + 4) c = SHADE_I[c];
             continue;
           }
-          if (s < rp.s0 || Math.abs(l) > W) continue;
+          if (s < rp.s0 || Math.abs(l) > rp.w) continue;
           k = C_PLATE;
           if (s >= rp.s1 - 3) {
             c = HAZ1; // the lip
@@ -1646,7 +2055,7 @@ function road(): void {
           const seam = (X + Y) & 1;
           c = rise < 0.34 ? (rise > 0.31 && seam ? base : SHADE_I[base]) : rise > 0.67 ? (rise < 0.7 && seam ? base : LIT_I[base]) : base;
           // Its dark outline.
-          if (Math.abs(l) > W - 1.6 || s < rp.s0 + 1.6) c = SOOT2;
+          if (Math.abs(l) > rp.w - 1.6 || s < rp.s0 + 1.6) c = SOOT2;
         }
       }
       // A lower road passing under a gap sits in shade, darker still just under each end.
@@ -1764,6 +2173,7 @@ function details(): void {
         }
       }
     }
+    if (art.mouths.length) cost += mouths();
     COST[0] = cost;
     return;
   }
@@ -1791,6 +2201,62 @@ function details(): void {
   clipClass = -1;
   next(art.furnished ? 6 : 5); // the road's furniture, where a track has any, before the tile is finished
   COST[0] = cost + done * 8;
+}
+
+/**
+ * What is painted where a shortcut leaves the main road and where it rejoins it (Mouth), on
+ * asphalt only and worn, as the wedge before an island's nose is: the striped wedge between the
+ * two roads and the fork's two arrows. Returns its cost in units (a whole number).
+ */
+function mouths(): number {
+  const art = job.art!, b = buffers(), N = noiseTable();
+  const { bx, by, o2 } = job;
+  const { idx, cls, mask, dist, seg, tt, lat: latOf } = b;
+  const { s0, ds, road: roadOf } = art;
+  const list = art.mouths;
+  let cost = 0;
+  for (let q = 0; q < list.length; q++) {
+    const m = list[q];
+    const xa = m.x0 - bx > 0 ? m.x0 - bx : 0, xb = m.x1 - bx < S ? m.x1 - bx : S;
+    const ya = m.y0 - by > 0 ? m.y0 - by : 0, yb = m.y1 - by < S ? m.y1 - by : S;
+    if (xa < xb && ya < yb) {
+      cost += 4 + (((xb - xa) * (yb - ya)) >> 6); // as a painted box is costed elsewhere: about 0.02 a pixel
+      const f = m.frame;
+      for (let y = ya; y < yb; y++) {
+        for (let x = xa; x < xb; x++) {
+          const p = y * S + x;
+          if (cls[p] !== C_TARMAC) continue;
+          // Further than a lane from its own road's centreline, on the side the other road is on ...
+          const e = dist[p] - MOUTH_LANE;
+          if (!(e > 0)) continue;
+          const i = seg[p], l = latOf[p];
+          const s = s0[i] + ds[i] * tt[p];
+          if (roadOf[i] === 0 ? s < m.m0 || s > m.m1 || l * m.sideM <= 0 : roadOf[i] !== m.road || s < m.b0 || s > m.b1 || l * m.sideB <= 0) continue;
+          // ... and between the wedge's tip and the tip of the gravel: an outline, and stripes
+          // that point back at the tip from either side.
+          const rx = (bx + x + 0.5 - f.x) * UNIT, ry = (by + y + 0.5 - f.y) * UNIT;
+          const along = rx * f.cos + ry * f.sin;
+          if (along < 0 || along > m.len) continue;
+          if (e >= 1.7 && m.len - along >= 1.7 && Math.floor((along + e) / MOUTH_STRIPE) & 1) continue;
+          if (N[((((by + y + (o2 >> 8)) & 255) << 8) | ((bx + x + o2 + 53) & 255))] < 214) idx[p] = BONE1;
+        }
+      }
+    }
+    const arrows = m.arrows;
+    for (let j = 0; j < arrows.length; j++) {
+      if (!polyFrom(arrows[j], bx, by)) continue;
+      cost += 6;
+      fillPoly(mask, 1);
+      for (let y = my0; y < my1; y++) {
+        for (let x = mx0; x < mx1; x++) {
+          const p = y * S + x;
+          if (mask[p] && cls[p] === C_TARMAC && N[((((by + y + (o2 >> 8)) & 255) << 8) | ((bx + x + o2 + 53) & 255))] < 214) idx[p] = BONE1;
+        }
+      }
+      maskClear(mask);
+    }
+  }
+  return cost;
 }
 
 /**
@@ -3621,15 +4087,17 @@ export class World {
     const art = this.art, track = art.track, L = track.length;
     // The renderer is not told which part of the track the car is on. At a crossing two parts
     // pass under it: the nearest piece, and the nearest one that is far from it along the
-    // track. The part that is a hazard there is the one the car fell from.
+    // track (or on another road: a shortcut's, BR-BAKE). The part that is a hazard there is the
+    // one the car fell from.
     const px = own.x * ZOOM, py = own.y * ZOOM;
-    let firstS = -1, pick = -1;
+    let firstS = -1, firstRoad = 0, pick = -1, pickRoad = 0;
     for (let pass = 0; pass < 2 && pick < 0; pass++) {
       let best = pass ? (2 * track.wall * ZOOM) ** 2 : BIG, bi = -1, bt = 0;
       for (let i = 0; i < art.n; i++) {
-        if (pass) {
+        if (pass && art.road[i] === firstRoad) {
+          // (firstS and a piece's s0 are of one road here: both have its base in them. An open road's ends are not neighbours.)
           const along = Math.abs(art.s0[i] - firstS);
-          if (Math.min(along, L - along) < track.wall * 4) continue;
+          if ((firstRoad ? along : Math.min(along, L - along)) < track.wall * 4) continue;
         }
         const wx = px - art.ax[i], wy = py - art.ay[i];
         let t = (wx * art.ex[i] + wy * art.ey[i]) * art.inv[i];
@@ -3642,15 +4110,36 @@ export class World {
         }
       }
       if (bi < 0) break;
-      const s = art.s0[bi] + art.ds[bi] * bt;
+      // On its own road (a shortcut's distances are its own, from its base).
+      const k = art.road[bi], on = art.roads[k];
+      const at = art.s0[bi] + art.ds[bi] * bt, s = k ? at - art.sBase[k] : at;
       // A falling car stands over the hazard; a wreck goes to the centreline there.
       const x = falling ? own.x : (art.ax[bi] + art.ex[bi] * bt) * UNIT, y = falling ? own.y : (art.ay[bi] + art.ey[bi] * bt) * UNIT;
-      if (gapAt(track, s) !== null || holeAt(track, x, y, s) !== null) pick = s;
-      else if (!pass) firstS = s;
+      if (gapAt(on, s) !== null || holeAt(on, x, y, s) !== null) {
+        pick = s;
+        pickRoad = k;
+      } else if (!pass) {
+        firstS = at;
+        firstRoad = k;
+      }
     }
     // A fall with no hazard found under the car (it left the track): from the nearest part.
-    if (pick < 0 && falling) pick = firstS;
+    if (pick < 0 && falling) {
+      pick = firstRoad ? firstS - art.sBase[firstRoad] : firstS;
+      pickRoad = firstRoad;
+    }
     if (pick < 0) return; // a wreck on solid ground stays where it is
+    if (pickRoad) {
+      // On a shortcut: its last recovery point at or before the place, or (none yet) the main
+      // road's before the fork (shared/track.ts recoveryFor).
+      const rec = art.roads[pickRoad].recovery;
+      let r = -1;
+      for (let k = 0; k < rec.length; k++) if (rec[k] <= pick) r = k;
+      this.destX = (r < 0 ? art.recX[art.recBack[pickRoad]] : art.recRoadX[pickRoad][r]) * ZOOM;
+      this.destY = (r < 0 ? art.recY[art.recBack[pickRoad]] : art.recRoadY[pickRoad][r]) * ZOOM;
+      this.dest = true;
+      return;
+    }
     let r = track.recovery.length - 1;
     for (let k = 0; k < track.recovery.length; k++) if (track.recovery[k] <= pick) r = k;
     this.destX = art.recX[r] * ZOOM;
@@ -3718,6 +4207,27 @@ export function bakeTileIndices(track: Track, tx: number, ty: number, trace?: (s
   const out = new Uint8Array(TILE * TILE);
   for (let y = 0; y < TILE; y++) for (let x = 0; x < TILE; x++) out[y * TILE + x] = idx[(y + PAD) * S + PAD + x] & 63;
   return out;
+}
+
+/**
+ * For checks: the most pieces the bake's two lists have held at a time (`near`: the pieces near
+ * a block, of `nearRoom`; `cand`: the pieces near a tile, of `candRoom`) since the page loaded
+ * or the last call with `reset`. A list that was full has left pieces out.
+ */
+export function bakePeaks(reset = false): { near: number; nearRoom: number; cand: number; candRoom: number } {
+  const out = { near: PEAK[0], nearRoom: near.length, cand: PEAK[1], candRoom: cand.length };
+  if (reset) PEAK.fill(0);
+  return out;
+}
+
+/**
+ * For checks: what a track's art lays out beside and on its roads. Barrier posts (x, y of each
+ * one's top-left view pixel: a post is 3 x 3), the junk or props outside the walls (centre and
+ * size, view pixels), the ruts' points (x, y pairs, view pixels), and how many mouths have paint.
+ */
+export function artLayout(track: Track): { posts: Int32Array; junk: readonly { x: number; y: number; r: number }[]; ruts: readonly Float32Array[]; mouths: number } {
+  const a = artOf(track);
+  return { posts: a.posts, junk: a.junk, ruts: a.ruts, mouths: a.mouths.length };
 }
 
 /** What a pixel of a baked tile is, as bakeTileKinds() tells it. */

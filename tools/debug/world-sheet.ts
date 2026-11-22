@@ -46,7 +46,7 @@ import { FONT_LETTERS, SMALL } from "../../client/gfx/font";
 import { P, PALETTE, rgbOf } from "../../client/gfx/palette";
 import { FX_SHADOW, OBST_H, OBST_W } from "../../client/gfx/sprites";
 import { PREVIEW_YARD, TEST_TRACKS, testTrack } from "../../shared/testtracks";
-import { buildTrack, pointAt, queryTrackNear, validateTrack, type Track } from "../../shared/track";
+import { buildTrack, pointAt, queryRoads, validateTrack, type Track } from "../../shared/track";
 import { trackById, trackList } from "../../shared/tracks";
 import { sheetYard } from "./world-sheet/yard";
 
@@ -251,7 +251,8 @@ async function belts(say: (good: boolean, what: string) => void): Promise<void> 
               for (let j = 0; j < 12; j++) {
                 for (let i = 0; i < 12; i++) {
                   if (!sheet![(drawn[k + 1] + j) * OBST_W + drawn[k] + i]) continue;
-                  const q = queryTrackNear(track, (ox + drawn[k + 2] + i + 0.5) / ZOOM, (oy + drawn[k + 3] + j + 0.5) / ZOOM, mid.seg);
+                  // (queryRoads with a hint: queryTrackNear on a track without shortcut roads, as these are; BR-BAKE.)
+                  const q = queryRoads(track, (ox + drawn[k + 2] + i + 0.5) / ZOOM, (oy + drawn[k + 3] + j + 0.5) / ZOOM, mid.seg);
                   const out = Math.max(s0 - q.s, q.s - s1, lat0 - q.lat, q.lat - lat1);
                   if (out <= 0) continue;
                   outside++;
