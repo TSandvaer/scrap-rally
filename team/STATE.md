@@ -584,6 +584,8 @@ User on the phone: point mode "much better but now the push area need to be smal
 ?debug=1 and pastes values (popup) -> TOUCH-6 makes them the defaults. QA11 stalled once (ended turn on background passes) -> told to
 re-run in the foreground. MOVE fix round 1 done: 84b1323 (7366491 F1-F4 + notes, repro tests; 893/893 + 133/133 x2; shipped SAME).
 Re-review (fixes + criterion 9) sent to ctx_b64bf57fdff3.
+QA11 live PASS (ctx_1c351f557824, released; tmp/qa11-live-report.md): point mode faces the stick (<5 deg at 250 ms), brakes/turns
+round, wall back-out, Mode switch; SURF-2 regression ok (3 bots x2 on Overpass Knot, 0 falls). ClickUp complete: TOUCH-5, M4-SURF-2.
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
