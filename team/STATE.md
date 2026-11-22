@@ -598,6 +598,11 @@ M4-TRACKS): BR-SCHEMA 123jpnbfgh9 -> BR-PHYS 123jpnbfgha + BR-BAKE 123jpnbfghb (
 (Fable) -> Branch Yard taste -> BR-TRACKS 123jpnbfghe.
 MOVE F3-edge fixed: 76719f1 (probe 128/3900 -> 0/3900; 893/893 + 133/133 x2); re-check sent to ctx_178052ad9776. Themes (desert, city,
 jungle + scrapyard; looks + surfaces; fixed per track): an Opus Plan agent drafts PLAN-THEMES (then Fable review, user approval).
+MOVE re-check APPROVE (ctx_5178711f0093). User popups: merge now / drive later; start M4-TRACKS now; BR-SCHEMA beside it; cap 3.
+M4-MOVE MERGED 158a691; gate running. IN FLIGHT (3 authors): TOUCH-6 ctx_2e38d6f098e2 (:3006); M4-TRACKS 123jpnbffz6 ctx_25b6cddb77d6
+(~/orca/workspaces/scrap-rally/m4-tracks, :3008; spec tmp/spec-m4-tracks.md; new tracks in shared/longtracks.ts); BR-SCHEMA 123jpnbfgh9
+ctx_d7d9decab927 (~/orca/workspaces/scrap-rally/br-schema, :3010; spec tmp/spec-br-schema.md). Next free slot: a Fable theme-art worker
+once PLAN-THEMES is approved. Move Yard taste copy: to set up on :3009 (replaces the split copy).
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).

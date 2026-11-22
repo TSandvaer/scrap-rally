@@ -149,3 +149,9 @@ scripts/bots.ts:92 (BR-PHYS), tools/debug/world-sheet.ts:254 (BR-BAKE), surf-tun
 4. Painted arrows mark the fork, no text.
 5. Shortcuts look the same as the main road on the minimap.
 6. A fall before the first branch recovery point goes back to the main recovery point before the fork.
+
+## Sequencing change (user, 2026-11-22, popup "run BR-SCHEMA beside M4-TRACKS")
+BR-SCHEMA runs in parallel with M4-TRACKS instead of after it: M4-TRACKS puts Slag Harbour and Breaker's Mile in a new
+shared/longtracks.ts (registry in shared/tracks.ts) and stays out of shared/track.ts; BR-SCHEMA owns shared/track.ts,
+shared/testtracks.ts and tools/debug/schema-hash.ts. Shared: sim-test appends and schema-hash.golden.json entries; the second to merge
+merges main first and re-runs `schema-hash --write` showing every other entry unchanged. The later waves keep their order.
