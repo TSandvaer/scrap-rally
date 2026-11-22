@@ -1267,6 +1267,13 @@ const OFF = KEEP_OFF;
 const cand = new Int16Array(1024); // pieces near the tile
 const fcand = new Int16Array(64); // flats near the tile (furniture)
 const tcand = new Int16Array(256); // things near the tile
+// What lies along the tile's pieces (wear): the repairs, the gaps' ends and the ramps whose stretch
+// of their road one of the tile's pieces is on. A pixel of the road is asked about these alone:
+// a track with shortcut roads has every road's repairs, ends and ramps in one list each
+// (BR-BAKE), and a pixel that asked about all of them paid for every road on the track.
+const pcand = new Int16Array(256);
+const ecand = new Int16Array(64);
+const rcand = new Int16Array(64);
 const near = new Int16Array(64); // ... near the block
 const nearD = new Float32Array(64); // ... and how far from its centre
 // For checks: the most pieces `near` and `cand` have held at a time since the page loaded (or
@@ -1290,6 +1297,10 @@ const job = {
   sub: 0, // progress inside a step that is cut up further
   track: false, // any piece of the track near this tile?
   voids: false, // ... and one of a gap among them? (only then can a pixel be void)
+  wide: false, // ... and one whose road is wider or narrower than the plain width? (only then has a pixel's distance that to take off)
+  np: 0, // the repairs, gap ends and ramps along the tile's pieces (in pcand, ecand, rcand)
+  ne: 0,
+  nr: 0,
   patched: false, // any repair on this tile? (its joint is drawn at the end of the road pass)
   // The box the props of a theme lie in on this tile (x1, y1 exclusive; none while px1 <= px0):
   // their pixels take no marks (finish()).
@@ -1398,20 +1409,23 @@ function classify(): void {
   const { bx, by } = job;
   const wall = art.track.wall;
   const reach = (art.wallMax + REACH) * ZOOM + 1; // view pixels
-  const wide = art.wide, wL0 = art.wL0, wL1 = art.wL1, wR0 = art.wR0, wR1 = art.wR1;
+  let wide = art.wide;
+  const wL0 = art.wL0, wL1 = art.wL1, wR0 = art.wR0, wR1 = art.wR1;
   if (job.sub === 0) {
     // The pieces that can reach into this tile.
-    let nc = 0, voids = false;
+    let nc = 0, voids = false, widened = false;
     for (let i = 0; i < art.n && nc < cand.length; i++) {
       const x0 = ax[i], y0 = ay[i], x1 = x0 + ex[i], y1 = y0 + ey[i];
       if (Math.max(x0, x1) < bx - reach || Math.min(x0, x1) > bx + S + reach) continue;
       if (Math.max(y0, y1) < by - reach || Math.min(y0, y1) > by + S + reach) continue;
       cand[nc++] = i;
       if (gap[i] >= 0) voids = true;
+      if (wide && (wL0[i] !== 0 || wL1[i] !== 0 || wR0[i] !== 0 || wR1[i] !== 0)) widened = true;
     }
     job.nc = nc;
     job.track = nc > 0;
     job.voids = voids;
+    job.wide = widened;
     if (nc > PEAK[1]) PEAK[1] = nc;
     b.cls.fill(C_NONE);
     b.dist.fill(BIG);
@@ -1424,6 +1438,7 @@ function classify(): void {
     b.patch.fill(0);
   }
   const nc = job.nc;
+  wide = job.wide; // of this tile's pieces: nothing to take off a pixel's distance where none is widened
   const reach2 = reach * reach;
   const gapR = (wall + BARRIER) * ZOOM;
   const blockReach = reach + BLOCK_R;
@@ -1836,6 +1851,52 @@ function yard(): void {
   COST[0] = cost;
 }
 
+/**
+ * The repairs, the gaps' ends and the ramps along the tile's pieces, into pcand, ecand and rcand
+ * (in their lists' order): those whose stretch one of the pieces touches. A pixel of the road is
+ * `s` along its own piece, so no other can be under it: road() asks about these alone, and what
+ * it paints is what it painted when it asked about all.
+ */
+function along(): void {
+  const art = job.art!;
+  const { s0, ds } = art;
+  const nc = job.nc;
+  const patches = art.patches, ends = art.ends, ramps = art.ramps;
+  let np = 0, ne = 0, nr = 0;
+  for (let q = 0; q < patches.length && np < pcand.length; q++) {
+    const pa = patches[q];
+    for (let k = 0; k < nc; k++) {
+      const i = cand[k];
+      if (s0[i] > pa.s1 || s0[i] + ds[i] < pa.s0) continue;
+      pcand[np++] = q;
+      break;
+    }
+  }
+  // An end: the 7 units before its edge (either side of it is asked: the nearer side costs nothing).
+  for (let q = 0; q < ends.length && ne < ecand.length; q++) {
+    const at = ends[q].s;
+    for (let k = 0; k < nc; k++) {
+      const i = cand[k];
+      if (s0[i] > at + 7 || s0[i] + ds[i] < at - 7) continue;
+      ecand[ne++] = q;
+      break;
+    }
+  }
+  // A ramp: its plate, and its lip's shadow on the 9 units beyond.
+  for (let q = 0; q < ramps.length && nr < rcand.length; q++) {
+    const rp = ramps[q];
+    for (let k = 0; k < nc; k++) {
+      const i = cand[k];
+      if (s0[i] > rp.s1 + 9 || s0[i] + ds[i] < rp.s0) continue;
+      rcand[nr++] = q;
+      break;
+    }
+  }
+  job.np = np;
+  job.ne = ne;
+  job.nr = nr;
+}
+
 /** The track itself: the void of a gap, then barrier, verge, kerb and tarmac with what is painted and worn on it. */
 function road(): void {
   const art = job.art!, b = buffers(), N = noiseTable();
@@ -1847,6 +1908,8 @@ function road(): void {
   const { s0, ds, dash0, groove0, groove1 } = art;
   const gaps = art.gaps, ramps = art.ramps, ends = art.ends, patches = art.patches;
   const nc = job.nc, pieceGap = art.gap;
+  if (job.sub === 0) along();
+  const np = job.np, ne = job.ne, nr = job.nr;
   // The theme's dressing of the bands.
   const dress = art.dress;
   const WALL = dress.wall, RAIL = dress.rail, BLOCK = dress.block, JOINT = dress.joint;
@@ -1946,18 +2009,18 @@ function road(): void {
           // Worn along the racing line: more rubber and oil, fewer light specks.
           const worn = Math.abs(l - (groove0[i] + (groove1[i] - groove0[i]) * t)) < 17;
           c = n < (worn ? 77 : 13) ? TAR0 : n > (worn ? 252 : 238) ? TAR2 : TAR1;
-          for (let q = 0; q < patches.length; q++) {
-            const pa = patches[q];
+          for (let q = 0; q < np; q++) {
+            const pa = patches[pcand[q]];
             if (s < pa.s0 || s > pa.s1 || l < pa.l0 || l > pa.l1) continue;
             c = n < 77 ? TAR2 : n > 248 ? TAR0 : TAR1; // a repair: a lighter mix
-            patch[p] = q + 1;
+            patch[p] = pcand[q] + 1;
             job.patched = true;
           }
           if (Math.abs(l) < 1.25 && (dash0[i] + ds[i] * t) % 44 < 18) c = TAR3; // the centre line
         }
         // A gap's end on the road: hazard stripes, then the broken edge.
-        for (let q = 0; q < ends.length; q++) {
-          const en = ends[q];
+        for (let q = 0; q < ne; q++) {
+          const en = ends[ecand[q]];
           const back = (en.s - s) * en.dir; // how far before the edge
           if (back < 0 || back > 7) continue;
           if (Math.abs(l) <= en.hw + KERB) {
@@ -1968,8 +2031,8 @@ function road(): void {
           }
           if (back <= 2) c = GRAVEL2;
         }
-        for (let q = 0; q < ramps.length; q++) {
-          const rp = ramps[q];
+        for (let q = 0; q < nr; q++) {
+          const rp = ramps[rcand[q]];
           // (rp.w: its road's wall less 1. A shortcut's ramp is as wide as the shortcut.)
           if (s > rp.s1) {
             // The lip's shadow on what lies beyond it.
