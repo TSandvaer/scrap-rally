@@ -746,7 +746,16 @@ hitch in the wave-4 drive). BR-BAKE MERGED ceb4e8c (README: both sides kept); ga
 index-BgDgKaUv.js); ClickUp ready for qa test; workers released; workspace + branch removed. MARSHALS-1 author told to merge main + re-run
 marshal-sheet --check (msg_0f1f171d4920).
 THEME-SURF 123jpnbfgj3 in flight: ctx_9557ecf4735b (Opus, ~/orca/workspaces/scrap-rally/theme-surf, :3010; spec tmp/spec-theme-surf.md; no
-shared files with MARSHALS-1). Active authors: MARSHALS-1, THEME-SURF. TH-LOOK-2 waits for
+shared files with MARSHALS-1). Active authors: MARSHALS-1, THEME-SURF.
+WAVE-4 TASTE COPY :3012 = ~/orca/workspaces/scrap-rally/branch-taste detached at 2badacf (BR-BAKE + BR-BOTS), SCRAP_DEV_TRACK=branch-yard
+SCRAP_DEV_BOTS=1 PORT=3012 nohup npm start (node pid 27353; log tmp/branch-taste-3012.log). The user drives Branch Yard + races 3 Hard bots;
+then BR-TRACKS. :3009 (HARD-2 tune copy, pid 96649) left as is. Kill by PID only after checking lsof cwd.
+THEME-SURF Q (msg_2fea7849ba5a) answered YES to both: additive run-up loop in shared/weapons.ts (identical without theme surfaces);
+theme surfaces join Track.surfaces/surfAt, re-record only the 3 theme yards' features lines (keep Track.sand/oil/fords for TH-LOOK-2;
+theme-sheet --hash identical before/after).
+WAVE-4 DRIVE PASSED (user: "feels good"). BR-TRACKS 123jpnbfghe dispatching (Opus, :3011, spec tmp/spec-br-tracks.md; fixes the two
+map-sheet false-FAIL checks first). Active authors then: MARSHALS-1, THEME-SURF, BR-TRACKS (cap full). After MARSHALS-1 merges: NOSELECT-2
+or TH-LOOK-2 takes its slot (TH-LOOK-2 first if a slot is free; NOSELECT-2 next). TH-LOOK-2 waits for
 MARSHALS-1 (shares render.ts + canvas-census.ts). Ford direction cue moved from THEME-SURF to TH-LOOK-3 (drawing = world.ts, Fable).
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
