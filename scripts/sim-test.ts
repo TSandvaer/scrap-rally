@@ -13372,7 +13372,7 @@ function moveReview1(): void {
     const was = moveBot.MOVE.truckYield;
     if (!yieldOn) moveBot.MOVE.truckYield = 1e9;
     try {
-      const a = surfCar(yard, tk.s - 480, 24, 400), b = surfCar(yard, tk.s - 500, 12, 400);
+      const a = surfCar(yard, tk.s - 480, 24, 400), b = surfCar(yard, tk.s - 515, 12, 400); // 35 apart: not touching at the start
       const ma = moveBot.newBotMem(24, "normal"), mb = moveBot.newBotMem(12, "normal");
       ma.weapons = mb.weapons = false;
       const env = moveW.raceEnv(yard);
@@ -13392,8 +13392,8 @@ function moveReview1(): void {
   };
   const on = pair(true), off = pair(false);
   check(
-    "move review note: two bots whose lines are both in the truck's band arriving together: the one behind gives the jump up and goes round (one take-off, no truck contact); with the yield off both go for the band",
-    on.jumps === 1 && on.truck === 0 && on.s.every((x) => x > tk.s + tk.len) && off.jumps + off.truck + off.bump > on.jumps,
+    "move review note: two bots whose lines are both in the truck's band arriving together: the one behind gives the jump up and goes round (one take-off, no truck contact, no bump); with the yield off both go for the band",
+    on.jumps === 1 && on.truck === 0 && on.bump === 0 && on.s.every((x) => x > tk.s + tk.len) && off.jumps + off.truck + off.bump > on.jumps,
     `yield on: ${on.jumps} take-off(s), truck contacts ${on.truck}, bumps ${on.bump}; off: ${off.jumps} take-offs, truck contacts ${off.truck}, bumps ${off.bump}`,
   );
   // Note (game.ts): a spectator's drawTick is clamped at 0 in the countdown (the own car's already was).
