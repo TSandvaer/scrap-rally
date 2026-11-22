@@ -145,3 +145,4 @@
 - 2026-11-22 — Browser behaviour (user: "the normal browser behaviour like copy, lookup, translate etc. need to be disabled"). Popup: everywhere but text fields (phone + desktop), page marked no-translate -> NOSELECT-1 123jpnbfgjj (Opus, small).
 - 2026-11-22 — M4-TRACKS taste (user drove both on :3009; confirmed by popup): Slag Harbour and Breaker's Mile both approved, no change. Merge after the code review approves.
 - 2026-11-22 — HARD-2 (user popup): merge on review APPROVE (defaults = today's Hard, no game change); the user tunes later on the :3009 copy and the pasted values become HARD-3.
+- 2026-11-22 — S7 speed budget (TH-LOOK-1 question; orchestrator): judged as theme vs the same yard's scrapyard look on identical frames (<= x1.05 on means and the faster half), because the S4 lap sits on the 5 us timer step in every theme; S6 rule unchanged; noted in PLAN-THEMES.md.

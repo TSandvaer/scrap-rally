@@ -667,6 +667,36 @@ BR-SCHEMA fix round 1 done: 7fdd7ef (66eb911 sectionCrossings on branch roads + 
 schema-hash 28/28; 946/946, bots 142-143/143 (known flake once)). Re-review sent to ctx_d7ef3257a313.
 NOSELECT-1 gate on main c59d6f1: check 0, sim 907/907, build ok (index-ByulflMS.js), bots 142/143 = only the known breakers-mile flake
 (2nd time on main; passed in BR-SCHEMA's run 2). Waiting on the M4-TRACKS author's fix before any push.
+BR-SCHEMA re-review APPROVE (ctx_08fa33cba092). BR-SCHEMA MERGED 287dd18; gate running; ClickUp complete; workers released, workspace removed.
+THEME-SCHEMA 123jpnbfgj1 (Opus) in flight: ctx_0362282f9fe4 (~/orca/workspaces/scrap-rally/theme-schema, :3010; spec
+tmp/spec-theme-schema.md); runs before BR-PHYS (both shared/track.ts). M4-TRACKS author told: flake fix inside scripts/bots.ts only.
+HARD-2 final round done: a7f1f66 (main merged; falls 0 on the 2 new tracks; nits fixed). Delta look sent to ctx_8f7a8c933e4d.
+BR-SCHEMA gate on 287dd18 GREEN (946/946 + 143/143, build index-Cu4WChiY.js; the flake passed this run). HARD-2 delta APPROVE; MERGED d111e89;
+gate running; ClickUp ready for qa test; workers released, workspace hard-2 removed. TUNING COPY :3009 rebuilt at d111e89 (main incl. the
+Bot tune row; SCRAP_DEV_BOTS=1; node pid 96649). Active authors: TH-LOOK-1, THEME-SCHEMA, M4-TRACKS flake fix.
+HARD-2 gate GREEN on d111e89 (975/975 + 145/145, build index-CAou9HUR.js). PUSHED (user popup): origin/main = 4496ac7 (M4-TRACKS,
+NOSELECT-1, BR-SCHEMA, HARD-2). Expected live bundle after Manual Deploy: index-CAou9HUR.js.
+M4-TRACKS flake fixed: f064035 (scripts/bots.ts only: blind bot stops 4 short of the press, stall starts at the warning tick; old 1/8 PASS,
+new 35/35; gate green x2). Quick reviewer ctx_27271d92a5da (tmp/review-tracks-flake.md). Observation: Slag Harbour's lagged barrel ticks
+vary (6..42, never 0 so far).
+DEPLOYED (user): live index-CAou9HUR.js (curl), page has translate="no" + notranslate. QA13 live worker dispatched (muted; spec
+tmp/spec-qa-live-13.md; report tmp/qa13-live-report.md): new tracks, NOSELECT-1, HARD-2 off live, stick regression.
+THEME-SCHEMA done: 8f793f7 (theme field; sand/oil/ford as data, kept out of surfaces/surfAt; validation + gating; Dune/Block/Canopy Yards;
+Breaker's Mile desert, Slag Harbour city; 993/993 + 143/143; report tmp/theme-schema/THEME-SCHEMA-report.md). Conflicts with main and
+th-look-1 only in sim-test/README appends. Opus reviewer ctx_70f3da126e82 (tmp/review-theme-schema.md). GATE BEFORE THE NEXT PUSH:
+once THEME-SCHEMA + TH-LOOK-1 are both on main, the LIVE Breaker's Mile draws the provisional desert -> the user must approve the desert
+(or the theme field is held back) before pushing. Active authors: TH-LOOK-1 only; BR-PHYS waits for THEME-SCHEMA's merge.
+QA13 live PASS (ctx_51bfb3ee9585, released; tmp/qa13-live-report.md): 5 tracks listed, races on both new tracks 0 falls (Normal 51.9-58.9 s),
+no-select works, Bot tune absent live, stick ok. ClickUp complete: M4-TRACKS, NOSELECT-1, HARD-2. HARD-3 ticket created ('to do',
+waits for the user's pasted values).
+THEME-SCHEMA review 1 REQUEST_CHANGES (ctx_70f3da126e82 kept): map-sheet.ts:214 probe on a 1-px step (6 false FAILs on the yards) + pin the
+widen count to 8. Fix round + merge main sent to ctx_0362282f9fe4. Review notes added to THEME-SURF (ford traction rect) and THEME-TRACKS
+(track-density footprints).
+M4-TRACKS flake-fix review REQUEST_CHANGES (ctx_27271d92a5da kept): Breaker's Mile contact happens only after the skew ends (title false);
+Slag Harbour barrel contact can be 0 by design. Both sent back to the author ctx_81ccfeeade7a: make the skewed contact real and checked, on both.
+TH-LOOK-1 done: c4900c3 (theme machinery + provisional desert; scrapyard bit-identical; speed gate PASS; S7 0.991/1.007; census 14.09 MB;
+975/975 + 145/145; report tmp/th-look-1/REPORT.md; sheets/shots in ~/orca/workspaces/scrap-rally/th-look-1/tmp/th-look/). Fable reviewer
+ctx_765df883d782 (tmp/review-th-look-1.md). Desert preview shown to the user inline (taste is separate; merge does not wait on it).
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).

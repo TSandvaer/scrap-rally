@@ -397,6 +397,7 @@ async function run(ctx: Ctx, bots: Bot[]): Promise<void> {
   await runSplit(ctx, bots);
   await runMove(ctx, bots);
   await runLong(ctx, bots);
+  await runHard2(ctx, bots);
 }
 
 const lost = new Map<string, (ConnReason | undefined)[]>();
@@ -2408,5 +2409,77 @@ async function runLong(ctx: Ctx, bots: Bot[]): Promise<void> {
       if (room && tick) room.tick = tick;
       for (const b of [H, S]) b.game.leave();
     }
+  }
+}
+
+// ---- HARD-2: Hard bots make human mistakes + a dev Bot tune knob (PLAN-M4.md addendum 2026-11-22, ClickUp 123jpnbfghz) ----
+
+// This section's imports (hoisted like the ones at the top).
+import { MISTAKE_KINDS as H2_KINDS, type BotTune as H2Tune, type MistakeKind as H2Kind } from "../shared/botdrive";
+
+/**
+ * A lagged (80±10 ms) Hard socket bot with mistakes on (BotDriver.tune: the knob's top, rate 3 and
+ * size 1) hosts a room with two Hard server bots on Rust Bowl, the server running with the dev flag
+ * SCRAP_DEV_BOTS=1 (set for this section only): the host's Game learns the knob from the room message
+ * and sends it (Game.tuneBots), so the server bots err as well, each mistake one server log line.
+ * All three finish and the lagged bot's prediction keeps within the bounds of "hard over sockets"
+ * (median reconciliation error below 0.5, no error > 50, at most 4 state mismatches).
+ */
+async function runHard2(ctx: Ctx, bots: Bot[]): Promise<void> {
+  const old = process.env.SCRAP_DEV_BOTS;
+  process.env.SCRAP_DEV_BOTS = "1";
+  const tune: H2Tune = { rate: 3, size: 1, pace: 1, aim: 2.5 };
+  const H = new Bot("Hotel6", ctx.url, 24, { lag: 80, jitter: 10 }, undefined, "hard");
+  bots.push(H);
+  H.driver.tune(tune);
+  const sock = Object.fromEntries(H2_KINDS.map((k) => [k, 0])) as Record<H2Kind, number>;
+  H.driver.onMistake = (kind) => void sock[kind]++;
+  const lines: string[] = [];
+  const log = console.log;
+  try {
+    H.game.create(H.name);
+    await waitFor("hard2: H welcome", () => !!H.game.you && H.game.scrap > 0 && H.game.botTune !== null, 3000);
+    const first = { ...H.game.botTune! };
+    H.game.pickTrack("rust-bowl");
+    H.game.addBot("hard");
+    H.game.addBot("hard");
+    H.game.tuneBots(tune);
+    await waitFor("hard2: two Hard bots in, the knob set", () => H.game.players.filter((p) => p.bot === "hard").length === 2 && H.game.trackId === "rust-bowl" && H.game.botTune?.rate === 3, 3000);
+    check(
+      "hard2 over sockets: with SCRAP_DEV_BOTS=1 the host's Game learns the knob from the room message (today's values in a new room) and Game.tuneBots sets it",
+      first.rate === 0 && first.pace === 1 && JSON.stringify(H.game.botTune) === JSON.stringify(tune),
+      `new room ${JSON.stringify(first)}; after ${JSON.stringify(H.game.botTune)}`,
+    );
+    const code = H.game.code;
+    console.log = (...a: unknown[]) => {
+      const l = a.join(" ");
+      if (l.startsWith(`[bots] room ${code} `)) lines.push(l);
+      else log(...a);
+    };
+    const e0 = H.game.recErrors.length, st0 = H.game.recStateErrors;
+    H.results = null;
+    H.game.start();
+    await waitFor("hard2: racing", () => H.game.phase === "racing" && !!H.game.car, 6000);
+    await waitFor("hard2: the race is over", () => H.results !== null, 90000);
+    console.log = log;
+    const rows: ResultRow[] = (H.results as ResultRow[] | null) ?? [];
+    const s = stats(H.game.recErrors.slice(e0));
+    const st = H.game.recStateErrors - st0;
+    const n = H2_KINDS.reduce((a, k) => a + sock[k], 0);
+    console.log(
+      `      Hotel6 (Hard, 80±10 ms, knob rate 3 size 1) and two Hard server bots on Rust Bowl: finish ${rows.map((x) => `${x.name} ${(x.timeMs / 1000).toFixed(2)}s`).join(", ")}; ` +
+        `its mistakes ${n} (${H2_KINDS.map((k) => `${k} ${sock[k]}`).join(", ")}); the server bots' ${lines.length} (server log, e.g. "${lines[0] ?? ""}"); ` +
+        `rec err n=${s.n} median=${s.median.toFixed(3)} p95=${s.p95.toFixed(3)} max=${s.max.toFixed(2)}; state mismatches ${st}; rtt=${H.game.rtt.toFixed(1)}ms`,
+    );
+    check(
+      "hard2 over sockets: a lagged Hard socket bot with mistakes on races two Hard server bots with the room's knob on Rust Bowl: all three finish, both make mistakes (its own counted, the server's in the server log), it keeps a median reconciliation error below 0.5, no error > 50, at most 4 state mismatches",
+      rows.length === 3 && rows.every((x) => x.timeMs > 0) && n > 0 && lines.length > 0 && s.n > 500 && s.median < 0.5 && s.max <= 50 && st <= 4 && H.errors.length === 0,
+      `mistakes ${n} + server ${lines.length}; median ${s.median.toFixed(3)}, max ${s.max.toFixed(2)}, state mismatches ${st}; errors ${H.errors.join("; ") || "none"}`,
+    );
+  } finally {
+    console.log = log;
+    H.game.leave();
+    if (old === undefined) delete process.env.SCRAP_DEV_BOTS;
+    else process.env.SCRAP_DEV_BOTS = old;
   }
 }

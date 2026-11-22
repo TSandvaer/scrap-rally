@@ -1064,6 +1064,9 @@ function draw(alpha: number, elapsed: number): void {
 if (soundBoard) void import("./soundboard").then((m) => m.mountEffects(m.mountSoundBoard(audio, music), audio));
 // Debug only: the touch stick's tuning panel (client/touchtune.ts, loaded only then; TOUCH-2).
 if (debug && !preview && !bench) void import("./touchtune").then((m) => m.mountTouchTune(touchPad, $("stage")));
+// Debug only: the Hard bots' Bot tune panel (client/bottune.ts, loaded only then; HARD-2). It shows only
+// to a host whose server runs with the dev flag SCRAP_DEV_BOTS=1 (the room message's botTune).
+if (debug && !preview && !bench) void import("./bottune").then((m) => m.mountBotTune(game, document.body));
 if (preview) {
   ui.menu.classList.add("hidden");
   void import("./preview").then((m) => m.runPreview($<HTMLCanvasElement>("view"), params));
