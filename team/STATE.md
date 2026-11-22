@@ -604,6 +604,8 @@ M4-MOVE MERGED 158a691; gate running. IN FLIGHT (3 authors): TOUCH-6 ctx_2e38d6f
 ctx_d7d9decab927 (~/orca/workspaces/scrap-rally/br-schema, :3010; spec tmp/spec-br-schema.md). Next free slot: a Fable theme-art worker
 once PLAN-THEMES is approved. TASTE COPY :3009 = Move Yard: worktree ~/orca/workspaces/scrap-rally/split-taste now detached at 158a691,
 SCRAP_DEV_TRACK=move-yard, node pid 22388, npm pid 22367 (the split copy is stopped).
+TOUCH-6 done: eaf4a31 (R 67; 9720 point directions reach past the dead zone; DRIVE hint 134 px; 861/861 + 128/128 x2; touch-drive
+127/127; report tmp/touch-6/touch6-report.md). Opus reviewer ctx_46accd6d22e2 (tmp/review-touch-6.md). On APPROVE: merge, gate, push popup.
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
