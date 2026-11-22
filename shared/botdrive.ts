@@ -60,6 +60,18 @@
 // fired straight along the heading with the car's velocity, would pass through the target (a
 // fire gate: it never steers to aim); a mine when a solid car follows in its wake at a distance
 // where it arrives just after the mine arms. The slipstream and the no-ramming rule as Normal.
+//
+// Hard's human mistakes (HARD-2, PLAN-M4 addendum 2026-11-22 and its binding advisor changes): now
+// and then a late brake into a bend (the brake trigger's lookahead shortened, then braking below the
+// bend's speed: it arrives fast and scrubs), a wide line (the apex bias turned to the outside), a
+// wobble after a landing (a few ticks of over-correcting steer, decaying) and a hesitation after an
+// overtake or a hit (a short lift: BotView.hp, fed by both adapters). Drawn from a hash of (BotMem.seed, BotView.lap, the segment, the kind of
+// moment), never Math.random or the random id, so a rerun is identical; latched for the bend (or the
+// few ticks) in BotMem.mistake. Only on its own racing line, with no hole, mound, surface, ramp, gap,
+// island, truck or mover within MISTAKE_LOOK (longer than RAMP_APPROACH plus a mistake's length), and
+// ended at once when anything of advisor change 4 comes up, so a mistake never carries into a jump or
+// a hole. BotMem.hard holds the constants for the race (HARD itself by default; a room's dev tune is
+// its own object, hardParams); mistakeRate 0, the default, runs none of it.
 
 import { CARS, DEFAULT_CAR, type CarType } from "./cars";
 import { angleDiff, CAR_LENGTH, CAR_RADIUS, CAR_WIDTH, clamp, DT, speedOf, type CarState, type CarStats } from "./physics";
@@ -139,7 +151,77 @@ export const HARD = {
   mineAcross: 14,
   /** Steps between two mines at least (4 s). */
   mineGap: 240,
+  /**
+   * HARD-2: mistakes per lap per bot (the expected number, spread over the lap's bends and landings
+   * where one may happen: mistakeSpots). 0: none, and none of the mistake code runs (Hard drives
+   * exactly as before HARD-2). The user tunes it on a dev copy (SCRAP_DEV_BOTS, the Bot tune panel).
+   */
+  mistakeRate: 0,
+  /** HARD-2: a mistake's size, 0..1 (each one 0.75-1.25 x this, at most 1). */
+  mistakeSize: 0.5,
 };
+
+/** Hard's constants as one bot reads them (BotMem.hard): HARD itself, or a room's dev tune (hardParams). */
+export type HardParams = typeof HARD;
+
+/**
+ * The dev Bot tune knob (HARD-2, SCRAP_DEV_BOTS): Hard's mistake rate (per lap) and size, its pace
+ * (1 = today's Hard bend pace, 0 = Normal's: corner, brakeBand and bendLook only; the apex, cells,
+ * weapons and shopping stay Hard's) and its rivet aim (HARD.rivetSlack: wider misses more).
+ */
+export interface BotTune {
+  rate: number;
+  size: number;
+  pace: number;
+  aim: number;
+}
+
+/** The knob's ranges (a message's values are clamped into them). */
+export const BOT_TUNE_RANGE: Readonly<Record<keyof BotTune, readonly [number, number]>> = {
+  rate: [0, 3],
+  size: [0, 1],
+  pace: [0, 1],
+  aim: [0, 20],
+};
+
+/** The knob at today's Hard (HARD's own values): what a room tunes from. */
+export function botTuneDefaults(): BotTune {
+  return { rate: HARD.mistakeRate, size: HARD.mistakeSize, pace: 1, aim: HARD.rivetSlack };
+}
+
+/** A knob from the wire: every value a finite number (else null), clamped into BOT_TUNE_RANGE. */
+export function cleanBotTune(v: unknown): BotTune | null {
+  if (!v || typeof v !== "object") return null;
+  const r = v as Record<string, unknown>;
+  const out = {} as BotTune;
+  for (const k of Object.keys(BOT_TUNE_RANGE) as (keyof BotTune)[]) {
+    const x = r[k];
+    if (typeof x !== "number" || !Number.isFinite(x)) return null;
+    out[k] = clamp(x, BOT_TUNE_RANGE[k][0], BOT_TUNE_RANGE[k][1]);
+  }
+  return out;
+}
+
+/** Normal's brake band and the bend lookahead factor (botControls: 25, x 1): the pace knob's 0. */
+const NORMAL_BRAKE_BAND = 25;
+
+/**
+ * Hard's constants for a race tuned with the knob: a new object (HARD is never changed). Pace 1 is
+ * HARD's corner, brakeBand and bendLook themselves (no interpolation: bit for bit today's Hard);
+ * pace 0 is Normal's 1, 25 and 1.
+ */
+export function hardParams(t: BotTune): HardParams {
+  const p = t.pace;
+  return {
+    ...HARD,
+    corner: p === 1 ? HARD.corner : 1 + (HARD.corner - 1) * p,
+    brakeBand: p === 1 ? HARD.brakeBand : NORMAL_BRAKE_BAND + (HARD.brakeBand - NORMAL_BRAKE_BAND) * p,
+    bendLook: p === 1 ? HARD.bendLook : 1 + (HARD.bendLook - 1) * p,
+    rivetSlack: t.aim,
+    mistakeRate: t.rate,
+    mistakeSize: t.size,
+  };
+}
 
 /**
  * Corner speeds by car type (M4-CARS): the Sport's bend targets times (grip / Sport grip)^(1/4),
@@ -235,6 +317,26 @@ export interface BotView {
   // and the race tick now. Absent: no cells.
   cells?: readonly number[];
   rt?: number;
+  /** Laps the car has completed (HARD-2: a mistake's draw). Absent: 0. */
+  lap?: number;
+  /** The car's hit points (HARD-2: a drop is a hit, a moment a hesitation may follow). Absent: no hits seen. */
+  hp?: number;
+}
+
+/** HARD-2: the kinds of Hard's mistakes (see the top of this file). */
+export type MistakeKind = "late-brake" | "wide" | "wobble" | "hesitate";
+export const MISTAKE_KINDS: readonly MistakeKind[] = ["late-brake", "wide", "wobble", "hesitate"];
+
+/** HARD-2: a mistake under way, latched when it begins (BotMem.mistake). */
+export interface Mistake {
+  kind: MistakeKind;
+  size: number; // 0..1
+  from: number; // the s it began at
+  end: number; // the s it ends at (or earlier: after n steps, or when an exclusion comes up)
+  delay: number; // a late brake: how far past `from` the bend is seen (0 for the others)
+  t: number; // steps since it began
+  n: number; // steps it lasts at most
+  sign: number; // a wobble's first swing (+1 right)
 }
 
 /** A bot's settings (by seat) and the state it keeps between steps. */
@@ -267,16 +369,34 @@ export interface BotMem {
   /** M4-MOVE: the truck (its s) it has decided about on this approach (-1: none), and whether it jumps it. */
   truckS: number;
   truckJump: boolean;
+  /** HARD-2: its mistakes' seed (server: the seat slot; a socket bot: from its lane), a setting. */
+  seed: number;
+  /** HARD-2: Hard's constants for this race (HARD itself by default; a room's dev tune: hardParams, set at beginRace). */
+  hard: HardParams;
+  /** HARD-2: the mistake under way, or null. */
+  mistake: Mistake | null;
+  /** HARD-2: in a bend (the bend-entry latch's hysteresis) ... */
+  inBend: boolean;
+  /** ... and in the air last step (a landing: the c.air edge) ... */
+  flew: boolean;
+  /** ... and its hit points last step (BotView.hp; -1: none seen yet), for a hit's edge. */
+  hp: number;
+  /** HARD-2: told of each mistake as it begins (the dev flag's server log; the tests), or null. */
+  onMistake: ((kind: MistakeKind, size: number, s: number, lap: number) => void) | null;
 }
 
 /**
  * A bot's memory. The mine offset defaults to the one the socket bots always used (from the
- * lane); server seats pass one by seat so two bots on mirrored lanes do not drop together.
+ * lane); server seats pass one by seat so two bots on mirrored lanes do not drop together. The
+ * mistakes' seed likewise (HARD-2): from the lane, signed (mirrored lanes differ); a seat's slot.
  */
-export function newBotMem(lateral: number, level: BotLevel = "normal", mineOffset = Math.round(Math.abs(lateral) * 7) % 480): BotMem {
+export function newBotMem(
+  lateral: number, level: BotLevel = "normal", mineOffset = Math.round(Math.abs(lateral) * 7) % 480, seed = Math.round(lateral * 7),
+): BotMem {
   return {
     level, lateral, weapons: level !== "easy", mineOffset, slow: 0, reversing: 0, backup: null, backedUpFor: -1, useWake: level !== "easy", wake: null, wakeRest: 0, lastMine: -Infinity,
     islandBack: 0, islandKind: 0, islandSide: 0, islandCool: 0, truckS: -1, truckJump: false,
+    seed, hard: HARD, mistake: null, inBend: false, flew: false, hp: -1, onMistake: null,
   };
 }
 
@@ -295,6 +415,10 @@ export function resetBotMem(mem: BotMem): void {
   mem.islandCool = 0;
   mem.truckS = -1;
   mem.truckJump = false;
+  mem.mistake = null;
+  mem.inBend = false;
+  mem.flew = false;
+  mem.hp = -1;
 }
 
 /** Distance from `from` forward to `to` along the track, in [0, length). */
@@ -868,6 +992,9 @@ function headingIntoHole(track: Track, x: number, y: number, vx: number, vy: num
   return false;
 }
 
+/** HARD-2: set by wakeLane when a pass is done or given up this step (botControls clears it before the call, for Hard with mistakes on). */
+const PASS = { done: false };
+
 /**
  * The slipstream lane for this step, or null for the racing line (see the top of this file).
  * (px, py, dir): the centerline point at the bot's s and its heading; the other cars and mines
@@ -904,10 +1031,14 @@ function wakeLane(
     if (w.pass) {
       if (a < -WAKE_DONE) {
         mem.wake = null; // passed: back to the racing line (on the pass side, away from it)
+        PASS.done = true; // HARD-2: a hesitation may follow
         return null;
       }
       const lane = olat + w.side * WAKE_SIDE;
-      if (w.steps > WAKE_PASS_MAX || a > WAKE_TO || !mineFree(lane)) return giveUp();
+      if (w.steps > WAKE_PASS_MAX || a > WAKE_TO || !mineFree(lane)) {
+        PASS.done = true; // HARD-2: an overtake given up, a moment a hesitation may follow too
+        return giveUp();
+      }
       return { lane, coast: false };
     }
     if (bend > WAKE_STRAIGHT || a < 0 || a > WAKE_TO + 20 || !leads(o)) {
@@ -983,12 +1114,25 @@ function cellLane(view: BotView, s: number, lane: number, toLip: number, max: nu
  * from nothing at HARD.apexFrom; kept 6 units inside the asphalt edge. Per seat: every bot moves
  * its own line by the same amount, so three bots do not converge on one inside lane.
  */
-export function apexLane(lateral: number, turn: number, halfWidth: number): number {
+export function apexLane(lateral: number, turn: number, halfWidth: number, h: HardParams = HARD): number {
   const bend = Math.abs(turn);
-  if (bend <= HARD.apexFrom) return lateral;
-  const k = Math.min(1, (bend - HARD.apexFrom) / (HARD.apexFull - HARD.apexFrom));
+  if (bend <= h.apexFrom) return lateral;
+  const k = Math.min(1, (bend - h.apexFrom) / (h.apexFull - h.apexFrom));
   const max = halfWidth - CAR_WIDTH / 2 - 6;
-  return clamp(lateral + Math.sign(turn) * HARD.apex * k, -max, max);
+  return clamp(lateral + Math.sign(turn) * h.apex * k, -max, max);
+}
+
+/**
+ * HARD-2: a wide line, the apex bias turned to the outside of the bend: the racing line moved away
+ * from the inside by (0.25 + 1.75 x size) x HARD.apex at full strength (as apexLane's ramp-up: size 0
+ * misses the apex, size 1 runs two apex biases wide), kept 6 units inside the asphalt edge.
+ */
+export function wideLane(lateral: number, turn: number, halfWidth: number, h: HardParams, size: number): number {
+  const bend = Math.abs(turn);
+  if (bend <= h.apexFrom) return lateral;
+  const k = Math.min(1, (bend - h.apexFrom) / (h.apexFull - h.apexFrom));
+  const max = halfWidth - CAR_WIDTH / 2 - 6;
+  return clamp(lateral - Math.sign(turn) * h.apex * (0.25 + 1.75 * size) * k, -max, max);
 }
 
 /** Track coordinates of a point near the track `de` (about) ahead of s: its s and lateral offset (+ = right of travel). */
@@ -1000,10 +1144,10 @@ function trackCoords(track: Track, s: number, de: number, x: number, y: number):
 
 /** Hard's apex check: no mine from 10 behind to APEX_MINE_LOOK ahead within reach of the lanes between `a` and `b`. */
 const APEX_MINE_LOOK = 320;
-function apexMineFree(view: BotView, c: CarState, s: number, a: number, b: number): boolean {
+function apexMineFree(view: BotView, c: CarState, s: number, a: number, b: number, clear: number): boolean {
   const mines = view.mines;
   if (!mines || !mines.length) return true;
-  const lo = Math.min(a, b) - HARD.apexMineClear, hi = Math.max(a, b) + HARD.apexMineClear;
+  const lo = Math.min(a, b) - clear, hi = Math.max(a, b) + clear;
   const far2 = (APEX_MINE_LOOK + 40) ** 2;
   const cos = Math.cos(c.h), sin = Math.sin(c.h);
   for (const m of mines) {
@@ -1030,13 +1174,13 @@ function apexMineFree(view: BotView, c: CarState, s: number, a: number, b: numbe
  * car holding its velocity, within the rivet's range and over the road (a wall stops a rivet)?
  * A gate on relative velocity only: the bot never steers to aim.
  */
-function rivetWouldHit(track: Track, s: number, c: CarState): (o: BotOther) => boolean {
+function rivetWouldHit(track: Track, s: number, c: CarState, slack: number): (o: BotOther) => boolean {
   const cos = Math.cos(c.h), sin = Math.sin(c.h);
   const nose = CAR_LENGTH / 2 + 4;
   const sx = c.x + cos * nose, sy = c.y + sin * nose;
   const wx = c.vx + cos * RIVET_SPEED, wy = c.vy + sin * RIVET_SPEED; // the rivet's velocity
   const tMax = RIVET_RANGE / Math.hypot(wx, wy);
-  const r = CAR_RADIUS + RIVET_RADIUS + HARD.rivetSlack;
+  const r = CAR_RADIUS + RIVET_RADIUS + slack;
   return (o) => {
     if (!o.solid) return false;
     const rx = o.x - sx, ry = o.y - sy;
@@ -1066,8 +1210,9 @@ const ARM_STEPS = Math.ceil((WEAPONS_ARM_MS * 60) / 1000) + 1;
  * most HARD.mineFar behind; the weapons armed and HARD.mineGap steps since the last one.
  */
 function mineWouldCatch(view: BotView, mem: BotMem, c: CarState, s: number, lat: number): boolean {
-  if (view.raceSteps <= ARM_STEPS || view.raceSteps - mem.lastMine < HARD.mineGap) return false;
-  const far = HARD.mineFar + 30;
+  const h = mem.hard;
+  if (view.raceSteps <= ARM_STEPS || view.raceSteps - mem.lastMine < h.mineGap) return false;
+  const far = h.mineFar + 30;
   const cos = Math.cos(c.h), sin = Math.sin(c.h);
   for (const o of view.others) {
     if (!o.solid) continue;
@@ -1076,8 +1221,8 @@ function mineWouldCatch(view: BotView, mem: BotMem, c: CarState, s: number, lat:
     const t = trackCoords(view.track, s, -Math.hypot(dx, dy), o.x, o.y);
     const d = ahead(view.track, t.s, s); // the follower's distance behind, along the track
     const vf = (o.vx ?? 0) * Math.cos(t.h) + (o.vy ?? 0) * Math.sin(t.h);
-    if (vf < 100 || Math.abs(t.lat - lat) > HARD.mineAcross) continue;
-    if (d >= (vf * MINE_ARM_TICKS) / 60 + HARD.mineNear && d <= HARD.mineFar) return true;
+    if (vf < 100 || Math.abs(t.lat - lat) > h.mineAcross) continue;
+    if (d >= (vf * MINE_ARM_TICKS) / 60 + h.mineNear && d <= h.mineFar) return true;
   }
   return false;
 }
@@ -1094,6 +1239,157 @@ function closingOnCar(view: BotView, c: CarState, dir: number): boolean {
   });
 }
 
+// ---- Hard's human mistakes (HARD-2, see the top of this file) ---------------------------------
+
+/** No mistake begins in the first 3 s after GO. */
+const MISTAKE_FROM = 180;
+/** A mistake lasts this far at most (units along the track) ... */
+const MISTAKE_MAX = 500;
+/**
+ * ... and begins only with nothing that matters (a hole, a mound, a surface, a ramp, a gap, a widen,
+ * an island, a truck, a barrel row or a press) from MISTAKE_BEHIND behind the car to this far ahead:
+ * longer than RAMP_APPROACH plus MISTAKE_MAX, so when it ends the next ramp is still out of view and
+ * every hole beyond the lane search's look (140 + 0.6 v).
+ */
+export const MISTAKE_LOOK = RAMP_APPROACH + MISTAKE_MAX;
+/** What the car is still beside (half a car and a little); a gap behind does not count (it has landed past it). */
+const MISTAKE_BEHIND = CAR_LENGTH / 2 + 4;
+/** The bend-entry latch: a bend begins when the bend lookahead turns more than BEND_ON, ends below BEND_OFF. */
+const BEND_ON = 0.5;
+const BEND_OFF = 0.3;
+/**
+ * Late brake: the brake trigger late by this x size of the bend lookahead (the bend is seen that far
+ * past its entry, still before the bend: the lookahead shortened for its trigger), then on the brakes
+ * too hard: down to the bend's speed less LATE_SCRUB x size, held through the bend. (Seen late alone it
+ * would gain time: the shipped bends take more speed than Hard asks for.)
+ */
+const LATE_LOOK = 0.6;
+const LATE_SCRUB = 0.4;
+/** Wobble: an added steer of WOBBLE_AMP0 + WOBBLE_AMP x size, swinging with this period (steps), decaying over 30 + 40 x size steps. */
+const WOBBLE_AMP0 = 0.3;
+const WOBBLE_AMP = 0.5;
+const WOBBLE_PERIOD = 24;
+/** ... and the throttle held to 1 - WOBBLE_LIFT x size for its first half. */
+const WOBBLE_LIFT = 0.5;
+/** The speed the lap's bends are counted at (mistakeSpots). */
+const SPOT_V = 400;
+
+/** A 32-bit mix (murmur3's finaliser). */
+function mix32(h: number): number {
+  h ^= h >>> 16;
+  h = Math.imul(h, 0x85ebca6b);
+  h ^= h >>> 13;
+  h = Math.imul(h, 0xc2b2ae35);
+  h ^= h >>> 16;
+  return h;
+}
+
+/** A deterministic draw in [0, 1) from (seed, lap, segment, what): never Math.random, never the random id. */
+export function mistakeDraw(seed: number, lap: number, seg: number, what: number): number {
+  let h = mix32((seed | 0) ^ 0x2545f491);
+  h = mix32(h ^ (lap | 0));
+  h = mix32(h ^ Math.imul(seg | 0, 0x9e3779b1));
+  h = mix32(h ^ (what | 0));
+  return (h >>> 0) / 4294967296;
+}
+
+/** Does the span a..b (track s, b >= a) touch the window from `from`, `len` long (round the lap)? */
+function spanIn(track: Track, from: number, len: number, a: number, b: number): boolean {
+  return ahead(track, from, a) <= len || ahead(track, a, from) <= b - a;
+}
+
+/**
+ * Is the road from MISTAKE_BEHIND behind s to MISTAKE_LOOK ahead free of everything a mistake must
+ * stay clear of (see MISTAKE_LOOK)? A gap only ahead of s.
+ */
+export function mistakeClear(track: Track, s: number): boolean {
+  const from = s - MISTAKE_BEHIND, len = MISTAKE_BEHIND + MISTAKE_LOOK;
+  for (const h of track.holes) if (spanIn(track, from, len, h.s - h.r, h.s + h.r)) return false;
+  for (const r of track.ramps) if (spanIn(track, from, len, r.s, r.s + r.len + LIP_ZONE)) return false;
+  for (const g of track.gaps) if (spanIn(track, s, MISTAKE_LOOK, g.s0, g.s1)) return false;
+  for (const m of track.tyres) if (spanIn(track, from, len, m.s - m.r, m.s + m.r)) return false;
+  for (const f of track.surfaces) if (spanIn(track, from, len, f.s0, f.s1)) return false;
+  for (const w of track.widens) if (spanIn(track, from, len, w.s0, w.s1)) return false;
+  for (const i of track.islands) if (spanIn(track, from, len, i.s0 - ISLAND_NOSE, i.s1 + ISLAND_NOSE)) return false;
+  for (const t of track.trucks) if (spanIn(track, from, len, t.s, t.s + t.len + LIP_ZONE)) return false;
+  for (const b of track.barrels) if (spanIn(track, from, len, b.s - BARREL_R, b.s + BARREL_R)) return false;
+  for (const g of track.presses) if (spanIn(track, from, len, g.s - PRESS_DEPTH / 2, g.s + PRESS_DEPTH / 2)) return false;
+  return true;
+}
+
+/** Where a car lands after the ramp with lip `lip` (just past its gap, if it has one; else a little past the lip). */
+function landingAfter(track: Track, lip: number): number {
+  const gap = track.gaps.find((g) => ahead(track, lip - LIP_ZONE, g.s0) <= 2 * LIP_ZONE);
+  return gap ? gap.s1 + CAR_WIDTH : lip + 120;
+}
+
+/** mistakeSpots by track and bend lookahead factor. */
+const spotsMemo = new WeakMap<Track, Map<number, number>>();
+
+/**
+ * The places a lap offers a mistake (counted once per track and bendLook): the bend entries (the
+ * bend-entry latch at SPOT_V) and the landings (ramps and trucks) where mistakeClear holds. A
+ * mistake's chance at each is mistakeRate over this, so a bot makes mistakeRate a lap on average
+ * (fewer when the slipstream, a cell or traffic keep it off its own line; a hesitation after a
+ * pass comes on top).
+ */
+export function mistakeSpots(track: Track, bendLook: number): number {
+  let by = spotsMemo.get(track);
+  if (!by) spotsMemo.set(track, (by = new Map()));
+  const known = by.get(bendLook);
+  if (known !== undefined) return known;
+  const d = 20 + Math.max(120, SPOT_V * 0.9) * bendLook;
+  const bendAt = (s: number) => Math.abs(angleDiff(pointAt(track, s + 20).h, pointAt(track, s + d).h));
+  let n = 0, inBend = false;
+  for (let s = -500; s < track.length; s += 10) {
+    const b = bendAt(s);
+    const entered = b > BEND_ON && !inBend;
+    if (b > BEND_ON) inBend = true;
+    else if (b < BEND_OFF) inBend = false;
+    if (s >= 0 && entered && mistakeClear(track, s)) n++; // from -500: the latch as it is at the line
+  }
+  for (const r of track.ramps) if (mistakeClear(track, landingAfter(track, r.s + r.len))) n++;
+  for (const t of track.trucks) if (mistakeClear(track, t.lip + 120)) n++;
+  by.set(bendLook, n);
+  return n;
+}
+
+/**
+ * One step of Hard's mistakes (mistakeRate > 0 only): the one under way goes on (ended when `free`
+ * is false, after its steps or past its end), the bend-entry latch moves, and at a bend entry, a
+ * landing, a pass done or given up, or a hit, with `free` and none under way, a new one may begin (mistakeDraw against
+ * the rate's chance, then mistakeClear): {kind, size, end} latched in mem.mistake (t 0 on the step it begins).
+ */
+function mistakeStep(
+  view: BotView, mem: BotMem, s: number, seg: number, v: number, bend: number, free: boolean, landed: boolean, passed: boolean, hit: boolean,
+): Mistake | null {
+  const track = view.track, hp = mem.hard;
+  let m = mem.mistake;
+  if (m !== null) {
+    m.t++;
+    if (!free || m.t > m.n || ahead(track, m.end, s) < track.length / 2) m = mem.mistake = null;
+  }
+  const entered = bend > BEND_ON && !mem.inBend;
+  if (bend > BEND_ON) mem.inBend = true;
+  else if (bend < BEND_OFF) mem.inBend = false;
+  if (m !== null || !free) return m;
+  const what = entered ? 1 : landed ? 2 : passed ? 3 : hit ? 4 : 0;
+  if (what === 0) return null;
+  const lap = view.lap ?? 0;
+  const spots = mistakeSpots(track, hp.bendLook);
+  const chance = spots > 0 ? Math.min(1, hp.mistakeRate / spots) : 0;
+  if (mistakeDraw(mem.seed, lap, seg, 4 * what) >= chance || !mistakeClear(track, s)) return null;
+  const kind: MistakeKind = what === 1 ? (mistakeDraw(mem.seed, lap, seg, 4 * what + 1) < 0.5 ? "late-brake" : "wide") : what === 2 ? "wobble" : "hesitate"; // 3, 4: a pass, a hit
+  const size = Math.min(1, hp.mistakeSize * (0.75 + 0.5 * mistakeDraw(mem.seed, lap, seg, 4 * what + 2)));
+  // A bend's: on through the bend seen at its entry (its lookahead) and a little past; a wobble or a
+  // hesitation: a few steps.
+  const len = what === 1 ? Math.min(MISTAKE_MAX, 20 + Math.max(120, v * 0.9) * hp.bendLook + 150) : MISTAKE_MAX;
+  const n = what === 1 ? 360 : what === 2 ? Math.round(30 + 40 * size) : Math.round(12 + 36 * size);
+  const delay = kind === "late-brake" ? LATE_LOOK * size * (20 + Math.max(120, v * 0.9) * hp.bendLook) : 0;
+  m = mem.mistake = { kind, size, from: s, end: s + len, delay, t: 0, n, sign: mistakeDraw(mem.seed, lap, seg, 4 * what + 3) < 0.5 ? -1 : 1 };
+  return m; // botControls reports it (onMistake) once it is driven: a wide line may find no free lane
+}
+
 /** Follow the line, brake for bends, take ramps flat out, dodge holes, shoot what is ahead. */
 export function botControls(view: BotView, mem: BotMem): BotControls {
   const c = view.car;
@@ -1108,11 +1404,24 @@ export function botControls(view: BotView, mem: BotMem): BotControls {
     mem.slow = 0;
     mem.backup = null;
     mem.wake = null;
+    mem.mistake = null; // HARD-2: a mistake ends here
     if (c.air === 0) mem.backedUpFor = -1; // a fall or a wreck: the next approach starts over
+    if (mem.level === "hard" && mem.hard.mistakeRate > 0) mem.flew = c.fall === 0 && c.wreck === 0; // in a jump's flight: it lands next
     return { throttle: 1, steer: 0, fire: false, mine: false };
   }
   const easy = mem.level === "easy";
   const hard = mem.level === "hard";
+  const hp = mem.hard; // Hard's constants for this race (HARD itself unless a room's dev tune)
+  // HARD-2: Hard's mistakes (mistakeRate 0, the default: none of the mistake code runs).
+  const errs = hard && hp.mistakeRate > 0;
+  let landed = false, hit = false;
+  if (errs) {
+    landed = mem.flew;
+    mem.flew = false;
+    const hpNow = view.hp ?? -1;
+    hit = hpNow >= 0 && mem.hp >= 0 && hpNow < mem.hp;
+    mem.hp = hpNow;
+  }
   const track = view.track;
   const q = queryTrackNear(track, c.x, c.y, c.seg);
   const v = speedOf(c);
@@ -1154,19 +1463,20 @@ export function botControls(view: BotView, mem: BotMem): BotControls {
     lane = lat >= tk.t.lat ? Math.max(lane, tk.t.lat + clear) : Math.min(lane, tk.t.lat - clear);
   }
   let look = hole.holes ? 40 + v * 0.25 : 55 + v * 0.3;
-  if (hard) look *= HARD.aimLook;
+  if (hard) look *= hp.aimLook;
 
   // A ramp coming up: full throttle, straight at it (a truck jumped: as a ramp, below).
   const ramp = rampAhead(track, q.s, RAMP_APPROACH);
   if (!ramp) mem.backedUpFor = -1;
   const near = pointAt(track, q.s + 20).h;
-  const far = pointAt(track, q.s + 20 + Math.max(120, v * 0.9) * (hard ? HARD.bendLook : 1)).h; // x 1: Normal's exact value
+  const far = pointAt(track, q.s + 20 + Math.max(120, v * 0.9) * (hard ? hp.bendLook : 1)).h; // x 1: Normal's exact value
   const turn = angleDiff(near, far);
   const bend = Math.abs(turn);
 
   // The slipstream: follow a car ahead on a straight, then pass it (Normal only).
   let coast = false;
   if (mem.wakeRest > 0) mem.wakeRest--;
+  if (errs) PASS.done = false;
   if (mem.useWake && !easy && view.raceOn && !hole.holes && !hole.dodge && !ramp && !jump && !mem.backup && mem.reversing === 0) {
     const w = wakeLane(view, mem, c, p.x, p.y, dir, bend, track.def.halfWidth - CAR_WIDTH / 2 - 2);
     if (w) {
@@ -1177,7 +1487,7 @@ export function botControls(view: BotView, mem: BotMem): BotControls {
   // A cell close to its lane (Normal): steer to it; it beats the slipstream.
   let cell = false;
   if (!easy && view.raceOn && view.cells && !hole.holes && !jump) {
-    const cl = cellLane(view, q.s, lane, ramp ? ramp.toLip : -1, track.def.halfWidth - CAR_WIDTH / 2 - 2, hard ? HARD.cellLane : CELL_LANE);
+    const cl = cellLane(view, q.s, lane, ramp ? ramp.toLip : -1, track.def.halfWidth - CAR_WIDTH / 2 - 2, hard ? hp.cellLane : CELL_LANE);
     if (cl !== null) {
       lane = cl;
       coast = false;
@@ -1187,9 +1497,28 @@ export function botControls(view: BotView, mem: BotMem): BotControls {
   }
   // Hard's apex bias: only on its own racing line (a hole lane, a ramp, the slipstream and a cell
   // come first), towards the inside of the bend ahead, never onto a mine. mem.lateral stays.
-  if (hard && HARD.apex > 0 && !hole.holes && !hole.dodge && !ramp && !jump && !mem.wake && !cell && view.raceOn && bend > HARD.apexFrom) {
-    const apex = apexLane(mem.lateral, turn, track.def.halfWidth);
-    if (apexMineFree(view, c, q.s, mem.lateral, apex)) lane = apex;
+  if (hard && hp.apex > 0 && !hole.holes && !hole.dodge && !ramp && !jump && !mem.wake && !cell && view.raceOn && bend > hp.apexFrom) {
+    const apex = apexLane(mem.lateral, turn, track.def.halfWidth, hp);
+    if (apexMineFree(view, c, q.s, mem.lateral, apex, hp.apexMineClear)) lane = apex;
+  }
+  // HARD-2: the mistake under way or one beginning: only on its own racing line, with nothing of
+  // advisor change 4 about (holes, a lane round anything, a ramp, a truck, a split, what moves, the
+  // slipstream, a cell, a back-up, reversing, backing off an island; waiting for a press needs a
+  // mover), and from MISTAKE_FROM after GO.
+  let err: Mistake | null = null;
+  if (errs) {
+    const free = view.raceOn && view.raceSteps > MISTAKE_FROM && !hole.holes && !hole.dodge && !ramp && !jump && !tk && !split && movers === 0 &&
+      !mem.wake && !cell && !mem.backup && mem.reversing === 0 && mem.islandBack === 0;
+    err = mistakeStep(view, mem, q.s, q.seg, v, bend, free, landed, PASS.done, hit);
+    if (err !== null && err.kind === "wide") {
+      // Running wide: the lane must cost nothing (laneFor from it, as its racing line) and pass no mine.
+      const wide = wideLane(mem.lateral, turn, track.def.halfWidth, hp, err.size);
+      const wl = laneFor(track, q.s, q.seg, laneLook, wide, wide, view.stats, null, lat, null, 0);
+      if (!wl.holes && !wl.dodge && wl.lane === wide && apexMineFree(view, c, q.s, mem.lateral, wide, hp.apexMineClear)) lane = wide;
+      else mem.mistake = err = null; // nowhere to run wide: no mistake
+    }
+    // A mistake that begins this step, once it is sure to be driven (a wide line has its lane).
+    if (err !== null && err.t === 0) mem.onMistake?.(err.kind, err.size, q.s, view.lap ?? 0);
   }
   let aim = q.s + look;
   if (ramp && ramp.toLip < RAMP_STRAIGHTEN) aim = q.s + ramp.toLip + 180;
@@ -1203,16 +1532,28 @@ export function botControls(view: BotView, mem: BotMem): BotControls {
   const tx = t.x - Math.sin(t.h) * lane;
   const ty = t.y + Math.cos(t.h) * lane;
   let steer = clamp(angleDiff(c.h, Math.atan2(ty - c.y, tx - c.x)) * 2.2, -1, 1);
-  let target = bend > 1.4 ? 200 : bend > 0.9 ? 260 : bend > 0.5 ? 330 : 1000;
+  // HARD-2 wobble: over-correcting steer after a landing, decaying over the mistake's steps.
+  if (err !== null && err.kind === "wobble") {
+    const amp = (WOBBLE_AMP0 + WOBBLE_AMP * err.size) * (1 - err.t / err.n);
+    steer = clamp(steer + err.sign * amp * Math.sin((2 * Math.PI * err.t) / WOBBLE_PERIOD), -1, 1);
+  }
+  // HARD-2 late brake: only the brake trigger is late (the bend is seen err.delay after its entry);
+  // `bend` (the slipstream, the apex, the bend latch) is unchanged.
+  let tb = bend;
+  if (err !== null && err.kind === "late-brake" && ahead(track, err.from, q.s) < err.delay) tb = 0;
+  let target = tb > 1.4 ? 200 : tb > 0.9 ? 260 : tb > 0.5 ? 330 : 1000;
   const scale = CORNER_SCALE[view.carType ?? DEFAULT_CAR];
   if (scale !== 1) target *= scale;
   if (easy) target *= EASY_CORNER;
-  if (hard) target *= HARD.corner;
+  if (hard) target *= hp.corner;
+  if (err !== null && err.kind === "late-brake" && tb > 0.5) target *= 1 - LATE_SCRUB * err.size;
   // Among holes and mounds: slow enough to weave. What moves and the trucks only steer the lane (M4-MOVE).
   if (hole.holes > movers) target = Math.min(target, HOLE_SPEED);
-  let throttle = v > target + (hard ? HARD.brakeBand : 25) ? -1 : v > target ? 0 : 1;
+  let throttle = v > target + (hard ? hp.brakeBand : 25) ? -1 : v > target ? 0 : 1;
   // No ramming; never on a ramp approach (the jump needs the speed: a bump costs less than a fall).
   if (!ramp && !jump && (coast || (mem.useWake && !easy && closingOnCar(view, c, dir))) && throttle > 0) throttle = 0;
+  if (err !== null && err.kind === "hesitate" && throttle > 0) throttle = 0; // HARD-2: a short lift (a ramp below still wins)
+  else if (err !== null && err.kind === "wobble" && err.t < err.n / 2 && throttle > 1 - WOBBLE_LIFT * err.size) throttle = 1 - WOBBLE_LIFT * err.size; // and off the gas a little while it swings
   if (ramp || jump) throttle = 1; // Easy too: the cap would leave it short of some jumps (a truck's: the band would be solid)
   else if (easy && throttle > EASY_THROTTLE) throttle = EASY_THROTTLE;
   // A press that will be down as the bot gets there, across its lane (no open one in reach): brake and
@@ -1303,13 +1644,14 @@ export function botControls(view: BotView, mem: BotMem): BotControls {
     mem.reversing--;
     throttle = -1;
     steer = -steer;
+    if (errs) mem.mistake = null; // HARD-2: backing out ends a mistake
   }
 
   const armed = mem.weapons && !easy;
   let fire = false;
   if (armed && hard) {
     // Only when the rivet would hit (see rivetWouldHit); the weapons arm first (no rivet wasted).
-    fire = view.raceSteps > ARM_STEPS && view.others.some(rivetWouldHit(track, q.s, c));
+    fire = view.raceSteps > ARM_STEPS && view.others.some(rivetWouldHit(track, q.s, c, hp.rivetSlack));
     // A mine when a car follows in its wake at the distance it arrives as the mine arms.
     const mine = mineWouldCatch(view, mem, c, q.s, lat);
     if (mine) mem.lastMine = view.raceSteps;

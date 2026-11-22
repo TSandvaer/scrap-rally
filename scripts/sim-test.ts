@@ -11485,17 +11485,15 @@ function surfShipped(): void {
     ok = false;
     out = String((e as { stdout?: string }).stdout ?? e);
   }
-  const lines = out.split("\n").filter((l) => /^(SAME|DIFF) /.test(l));
-  // M4-TRACKS (coordinator's rule): every line of the three original tracks present and SAME; every
-  // other line SAME or new (a track the golden file has no entry for yet: schema-hash prints it DIFF),
-  // with no exact total. ok (the exit code) is not required: schema-hash exits 1 on a new track too.
-  const golden = JSON.parse(surfRead("tools/debug/schema-hash.golden.json", "utf8")) as Record<string, unknown>;
-  const original = ["rust-bowl", "crusher-run", "overpass-knot"].flatMap((id) => ["built", "queries", "botsDirect", "room", "walls"].map((part) => `SAME  ${id} ${part}`));
-  const changed = lines.filter((l) => l.startsWith("DIFF") && l.split(/\s+/)[1] in golden);
+  // The rule shared with M4-TRACKS (coordinator, 2026-11-22): every line of the three original tracks
+  // present and SAME; every other line SAME or NEW (tracks added since, e.g. BR-SCHEMA's Branch Yard).
+  const lines = out.split("\n").filter((l) => /^(SAME|DIFF|NEW |GONE) /.test(l));
+  const originals = ["rust-bowl", "crusher-run", "overpass-knot"].flatMap((id) => ["built", "queries", "botsDirect", "room", "walls"].map((part) => `SAME  ${id} ${part}`));
+  const others = lines.filter((l) => !/^\S+\s+(rust-bowl|crusher-run|overpass-knot) /.test(l));
   check(
-    "surf shipped: tools/debug/schema-hash.ts --check: every part SAME on every shipped track (built, queries, botsDirect, room, walls), against the golden recorded before M4-SURF changed physics",
-    original.every((l) => lines.includes(l)) && changed.length === 0,
-    changed.join("; ") || `the original 15 SAME: ${original.every((l) => lines.includes(l))}; ${lines.filter((l) => l.startsWith("SAME")).length} SAME, ${lines.length - lines.filter((l) => l.startsWith("SAME")).length} new${ok ? "" : " (exit code 1)"}`,
+    "surf shipped: tools/debug/schema-hash.ts --check: every part SAME on the three original tracks (built, queries, botsDirect, room, walls), against the golden recorded before M4-SURF changed physics; every other line SAME or NEW",
+    ok && originals.every((o) => lines.includes(o)) && others.every((l) => l.startsWith("SAME") || l.startsWith("NEW ")),
+    lines.filter((l) => !l.startsWith("SAME")).join("; ") || `${lines.length} parts SAME`,
   );
   const got = surfTune.hardHashes();
   const bad = Object.keys(SURF_HARD_GOLDEN).filter((k) => got[k] !== SURF_HARD_GOLDEN[k]);
@@ -13452,6 +13450,351 @@ for (const t of [moveBarrels, moveSolids, moveLandings, moveRivets, moveRespawn,
   }
 }
 
+// ---- branch roads as data (BR-SCHEMA, PLAN-BRANCH.md 2.1-2.5, 2.8-2.10, advisor changes 1-3, 7, 8; ClickUp 123jpnbfgh9, 2026-11-22) ----
+
+// This section's imports (hoisted like the ones at the top).
+import * as brT from "../shared/track";
+import * as brPhys from "../shared/physics";
+import { BRANCH_YARD } from "../shared/testtracks";
+import { unionProbe as brUnion } from "../tools/debug/branch-yard";
+
+const brClock = { t0: 0 };
+const brYard = () => testTrack(BRANCH_YARD.id)!;
+const brShippedIds = ["rust-bowl", "crusher-run", "overpass-knot", "slag-harbour", "breakers-mile"]; // M4-TRACKS added the last two
+/** Branch Yard's three branches as declared: the dirt cut, the jump cut, the narrow cut. */
+const brDefs = () => BRANCH_YARD.features!.filter((f): f is brT.Branch => f.k === "branch");
+/** Branch Yard's loop with these branches and main-road features (and its own recovery points, or these). */
+const brWith = (branches: brT.Branch[], main: Feature[] = [], recovery = BRANCH_YARD.recovery) =>
+  buildTrack({ ...BRANCH_YARD, id: "branch-test", features: [...main, ...branches], recovery });
+const brErrs = (branches: brT.Branch[], main: Feature[] = [], recovery = BRANCH_YARD.recovery) => validateTrack(brWith(branches, main, recovery)).join(" | ");
+const brF = (v: number) => v.toFixed(1);
+
+function brTypes(): void {
+  brClock.t0 = performance.now();
+  // Criterion 1: the types. Every track without a branch: none, no mouthAt, road 0 (shipped and test tracks).
+  const plain = [...brShippedIds.map((id) => trackById(id)), ...TEST_TRACKS.filter((d) => d.id !== BRANCH_YARD.id).map((d) => testTrack(d.id)!)];
+  const plainErrs = plain.flatMap((t) => validateTrack(t).map((e) => `${t.def.id}: ${e}`));
+  check(
+    "branch types: every track without a branch (the five shipped ones, Slag Harbour and Breaker's Mile included, and the other test tracks) has branches [], mouthAt [] and roadNo 0, its queries road 0, and validateTrack (with the branch checks) accepts it",
+    plain.every((t) => t.branches.length === 0 && t.mouthAt.length === 0 && t.roadNo === 0 && queryTrack(t, t.pts[5].x + 3, t.pts[5].y).road === 0) &&
+      plainErrs.length === 0 && brShippedIds.every((id) => trackList().some((e) => e.id === id)),
+    `${plain.map((t) => t.def.id).join(", ")}${plainErrs.length ? `; ${plainErrs.join(" | ")}` : ""}`,
+  );
+  const t = brYard();
+  const n = t.pts.length;
+  let base = n;
+  const shape = t.branches.map((b, k) => {
+    const r = b.road, m = r.pts.length, segs = m - 1;
+    const ok = b.base === base && r.roadNo === k + 1 && r.branches.length === 0 && r.cum.length === m && r.halfL.length === m && r.wallR.length === m &&
+      r.surfAt.length === segs && r.tyresAt.length === segs && r.islandsAt.length === segs && r.barrelsAt.length === segs && r.trucksAt.length === segs &&
+      brT.segCount(r) === segs && b.mapS.length === m && b.forkGore !== null && b.mergeGore !== null && b.side === 1 && b.s0 === brDefs()[k].s0 && b.s1 === brDefs()[k].s1;
+    base += segs;
+    return { ok, segs };
+  });
+  check(
+    "branch types: Branch Yard has 3 PlacedBranch {road, base, s0, s1, side, forkGore, mergeGore, mapS}; each road is an open Track (roadNo k + 1, m samples, m - 1 segments in every per-segment list); bases follow the main road's n segments",
+    t.branches.length === 3 && shape.every((x) => x.ok) && t.mouthAt.length === base,
+    `n ${n}, bases ${t.branches.map((b) => b.base).join(", ")}, segments ${shape.map((x) => x.segs).join(", ")}, global ${t.mouthAt.length}`,
+  );
+  // Branch cells after the main road's (the snapshot order: shipped indices never move).
+  const [a] = brDefs();
+  const ct = brWith([{ ...a, features: [...a.features!, { k: "cell", s: 1700, lat: 50 }] }], [{ k: "cell", s: 2000, lat: -58 }]);
+  const own = ct.branches[0].road.cells[0], app = ct.cells[1];
+  check(
+    "branch types: a branch's cells come after the main road's in track.cells (road = its road, seg = its global segment, s in u); the branch road keeps its own (seg on it); the main road's cell stays index 0",
+    ct.cells.length === 2 && ct.cells[0].s === 2000 && ct.cells[0].road === undefined && app.road === 1 && app.s === 1700 && app.seg === ct.branches[0].base + own.seg && app.x === own.x && app.y === own.y && own.road === undefined && validateTrack(ct).length === 0,
+    `cells ${ct.cells.map((c) => `${c.road ?? 0}:${c.s}@${c.seg}`).join(", ")}; the branch's own ${own.s}@${own.seg}; ${validateTrack(ct).join(" | ") || "valid"}`,
+  );
+}
+
+function brBuild(): void {
+  const t = brYard();
+  // Criterion 2: the curve through main(s0 - 100), main(s0), the control points, main(s1), main(s1 + 100).
+  const curve = t.branches.map((b, k) => {
+    const r = b.road, d = brDefs()[k], f = pointAt(t, b.s0), m = pointAt(t, b.s1), last = r.pts[r.pts.length - 1];
+    const ends = r.pts[0].x === f.x && r.pts[0].y === f.y && last.x === m.x && last.y === m.y;
+    const through = d.control.every((c, i) => r.pts[16 * (i + 1)].x === c[0] && r.pts[16 * (i + 1)].y === c[1]);
+    return ends && through && r.pts.length === 16 * (d.control.length + 1) + 1;
+  });
+  check("branch build: each branch's centreline starts at main(s0) and ends at main(s1) exactly, passes through its control points (16 samples a span), open", curve.every(Boolean), curve.join(","));
+  // Open road: s clamps (no wrap), the window clamps, the last sample's direction is the last segment's.
+  const r = t.branches[0].road, m = r.pts.length;
+  const pa = pointAt(r, -80), pb = pointAt(r, r.length + 80), q = queryTrack(r, r.pts[m - 1].x + 60, r.pts[m - 1].y + 5);
+  const qn = queryTrackNear(r, r.pts[m - 1].x, r.pts[m - 1].y, m + 30), d0 = brT.segDir(r, m - 1), d1 = brT.segDir(r, m - 2);
+  check(
+    "branch build: an open road never wraps: pointAt before 0 / past its length is its first / last point, a query past its end stays on its last segment (no closing segment), a window past the end is clamped, segDir of the last sample is the last segment's",
+    pa.x === r.pts[0].x && pa.y === r.pts[0].y && pa.seg === 0 && pb.x === r.pts[m - 1].x && pb.seg === m - 2 && q.seg === m - 2 && q.road === 1 && qn.seg === m - 2 && d0.x === d1.x && d0.y === d1.y,
+    `pointAt(-80) seg ${pa.seg}, pointAt(L + 80) seg ${pb.seg}, query past the end seg ${q.seg} (s ${brF(q.s)} of ${brF(r.length)}), window seg ${qn.seg}`,
+  );
+  // Equal mouth widths to the gore, a WIDEN_TAPER taper, then its own width (advisor 2: halfOf / wallOf read them).
+  const widths = t.branches.map((b) => {
+    const r = b.road, fg = b.forkGore!, mg = b.mergeGore!, own = r.def.halfWidth, main = t.def.halfWidth;
+    let mouth = true, middle = true, taper = true;
+    for (let i = 0; i < r.pts.length; i++) {
+      const u = r.cum[i];
+      const hs = [r.halfL[i], r.halfR[i]], ws = [r.wallL[i], r.wallR[i]];
+      if (u <= fg.u || u >= mg.u) mouth &&= hs.every((h) => h === main) && ws.every((w) => w === t.wall);
+      else if (u >= fg.u + brT.WIDEN_TAPER && u <= mg.u - brT.WIDEN_TAPER) middle &&= hs.every((h) => h === own) && ws.every((w) => w === own + t.def.verge);
+      else taper &&= hs.every((h) => h <= main && h >= own);
+    }
+    const qm = queryTrackNear(r, r.pts[3].x + 2, r.pts[3].y + 30, 3), mid = r.pts.length >> 1, qo = queryTrackNear(r, r.pts[mid].x + 2, r.pts[mid].y + 2, mid);
+    const reads = brT.halfOf(r, qm) === main && brT.wallOf(r, qm) === t.wall && brT.halfOf(r, qo) === own && brT.wallOf(r, qo) === own + t.def.verge;
+    return { ok: mouth && middle && taper && reads && r.widens.length >= 2, own, w: `${brF(brT.halfOf(r, qm))}/${brF(brT.halfOf(r, qo))}` };
+  });
+  check(
+    "branch build: in each mouth (fork to gore, gore to merge) the branch's half-widths and walls equal the main road's (64, 108) at every sample; past the gores' tapers its own (56, 56, 40); halfOf / wallOf of a query read them (non-empty widens)",
+    widths.every((x) => x.ok),
+    widths.map((x) => `own ${x.own}: halfOf mouth/middle ${x.w}`).join("; "),
+  );
+  // The gores' noses: a tyre stack in both roads' buckets, in neither road's tyres list.
+  const noses = t.branches.flatMap((b) => [b.forkGore!, b.mergeGore!].map((g) => {
+    const inMain = t.tyresAt.filter((l) => l.includes(g.noseMain)).length, inBranch = b.road.tyresAt.filter((l) => l.includes(g.noseBranch)).length;
+    const same = g.noseMain.x === g.noseBranch.x && g.noseMain.y === g.noseBranch.y && g.noseMain.r === brT.GORE_NOSE_R && g.noseBranch.r === brT.GORE_NOSE_R;
+    return { ok: inMain > 0 && inBranch > 0 && same && !t.tyres.includes(g.noseMain) && !b.road.tyres.includes(g.noseBranch) && Math.abs(g.noseMain.lat - b.side * t.wall) < 2, inMain, inBranch, lat: g.noseMain.lat };
+  }));
+  check(
+    "branch build: each gore has a tyre-stack nose (radius GORE_NOSE_R, half-way between the centrelines: at the main road's wall on the branch's side) in both roads' tyre buckets and in neither road's tyres list",
+    noses.length === 6 && noses.every((x) => x.ok),
+    noses.map((x) => `${x.inMain}/${x.inBranch} segs, lat ${brF(x.lat)}`).join("; "),
+  );
+  // A nose is a mound to the physics: a car driving into it is pushed out (collideTyres on the bucket).
+  const g = t.branches[0].forkGore!, at = t.tyresAt.findIndex((l) => l.includes(g.noseMain));
+  const c: CarState = { x: g.x - 30, y: g.y - 6, h: 0, vx: 200, vy: 0, seg: at, wreck: 0, air: 0, fall: 0, boost: 0 };
+  let hit = 0;
+  for (let k = 0; k < 20; k++) {
+    c.x += c.vx * DT;
+    hit += brPhys.collideTyres(c, t.tyresAt[at]) > 0 ? 1 : 0;
+  }
+  check("branch build: a car driven into a gore's nose bounces off it (collideTyres on the main road's bucket)", hit > 0 && Math.hypot(c.x - g.x, c.y - g.y) >= g.noseMain.r + brPhys.CAPSULE_R - 1e-6, `hits ${hit}, ends ${brF(Math.hypot(c.x - g.x, c.y - g.y))} from its centre`);
+}
+
+function brMaps(): void {
+  const t = brYard();
+  // Criterion 3: mapS, mainS, mouthAt, queryRoads, recoveryAt / recoveryFor.
+  const maps = t.branches.map((b) => {
+    const r = b.road, fg = b.forkGore!, mg = b.mergeGore!;
+    let inc = true, proj = 0, lin = 0, hint = pointAt(t, b.s0).seg;
+    for (let i = 1; i < b.mapS.length; i++) inc &&= b.mapS[i] > b.mapS[i - 1];
+    for (let i = 0; i < r.pts.length; i++) {
+      const u = r.cum[i];
+      const q = queryTrackNear(t, r.pts[i].x, r.pts[i].y, hint);
+      hint = q.seg;
+      if (u <= fg.u && i > 0) proj = Math.max(proj, Math.abs(b.mapS[i] - q.s));
+      else if (u > fg.u && u < mg.u) lin = Math.max(lin, Math.abs(b.mapS[i] - (fg.s + ((u - fg.u) * (mg.s - fg.s)) / (mg.u - fg.u))));
+    }
+    return { ok: inc && b.mapS[0] === b.s0 && b.mapS[b.mapS.length - 1] === b.s1 && proj === 0 && lin < 1e-9, proj, lin };
+  });
+  check(
+    "branch mapS: strictly increasing, s0 at the fork and s1 at the merge, the main road's projection in the fork mouth (exactly), linear in u between the gores",
+    maps.every((x) => x.ok),
+    maps.map((x) => `projection off ${x.proj}, linear off ${x.lin.toExponential(1)}`).join("; "),
+  );
+  // mainS: q.s on the main road; on a branch mapS interpolated, so in a mouth (its segments wholly before
+  // the gore) it is within a unit of the main road's own query there (the projection; between samples a
+  // chord's). In the gore's own segment it runs on toward the linear part (advisor change 9: a road flip
+  // moves s a little); along the whole branch it never goes back and never jumps.
+  let worst = 0, mainSame = true, steps = 0, back = 0, leap = 0;
+  for (const b of t.branches) {
+    const r = b.road;
+    let prev = -Infinity;
+    for (let u = 0; u <= r.length; u += 3) {
+      const p = pointAt(r, u), s = brT.mainS(t, queryTrackNear(r, p.x, p.y, p.seg));
+      if (s < prev) back++;
+      if (prev > -Infinity) leap = Math.max(leap, s - prev);
+      prev = s;
+    }
+    for (let u = 1; r.cum[pointAt(r, u).seg + 1] <= b.forkGore!.u; u += 7) {
+      const p = pointAt(r, u);
+      const qb = queryTrackNear(r, p.x, p.y, p.seg), qm = queryTrackNear(t, p.x, p.y, pointAt(t, b.s0 + u).seg);
+      worst = Math.max(worst, Math.abs(brT.mainS(t, qb) - qm.s));
+      mainSame &&= brT.mainS(t, qm) === qm.s;
+      steps++;
+    }
+  }
+  check(
+    "branch mainS: q.s on the main road; on a branch in a mouth within 1 of the main road's own s at that point; along a whole branch never back, never more than 6 in 3 units of u",
+    worst < 1 && mainSame && back === 0 && leap <= 6,
+    `${steps} mouth points, worst ${worst.toFixed(4)}; along the branches ${back} steps back, largest step ${leap.toFixed(2)}`,
+  );
+  // mouthAt: -1 away from mouths, the other road's segment near them; no mouth window shared.
+  const n = t.pts.length;
+  const far = [pointAt(t, 1000).seg, pointAt(t, 14000).seg, ...t.branches.map((b) => b.base + (brT.segCount(b.road) >> 1))];
+  let pairs = 0, near = true;
+  for (let g = 0; g < t.mouthAt.length; g++) {
+    const o = t.mouthAt[g];
+    if (o < 0) continue;
+    pairs++;
+    const ra = brT.roadOfSeg(t, g), rb = brT.roadOfSeg(t, o);
+    const pa = brT.roadOf(t, ra).pts[brT.localSeg(t, g)], pb = brT.roadOf(t, rb).pts[brT.localSeg(t, o)];
+    near &&= (ra === 0) !== (rb === 0) && Math.hypot(pa.x - pb.x, pa.y - pb.y) < 2 * brT.LOCAL_WINDOW * 60;
+  }
+  const mouthMain = t.branches.every((b) => t.mouthAt[pointAt(t, b.s0 + 50).seg] >= b.base && t.mouthAt[pointAt(t, b.s1 - 50).seg] >= b.base && t.mouthAt[b.base + 1] >= 0 && t.mouthAt[b.base] < n);
+  check(
+    "branch mouthAt: one entry per global segment; -1 far from every mouth; a fork's and a merge's segments (and LOCAL_WINDOW round them) on either road point at a segment of the other road nearby",
+    far.every((g) => t.mouthAt[g] === -1) && mouthMain && near && pairs > 0,
+    `${pairs} segments in mouth windows of ${t.mouthAt.length}; far ones ${far.map((g) => t.mouthAt[g]).join(",")}`,
+  );
+  // queryRoads without branches is today's query exactly.
+  let same = 0, differ = 0;
+  for (const id of brShippedIds) {
+    const s = trackById(id);
+    for (let i = 0; i < s.pts.length; i += 3) {
+      const x = s.pts[i].x + 37.3, y = s.pts[i].y - 21.1;
+      const a = queryTrackNear(s, x, y, i), b = brT.queryRoads(s, x, y, i), c = queryTrack(s, x, y), d = brT.queryRoads(s, x, y);
+      const eq = a.dist === b.dist && a.s === b.s && a.seg === b.seg && a.nx === b.nx && a.side === b.side && c.dist === d.dist && c.seg === d.seg && c.s === d.s;
+      if (eq) same++;
+      else differ++;
+    }
+  }
+  check("branch queryRoads: on a track without branches it is queryTrackNear (with a hint) and queryTrack (without) exactly", differ === 0 && same > 0, `${same} points the same, ${differ} differ`);
+  // On Branch Yard: without a hint the nearer road; with a hint on either road near a mouth (the branch's
+  // segment, or the main road's beside it) the same road and distance: physics and the bake agree.
+  let pts = 0, agree = 0, nearest = 0;
+  const bad: string[] = [];
+  for (const b of t.branches) {
+    const r = b.road;
+    for (const [u0, u1] of [[0, b.forkGore!.u + 250], [b.mergeGore!.u - 250, r.length]]) {
+      for (let u = u0; u <= u1; u += 9) {
+        const p = pointAt(r, u);
+        for (let lat = -150; lat <= 150; lat += 10) {
+          const x = p.x - Math.sin(p.h) * lat, y = p.y + Math.cos(p.h) * lat;
+          const g = brT.queryRoads(t, x, y);
+          const qm = queryTrack(t, x, y), qb = queryTrack(r, x, y);
+          if (g.dist === Math.min(qm.dist, qb.dist)) nearest++;
+          const hints = [b.base + p.seg, pointAt(t, brT.mainS(t, queryTrackNear(r, x, y, p.seg))).seg];
+          for (const h of hints) {
+            const q = brT.queryRoads(t, x, y, h);
+            pts++;
+            // On an exact tie (the fork and merge points lie on both roads) the hint's road keeps it.
+            const tie = queryTrack(t, x, y).dist === queryTrack(r, x, y).dist;
+            if ((q.road === g.road || tie) && Math.abs(q.dist - g.dist) < 1e-9) agree++;
+            else if (bad.length < 3) bad.push(`u ${brF(u)} lat ${lat} hint ${h}: road ${q.road} ${brF(q.dist)} vs ${g.road} ${brF(g.dist)}`);
+          }
+        }
+      }
+    }
+  }
+  check(
+    "branch queryRoads: round every mouth (to 250 past each gore) the hinted query, from the branch's segment or the main road's beside it, finds the same road (on an exact tie the hint's) and distance as the whole-track one (the nearer centreline)",
+    agree === pts && pts > 0 && nearest === pts / 2,
+    `${agree}/${pts} hinted queries agree, ${nearest} nearest${bad.length ? `; ${bad.join("; ")}` : ""}`,
+  );
+  // recoveryAt on an open road (advisor 3): no undefined, no wrap; recoveryFor (user decision 6).
+  const jump = t.branches[1], jr = jump.road, dirt = t.branches[0].road;
+  const ra = [brT.recoveryAt(dirt, 1000), brT.recoveryAt(jr, 100), brT.recoveryAt(jr, 900), brT.recoveryAt(jr, jr.length + 500), brT.recoveryAt(jr, -40)];
+  const mainBefore = brT.recoveryAt(t, jump.s0);
+  const rf = [brT.recoveryFor(t, 2, 100), brT.recoveryFor(t, 2, 1500), brT.recoveryFor(t, 1, 1500), brT.recoveryFor(t, 0, 9000)];
+  check(
+    "branch recovery: on an open road recoveryAt is the last point at or before u, -1 when none is (none at all, or u before the first; never undefined, never the last one wrapped); recoveryFor goes back to the main road's recovery point before the fork then (user decision 6)",
+    ra.join() === "-1,-1,850,850,-1" && rf[0].road === 0 && rf[0].s === mainBefore && mainBefore > 0 && mainBefore < jump.s0 && rf[1].road === 2 && rf[1].s === 850 &&
+      rf[2].road === 0 && rf[2].s === recoveryAt(t, t.branches[0].s0) && rf[3].road === 0 && rf[3].s === recoveryAt(t, 9000),
+    `recoveryAt ${ra.join(", ")}; recoveryFor ${rf.map((x) => `${x.road}:${x.s}`).join(", ")}`,
+  );
+  // The union (advisor 1): a point is inside the nearer road's wall exactly when it is inside either corridor.
+  const u = brUnion(t);
+  check("branch union: round every mouth of Branch Yard, a point is inside the nearer road's wall (queryRoads) exactly when it is inside either road's corridor", u.wrong === 0 && u.probes > 100000, `${u.probes} points, ${u.wrong} disagree${u.first.length ? `: ${u.first.join("; ")}` : ""}`);
+}
+
+function brRules(): void {
+  // Criterion 4: one def per rule that breaks it; Branch Yard and each of its branches alone validate.
+  const [a, b, c] = brDefs();
+  const good = [brErrs([a]), brErrs([b]), brErrs([c]), validateTrack(brYard()).join(" | ")];
+  check("branch rules: Branch Yard and each of its three branches alone validate", good.every((e) => e === ""), good.map((e) => e || "valid").join(" / "));
+  const rule = (name: string, bad: string, want: string) => check(`branch rule: ${name}`, bad.includes(want), bad.slice(0, 600));
+  rule("a branch not shorter than the main road from its fork to its merge is refused",
+    brErrs([{ ...a, control: [[5000, 680], [5250, 820], [5600, 1030], [5000, 2600], [6170, 1600], [6380, 1950], [6520, 2200]] }]), "not shorter than the main road's 3408.9");
+  rule("a branch narrower than BRANCH_HALF_MIN (36) is refused", brErrs([{ ...a, halfWidth: 30 }]), "half-width 30 is narrower than 36");
+  rule("centrelines meeting at more than GORE_ANGLE_MAX (35 degrees) at a gore are refused", brErrs([{ ...a, control: [[4950, 720], [5150, 900], ...a.control.slice(2)] }]), "meet at 47.1 degrees at its fork gore");
+  rule("a mouth longer than MOUTH_LEN_MAX (600) is refused", brErrs([{ ...a, control: [[5100, 640], [5400, 700], [5800, 860], ...a.control.slice(3)] }]), "its fork mouth is 984.2 long");
+  rule("a mapS that is not strictly increasing is refused (a branch that starts backwards)", brErrs([{ ...a, control: [[4700, 760], ...a.control.slice(1)] }]), "mapS is not strictly increasing at branch sample 1");
+  rule("corridors of different roads that overlap outside a mouth are refused",
+    brErrs([{ ...a, control: [[5000, 680], [5250, 820], [5600, 1030], [6000, 760], [6170, 1600], [6380, 1950], [6520, 2200]] }]), "their corridors overlap (by 7.6) outside a mouth");
+  rule("corridors of different roads less than BRANCH_SEP (40) apart outside the mouths and noses are refused",
+    brErrs([{ ...a, control: [[5000, 680], [5250, 820], [5600, 1030], [6330, 1450], [6380, 1950], [6520, 2200]] }]), "their corridors are 32.0 apart, less than 40 (outside the mouths and the gores' noses)");
+  rule("a corridor not BRANCH_SEP clear within MOUTH_CLEAR past its gore is refused (the nose zone is bounded)",
+    brErrs([{ ...a, control: [[5000, 680], [5250, 820], [5600, 836], [6000, 836], [6170, 1600], [6380, 1950], [6520, 2200]] }]), "is not 40 clear of the main road's within 300 past its fork gore");
+  const wide = brWith([{ ...a, halfWidth: 120, features: [] }]);
+  const wideUnion = brUnion(wide);
+  rule(`past a gore a gap between the corridors under the walls' difference is refused (advisor 1; a 240-wide branch: ${wideUnion.wrong} of ${wideUnion.probes} union probes disagree)`,
+    validateTrack(wide).join(" | ") + (wideUnion.wrong > 0 ? "" : " (NO UNION DISAGREEMENT)"), "past a gore their corridors are 28.0 apart, less than the walls' difference 46.6");
+  rule("a branch feature within MOUTH_CLEAR (300) of a gore is refused", brErrs([{ ...a, features: [{ k: "dirt", s0: 600, s1: 780, lat0: -56, lat1: 56 }] }]), "dirt 600.0..780.0: outside u 794.3..1836.0");
+  rule("a branch recovery point in a mouth is refused", brErrs([{ ...a, recovery: [300] }]), "recovery point u=300.0 is in a mouth");
+  rule("a main-road feature in a mouth or within MOUTH_CLEAR of its gore is refused (advisor 7)",
+    brErrs([a], [{ k: "tyres", s: 4200, lat: 0, r: 20 }, { k: "dirt", s0: 4500, s1: 4600, lat0: -64, lat1: 64 }]), "tyres at s=4200.0: in a mouth of branch 1 or within 300 of its gore");
+  rule("past the gore too (a main-road dirt patch past the fork gore, within MOUTH_CLEAR)", brErrs([a], [{ k: "dirt", s0: 4500, s1: 4600, lat0: -64, lat1: 64 }]), "dirt 4500.0..4600.0: in a mouth of branch 1 or within 300 of its gore");
+  rule("a branch without a recovery point before its first hazard is refused", brErrs([{ ...b, recovery: [1500] }]), "no recovery point before its first hazard at u=1150.0");
+  rule("a branch solid within SOLID_CLEAR (40) of a branch recovery point is refused",
+    brErrs([{ ...c, features: [...c.features!, { k: "tyres", s: 900, lat: 0, r: 20 }] }]), "tyres at s=900.0: 30.0 from recovery point s=850.0 (solids keep >= 40)");
+  rule("a branch that leaves on the other side than its declared side is refused", brErrs([{ ...a, side: -1 }]), "it leaves the main road on its right at its fork, not on side -1");
+  rule("a branch whose corridor never parts from the main road's is refused",
+    brErrs([{ k: "branch", s0: 3000, s1: 4300, side: 1, halfWidth: 56, control: [[3500, 650], [3900, 650]] }]), "its corridor never parts from the main road's past its fork");
+  rule("two mouths within a search window of each other are refused (mouthAt has one answer)",
+    brErrs([a, { ...b, s0: 7700, control: [[6520, 2900], ...b.control.slice(1)] }]), "the merge of branch 1 and the fork of branch 2 are within 12 segments of each other on the main road");
+  rule("a fork in the start zone is refused", brErrs([{ ...a, s0: 100 }]), "its fork or merge is in the start zone or off the lap");
+  // Review 1: a branch road gets the crossing checks too (no wrap on an open road), and no bend tighter than
+  // its inside's reach (the reviewer's repro, a fold: samples u 1303.2 and u 1707.1 are 123.2 apart with
+  // walls 100; its overlapping corridor pieces all lie within 378 along it, under the crossing check's
+  // SAME_SECTION reach of 400, so the bend rule is what refuses it).
+  rule("a branch whose corridor folds over itself (a bend tighter than its inside's reach) is refused (review 1's repro)",
+    brErrs([{ ...a, features: [], control: [[5000, 680], [5250, 820], [5600, 1030], [5950, 1400], [5850, 1350], [6100, 1420], [6380, 1950], [6520, 2200]] }]),
+    "a car centre reaches 92.0 (the wall less half a car) on the inside of the bend at u=1430.9, not below the local radius 21.1 (its corridor folds over itself)");
+  rule("a branch that crosses itself is refused (the crossing check on each branch road, u not wrapped)",
+    brErrs([{ ...a, features: [], control: [[5000, 680], [5250, 820], [5600, 1030], [6150, 1400], [6100, 1900], [5700, 1950], [5550, 1550], [5950, 1350], [6350, 1700], [6520, 2200]] }]),
+    "ground corridors overlap at u=1160.0 and u=3300.8 (cover one with a gap)");
+}
+
+function brYardCheck(): void {
+  // Criterion 5: Branch Yard: a dirt cut (<= ~350 of dirt), a jump cut, a narrow cut with holes; one out of
+  // sight; plain road between; validates; picked with SCRAP_DEV_TRACK=branch-yard.
+  const t = brYard();
+  const [dirt, jump, narrow] = t.branches;
+  const far = t.branches.map((b) => {
+    const r = b.road;
+    let out = 0;
+    for (let i = 1; i < r.pts.length; i++) if (queryTrack(t, r.pts[i].x, r.pts[i].y).dist > 450) out += r.cum[i] - r.cum[i - 1];
+    return out;
+  });
+  const gains = t.branches.map((b) => b.s1 - b.s0 - b.road.length);
+  const dirtLen = dirt.road.dirt.map((d) => d.s1 - d.s0);
+  const ok =
+    t.def.features!.every((f) => f.k === "branch") &&
+    dirt.road.dirt.length === 1 && dirtLen[0] <= 350 && dirt.road.dirt[0].lat0 <= -dirt.road.def.halfWidth && dirt.road.dirt[0].lat1 >= dirt.road.def.halfWidth &&
+    jump.road.ramps.length === 1 && jump.road.gaps.length === 1 && jump.road.recovery.some((r) => r < jump.road.ramps[0].s) &&
+    narrow.road.def.halfWidth < t.def.halfWidth && narrow.road.def.halfWidth >= brT.BRANCH_HALF_MIN && narrow.road.holes.length >= 2 &&
+    gains.every((g) => g > 0) && far.some((f) => f > 0) && validateTrack(t).length === 0 && validateRunUps(t).length === 0;
+  check(
+    "branch yard: three shortcuts (a dirt cut with one 340 stretch of dirt across it, a jump cut with a recovery point before its ramp, a 80-wide cut with pits), all shorter, out of sight of the main road in their middles, nothing on the main road; validateTrack and validateRunUps pass",
+    ok,
+    `gains ${gains.map(brF).join(", ")} units; dirt ${dirtLen.map(brF).join(",")}; out of sight (> 450 from the main centreline) ${far.map(brF).join(", ")} units; half-widths ${t.branches.map((b) => b.road.def.halfWidth).join(", ")}`,
+  );
+  const on = withDevTrack(BRANCH_YARD.id, () => {
+    const rooms = new Rooms(1);
+    const x = { conn: new FakeConn(), room: null, player: null } as Session;
+    rooms.onMessage(x, { t: "create", name: "Ann" }, 1000);
+    return { id: x.room!.trackId, same: x.room!.track === testTrack(BRANCH_YARD.id), flag: surfRoom.devTrackId() };
+  });
+  const off = withDevTrack(undefined, () => {
+    const sim = new Sim();
+    const host = sim.add("Host");
+    return sim.room.setTrack(host, BRANCH_YARD.id);
+  });
+  check(
+    "branch yard: SCRAP_DEV_TRACK=branch-yard starts a new room on Branch Yard; unset (the default, and on Render) the host cannot pick it; it is not in the lobby's list",
+    on.id === BRANCH_YARD.id && on.same && on.flag === BRANCH_YARD.id && off === "Unknown track" && !trackList().some((e) => e.id === BRANCH_YARD.id),
+    `${JSON.stringify(on)}; unset: ${off}`,
+  );
+  console.log(`  BR-SCHEMA sim-test sections' runtime (brTypes .. brYardCheck): ${((performance.now() - brClock.t0) / 1000).toFixed(1)} s`);
+}
+
+for (const t of [brTypes, brBuild, brMaps, brRules, brYardCheck]) {
+  console.log(`\n# ${t.name}`);
+  try {
+    t();
+  } catch (e) {
+    check(`${t.name} threw`, false, String(e));
+  }
+}
+
 // ---- M4-TRACKS (ClickUp 123jpnbffz6): the two long tracks, Slag Harbour and Breaker's Mile ----------
 // This section's imports (hoisted like the ones at the top).
 import { BREAKERS_MILE, SLAG_HARBOUR } from "../shared/longtracks";
@@ -13750,6 +14093,519 @@ function longCpu(): void {
 }
 
 for (const t of [longRegistry, longValidate, longTruckCell, longDensityRules, longFeatures, longBots, longParity, longCpu]) {
+  console.log(`\n# ${t.name}`);
+  try {
+    t();
+  } catch (e) {
+    check(`${t.name} threw`, false, String(e));
+  }
+}
+
+// ---- HARD-2: Hard bots make human mistakes + a dev Bot tune knob (PLAN-M4.md addendum 2026-11-22 and its binding advisor changes, ClickUp 123jpnbfghz, 2026-11-22) ----
+
+// This section's imports (hoisted like the ones at the top).
+import * as h2Bot from "../shared/botdrive";
+import * as h2Tune from "../tools/debug/hard-tune";
+import * as h2Seat from "../server/bots";
+import { devBotsOn as h2DevBotsOn } from "../server/room";
+import { testTrack as h2TestTrack } from "../shared/testtracks";
+import { readFileSync as h2Read } from "node:fs";
+
+/** When the HARD-2 sections began (their runtime is printed and bounded at the end). */
+const h2Clock = { t0: 0 };
+
+/** The races of the HARD-2 sections, run once per label (the table reuses the gate's runs). */
+const h2Memo = new Map<string, ReturnType<typeof h2Tune.tuneTraffic>>();
+function h2Traffic(label: string, tune: h2Bot.BotTune | undefined, tracks: readonly string[], levels: BotLevel[], weapons: boolean): ReturnType<typeof h2Tune.tuneTraffic> {
+  const key = `${label}|${JSON.stringify(tune)}|${tracks.join()}|${levels.join()}|${weapons}`;
+  let r = h2Memo.get(key);
+  if (!r) h2Memo.set(key, (r = h2Tune.tuneTraffic(label, tune, tracks, levels, weapons)));
+  return r;
+}
+
+const H2_3 = ["hard", "hard", "hard"] as BotLevel[];
+const H2_5 = ["hard", "hard", "hard", "hard", "hard"] as BotLevel[];
+
+function hard2Params(): void {
+  h2Clock.t0 = performance.now();
+  const H = h2Bot.HARD;
+  const before = JSON.stringify(H);
+  const def = h2Bot.botTuneDefaults();
+  const p1 = h2Bot.hardParams(def), p0 = h2Bot.hardParams({ ...def, pace: 0 }), ph = h2Bot.hardParams({ ...def, pace: 0.5 });
+  const moved = (p: h2Bot.HardParams) => (Object.keys(H) as (keyof h2Bot.HardParams)[]).filter((k) => !Object.is(p[k], H[k])).join();
+  check(
+    "hard2 params: BotMem.hard is HARD itself by default (every level); mistakeRate 0 by default; the knob's defaults are today's Hard (rate 0, pace 1, aim = rivetSlack); hardParams never changes HARD",
+    newBotMem(0, "hard").hard === H && newBotMem(-24, "normal").hard === H && newBotMem(12, "easy").hard === H && h2Seat.newBotSeat("hard", 3, 1).mem.hard === H &&
+      H.mistakeRate === 0 && def.rate === 0 && def.pace === 1 && def.aim === H.rivetSlack && def.size === H.mistakeSize && JSON.stringify(H) === before,
+    `defaults ${JSON.stringify(def)}`,
+  );
+  check(
+    "hard2 params: pace 1 is HARD's corner, brakeBand and bendLook themselves (Object.is, no interpolation); pace 0 is Normal's 1, 25, 1; the pace knob moves only those three (apex, cells, weapons, mines stay Hard's)",
+    Object.is(p1.corner, H.corner) && Object.is(p1.brakeBand, H.brakeBand) && Object.is(p1.bendLook, H.bendLook) && moved(p1) === "" && p1 !== H &&
+      p0.corner === 1 && p0.brakeBand === 25 && p0.bendLook === 1 && moved(p0) === "corner,brakeBand,bendLook" && moved(ph) === "corner,brakeBand,bendLook" &&
+      ph.corner > 1 && ph.corner < H.corner && ph.brakeBand > H.brakeBand && ph.brakeBand < 25 && ph.bendLook > H.bendLook && ph.bendLook < 1 &&
+      moved(h2Bot.hardParams({ ...def, rate: 2, size: 0.8, aim: 9 })) === "rivetSlack,mistakeRate,mistakeSize",
+    `pace 0: ${p0.corner}/${p0.brakeBand}/${p0.bendLook}; 0.5: ${ph.corner.toFixed(4)}/${ph.brakeBand}/${ph.bendLook}; 1: ${p1.corner}/${p1.brakeBand}/${p1.bendLook}`,
+  );
+  // withHard (the tuner) still sweeps: the default reference is HARD, so a change to it is the bot's.
+  const swept = h2Tune.withHard({ apex: 0, mistakeRate: 2 }, () => {
+    const m = newBotMem(0, "hard");
+    return `${m.hard.apex},${m.hard.mistakeRate}`;
+  });
+  check("hard2 params: withHard (tools/debug/hard-tune.ts) still sweeps a bot's constants (its BotMem.hard is HARD)", swept === "0,2" && H.apex === 20 && H.mistakeRate === 0, swept);
+  // The seed: a server seat's slot; a socket bot's from its lane, signed (mirrored lanes differ).
+  const seeds = [0, 1, 2, 3, 4, 5].map((slot) => h2Seat.newBotSeat("hard", slot, slot + 1).mem.seed);
+  check(
+    "hard2 params: the mistakes' seed is the server seat's slot; a socket bot's comes from its lane (mirrored lanes -24 and 24 differ), as the mine offset",
+    seeds.join() === "0,1,2,3,4,5" && newBotMem(24).seed === 168 && newBotMem(-24).seed === -168 && newBotMem(0).seed === 0,
+    `slots -> ${seeds.join()}; lanes -24/0/24 -> ${[-24, 0, 24].map((l) => newBotMem(l).seed).join("/")}`,
+  );
+  // The draw: deterministic, in [0, 1), spread.
+  const draws: number[] = [];
+  for (let seed = 0; seed < 6; seed++) for (let lap = 0; lap < 3; lap++) for (let seg = 0; seg < 400; seg += 7) draws.push(h2Bot.mistakeDraw(seed, lap, seg, 4));
+  const mean = draws.reduce((a, b) => a + b, 0) / draws.length;
+  const low = draws.filter((x) => x < 0.25).length / draws.length;
+  check(
+    "hard2 params: mistakeDraw is deterministic (same inputs, same value), in [0, 1) and spread (mean ~0.5, a quarter below 0.25)",
+    draws.every((x, i) => x >= 0 && x < 1 && x === h2Bot.mistakeDraw(Math.floor(i / 174), Math.floor((i % 174) / 58), (i % 58) * 7, 4)) && Math.abs(mean - 0.5) < 0.05 && Math.abs(low - 0.25) < 0.05,
+    `${draws.length} draws: mean ${mean.toFixed(3)}, below 0.25 ${(low * 100).toFixed(1)}%`,
+  );
+}
+
+function hard2Identity(): void {
+  // Rate 0 through the knob (the dev message, flag on, today's values): the Hard streams are today's
+  // (SURF_HARD_GOLDEN); a knob far from today's leaves Easy and Normal byte-identical (HARD_GOLDEN).
+  const def = h2Bot.botTuneDefaults();
+  const wild = { rate: 3, size: 1, pace: 0, aim: 20 };
+  const got: Record<string, string> = {};
+  for (const t of HARD_TRACKS) got[`${t} hard`] = h2Tune.goldenServer(t, H2_3, 2, 3, def).hash;
+  got["client overpass-knot hard"] = h2Tune.goldenClient("overpass-knot", 2, "hard", 1, false, def).hash;
+  const bad = Object.keys(SURF_HARD_GOLDEN).filter((k) => got[k] !== SURF_HARD_GOLDEN[k]);
+  check(
+    "hard2 identity: with the dev flag on and the knob at today's values (rate 0, pace 1) sent by the host, Hard bots drive, shoot and shop byte-identically to today (SURF_HARD_GOLDEN: server bots on every shipped track, two races; the socket-bot path)",
+    bad.length === 0 && Object.keys(got).length === 4,
+    bad.map((k) => `${k}: ${got[k]?.slice(0, 12)} != ${SURF_HARD_GOLDEN[k].slice(0, 12)}`).join("; ") || "4 hashes match",
+  );
+  const en: string[] = [];
+  for (const t of HARD_TRACKS) {
+    for (const level of ["easy", "normal"] as BotLevel[]) {
+      const h = h2Tune.goldenServer(t, [level, level, level], 2, 3, wild).hash;
+      if (h !== HARD_GOLDEN[`${t} ${level}`]) en.push(`${t} ${level}: ${h.slice(0, 12)} != ${HARD_GOLDEN[`${t} ${level}`].slice(0, 12)}`);
+    }
+  }
+  check("hard2 identity: with the knob at rate 3, size 1, pace 0, aim 20, Easy and Normal bots drive byte-identically to before M4-HARD (HARD_GOLDEN, every shipped track, two races)", en.length === 0, en.join("; ") || "6 hashes match");
+  // Mistakes do change Hard (else the identity above proves nothing), the same way on a rerun.
+  const on = { ...def, rate: 3, size: 1 };
+  const a = h2Tune.goldenServer("rust-bowl", H2_3, 1, 3, on).hash, b = h2Tune.goldenServer("rust-bowl", H2_3, 1, 3, on).hash;
+  check(
+    "hard2 identity: with mistakes on (rate 3) a Hard race's stream differs from today's, and is identical on a rerun",
+    a === b && a !== h2Tune.goldenServer("rust-bowl", H2_3, 1, 3, def).hash,
+    `${a.slice(0, 12)} (rerun ${b.slice(0, 12)})`,
+  );
+}
+
+function hard2Mistakes(): void {
+  // Falls 0 in traffic (advisor change 10): 3 and 5 Hard bots (seats 0-4), 3 laps, every shipped
+  // track and the Surf, Split and Move Yards, every car set (the mix, all Sport, Racer, Truck).
+  const cfgs: [string, h2Bot.BotTune][] = [["rate 1 size 0.5", h2Tune.tuneOf({ rate: 1, size: 0.5 })], ["rate 3 size 1", h2Tune.tuneOf({ rate: 3, size: 1 })]];
+  const kinds = { "late-brake": 0, wide: 0, wobble: 0, hesitate: 0 } as Record<h2Bot.MistakeKind, number>;
+  const lines: string[] = [];
+  let offOk = true, onOk = true, zones = 0;
+  for (const levels of [H2_3, H2_5]) {
+    for (const [label, tune] of cfgs) {
+      for (const weapons of [false, true]) {
+        const r = h2Traffic(`${label} ${levels.length}H ${weapons ? "weapons" : "no weapons"}`, tune, h2Tune.MISTAKE_TRACKS, levels, weapons).row;
+        for (const k of h2Bot.MISTAKE_KINDS) kinds[k] += r.mistakes[k];
+        zones += r.badZone;
+        if (weapons) onOk &&= r.falls - r.hitFalls === 0 && r.mistakeFalls === 0;
+        else offOk &&= r.falls === 0;
+        lines.push(`${r.label}: falls ${r.falls} (${r.hitFalls} within 3 s of being hit, ${r.mistakeFalls} within 3 s of a mistake), ${r.perLap.toFixed(2)} mistakes/lap, ${r.wrecks} wrecks`);
+      }
+    }
+  }
+  for (const l of lines) console.log(`  ${l}`);
+  check(
+    "hard2 mistakes: falls 0 with mistakes on in traffic, weapons off: 3 and 5 Hard bots, 3 laps, the shipped tracks and the Surf, Split and Move Yards, every car set, rate 1 size 0.5 and rate 3 size 1",
+    offOk,
+    lines.filter((l) => l.includes("no weapons")).join("; "),
+  );
+  check(
+    "hard2 mistakes: with weapons on as well, no fall but after being hit by a rivet or a mine (the weapons' falls, as at rate 0), none within 3 s of a mistake",
+    onOk,
+    lines.filter((l) => !l.includes("no weapons")).join("; "),
+  );
+  check(
+    "hard2 mistakes: every kind fires when the rate is above 0 (late brake, wide line, wobble after a landing, hesitation after a pass or a hit), counted per kind",
+    h2Bot.MISTAKE_KINDS.every((k) => kinds[k] > 0),
+    h2Bot.MISTAKE_KINDS.map((k) => `${k} ${kinds[k]}`).join(", "),
+  );
+  check(
+    "hard2 mistakes: no step of a mistake in an excluded zone (independent check: a feature from 15 behind to 650 ahead, the slipstream, a back-up, reversing, backing off an island)",
+    zones === 0,
+    `${zones} steps`,
+  );
+  // Rerun identical (the gate's heaviest run, weapons on).
+  const again = h2Tune.tuneTraffic("rerun", cfgs[1][1], h2Tune.MISTAKE_TRACKS, H2_5, true);
+  const first = h2Traffic(`rate 3 size 1 5H weapons`, cfgs[1][1], h2Tune.MISTAKE_TRACKS, H2_5, true);
+  check("hard2 mistakes: a rerun is identical (5 Hard bots, weapons on, rate 3 size 1, every track and car set: every tally, lap and mistake)", JSON.stringify(again.runs) === JSON.stringify(first.runs));
+  // The lap from both adapters: the server's bots err on every lap of a 3-lap race; the socket bots
+  // (BotDriver over the Game, the lap from its snapshots) too, identically on a rerun, no state mismatch.
+  const laps = new Set<number>();
+  {
+    // A 3-lap room race of 3 Hard bots on Rust Bowl: onMistake's lap argument.
+    const room = new Room("H2LP", 3, CAR_HP);
+    const host = room.addPlayer("Host", { conn: { send() {}, close() {} }, room: null, player: null } as Session, 1000) as Player;
+    const bots = [0, 1, 2].map(() => room.addBot(host, "hard", 1000) as Player);
+    let now = 1000, tick = 0;
+    h2Tune.withDevBots(() => room.setBotTune(host, cfgs[1][1]) ?? room.start(host, now));
+    for (const b of bots) b.bot!.mem.onMistake = (_k, _z, _s, lap) => void laps.add(lap);
+    while (room.phase !== "racing") room.tick(++tick, (now += 1000 / 60));
+    room.retire(host);
+    for (let i = 0; i < 60 * 300 && room.phase === "racing"; i++) room.tick(++tick, (now += 1000 / 60));
+  }
+  const ca = h2Tune.goldenClient("rust-bowl", 2, "hard", 1, false, cfgs[1][1]), cb = h2Tune.goldenClient("rust-bowl", 2, "hard", 1, false, cfgs[1][1]);
+  const cl = new Set(ca.mistakes!.map((m) => m.lap));
+  check(
+    "hard2 mistakes: the lap reaches the draw from both adapters: server bots err on laps 1, 2 and 3; socket bots (BotDriver, the lap from the snapshots) on laps 1 and 2 of a 2-lap race, all finish, no state mismatch, identically on a rerun",
+    [0, 1, 2].every((l) => laps.has(l)) && cl.has(0) && cl.has(1) && ca.finish[0].every((f) => f > 0) && ca.stateErrs === 0 && ca.hash === cb.hash && ca.mistakes!.length > 0,
+    `server laps ${[...laps].sort().map((l) => l + 1).join(",")}; socket: ${ca.mistakes!.length} mistakes on laps ${[...cl].sort().map((l) => l + 1).join(",")} (${h2Bot.MISTAKE_KINDS.map((k) => `${k} ${ca.mistakes!.filter((m) => m.kind === k).length}`).join(", ")}), finish ${ca.finish[0].map((f) => (f / 1000).toFixed(2)).join("/")} s, state mismatches ${ca.stateErrs}`,
+  );
+}
+
+/** A Hard bot's memory with mistakes certain (chance 1) and a mistake under way. */
+function h2Mem(lane = 0): BotMem {
+  const m = newBotMem(lane, "hard");
+  m.hard = { ...h2Bot.HARD, mistakeRate: 100, mistakeSize: 1 };
+  m.useWake = false;
+  m.weapons = false;
+  return m;
+}
+
+function hard2Latch(): void {
+  // Cleared in resetBotMem, in the air/fall/wreck return and by the socket bot between races.
+  const t = trackById("rust-bowl");
+  const p = pointAt(t, 1000);
+  const car = (extra: Partial<CarState> = {}): CarState => ({ x: p.x, y: p.y, h: p.h, vx: Math.cos(p.h) * 400, vy: Math.sin(p.h) * 400, seg: p.seg, wreck: 0, air: 0, fall: 0, boost: 0, ...extra });
+  const busy = (): h2Bot.Mistake => ({ kind: "wide", size: 0.5, from: 0, end: 400, delay: 0, t: 3, n: 360, sign: 1 });
+  const m = h2Mem();
+  m.mistake = busy();
+  m.inBend = true;
+  m.flew = true;
+  m.hp = 50;
+  resetBotMem(m);
+  const reset = m.mistake === null && !m.inBend && !m.flew && m.hp === -1 && m.seed === 0 && m.hard.mistakeRate === 100;
+  const airs = (["air", "fall", "wreck"] as const).map((k) => {
+    const mm = h2Mem();
+    mm.mistake = busy();
+    botControls({ car: car({ [k]: 10 }), track: t, stats: BASE_STATS, raceOn: true, raceSteps: 600, others: [] }, mm);
+    return mm.mistake === null && mm.flew === (k === "air");
+  });
+  const g = new Game(() => ({ send() {}, close() {}, onOpen() {}, onMessage() {}, onClose() {} }) as unknown as Transport, { get: () => null, set() {} });
+  const d = new BotDriver(g, 24, "hard");
+  const dm = (d as unknown as { mem: BotMem }).mem;
+  dm.mistake = busy();
+  dm.inBend = true;
+  dm.flew = true;
+  dm.hp = 40;
+  d.controls(); // no car: between races
+  check(
+    "hard2 latch: a mistake (and the bend latch, the landing edge, the hit edge) is forgotten by resetBotMem (the settings stay), in the air/fall/wreck return (in the air the landing edge is set), and by the socket bot between races",
+    reset && airs.every(Boolean) && dm.mistake === null && !dm.inBend && !dm.flew && dm.hp === -1 && dm.seed === 168,
+    `reset ${reset}; air/fall/wreck ${airs.join("/")}; socket bot ${dm.mistake === null && dm.hp === -1}`,
+  );
+  // Triggers, directly (chance 1): a bend entry, a landing, a hit (BotView.hp from both adapters:
+  // botStep passes the player's hp, BotDriver the snapshot's), each only when free; never in the
+  // first 3 s; and a hesitation is a lift that a ramp approach still beats (throttle 1).
+  let s0 = -1;
+  for (let s = 200; s < t.length && s0 < 0; s += 10) {
+    const b = Math.abs(angleDiff(pointAt(t, s + 20).h, pointAt(t, s + 20 + Math.max(120, 360) * h2Bot.HARD.bendLook).h));
+    if (b < 0.1 && h2Bot.mistakeClear(t, s)) s0 = s;
+  }
+  const q = pointAt(t, s0);
+  const straight: CarState = { x: q.x, y: q.y, h: q.h, vx: Math.cos(q.h) * 400, vy: Math.sin(q.h) * 400, seg: q.seg, wreck: 0, air: 0, fall: 0, boost: 0 };
+  const view = (hp: number, steps = 600) => ({ car: { ...straight }, track: t, stats: BASE_STATS, raceOn: true, raceSteps: steps, others: [], hp, lap: 1 });
+  const seen: string[] = [];
+  const hm = h2Mem();
+  hm.onMistake = (k, _z, s, lap) => void seen.push(`${k}@lap${lap}`);
+  const t1 = botControls(view(100), hm).throttle;
+  const t2 = botControls(view(80), hm).throttle; // hit
+  const early = h2Mem();
+  botControls(view(100, 100), early);
+  botControls(view(80, 100), early);
+  const landed = h2Mem();
+  botControls({ ...view(100), car: { ...straight, air: 5 } }, landed);
+  botControls(view(100), landed);
+  // botStep (the server adapter) passes p.hp and the lap.
+  const seat = h2Seat.newBotSeat("hard", 2, 1);
+  seat.mem.hard = hm.hard;
+  seat.steps = 600;
+  const laps: number[] = [];
+  seat.mem.onMistake = (k, _z, _s, lap) => void laps.push(lap);
+  const fighter = { id: "b", car: { ...straight }, finished: false, hp: 100, maxHp: 100, ghost: 0, cooldown: 0, ammo: { rivets: 0, mines: 0 }, levels: { engine: 0, tyres: 0, welder: 0 }, stats: BASE_STATS, bot: seat, carType: "sport" as CarType };
+  h2Seat.botStep(fighter, [fighter], t, true, [], undefined, 0, 2);
+  fighter.hp = 70;
+  fighter.car = { ...straight };
+  h2Seat.botStep(fighter, [fighter], t, true, [], undefined, 0, 2);
+  // BotDriver (the socket adapter) passes the snapshot's hp and lap.
+  const sg = { car: { ...straight }, track: t, stats: { ...BASE_STATS }, raceOn: () => true, otherPoses: () => [], visibleMines: () => [], raceTickNow: () => 0, you: "me", latest: { time: 0, cars: new Map([["me", { hp: 100, lap: 1 }]]), shots: new Map(), mines: [] } } as unknown as Game;
+  const sd = new BotDriver(sg, 0, "hard");
+  sd.tune({ rate: 100, size: 1, pace: 1, aim: h2Bot.HARD.rivetSlack });
+  const sk: string[] = [];
+  sd.onMistake = (k, _z, _s, lap) => void sk.push(`${k}@lap${lap}`);
+  for (let i = 0; i < 200; i++) sd.controls(); // past the first 3 s of its race steps
+  (sg.latest!.cars.get("me") as unknown as { hp: number }).hp = 60;
+  sd.controls();
+  check(
+    "hard2 latch: a hit (hp drop) begins a hesitation (a lift: throttle 1 -> 0) when free; not in the first 3 s after GO; a landing (the c.air edge) begins a wobble; both adapters feed hp and the lap (botStep: the player's; BotDriver: the snapshot's)",
+    s0 >= 0 && seen.join() === "hesitate@lap1" && t1 === 1 && t2 === 0 && early.mistake === null && landed.mistake?.kind === "wobble" && laps.join() === "2" && sk.join() === "hesitate@lap1",
+    `straight at s ${s0}; direct ${seen.join() || "none"}, throttle ${t1} -> ${t2}; early ${early.mistake?.kind ?? "none"}; landing ${landed.mistake?.kind ?? "none"}; botStep laps ${laps.join() || "none"}; BotDriver ${sk.join() || "none"}`,
+  );
+  // A wide line is reported (onMistake: the server log, the counts) only once it is driven: at a bend
+  // entry whose draw is "wide", a mine on the outside lane leaves it nowhere to run wide, so no mistake
+  // begins and none is reported; without the mine the same bend reports "wide" (review nit 2).
+  let e0 = -1;
+  for (let s = 200; s < t.length && e0 < 0; s += 5) {
+    const at = (x: number) => Math.abs(angleDiff(pointAt(t, x + 20).h, pointAt(t, x + 20 + 360 * h2Bot.HARD.bendLook).h));
+    if (at(s) > 0.5 && at(s - 5) <= 0.5 && h2Bot.mistakeClear(t, s)) e0 = s;
+  }
+  const ep = pointAt(t, e0);
+  const eturn = angleDiff(pointAt(t, e0 + 20).h, pointAt(t, e0 + 20 + 360 * h2Bot.HARD.bendLook).h);
+  const entry: CarState = { x: ep.x, y: ep.y, h: ep.h, vx: Math.cos(ep.h) * 400, vy: Math.sin(ep.h) * 400, seg: ep.seg, wreck: 0, air: 0, fall: 0, boost: 0 };
+  const mq = pointAt(t, e0 + 100), out = -Math.sign(eturn) * 20;
+  const wideAt = (seed: number, mine: boolean) => {
+    const m = h2Mem();
+    m.seed = seed;
+    const said: string[] = [];
+    m.onMistake = (k) => void said.push(k);
+    const mines = mine ? [{ x: mq.x - Math.sin(mq.h) * out, y: mq.y + Math.cos(mq.h) * out }] : [];
+    botControls({ car: { ...entry }, track: t, stats: BASE_STATS, raceOn: true, raceSteps: 600, others: [], mines, lap: 1 }, m);
+    return { said: said.join(), kind: m.mistake?.kind ?? "none" };
+  };
+  let wseed = -1;
+  for (let seed = 0; seed < 64 && wseed < 0; seed++) if (wideAt(seed, false).said === "wide") wseed = seed;
+  const free = wseed >= 0 ? wideAt(wseed, false) : null, blocked = wseed >= 0 ? wideAt(wseed, true) : null;
+  check(
+    "hard2 latch: a wide line is reported only once it is driven: with a mine on the outside lane no mistake begins and none is reported; the same bend entry without it reports \"wide\" (review nit 2)",
+    e0 >= 0 && !!free && !!blocked && free.said === "wide" && free.kind === "wide" && blocked.said === "" && blocked.kind === "none",
+    `bend entry at s ${e0} (turn ${eturn.toFixed(2)}), seed ${wseed}: free ${free?.said || "none"} / ${free?.kind}; mine on the outside lane ${blocked?.said || "nothing reported"} / ${blocked?.kind}`,
+  );
+  // Exclusions: mistakeClear holds nowhere a feature lies within MISTAKE_LOOK ahead (or beside), and
+  // the start of a mistake needs it. Crusher Run: before its ramps and holes, no; far from them, yes.
+  const cr = trackById("crusher-run");
+  const lip = cr.ramps[0].s + cr.ramps[0].len;
+  const crClear = [1000, lip - h2Bot.MISTAKE_LOOK + 10, lip - 300, cr.holes[0].s, cr.holes[0].s - 900].map((s) => h2Bot.mistakeClear(cr, s));
+  const share = (id: string) => {
+    const tt = h2TestTrack(id) ?? trackById(id);
+    let n = 0, k = 0;
+    for (let s = 0; s < tt.length; s += 25, k++) if (h2Bot.mistakeClear(tt, s)) n++;
+    return `${id} ${((n / k) * 100).toFixed(0)}%`;
+  };
+  check(
+    `hard2 latch: mistakeClear (MISTAKE_LOOK ${h2Bot.MISTAKE_LOOK} = RAMP_APPROACH 650 + a mistake's 500) is false within that look before Crusher Run's first ramp or a hole, true far from them`,
+    h2Bot.MISTAKE_LOOK > 650 && crClear.join() === "true,false,false,false,false",
+    `s 1000 / lip - ${h2Bot.MISTAKE_LOOK - 10} / lip - 300 / at a hole / 900 before it: ${crClear.join("/")}; share of the lap where one may begin: ${["rust-bowl", ...h2Tune.MISTAKE_TRACKS.slice(1)].map(share).join(", ")}`,
+  );
+}
+
+function hard2Table(): void {
+  // REPORT + gate: lap-time loss and wall/obstacle contacts per rate (sizes 0.5 and 1) and per pace
+  // (0, 0.25, 0.5, 0.75, 1), 3 Hard bots in traffic (weapons off, so the driving alone shows), every
+  // track and car set; and a lone bot's lap per pace on the shipped tracks (every type, lanes -24/0/24).
+  const tracks = h2Tune.MISTAKE_TRACKS;
+  const base = h2Traffic("rate 0 (today's Hard)", undefined, tracks, H2_3, false).row;
+  const rows: h2Tune.TuneRow[] = [];
+  for (const size of [0.5, 1]) for (const rate of [0.5, 1, 2, 3]) rows.push(h2Traffic(`rate ${rate} size ${size}`, h2Tune.tuneOf({ rate, size }), tracks, H2_3, false).row);
+  console.log(`  per rate (3 Hard bots, weapons off, ${tracks.length} tracks x 4 car sets, 3 laps):`);
+  console.log(`  ${h2Tune.tuneLine(base, base)}`);
+  for (const r of rows) console.log(`  ${h2Tune.tuneLine(r, base)}`);
+  const paces = [0, 0.25, 0.5, 0.75, 1];
+  const prow = paces.map((pace) => h2Traffic(`pace ${pace} rate 0`, pace === 1 ? undefined : h2Tune.tuneOf({ pace }), tracks, H2_3, false).row);
+  const solo = paces.map((pace) => {
+    let lap = 0, n = 0, falls = 0, walls = 0, dirt = 0;
+    for (const track of HARD_TRACKS) {
+      for (const car of CAR_TYPES) {
+        for (const lane of [-24, 0, 24]) {
+          const [r] = h2Tune.runRaces({ track, levels: ["hard"], cars: [car], lanes: [lane], weapons: false, tune: h2Tune.tuneOf({ pace }) });
+          lap += r.lapTicks.reduce((a, b) => a + b, 0);
+          n += r.lapTicks.length;
+          falls += r.falls;
+          walls += r.walls;
+          dirt += r.dirt;
+        }
+      }
+    }
+    return { pace, lap: lap / n, falls, walls, dirt };
+  });
+  console.log("  per pace (rate 0): a lone bot's mean lap on the shipped tracks (every type, lanes -24/0/24) | traffic as above:");
+  paces.forEach((pace, i) => console.log(`  pace ${pace.toFixed(2)}: solo ${(solo[i].lap / 60).toFixed(3)} s (+${((solo[i].lap / solo[4].lap - 1) * 100).toFixed(2)}% on pace 1), falls ${solo[i].falls}, walls ${solo[i].walls}, dirt ${solo[i].dirt} | ${h2Tune.tuneLine(prow[i], prow[4])}`));
+  const all = [base, ...rows, ...prow];
+  const loss = (r: h2Tune.TuneRow) => r.lap / base.lap - 1;
+  check(
+    "hard2 table: every rate and every pace drives without a fall (traffic, weapons off, every track and car set); mistakes cost lap time (rate 1 and up, both sizes, more at size 1 than 0.5 for rates 2 and 3)",
+    all.every((r) => r.falls === 0 && r.badZone === 0) && rows.filter((_, i) => i % 4 >= 1).every((r) => loss(r) > 0) && loss(rows[6]) > loss(rows[2]) && loss(rows[7]) > loss(rows[3]),
+    rows.map((r) => `${r.label} ${(loss(r) * 100).toFixed(2)}%`).join(", "),
+  );
+  check(
+    "hard2 table: the pace knob slows the bends step by step from today's Hard (1) to Normal's bend pace (0), no fall or wall contact alone",
+    solo.every((r, i) => r.falls === 0 && r.walls === 0 && (i === 0 || r.lap < solo[i - 1].lap)),
+    solo.map((r) => `${r.pace}: ${(r.lap / 60).toFixed(3)} s`).join(", "),
+  );
+}
+
+function hard2Knob(): void {
+  // The dev message: refused without the flag (unset, or anything but "1"), from a guest, outside the
+  // lobby and with a value that is not a finite number; clamped; the room message carries botTune only
+  // under the flag; a race snapshots it at beginRace (HARD itself without one).
+  const msg = (v: Partial<Record<keyof h2Bot.BotTune, unknown>>) => ({ t: "botTune", rate: 1, size: 0.5, pace: 1, aim: 2.5, ...v }) as unknown as ClientMsg;
+  const off = ["", "0", "true", undefined].map((flag) =>
+    h2Tune.withEnv("SCRAP_DEV_BOTS", flag, () => {
+      const R = botRooms();
+      R.send(R.ann, msg({}));
+      const m = lastRoomMsg(R.ann.conn);
+      return { on: h2DevBotsOn(), errs: errMsgs(R.ann.conn).map((x) => x.msg).join(), field: !!m && "botTune" in m };
+    }),
+  );
+  check(
+    "hard2 knob: without the flag (unset, empty, \"0\", \"true\": only SCRAP_DEV_BOTS=1 is on) the host's botTune is refused and the room message has no botTune",
+    off.every((x) => !x.on && x.errs === "Bot tuning is off on this server" && !x.field),
+    off.map((x) => `${x.errs || "accepted"}, field ${x.field}`).join("; "),
+  );
+  h2Tune.withDevBots(() => {
+    const R = botRooms();
+    const { room, ann, bo, send } = R;
+    send(ann, { t: "addBot", level: "hard" });
+    send(ann, { t: "addBot", level: "normal" });
+    const first = lastRoomMsg(bo.conn)?.botTune;
+    send(bo, msg({ rate: 2 }));
+    const guest = errMsgs(bo.conn).map((x) => x.msg).join();
+    const bads = [{ rate: NaN }, { size: Infinity }, { pace: "1" }, { aim: null }, { rate: undefined }].map((v) => {
+      const n = errMsgs(ann.conn).length;
+      send(ann, msg(v));
+      return errMsgs(ann.conn).slice(n).map((x) => x.msg).join();
+    });
+    send(ann, msg({ rate: 99, size: -1, pace: 0.5, aim: 7 }));
+    const clamped = lastRoomMsg(bo.conn)?.botTune;
+    check(
+      "hard2 knob: with SCRAP_DEV_BOTS=1 a new room shows today's values; a guest's botTune is refused; NaN, Infinity, a string, null or a missing value is refused; the host's is clamped (rate 99 -> 3, size -1 -> 0) and goes to everyone in the room message",
+      JSON.stringify(first) === JSON.stringify(h2Bot.botTuneDefaults()) && guest === "Only the host can tune the bots" && bads.every((b) => b === "Bad bot tune") &&
+        JSON.stringify(clamped) === JSON.stringify({ rate: 3, size: 0, pace: 0.5, aim: 7 }),
+      `new room ${JSON.stringify(first)}; guest: ${guest}; bad: ${bads.join(" | ")}; clamped ${JSON.stringify(clamped)}`,
+    );
+    send(bo, { t: "ready", ready: true });
+    send(ann, { t: "start" });
+    R.step(1);
+    const bots = R.bots();
+    const snap = bots.map((b) => b.bot!.mem.hard);
+    const params = snap[0];
+    let racing = 0;
+    while (room.phase !== "racing" && racing++ < 400) R.step(1);
+    const n = errMsgs(ann.conn).length;
+    send(ann, msg({ rate: 1 }));
+    const inRace = errMsgs(ann.conn).slice(n).map((x) => x.msg).join();
+    check(
+      "hard2 knob: the race begins with the knob (beginRace: every bot's BotMem.hard one new object with rate 3, size 0, the pace-0.5 constants, rivetSlack 7; HARD unchanged; the server's mistake log on); in a race the message is refused",
+      room.phase === "racing" && snap.every((h) => h === params) && params !== h2Bot.HARD && params.mistakeRate === 3 && params.mistakeSize === 0 && params.rivetSlack === 7 &&
+        params.corner === h2Bot.hardParams({ rate: 3, size: 0, pace: 0.5, aim: 7 }).corner && h2Bot.HARD.mistakeRate === 0 && h2Bot.HARD.rivetSlack === 2.5 &&
+        bots.every((b) => b.bot!.mem.onMistake !== null) && inRace === "The bots can only be tuned in the lobby",
+      `phase ${room.phase}; params ${JSON.stringify({ rate: params.mistakeRate, size: params.mistakeSize, corner: params.corner, slack: params.rivetSlack })}; in a race: ${inRace}`,
+    );
+  });
+  // A race without a knob (or the flag off) runs with HARD itself.
+  {
+    const sim = new Sim(1);
+    const host = sim.add("Host");
+    const b = sim.room.addBot(host, "hard", sim.now) as Player;
+    b.bot!.mem.hard = h2Bot.hardParams(h2Tune.tuneOf({ rate: 2 })); // left over: beginRace puts HARD back
+    sim.room.start(host, sim.now);
+    check("hard2 knob: a race with no knob set runs its bots with HARD itself and no mistake log", b.bot!.mem.hard === h2Bot.HARD && b.bot!.mem.onMistake === null);
+  }
+  // The server log under the flag: each mistake one line (seat, lap, s, kind); none without the flag.
+  const logRace = (flag: boolean) => {
+    const lines: string[] = [];
+    const log = console.log;
+    console.log = (...a: unknown[]) => void lines.push(a.join(" "));
+    try {
+      const run = () => {
+        const sim = new Sim(1);
+        const host = sim.add("Host");
+        for (let i = 0; i < 3; i++) sim.room.addBot(host, "hard", sim.now);
+        if (flag) sim.room.setBotTune(host, h2Tune.tuneOf({ rate: 3, size: 1 }));
+        sim.room.start(host, sim.now);
+        while (sim.room.phase !== "racing") sim.tick();
+        sim.room.retire(host);
+        for (let i = 0; i < 60 * 120 && sim.room.phase === "racing"; i++) sim.tick();
+      };
+      if (flag) h2Tune.withDevBots(run);
+      else h2Tune.withEnv("SCRAP_DEV_BOTS", undefined, run);
+    } finally {
+      console.log = log;
+    }
+    return lines.filter((l) => l.startsWith("[bots] "));
+  };
+  const on = logRace(true), quiet = logRace(false);
+  const shape = /^\[bots\] room TEST race tick \d+: (Gasket|Lugnut|Piston) \(bot\) seat [0-2] lap 1 s \d+: (late-brake|wide|wobble|hesitate) \(size \d\.\d\d\)$/;
+  check(
+    "hard2 knob: under the flag each mistake is one server log line (room, race tick, bot, seat, lap, s, kind, size); without it none",
+    on.length > 0 && on.every((l) => shape.test(l)) && quiet.length === 0,
+    `${on.length} lines, e.g. "${on[0] ?? ""}"; without the flag ${quiet.length}`,
+  );
+  // Over the wire: the Game learns the flag from the room message and Game.tuneBots sends the knob.
+  const wire = (flag: boolean) =>
+    h2Tune.withEnv("SCRAP_DEV_BOTS", flag ? "1" : undefined, () => {
+      const rooms = new Rooms(1);
+      const A = wiredGame(rooms, { now: 1000 });
+      A.game.create("Ann");
+      A.open();
+      A.flush();
+      const seen = A.game.botTune ? { ...A.game.botTune } : null;
+      A.game.tuneBots({ rate: 1.5, size: 0.25, pace: 0.75, aim: 4 });
+      A.flush();
+      const after = A.game.botTune;
+      A.game.leave();
+      return { seen, after, left: A.game.botTune };
+    });
+  const won = wire(true), woff = wire(false);
+  check(
+    "hard2 knob: over the wire the Game learns the knob from the room message only under the flag (null without), Game.tuneBots sets it, and leaving the room forgets it",
+    JSON.stringify(won.seen) === JSON.stringify(h2Bot.botTuneDefaults()) && JSON.stringify(won.after) === JSON.stringify({ rate: 1.5, size: 0.25, pace: 0.75, aim: 4 }) && won.left === null &&
+      woff.seen === null && woff.after === null,
+    `flag on: ${JSON.stringify(won.seen)} -> ${JSON.stringify(won.after)}; off: ${JSON.stringify(woff.seen)} -> ${JSON.stringify(woff.after)}`,
+  );
+  const yaml = h2Read("render.yaml", "utf8"), docker = h2Read("Dockerfile", "utf8");
+  check("hard2 knob: render.yaml and the Dockerfile set no SCRAP_ variable (the knob is off on Render)", !yaml.includes("SCRAP_") && !docker.includes("SCRAP_"));
+}
+
+function hard2Cpu(): void {
+  // 1 human (retired at GO) + 5 Hard bots with mistakes on (rate 3, size 1), 3 laps of Crusher Run.
+  const sim = new Sim(3);
+  const host = sim.add("Host");
+  sim.room.setTrack(host, "crusher-run");
+  for (let i = 0; i < 5; i++) sim.room.addBot(host, "hard", sim.now);
+  h2Tune.withDevBots(() => sim.room.setBotTune(host, h2Tune.tuneOf({ rate: 3, size: 1 })) ?? sim.room.start(host, sim.now));
+  for (const p of sim.room.players.values()) if (p.bot) p.bot.mem.onMistake = null;
+  while (sim.room.phase !== "racing") sim.tick();
+  sim.room.retire(host);
+  const steps: number[] = [];
+  botTiming.samples = steps;
+  try {
+    for (let i = 0; i < 60 * 300 && sim.room.phase === "racing"; i++) sim.tick();
+  } finally {
+    botTiming.samples = null;
+  }
+  const med = [...steps].sort((a, b) => a - b)[Math.floor(steps.length / 2)];
+  const p99 = [...steps].sort((a, b) => a - b)[Math.floor(steps.length * 0.99)];
+  console.log(`  CPU: Hard bot step with mistakes on, median ${(med * 1000).toFixed(2)} us, p99 ${(p99 * 1000).toFixed(2)} us over ${steps.length} steps (hard CPU above: the same without)`);
+  check(
+    "hard2 CPU: with mistakes on (rate 3, size 1) the median Hard bot step stays <= 0.05 ms (the M4-BOTS gate fails above 0.2 ms)",
+    steps.length > 5 * 3000 && med <= 0.2 && (sim.room.phase as string) === "results",
+    `median bot step ${med.toFixed(5)} ms (${med <= 0.05 ? "within" : "OVER"} the 0.05 ms target)`,
+  );
+  const added = (performance.now() - h2Clock.t0) / 1000;
+  console.log(`  HARD-2 sections' runtime (hard2Params .. hard2Cpu): ${added.toFixed(1)} s`);
+  check("hard2 CPU: the HARD-2 sim-test sections add at most 90 s (printed)", added <= 90, `${added.toFixed(1)} s`);
+}
+
+for (const t of [hard2Params, hard2Identity, hard2Mistakes, hard2Latch, hard2Table, hard2Knob, hard2Cpu]) {
   console.log(`\n# ${t.name}`);
   try {
     t();

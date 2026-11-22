@@ -20,7 +20,7 @@ import {
   type ServerMsg,
   type ShotSnap,
 } from "../shared/protocol";
-import type { BotLevel } from "../shared/botdrive";
+import { cleanBotTune, type BotLevel, type BotTune } from "../shared/botdrive";
 import { DEFAULT_CAR, isCarType, type CarType } from "../shared/cars";
 import { statsFor, type Levels } from "../shared/shop";
 import { BUILTIN_SOUND, DEFAULT_SONG_ID, isSongChoice, type RoomSound } from "../shared/sound";
@@ -269,6 +269,11 @@ export class Game {
    * default outside a room, and for a room message without it (an older server).
    */
   mines: MineMode = DEFAULT_MINE_MODE;
+  /**
+   * The host's Bot tune knob (room message, HARD-2): what the next race's Hard bots begin with. Only
+   * from a server with the dev flag SCRAP_DEV_BOTS=1; null without it (the panel stays hidden).
+   */
+  botTune: BotTune | null = null;
   // The host's pause (room message, MENU-3). While paused nothing is predicted or sent, and the
   // race-time view (raceNow) stands at pausedAt. resumeAt: the end of the resume 3-2-1, 0 = none.
   paused = false;
@@ -452,6 +457,11 @@ export class Game {
     this.send({ t: "addBot", level });
   }
 
+  /** Host only, in the lobby, dev flag only (HARD-2): the Hard bots' Bot tune knob, from the next race. */
+  tuneBots(t: BotTune): void {
+    this.send({ t: "botTune", rate: t.rate, size: t.size, pace: t.pace, aim: t.aim });
+  }
+
   /** In the lobby (M4-CARS): race with this car type from the next race on (free). */
   pickCar(id: CarType): void {
     this.send({ t: "car", id });
@@ -507,6 +517,7 @@ export class Game {
     this.soundDefaults = { ...BUILTIN_SOUND };
     this.song = DEFAULT_SONG_ID;
     this.mines = DEFAULT_MINE_MODE;
+    this.botTune = null;
     this.clearPause();
     this.resumeGo = 0;
     this.results = null;
@@ -707,6 +718,7 @@ export class Game {
         this.locked = msg.locked === true;
         this.useSound(msg.soundDefaults, msg.song);
         this.mines = isMineMode(msg.mines) ? msg.mines : DEFAULT_MINE_MODE;
+        this.botTune = cleanBotTune(msg.botTune);
         this.useTrack(msg.trackId);
         this.players = msg.players;
         if (msg.phase !== "results") this.results = null;
