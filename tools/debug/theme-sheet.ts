@@ -223,7 +223,7 @@ if (args.includes("--hash")) {
 
 // ---- the themes' own code ----------------------------------------------------------------------
 
-const { bakeTileIndices, bakeTileKinds, bakeTileMarked, clearMarks, KIND, MARK, scorch, skid, TILE, ZOOM } = await import("../../client/gfx/world");
+const { bakeTileIndices, bakeTileKinds, bakeTileMarked, clearMarks, KIND, MARK, scorch, skid, TILE, VIEW_H, VIEW_W, World, ZOOM } = await import("../../client/gfx/world");
 const { BARREL, obstacleIndexSheet, ROLL } = await import("../../client/gfx/obstacles");
 const { CAR_COLORS, FIXED, LIT, P, PALETTE, rgbOf, SCRAPYARD, SHADE } = await import("../../client/gfx/palette");
 const { FX_SHADOW, OBST_W } = await import("../../client/gfx/sprites");
@@ -760,6 +760,9 @@ function check(): boolean {
     let roleLinks = 0;
     for (let c = 0; c < SCRAPYARD; c++) if (sc.shadeI[c] >= SCRAPYARD || sc.litI[c] >= SCRAPYARD) roleLinks++;
     say(roleLinks === 0, `${theme}: the SHADE and the LIT of each of the 32 is one of the 32 (a pixel that takes marks holds five bits of colour); ${roleLinks} are not`);
+    // SHADE and LIT for every index a pixel can hold, the extras with their own (a shadow on an extra must not come out as index 0, soot0).
+    const unwired = pal.extras.filter((e, k) => sc.names[sc.shadeI[PALETTE.length + k]] !== e.shade || sc.names[sc.litI[PALETTE.length + k]] !== e.lit).map((e) => e.name);
+    say(sc.shadeI.length === COLOURS && sc.litI.length === COLOURS && sc.pal32.length === COLOURS && unwired.length === 0, `${theme}: SHADE and LIT have ${sc.shadeI.length} entries, and each of the ${pal.extras.length} extras has the shade and the lit tone its palette names${unwired.length ? `; not: ${unwired.join(", ")}` : ""}`);
     // Luminance: SHADE <= colour <= LIT.
     const L = sc.hex.map((h) => (h ? lum601(h) : 0));
     const wrong: string[] = [];
@@ -866,8 +869,116 @@ function check(): boolean {
     }
     say(frames.size === ROLL && offSheet === 0, `${theme}: Preview Yard's obstacle sheet: every pixel one of the global 32 or the cast shadow (${offSheet} others), the ${ROLL} frames of a barrel's turn ${frames.size} different pictures`);
   }
+  sameRoad(say);
+  mixedPool(say);
   contrastTable(say);
   return ok;
+}
+
+/**
+ * A theme changes what is painted, never where, and puts nothing on the tarmac: on the shipped
+ * tracks without furniture every pixel is the same kind in every theme, a tarmac pixel holds the
+ * same palette index (so the road's wear, paint and shadows are the scrapyard's, only tinted;
+ * but for a pit's far wall inside its mouth, which is the theme's), and the hazard stripes at a
+ * gap's end are the same pixels.
+ */
+function sameRoad(say: (good: boolean, what: string) => void): void {
+  const HAZ1 = sceneryOf("scrapyard").index.haz1;
+  for (const theme of THEMES.filter((t) => hasArt(t) && t !== "scrapyard")) {
+    let pixels = 0, kinds = 0, tarmac = 0, tarmacOther = 0, pitWall = 0, stripes = 0, stripesOther = 0;
+    for (const id of ["rust-bowl", "crusher-run", "overpass-knot"]) {
+      const yard = trackById(id), themed = themedTrack(yard, theme);
+      const seen = new Set<string>();
+      for (let s = 0; s < yard.length; s += 120) {
+        const p = at(yard, s, 0);
+        const tx = Math.floor((p.x * ZOOM) / TILE), ty = Math.floor((p.y * ZOOM) / TILE);
+        if (seen.has(`${tx},${ty}`)) continue;
+        seen.add(`${tx},${ty}`);
+        const a = bakeTileIndices(yard, tx, ty), ak = bakeTileKinds(yard, tx, ty), b = bakeTileIndices(themed, tx, ty), bk = bakeTileKinds(themed, tx, ty);
+        for (let i = 0; i < a.length; i++) {
+          pixels++;
+          // (A theme's props are their own kind of pixel; the scrapyard's junk is plain ground.)
+          if (ak[i] !== bk[i] && bk[i] !== KIND.prop) kinds++;
+          if (ak[i] === KIND.tarmac) {
+            tarmac++;
+            if (a[i] !== b[i]) {
+              // A pit is cut into the tarmac and its far wall is the theme's (dark rock for dark earth): inside a pit's mouth it is no decoration.
+              const wx = (tx * TILE + (i % TILE) + 0.5) / ZOOM, wy = (ty * TILE + Math.floor(i / TILE) + 0.5) / ZOOM;
+              if (yard.holes.some((h) => Math.hypot(wx - h.x, wy - h.y) <= h.r)) pitWall++;
+              else tarmacOther++;
+            }
+            if (a[i] === HAZ1) stripes++;
+            if ((a[i] === HAZ1) !== (b[i] === HAZ1)) stripesOther++;
+          }
+        }
+      }
+    }
+    say(kinds === 0, `${theme}: on Rust Bowl, Crusher Run and Overpass Knot every one of ${pixels} pixels is the same kind as in the scrapyard (the bands, the features, a void: ${kinds} differ, a prop outside the walls aside)`);
+    say(tarmacOther === 0 && stripesOther === 0, `${theme}: nothing is put on the tarmac: all ${tarmac} tarmac pixels hold the scrapyard's palette index (${tarmacOther} do not; the ${pitWall} of a pit's far wall, inside its mouth, aside: that wall is the theme's), the ${stripes} hazard-stripe pixels at the gaps' ends among them (${stripesOther} differ)`);
+  }
+}
+
+/**
+ * The pool holds tiles of two themes at once (advisor change 1: palette tables per tile, not
+ * per race): a World of Rust Bowl and one of the same road in the desert draw the same view in
+ * turn on one page; marks are made on each, and each one's marks are wiped while the other
+ * draws. Every tile canvas must show its own track's bake in its own theme's colours all along.
+ */
+function mixedPool(say: (good: boolean, what: string) => void): void {
+  const yard = trackById("rust-bowl");
+  for (const theme of THEMES.filter((t) => hasArt(t) && t !== "scrapyard")) {
+    const sand = themedTrack(yard, theme);
+    const ctx = makeCtx({ width: VIEW_W, height: VIEW_H }) as unknown as CanvasRenderingContext2D;
+    const p = at(yard, 700, 0);
+    const ox = Math.round(p.x * ZOOM) - VIEW_W / 2, oy = Math.round(p.y * ZOOM) - VIEW_H / 2;
+    type Blit = { src: FakeCanvas; x: number; y: number };
+    const frame = (w: InstanceType<typeof World>, times = 1): Blit[] => {
+      for (let k = 0; k < times; k++) {
+        blits.length = 0;
+        w.aim(p.x, p.y, 1000 / 60, true);
+        w.draw(ox, oy, []);
+      }
+      return blits.slice();
+    };
+    // How many pixels of the tiles blitted are not what the track's own bake comes to in its own theme's colours; and how many are marked.
+    const wrong = (track: Track, shown: Blit[], marked: boolean): { bad: number; marks: number } => {
+      const sc = sceneryFor(track);
+      let bad = 0, marks = 0;
+      for (const b of shown) {
+        const tx = (b.x + ox) / TILE, ty = (b.y + oy) / TILE;
+        const plain = bakeTileIndices(track, tx, ty), idx = marked ? bakeTileMarked(track, tx, ty) : plain;
+        for (let i = 0; i < idx.length; i++) {
+          if (!b.src.px || b.src.px[i] !== sc.pal32[idx[i]]) bad++;
+          if (idx[i] !== plain[i]) marks++;
+        }
+      }
+      return { bad, marks };
+    };
+    clearMarks();
+    const A = new World(ctx, yard);
+    const a1 = frame(A);
+    const r1 = wrong(yard, a1, false);
+    scorchAt(yard, p.x, p.y);
+    const a2 = frame(A);
+    const r2 = wrong(yard, a2, true);
+    // The themed World: the scrapyard's marks go, and its tiles are wiped while this one draws.
+    const B = new World(ctx, sand);
+    const b1 = frame(B, 10);
+    const r3 = wrong(sand, b1, false), r4 = wrong(yard, a2, false);
+    scorchAt(sand, p.x, p.y);
+    const b2 = frame(B);
+    const r5 = wrong(sand, b2, true);
+    // And back: a mark on the scrapyard's track, the theme's tiles wiped while the scrapyard's World draws.
+    frame(A);
+    scorchAt(yard, p.x, p.y);
+    const a3 = frame(A, 10);
+    const r6 = wrong(yard, a3, true), r7 = wrong(sand, b2, false);
+    clearMarks();
+    const tilesShown = a1.length + b1.length;
+    const bad = [r1, r2, r3, r4, r5, r6, r7].map((r) => r.bad);
+    say(bad.every((n) => n === 0) && r2.marks > 0 && r5.marks > 0 && r6.marks > 0 && a1.length > 0 && b1.length > 0 && a1.every((t) => !b1.some((u) => u.src === t.src)),
+      `${theme}: the pool holding tiles of the scrapyard and of the ${theme} at once (${tilesShown} tiles of one view of Rust Bowl in both, drawn in turn): every tile canvas shows its own bake in its own theme's colours, plain, with a scorch on it (${r2.marks} and ${r5.marks} marked pixels) and after its marks were wiped while the other theme's World drew (wrong pixels at the seven looks: ${bad.join(", ")})`);
+  }
 }
 
 // ---- the override's screenshots (headless Chrome) --------------------------------------------

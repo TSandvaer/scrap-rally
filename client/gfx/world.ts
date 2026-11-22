@@ -482,7 +482,7 @@ function buildArt(track: Track, scenery: Scenery): Art {
   const dress = dressOf(scenery);
   const desert = dress.props === PROPS_DESERT;
   // A theme's prop for a piece of junk: its kind by the same draw, its paint by the junk's.
-  const prop = (pick: number): number => (pick < 0.5 ? K_ROCK : pick < 0.7 ? K_SCRUB : pick < 0.88 ? K_CACTUS : K_SHELL);
+  const propKind = (pick: number): number => (pick < 0.5 ? K_ROCK : pick < 0.7 ? K_SCRUB : pick < 0.88 ? K_CACTUS : K_SHELL);
   const propPaint = (kind: number, c: number): number => (kind === K_ROCK ? dress.stones[c === STEEL1 || c === STEEL2 ? 1 : 0] : kind === K_SHELL ? dress.shells[c % dress.shells.length] : 0);
   const { pts, cum, length: L, wall } = track;
   const hw = track.def.halfWidth;
@@ -595,7 +595,7 @@ function buildArt(track: Track, scenery: Scenery): Art {
         const x = at.x + (rnd() - 0.5) * 52, y = at.y + (rnd() - 0.5) * 40;
         const pick = rnd(), r = 9 + rnd() * 8, a = rnd() * Math.PI, c = paints[Math.floor(rnd() * paints.length)];
         if (away(x, y) < R + 16) continue;
-        const kind = desert ? prop(pick) : pick < 0.3 ? K_CUBE : pick < 0.46 ? K_DRUM : pick < 0.62 ? K_TYRES : pick < 0.72 ? K_PLATE : pick < 0.82 ? K_PALLET : pick < 0.92 ? K_ENGINE : K_COIL;
+        const kind = desert ? propKind(pick) : pick < 0.3 ? K_CUBE : pick < 0.46 ? K_DRUM : pick < 0.62 ? K_TYRES : pick < 0.72 ? K_PLATE : pick < 0.82 ? K_PALLET : pick < 0.92 ? K_ENGINE : K_COIL;
         art.junk.push({ kind, x: x * ZOOM, y: y * ZOOM, r: r * ZOOM, a, c: desert ? propPaint(kind, c) : c });
       }
       // Half the heaps have leaked: a dark stain in the dirt beside them.
