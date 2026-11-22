@@ -679,6 +679,8 @@ NOSELECT-1, BR-SCHEMA, HARD-2). Expected live bundle after Manual Deploy: index-
 M4-TRACKS flake fixed: f064035 (scripts/bots.ts only: blind bot stops 4 short of the press, stall starts at the warning tick; old 1/8 PASS,
 new 35/35; gate green x2). Quick reviewer ctx_27271d92a5da (tmp/review-tracks-flake.md). Observation: Slag Harbour's lagged barrel ticks
 vary (6..42, never 0 so far).
+DEPLOYED (user): live index-CAou9HUR.js (curl), page has translate="no" + notranslate. QA13 live worker dispatched (muted; spec
+tmp/spec-qa-live-13.md; report tmp/qa13-live-report.md): new tracks, NOSELECT-1, HARD-2 off live, stick regression.
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
