@@ -14651,8 +14651,8 @@ function thTypes(): void {
   );
   const originals = [TH_RUST_BOWL, TH_CRUSHER_RUN, TH_OVERPASS_KNOT];
   check(
-    "theme types: the three original tracks have no theme field (the scrapyard); Breaker's Mile is desert and Slag Harbour city (shared/longtracks.ts, the field only); the registry serves those defs",
-    originals.every((d) => !("theme" in d) && thTheme.themeOf(d) === "scrapyard") && TH_BREAKERS_MILE.theme === "desert" && TH_SLAG_HARBOUR.theme === "city" &&
+    "theme types: the three original tracks have no theme field (the scrapyard); Breaker's Mile is desert (shared/longtracks.ts, the field only) and Slag Harbour theme-less, the scrapyard (user, 2026-11-22: its own harbour theme comes with a later ticket); the registry serves those defs",
+    originals.every((d) => !("theme" in d) && thTheme.themeOf(d) === "scrapyard") && TH_BREAKERS_MILE.theme === "desert" && !("theme" in TH_SLAG_HARBOUR) && thTheme.themeOf(TH_SLAG_HARBOUR) === "scrapyard" &&
       trackById("breakers-mile").def === TH_BREAKERS_MILE && trackById("slag-harbour").def === TH_SLAG_HARBOUR && trackById("rust-bowl").def === TH_RUST_BOWL,
     trackList().map((e) => `${e.id}: ${thTheme.themeOf(e.def)}`).join(", "),
   );
