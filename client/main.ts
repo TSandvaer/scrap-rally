@@ -961,14 +961,19 @@ function touchFrame(): void {
 }
 
 /** Where the race stands, for the marshals at the line (render.ts WorldFx.race): kept, changed in place. */
-const raceOut: RaceView = { phase: 0, lastLap: false, finished: 0 };
+const raceOut: RaceView = { phase: 0, lastLap: false, finished: 0, paused: false };
 
-/** This frame's raceOut. The countdown ends when the HUD says GO (raceOnAt), not a snapshot later. */
+/**
+ * This frame's raceOut. The countdown ends when the HUD says GO (raceOnAt), not a snapshot later.
+ * Before a room's first snapshot is in (a spectator who has just joined a running race) there is
+ * no race to show yet: the cars that have finished by then are not counted in one frame late, as
+ * if they had just come in.
+ */
 function raceView(): RaceView {
   let lap = 0, finished = 0;
-  const racePhase = game.phase === "countdown" || game.phase === "racing" || game.phase === "results";
-  if (racePhase && game.latest) {
-    for (const c of game.latest.cars.values()) {
+  const racePhase = game.latest !== null && (game.phase === "countdown" || game.phase === "racing" || game.phase === "results");
+  if (racePhase) {
+    for (const c of game.latest!.cars.values()) {
       if (c.lap > lap) lap = c.lap;
       if (c.fin) finished++;
     }
@@ -976,6 +981,7 @@ function raceView(): RaceView {
   raceOut.phase = !racePhase ? 0 : game.phase === "results" ? 3 : game.raceOnAt(game.raceNow()) ? 2 : 1;
   raceOut.lastLap = raceOut.phase === 2 && lap >= game.laps - 1; // the leader has one lap to go, or is in
   raceOut.finished = finished;
+  raceOut.paused = game.paused; // the host's pause, its resume 3-2-1 included: the flags are held still
   return raceOut;
 }
 

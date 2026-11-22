@@ -156,6 +156,8 @@ export interface RaceView {
   lastLap: boolean;
   /** How many cars have finished. */
   finished: number;
+  /** The host has paused the race (phase 2): the flags are held up and still until it goes on, the 3-2-1 that ends the pause included. Absent or false = not paused. */
+  paused?: boolean;
 }
 
 export interface HudView {

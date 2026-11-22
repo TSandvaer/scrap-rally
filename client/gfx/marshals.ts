@@ -23,7 +23,10 @@
 // - The last lap, from when the leader starts it until the winner is in: another flag, yellow
 //   with one dark bar (one lap to go), waved in double time.
 // - The finish: the chequered flag, fast for BURST_MS for the winner and again for every car
-//   that comes in after, steady in between; slow once the race is over.
+//   that comes in after, steady in between; slow once the race is over. Cars that were in
+//   before the race was first shown (a spectator who joins late) get no burst.
+// - A paused race (RaceView.paused): as the countdown, the pennant held up and still, through
+//   the pause and the 3-2-1 that ends it; then fast again as from GO.
 //
 // Everything is a sprite, drawn in view space at whole pixels on the world already drawn and
 // under the cars. One small sheet (sprites.ts marshalSheet: MARSHAL_W x MARSHAL_H) holds the
@@ -52,7 +55,11 @@ export const STAND = 11;
 /** The spot is clear of a road when it is this far outside that road's barrier: the figure's reach. */
 const CLEAR = 6;
 
-/** Is (x, y) outside every barrier of a road, with CLEAR to spare? Every segment is asked: the nearest one alone could have the narrower wall. */
+/**
+ * Is (x, y) outside every barrier of a road, with CLEAR to spare? Every segment is asked (the
+ * nearest one alone could have the narrower wall), each for the wall on the side the point is on:
+ * the per-sample walls of its two ends, in a straight line between them, as the bake draws it.
+ */
 function clearOf(road: Track, x: number, y: number): boolean {
   const { pts, wallL, wallR } = road;
   const n = pts.length, segs = road.roadNo > 0 ? n - 1 : n;
@@ -63,7 +70,9 @@ function clearOf(road: Track, x: number, y: number): boolean {
     let t = ((x - a.x) * ex + (y - a.y) * ey) / (ex * ex + ey * ey || 1);
     t = t < 0 ? 0 : t > 1 ? 1 : t;
     const dx = x - a.x - ex * t, dy = y - a.y - ey * t;
-    const wall = Math.max(wallL[i], wallL[j], wallR[i], wallR[j]) + BARRIER + CLEAR;
+    // The side: the cross product of the segment's direction and the point (shared/track.ts: < 0 = left of travel).
+    const walls = ex * (y - a.y) - ey * (x - a.x) < 0 ? wallL : wallR;
+    const wall = walls[i] + (walls[j] - walls[i]) * t + BARRIER + CLEAR;
     if (dx * dx + dy * dy < wall * wall) return false;
   }
   return true;
@@ -368,9 +377,9 @@ export class Marshals {
   /** Per marshal: the pixel of its middle in the track's plane (x, y), the corner the flag's shoulder is on from there (x, y), and its side (0 = left of the road, 1 = right). */
   readonly spots = new Int32Array(10);
   private readonly heading: number;
-  // What the race was at in the frame before, and when it changed (ms): GO, the last car in.
+  // What the race was at in the frame before (a paused race as the countdown), and when it changed (ms): GO, the last car in.
   private phase = -1;
-  private finished = -1;
+  private finished = 0;
   private readonly since = new Float64Array(2).fill(NEVER);
 
   constructor(
@@ -404,15 +413,21 @@ export class Marshals {
    * race: at ease).
    */
   draw(ox: number, oy: number, now: number, race: RaceView | undefined): void {
-    const phase = race ? race.phase : 0, finished = race ? race.finished : 0;
-    // What changed since the frame before. A first frame in the middle of a race is no GO, and
-    // the cars that were in before it are no news.
-    if (phase !== this.phase) {
-      if (phase === RACING && this.phase === COUNTDOWN) this.since[0] = now;
+    // A paused race is held as the countdown is: the flags up and still, through the pause and
+    // its 3-2-1. When it goes on, that is a GO again.
+    const phase = !race ? 0 : race.paused === true && race.phase === RACING ? COUNTDOWN : race.phase;
+    const finished = race ? race.finished : 0;
+    // What changed since the frame before. A car that comes in is news only when the frame
+    // before showed the race going: the cars already in when a race is first shown (a new
+    // Renderer, one that drew the menu's tour until now, a spectator who joins) are none. Nor is
+    // a first frame in the middle of a race a GO.
+    const was = this.phase;
+    if (phase !== was) {
+      if (phase === RACING && was === COUNTDOWN) this.since[0] = now;
       this.phase = phase;
     }
     if (finished !== this.finished) {
-      if (finished > this.finished && this.finished >= 0) this.since[1] = now;
+      if (finished > this.finished && phase === RACING && was === RACING) this.since[1] = now;
       this.finished = finished;
     }
     const n = this.count;

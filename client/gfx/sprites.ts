@@ -1036,7 +1036,11 @@ export const MARSHAL_H = 66;
 
 let marshals: { canvas: HTMLCanvasElement; ctx: CanvasRenderingContext2D } | null = null;
 
-/** The marshal sheet's canvas, made with the first Renderer whose track has a marshal at its line: one, whatever the track. */
+/**
+ * The marshal sheet's canvas: one, whatever the track. Made in the first frame that draws a
+ * marshal, never with the Renderer: the first sheet made settles where every sheet lives
+ * (spritesFor), and a Renderer may be built on a view the page never draws on.
+ */
 export function marshalSheet(): { canvas: HTMLCanvasElement; ctx: CanvasRenderingContext2D } {
   return marshals ?? (marshals = sheetCanvas(MARSHAL_W, MARSHAL_H));
 }

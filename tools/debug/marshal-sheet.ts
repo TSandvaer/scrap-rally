@@ -6,7 +6,8 @@
 //   npx tsx tools/debug/marshal-sheet.ts --alloc         rule 1: bytes a frame allocates with the marshals in view,
 //                                                        through every phase (--warm 30000, --frames 6000, --interval 128)
 //   npx tsx tools/debug/marshal-sheet.ts --shots         screenshots of every phase, in headless Chrome -> tmp/marshals/shots/
-//                                                        (--out <dir>, --port <n>: default 3016), and the pixel proof below
+//                                                        (--out <dir>, --port <n>: default 3016, --session <prefix>: default
+//                                                        msh, the browser session is <prefix>-<pid>), and the pixel proof below
 //
 // The contact sheet (Node, no browser): the sprite sheet as the game paints it for a track's
 // line, enlarged; every phase of a scripted race (at ease, the countdown, GO, the last lap, the
@@ -17,16 +18,24 @@
 //
 // --check (Node), for every shipped track and every test track, in every theme whose art has
 // landed:
-// - both marshals stand: each side's spot is clear of every road (marshalSpot);
+// - both marshals stand: each side's spot is clear of every road (marshalSpot); and on a road of
+//   the check's own, widened on one side only from the line on, the marshal on the other side
+//   stands: a spot is held against the wall on its own side;
 // - every picture fits its cell at the track's heading, and at 360 headings a degree apart;
 // - every pixel of the sheet is a palette colour or the cast shadow;
 // - no pixel of a figure (its body and outline; not its shadow, not its flag) lies on anything
 //   but open ground: none on the road, a kerb, the verge, a barrier or its rail, a post, a
 //   theme's prop (the bake's own kinds, bakeTileKinds), and none on a colour the theme's open
 //   ground does not have (the scrapyard's junk is plain ground to the kinds: its colours tell);
-// - a waved flag reaches no further toward the track than the wall line: it stays off the road;
+// - a waved flag reaches no further toward the track than the wall line (the per-sample wall on
+//   the pixel's side): it stays off the road;
 // - culling: with the view moved past the marshals a pixel at a time, a sprite is drawn whenever
 //   its cell has a pixel in the view, and nothing is drawn far off;
+// - the phases, on the Marshals class with the race handed over as client/main.ts hands it over:
+//   the left marshal's flag and its pace (fast, steady, slow, still) at every step of a whole
+//   race and the start of the next; a race whose last lap is on from GO; a spectator who joins
+//   late (no burst for the cars already in, one for the next); a paused race (held up and still
+//   through the pause and its 3-2-1, a GO again when it goes on, no burst for a car already in);
 // - the wave's four pictures of each flag are four different pictures, and the three flags
 //   differ from each other in every one of them;
 // - no tone of the uniform or the flags is one of the six car colours, and how far each is from
@@ -42,7 +51,7 @@
 //
 // --shots (headless Chrome): the sheet's own page (marshal-sheet/: the game's Renderer on the
 // game's canvas, laid out as the game lays it out, a scripted race held at a moment), built
-// into a temp directory and served on 127.0.0.1 (--port). One browser session (msh-<pid>,
+// into a temp directory and served on 127.0.0.1 (--port). One browser session (<prefix>-<pid>,
 // muted, closed at the end). Every phase on two tracks (Rust Bowl in the scrapyard, Breaker's
 // Mile in the desert through the same theme switch as the preview's), at 1280x720 and at
 // 390x844@3. Then the pixel proof: every scene is drawn again with the marshals switched off
@@ -60,8 +69,8 @@ import { promisify } from "node:util";
 import { FONT_LETTERS, SMALL } from "../../client/gfx/font";
 import { CAR_COLORS, P, PALETTE, rgbOf } from "../../client/gfx/palette";
 import type { RaceView } from "../../client/render";
-import { TEST_TRACKS, testTrack } from "../../shared/testtracks";
-import { pointAt, queryTrack, type Track } from "../../shared/track";
+import { PREVIEW_YARD, TEST_TRACKS, testTrack } from "../../shared/testtracks";
+import { buildTrack, pointAt, queryTrack, wallOf, type Track } from "../../shared/track";
 import { trackById, trackList } from "../../shared/tracks";
 import { carsAt, CAMERA, END, makeCars, raceAt, SHOTS } from "./marshal-sheet/scene";
 import { blank, decodePng, paste, savePng, type Picture } from "./png";
@@ -377,6 +386,123 @@ const apart = (a: string, b: string): number => {
 /** A figure's best part must stand out from every tone of the open ground by this (WCAG; 3 is its measure for what is not text). */
 const MIN_CONTRAST = 3;
 
+/**
+ * What the marshals show as a race goes by, handed over as client/main.ts hands it over (one
+ * RaceView object, changed in place; phase 0 in the menu and the lobby), 10 ms a frame. Each
+ * step runs on for a while with the race as it stands and says what the left marshal showed
+ * over the last 840 ms of it: its flag, and its pace by how often the picture changed (a wave
+ * is fast at 12 pictures, steady at 7, slow at 4 or 5; still at none).
+ */
+function phases(say: (good: boolean, what: string) => void): void {
+  const track = trackById("rust-bowl");
+  const stage = (): { race: RaceView; run: (ms: number, handed?: boolean) => string } => {
+    const m = new M.Marshals(canvas, track);
+    const race: RaceView = { phase: 0, lastLap: false, finished: 0, paused: false };
+    let t = 1000;
+    const run = (ms: number, handed = true): string => {
+      let last = -1, changes = 0, cell = -1;
+      for (const until = t + ms; t < until; t += 10) {
+        cell = frameOf(m, t, handed ? race : undefined).map(cellNo).find((c) => c < M.M_BODY) ?? -1;
+        if (t >= until - 840) {
+          if (last >= 0 && cell !== last) changes++;
+          last = cell;
+        }
+      }
+      const flag = cell < 0 ? "nothing" : cell < M.M_LAST ? "pennant" : cell < M.M_CHEQ ? "last lap's flag" : cell < M.M_HELD ? "chequered" : cell < M.M_EASE ? "held up" : "furled";
+      return `${flag}, ${changes >= 10 ? "fast" : changes >= 6 ? "steady" : changes >= 3 ? "slow" : changes === 0 ? "still" : `${changes} changes`}`;
+    };
+    return { race, run };
+  };
+  const tell = (what: string, steps: [string, string, string][]): void => {
+    const off = steps.filter(([, want, got]) => want !== got);
+    say(off.length === 0, `${what}: ${steps.map(([name, , got]) => `${name}: ${got}`).join("; ")}${off.length ? ` -- EXPECTED ${off.map(([name, want]) => `${name}: ${want}`).join("; ")}` : ""}`);
+  };
+
+  // A whole race, and the start of the next.
+  {
+    const { race, run } = stage();
+    const steps: [string, string, string][] = [];
+    const step = (name: string, want: string, ms: number, set: Partial<RaceView> = {}): void => {
+      Object.assign(race, set);
+      steps.push([name, want, run(ms)]);
+    };
+    step("lobby", "furled, still", 1000);
+    step("countdown", "held up, still", 3000, { phase: 1 });
+    step("GO", "pennant, fast", 840, { phase: 2 });
+    step("4 s on", "pennant, steady", 3200);
+    step("leader on the last lap", "last lap's flag, fast", 840, { lastLap: true });
+    step("winner in", "chequered, fast", 840, { finished: 1 });
+    step("3.8 s on", "chequered, steady", 3000);
+    step("second car in", "chequered, fast", 840, { finished: 2 });
+    step("results", "chequered, slow", 3840, { phase: 3, lastLap: false });
+    step("lobby again", "furled, still", 1000, { phase: 0, finished: 0 });
+    step("next countdown", "held up, still", 3000, { phase: 1 });
+    step("next GO", "pennant, fast", 840, { phase: 2 });
+    tell("a whole race handed over as main.ts does it", steps);
+  }
+  // A one-lap race: the last lap is on from GO, but GO comes first.
+  {
+    const { race, run } = stage();
+    Object.assign(race, { phase: 1 });
+    run(1000);
+    Object.assign(race, { phase: 2, lastLap: true });
+    tell("the last lap on from GO", [["GO", "pennant, fast", run(840)], ["3 s on", "last lap's flag, fast", run(3000)]]);
+  }
+  // Cars that were in before the race was first shown are no news: no burst for them.
+  {
+    const steps: [string, string, string][] = [];
+    // A Renderer that drew the menu's tour (main.ts hands over phase 0), then shows a race two cars have finished.
+    let s = stage();
+    s.run(500);
+    Object.assign(s.race, { phase: 2, finished: 2 });
+    steps.push(["after the tour, a race with two cars in", "chequered, steady", s.run(840)]);
+    Object.assign(s.race, { finished: 3 });
+    steps.push(["a third comes in", "chequered, fast", s.run(840)]);
+    // The same after frames with no race object at all (the preview, a tool).
+    s = stage();
+    s.run(500, false);
+    Object.assign(s.race, { phase: 2, finished: 2 });
+    steps.push(["after frames without a race, the same", "chequered, steady", s.run(840)]);
+    // A new Renderer in the middle of it (the room's track changed, a page loaded late).
+    s = stage();
+    Object.assign(s.race, { phase: 2, finished: 2 });
+    steps.push(["a new Renderer, the same", "chequered, steady", s.run(840)]);
+    // ... and one that first shows the results.
+    s = stage();
+    s.run(500);
+    Object.assign(s.race, { phase: 3, finished: 4 });
+    steps.push(["after the tour, the results", "chequered, slow", s.run(840)]);
+    tell("a spectator who joins late", steps);
+  }
+  // A paused race: the flags held up and still through the pause and its 3-2-1, then a GO again.
+  {
+    const { race, run } = stage();
+    const steps: [string, string, string][] = [];
+    Object.assign(race, { phase: 1 });
+    run(1000);
+    Object.assign(race, { phase: 2 });
+    steps.push(["the race, 5 s in", "pennant, steady", run(5000)]);
+    Object.assign(race, { paused: true });
+    steps.push(["paused", "held up, still", run(4000)]);
+    steps.push(["its 3-2-1", "held up, still", run(3000)]);
+    Object.assign(race, { paused: false });
+    steps.push(["it goes on", "pennant, fast", run(840)]);
+    steps.push(["4 s on", "pennant, steady", run(3200)]);
+    // On the last lap with a car in: no burst for it when the race goes on.
+    Object.assign(race, { lastLap: true, finished: 1 });
+    run(4000);
+    Object.assign(race, { paused: true });
+    steps.push(["paused at the finish", "held up, still", run(2000)]);
+    Object.assign(race, { paused: false });
+    steps.push(["it goes on", "chequered, steady", run(840)]);
+    // A pause in the countdown.
+    const c = stage();
+    Object.assign(c.race, { phase: 1, paused: true });
+    steps.push(["paused in the countdown", "held up, still", c.run(2000)]);
+    tell("a paused race", steps);
+  }
+}
+
 function check(): boolean {
   let ok = true;
   const say = (good: boolean, what: string) => {
@@ -468,6 +594,18 @@ function check(): boolean {
     say(missed === 0 && far === 0 && culled > 0, `${track.def.name}: culling, the view moved past the marshals a pixel at a time in four directions (${frames} frames): ${missed} sprites with a cell in the view were not drawn, ${culled} frames drew nothing, ${far} frames far off drew something`);
   }
 
+  phases(say);
+
+  // A spot is held against the wall on its own side. No track there is has two different walls
+  // near its line, so a road of this check's own: Preview Yard's loop, widened by 60 on its left
+  // from the line on (not a track validateTrack accepts: nothing may lie on the start straight).
+  {
+    const lop = buildTrack({ ...PREVIEW_YARD, id: "marshal-lopsided", features: [{ k: "widen", s0: 0, s1: 600, left: 60, right: 0 }], recovery: [0] });
+    const right = M.marshalSpot(lop, 1), left = M.marshalSpot(lop, -1);
+    const k = lop.cum.findIndex((c) => c >= 60);
+    say(right !== null && lop.wallL[k] > lop.wallR[k] + 13, `a road widened on its left only from the line on (${k} samples on its left wall is ${lop.wallL[k].toFixed(1)}, its right ${lop.wallR[k].toFixed(1)}): the marshal on the right ${right ? "stands" : "does NOT stand"} (its spot is held against the right wall, not the wider of the two); the one on the left ${left ? "stands" : "does not (the widening wall comes too near its spot)"}`);
+  }
+
   // Every track, every landed theme: where the figures stand.
   const open = new Map<Theme, Set<string>>(); // the tones of each theme's open ground under the figures
   for (const base of allTracks()) {
@@ -507,9 +645,9 @@ function check(): boolean {
       for (const [n] of tones) set.add(sc.palette.colours[n as keyof typeof P] ?? sc.hex[sc.index[n]]);
       open.set(theme, set);
 
-      // A waved flag stays off the road: every pixel of every picture of every wave, on both sides.
+      // A waved flag stays off the road: every pixel of every picture of every wave, on both sides,
+      // against the wall where the pixel is (its side's per-sample wall, shared/track.ts wallOf).
       let over = 0, worst = 0;
-      const p = pointAt(track, 0);
       for (let k = 0; k < 2; k++) {
         const ax = m.spots[k * 5] + m.spots[k * 5 + 2], ay = m.spots[k * 5 + 1] + m.spots[k * 5 + 3];
         for (let f = 0; f < M.M_EASE + 2; f++) {
@@ -518,7 +656,7 @@ function check(): boolean {
               const v = idx[(Math.floor(f / cells) * M.MCELL + j) * MARSHAL_W + (f % cells) * M.MCELL + i];
               if (!v || v === FX_SHADOW) continue;
               const q = queryTrack(track, (ax + M.MARSHAL_AT[f * 2] + i + 0.5) / ZOOM, (ay + M.MARSHAL_AT[f * 2 + 1] + j + 0.5) / ZOOM);
-              const inside = track.wall - q.dist;
+              const inside = wallOf(track, q) - q.dist;
               if (inside > 0) {
                 over++;
                 worst = Math.max(worst, inside);
@@ -527,7 +665,6 @@ function check(): boolean {
           }
         }
       }
-      void p;
       say(over === 0, `${what}: no pixel of a flag, in any of its ${M.M_EASE + 2} pictures on either side, lies inside the wall line (${over} do${over ? `, up to ${worst.toFixed(1)} units in` : ""})`);
     }
   }
@@ -685,7 +822,7 @@ async function shots(out: string, port: number): Promise<boolean> {
       server.listen(port, "127.0.0.1", () => done());
     });
     const url = `http://127.0.0.1:${port}`;
-    const session = `msh-${process.pid}`;
+    const session = `${arg("--session") ?? "msh"}-${process.pid}`;
     const ab = async (more: string[]): Promise<string> => (await run("agent-browser", ["--session", session, ...more], { timeout: 120_000, maxBuffer: 64 << 20 })).stdout.trim();
     cleanups.push(() => ab(["close"]));
     await ab(["--args", "--mute-audio,--disable-background-timer-throttling,--disable-renderer-backgrounding", "open", "about:blank"]);
