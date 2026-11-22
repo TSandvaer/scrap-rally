@@ -564,6 +564,10 @@ MOVE asked: server/combat.ts Combat.step rt param + :126, server/room.ts:1062 pa
 TOUCH-5 fix round 1 done: 89ed7be (main ae4db2c merged; F2 brake hysteresis start >180 release 150; F1 touch-drive forces catch-up
 frames, stale-read mutation fails 3 checks; 861/861 + 128/128 twice; report tmp/touch-5/touch5-fix1-report.md). Re-review sent to
 ctx_09e09c787a72.
+M4-MOVE part 1 done: dc42d82 (8 commits on ae4db2c; report tmp/m4-move/m4-move-report.md): barrels/press/truck solid at rt, yaw kick
+dropped, no x1.3, Move Yard (SCRAP_DEV_TRACK=move-yard), bots 0 contacts weapons off; shipped SAME; 866/866 + 133/133 twice. Merges
+clean with main and touch-5. Only criterion 9 left (main.ts fx.rt = game.drawTick(); after TOUCH-5 merges). Opus reviewer ctx_b64bf57fdff3
+(tmp/review-m4-move.md) on part 1 now; criterion 9 = a delta review later; taste copy after criterion 9 (art static until then).
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
