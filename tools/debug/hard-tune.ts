@@ -74,6 +74,7 @@ export interface GoldenRun {
   dropped?: number[][]; // ... and mines the server took from its ammo
   finish: number[][]; // per race, per bot: finish time (ms after GO, 0 = did not finish)
   wallets: string[]; // per race: the bots' wallets after the payout and shopping
+  mistakes?: { kind: MistakeKind; bot: number; lap: number; s: number }[]; // client runs with a tune (HARD-2): every mistake begun
 }
 
 /**
@@ -164,7 +165,7 @@ export function wired(rooms: Rooms, clock: { now: number }): { game: Game; open(
  * presses / dropped: per race, per bot, the mine presses its driver made and the mines the server
  * took from its ammo.
  */
-export function goldenClient(track = "crusher-run", laps = 3, level: BotLevel = "normal", races = 1, shop = false): GoldenRun {
+export function goldenClient(track = "crusher-run", laps = 3, level: BotLevel = "normal", races = 1, shop = false, tune?: BotTune): GoldenRun {
   const h = createHash("sha256");
   const realNow = performance.now.bind(performance);
   const clock = { now: 1_000_000 };
@@ -185,6 +186,14 @@ export function goldenClient(track = "crusher-run", laps = 3, level: BotLevel = 
     });
     for (const w of ws) w.flush();
     const drivers = ws.map((w, i) => new BotDriver(w.game, lanes[i], level));
+    const mistakes: NonNullable<GoldenRun["mistakes"]> = [];
+    if (tune) {
+      // HARD-2: the socket bots drive with the knob's values (BotDriver.tune) and every mistake is noted.
+      drivers.forEach((d, k) => {
+        d.tune(tune);
+        d.onMistake = (kind, _size, s, lap) => void mistakes.push({ kind, bot: k, lap, s });
+      });
+    }
     const server = (k: number) => room.players.get(ws[k].game.you);
     const shopAll = () => {
       for (const w of ws) {
@@ -236,6 +245,7 @@ export function goldenClient(track = "crusher-run", laps = 3, level: BotLevel = 
     }
     out.hash = h.digest("hex");
     out.stateErrs = ws.reduce((a, w) => a + w.game.recStateErrors, 0);
+    if (tune) out.mistakes = mistakes;
     return out;
   } finally {
     performance.now = realNow;
