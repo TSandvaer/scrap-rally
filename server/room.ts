@@ -962,6 +962,7 @@ export class Room {
   /** HARD-2, dev flag: a Hard bot's mistakes, one server log line each (seat, lap, s, kind), to match what the host saw. */
   private mistakeLog(q: Player): (kind: MistakeKind, size: number, s: number, lap: number) => void {
     return (kind, size, s, lap) =>
+      !q.finished && // a finished car rolls on: what it does then is no part of the race
       console.log(`[bots] room ${this.code} race tick ${this.raceTick}: ${q.name} seat ${q.bot?.slot} lap ${lap + 1} s ${s.toFixed(0)}: ${kind} (size ${size.toFixed(2)})`);
   }
 
