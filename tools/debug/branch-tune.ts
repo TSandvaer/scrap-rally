@@ -23,18 +23,27 @@
 //
 // --cpu: 5 Hard bots, 3 laps: the median and p99 bot step and room tick.
 //
+// --gores (the BR-BOTS review 1 probe): past a gore the route must take the car's own road at once.
+// (1) one botControls step per point on every road every 10 units, lanes 12 apart across the car-centre
+// corridor, for each of the 8 routes (a Hard Sport at 300 u/s along the road, committed at every fork): the
+// (point, route) pairs past a gore whose route's ring after the step is not on the car's road there; (2) 120
+// drives from 1..28 past each fork gore on the main road with route 7 (2 speeds, 2 lanes): steps the route
+// still holds the cut, the closest the car comes to its wall; (3) 72 drives from 20/50/80 % of each fork
+// mouth to its gore with a route taking that cut (4 lanes, 320 u/s): wall contacts.
+//
 // The race runner (branchRace) is used by scripts/sim-test.ts (section BR-BOTS).
 
 import { createHash } from "node:crypto";
 import { botTiming, botTrace } from "../../server/bots";
 import { Room, type Player, type Session } from "../../server/room";
-import { BOT_LANES, routePlan, type BotControls, type BotLevel, type BotTune, type MistakeKind } from "../../shared/botdrive";
+import { BOT_LANES, botControls, newBotMem, routeOf, routePlan, type BotControls, type BotLevel, type BotMem, type BotTune, type MistakeKind } from "../../shared/botdrive";
 import { CAR_TYPES, type CarType } from "../../shared/cars";
 import { wallLimit, type CarState } from "../../shared/physics";
 import { FINISH_GRACE_MS, type GameEvent, type ServerMsg } from "../../shared/protocol";
 import { statsFor } from "../../shared/shop";
-import { MOUTH_CLEAR, queryTrackNear, roadOfSeg, type Track } from "../../shared/track";
-import { CAR_HP } from "../../shared/weapons";
+import { globalSeg, MOUTH_CLEAR, pointAt, queryTrackNear, roadOf, roadOfSeg, type Track, type TrackQuery } from "../../shared/track";
+import { CAR_HP, raceEnv, stepRaceCar } from "../../shared/weapons";
+import { testTrack } from "../../shared/testtracks";
 import { tuneOf, withDevBots, withEnv } from "./hard-tune";
 import { moveContact } from "./move-tune";
 import { islandContact } from "./split-tune";
@@ -285,6 +294,150 @@ export const ACCEPT_RACES: { label: string; levels: BotLevel[] }[] = [
   { label: "mixed 5", levels: ["hard", "normal", "easy", "hard", "normal"] }, // M4-TRACKS' mixed field on the long tracks (track-density.ts raceSet)
 ];
 
+/** Is a query (the car's road and s) between its road's two gores of some branch (the corridors apart)? */
+function pastAGore(t: Track, q: TrackQuery): boolean {
+  return t.branches.some((b, k) => {
+    const fg = b.forkGore, mg = b.mergeGore;
+    if (!fg || !mg) return false;
+    return q.road === 0 ? q.s > fg.s && q.s < mg.s : q.road === k + 1 && q.s > fg.u && q.s < mg.u;
+  });
+}
+
+/** The road a route's ring puts a car at (x, y, its global segment seg) on. */
+function ringRoad(t: Track, mask: number, x: number, y: number, seg: number): number {
+  const r = routeOf(t, mask);
+  return r.segRoad[queryTrackNear(r.ring, x, y, r.hint[seg]).seg];
+}
+
+/** A Hard Sport bot's memory driving route `mask`, committed at every fork. */
+function goreMem(t: Track, mask: number, lane = BOT_LANES[0]): BotMem {
+  const m = newBotMem(lane, "hard", 0, 0, 0);
+  m.weapons = false;
+  m.plan = m.route = mask;
+  m.planTrack = t;
+  m.forkDone = (1 << t.branches.length) - 1;
+  return m;
+}
+
+/** A car at (road, s, lat) of t heading along it at v, its seg the physics' (queryTrackNear round its road's segment). */
+function goreCar(t: Track, road: number, s: number, lat: number, v: number): CarState {
+  const r = roadOf(t, road), p = pointAt(r, s);
+  const x = p.x - Math.sin(p.h) * lat, y = p.y + Math.cos(p.h) * lat;
+  const hint = road === 0 ? p.seg : t.branches[road - 1].base + p.seg;
+  return { x, y, h: p.h, vx: Math.cos(p.h) * v, vy: Math.sin(p.h) * v, seg: globalSeg(t, queryTrackNear(t, x, y, hint)), wreck: 0, air: 0, fall: 0, boost: 0 };
+}
+
+export interface GoreProbe {
+  pairs: number; // (point, route) pairs stepped
+  past: number; // ... of them past a gore
+  wrong: number; // ... whose route's ring is not on the car's road after the step
+  first: string[];
+  drives: number; // probe 2
+  held: number; // steps past a gore with the ring on the other road (summed)
+  heldMax: number; // most in one drive
+  heldWorst: string;
+  closest: number; // the closest any of them came to its wall (car-centre limit - distance)
+  walls2: number; // wall contacts begun in probe 2
+  mouthDrives: number; // probe 3
+  walls3: number; // wall contacts begun in probe 3
+}
+
+/** The review-1 probe (see --gores at the top). */
+export function goreProbe(t: Track = testTrack("branch-yard")!): GoreProbe {
+  const sport = statsFor("sport", { engine: 0, tyres: 0, welder: 0 });
+  const nb = t.branches.length, routes = 1 << nb;
+  const out: GoreProbe = { pairs: 0, past: 0, wrong: 0, first: [], drives: 0, held: 0, heldMax: 0, heldWorst: "", closest: Infinity, walls2: 0, mouthDrives: 0, walls3: 0 };
+  // (1) One step per point and route.
+  for (let road = 0; road <= nb; road++) {
+    const r = roadOf(t, road);
+    for (let s = 5; s < r.length; s += 10) {
+      for (let lat = -96; lat <= 96; lat += 12) {
+        const c0 = goreCar(t, road, s, lat, 300);
+        const q = queryTrackNear(t, c0.x, c0.y, c0.seg);
+        if (q.dist > wallLimit(t, q)) continue; // outside the corridor
+        const past = pastAGore(t, q);
+        for (let mask = 0; mask < routes; mask++) {
+          const m = goreMem(t, mask), c = { ...c0 };
+          botControls({ car: c, track: t, stats: sport, raceOn: true, raceSteps: 600, others: [], carType: "sport" }, m);
+          out.pairs++;
+          if (!past) continue;
+          out.past++;
+          const rr = ringRoad(t, m.route, c.x, c.y, c.seg);
+          if (rr !== q.road) {
+            out.wrong++;
+            if (out.first.length < 4) out.first.push(`road ${q.road} s ${q.s.toFixed(0)} lat ${q.lat.toFixed(0)} route ${mask} -> ring road ${rr}`);
+          }
+        }
+      }
+    }
+  }
+  // Drive one bot for n ticks; per tick told the car (after the step) and the bot's memory.
+  const drive = (c: CarState, m: BotMem, n: number, on: (c: CarState, m: BotMem) => void) => {
+    for (let rt = 1; rt <= n; rt++) {
+      const ctl = botControls({ car: c, track: t, stats: sport, raceOn: true, raceSteps: 600 + rt, others: [], carType: "sport" }, m);
+      stepRaceCar(c, { throttle: ctl.throttle, steer: ctl.steer }, sport, raceEnv(t, rt));
+      on(c, m);
+    }
+  };
+  const wallTracker = () => {
+    let was = false, n = 0;
+    return {
+      step(c: CarState): number {
+        if (c.air > 0 || c.fall > 0) return Infinity;
+        const q = queryTrackNear(t, c.x, c.y, c.seg), room = wallLimit(t, q) - q.dist;
+        const at = room <= 0.01;
+        if (at && !was) n++;
+        was = at;
+        return room;
+      },
+      get n() {
+        return n;
+      },
+    };
+  };
+  // (2) From 1..28 past each fork gore on the main road, route 7.
+  for (const b of t.branches) {
+    const fg = b.forkGore;
+    if (!fg) continue;
+    for (let d = 1; d <= 28; d += 3) {
+      for (const v of [250, 400]) {
+        for (const lane of [-24, 24]) {
+          const c = goreCar(t, 0, fg.s + d, lane, v), m = goreMem(t, routes - 1, lane), w = wallTracker();
+          let held = 0;
+          drive(c, m, 90, (car, mm) => {
+            out.closest = Math.min(out.closest, w.step(car));
+            const q = queryTrackNear(t, car.x, car.y, car.seg);
+            if (pastAGore(t, q) && ringRoad(t, mm.route, car.x, car.y, car.seg) !== q.road) held++;
+          });
+          out.drives++;
+          out.held += held;
+          out.walls2 += w.n;
+          if (held > out.heldMax) {
+            out.heldMax = held;
+            out.heldWorst = `fork gore s ${fg.s.toFixed(1)} + ${d}, ${v} u/s, lane ${lane}`;
+          }
+        }
+      }
+    }
+  }
+  // (3) From 20/50/80 % of each fork mouth to its gore, a route taking that cut (alone, and all three).
+  t.branches.forEach((b, k) => {
+    const fg = b.forkGore;
+    if (!fg) return;
+    for (const f of [0.2, 0.5, 0.8]) {
+      for (const lane of [-36, -12, 12, 36]) {
+        for (const mask of [1 << k, routes - 1]) {
+          const c = goreCar(t, 0, b.s0 + f * (fg.s - b.s0), lane, 320), w = wallTracker();
+          drive(c, goreMem(t, mask, lane), 240, (car) => void w.step(car));
+          out.mouthDrives++;
+          out.walls3 += w.n;
+        }
+      }
+    }
+  });
+  return out;
+}
+
 function main(): void {
   const args = process.argv.slice(2);
   const arg = (k: string) => {
@@ -312,6 +465,12 @@ function main(): void {
         );
       }
     }
+  }
+  if (args.includes("--gores")) {
+    const g = goreProbe();
+    console.log(`(1) ${g.pairs} (point, route) pairs, ${g.past} past a gore: ${g.wrong} keep a ring road that is not the car's${g.first.length ? ` (${g.first.join("; ")})` : ""}`);
+    console.log(`(2) ${g.drives} drives from fork gore + 1..28 with route 7: ${g.held} steps holding the other road, most ${g.heldMax}${g.heldWorst ? ` (${g.heldWorst})` : ""}; closest to the wall ${g.closest.toFixed(1)}; wall contacts ${g.walls2}`);
+    console.log(`(3) ${g.mouthDrives} drives from 20/50/80 % of a fork mouth with a route taking the cut: wall contacts ${g.walls3}`);
   }
   if (args.includes("--cpu")) {
     const steps: number[] = [];

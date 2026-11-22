@@ -15747,7 +15747,7 @@ for (const t of [bpQuery, bpWallsCheck, bpProgress, bpRecovery, bpFeatures, bpRi
 // This section's imports (hoisted like the ones at the top).
 import * as bbD from "../shared/botdrive";
 import * as bbT from "../shared/track";
-import { ACCEPT_RACES as BB_RACES, branchRace as bbRace, gainTable as bbGains, raceLines as bbRaceLines } from "../tools/debug/branch-tune";
+import { ACCEPT_RACES as BB_RACES, branchRace as bbRace, gainTable as bbGains, goreProbe as bbGoreProbe, raceLines as bbRaceLines } from "../tools/debug/branch-tune";
 import { BRANCH_YARD as BB_YARD, TEST_TRACKS as BB_TEST_TRACKS, testTrack as bbTestTrack } from "../shared/testtracks";
 import { CAR_TYPES as BB_TYPES } from "../shared/cars";
 import { statsFor as bbStats } from "../shared/shop";
@@ -16025,6 +16025,40 @@ function bbCursor(): void {
   check("branch bots cursor: on the jump cut the bots taking it are on full throttle on the ramp approach (600 before the lip to the lip), every step", approach > 200 && lifted === 0, `${approach} steps, ${lifted} off full throttle`);
 }
 
+function bbGores(): void {
+  // Criterion 2 (BR-BOTS review 1): past a gore the car's road at once, where the car is along its segment (a
+  // segment's start can lie before the gore: Branch Yard's fork gores lie 13.9-36.1 before the end of theirs).
+  // A route-7 car on the main road 1..30 past each fork gore drops that cut on its first step.
+  const t = bbYard(), bad: string[] = [];
+  let n = 0;
+  t.branches.forEach((b, k) => {
+    for (let d = 1; d <= 30; d++) {
+      for (const lane of [-24, 0, 24]) {
+        const m = bbMem(t, 7, 7, 7), c = bbCar(t, 0, b.forkGore!.s + d, lane, 300);
+        c.seg = bbT.globalSeg(t, queryTrackNear(t, c.x, c.y, c.seg)); // the physics' road there
+        bbD.botControls(bbView(t, c), m);
+        n++;
+        if (bbT.roadOfSeg(t, c.seg) !== 0 || (m.route & (1 << k)) !== 0) bad.push(`branch ${k + 1} gore + ${d} lane ${lane}: route ${m.route}`);
+      }
+    }
+  });
+  check(
+    "branch bots gores: a route-7 car on the main road 1..30 past each fork gore (3 lanes) drops that cut on its first step (the car's s along its segment, not the segment's start)",
+    bad.length === 0 && n === 270,
+    bad.slice(0, 4).join(" | ") || `${n} cars, every one drops the cut`,
+  );
+  // The review's probe (tools/debug/branch-tune.ts --gores): no (point, route) past a gore keeps the other road
+  // after a step; drives from just past a fork gore never hold the cut nor touch a wall; fork-mouth drives' wall
+  // contacts printed (from 80 % of the way to the gore the car cannot make the cut).
+  const g = bbGoreProbe(t);
+  console.log(`  gores probe: (1) ${g.pairs} (point, route) pairs, ${g.past} past a gore, ${g.wrong} on the other road; (2) ${g.drives} drives from fork gore + 1..28: ${g.held} steps holding the cut (most ${g.heldMax}), closest to the wall ${g.closest.toFixed(1)}, walls ${g.walls2}; (3) ${g.mouthDrives} fork-mouth drives: walls ${g.walls3}`);
+  check(
+    "branch bots gores (probe): past a gore no (point, route) pair keeps a ring road that is not the car's after one step (every road every 10, lanes 12 apart, 8 routes); 120 drives from 1..28 past a fork gore with route 7 hold the cut on no step and touch no wall",
+    g.wrong === 0 && g.past > 100000 && g.held === 0 && g.walls2 === 0 && g.drives === 120,
+    `${g.wrong} of ${g.past} pairs past a gore wrong; ${g.held} steps held (most ${g.heldMax}), walls ${g.walls2}; mouth drives' walls ${g.walls3}`,
+  );
+}
+
 function bbJumpSkip(): void {
   // Criterion 1: a jump shortcut skipped at the fork below takeoffSpeedFor. A jump cut with its ramp at u 800 and a
   // gap long enough that full throttle from rest 100 before the fork does not reach its take-off speed at the lip,
@@ -16181,7 +16215,7 @@ function bbShipped(): void {
   console.log(`  BR-BOTS sim-test sections' runtime (bbPlan .. bbShipped): ${((performance.now() - bbClock.t0) / 1000).toFixed(1)} s`);
 }
 
-for (const t of [bbPlan, bbRing, bbCursor, bbJumpSkip, bbRaces, bbGain, bbMistakes, bbCpu, bbShipped]) {
+for (const t of [bbPlan, bbRing, bbCursor, bbGores, bbJumpSkip, bbRaces, bbGain, bbMistakes, bbCpu, bbShipped]) {
   console.log(`\n# ${t.name}`);
   try {
     t();

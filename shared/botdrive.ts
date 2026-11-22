@@ -1803,6 +1803,14 @@ function routeAt(track: Track, route: Route, d: number): typeof AT {
   return AT;
 }
 
+/** The s on road r of (x, y) projected onto r's segment seg (cum[seg] plus its distance along the segment, clamped to it). */
+function alongSeg(r: Track, seg: number, x: number, y: number): number {
+  const a = r.pts[seg], b = r.pts[(seg + 1) % r.pts.length];
+  const ex = b.x - a.x, ey = b.y - a.y, len = r.cum[seg + 1] - r.cum[seg];
+  const l = Math.sqrt(ex * ex + ey * ey) || 1;
+  return r.cum[seg] + clamp(((x - a.x) * ex + (y - a.y) * ey) / l, 0, len);
+}
+
 /** Is a car on the branch b's road at u, or on the main road at s (road 0), between its two gores (the corridors apart: walls between the roads)? */
 function pastGores(b: PlacedBranch, road: number, s: number): boolean {
   const fg = b.forkGore, mg = b.mergeGore;
@@ -1866,16 +1874,17 @@ function routeStep(view: BotView, mem: BotMem, c: CarState): typeof ROUTE_STEP {
       mask = go ? mask | bit : mask & ~bit;
     }
   }
-  // Past a gore the car's own road (CarState.seg: the physics'), when it is not the route's there.
+  // Past a gore the car's own road (CarState.seg: the physics'), when it is not the route's there: where
+  // the car is along that segment (BR-BOTS review 1: its start can lie up to a segment before the gore).
   const pr = roadOfSeg(track, c.seg);
   if (pr !== road) {
     if (pr > 0) {
       const b = bs[pr - 1];
-      if (pastGores(b, pr, b.road.cum[c.seg - b.base])) {
+      if (pastGores(b, pr, alongSeg(b.road, c.seg - b.base, c.x, c.y))) {
         mask |= 1 << (pr - 1);
         mem.forkDone |= 1 << (pr - 1);
       }
-    } else if (pastGores(bs[road - 1], 0, track.cum[c.seg])) {
+    } else if (pastGores(bs[road - 1], 0, alongSeg(track, c.seg, c.x, c.y))) {
       mask &= ~(1 << (road - 1));
       mem.forkDone |= 1 << (road - 1);
     }
