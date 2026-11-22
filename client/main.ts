@@ -19,7 +19,7 @@ import { JerkMeter } from "./jerk";
 import { GameMenu } from "./menu";
 import { MusicPlayer, songById } from "./music";
 import { connectWs } from "./net";
-import { Renderer, type CarView, type CellView, type DrawPose, type HudView } from "./render";
+import { Renderer, type CarView, type CellView, type DrawPose, type HudView, type RaceView } from "./render";
 import { RaceSounds } from "./sfx";
 
 const STEP_MS = 1000 / 60;
@@ -960,6 +960,25 @@ function touchFrame(): void {
   touchPad.setAmmo(rivets, mines);
 }
 
+/** Where the race stands, for the marshals at the line (render.ts WorldFx.race): kept, changed in place. */
+const raceOut: RaceView = { phase: 0, lastLap: false, finished: 0 };
+
+/** This frame's raceOut. The countdown ends when the HUD says GO (raceOnAt), not a snapshot later. */
+function raceView(): RaceView {
+  let lap = 0, finished = 0;
+  const racePhase = game.phase === "countdown" || game.phase === "racing" || game.phase === "results";
+  if (racePhase && game.latest) {
+    for (const c of game.latest.cars.values()) {
+      if (c.lap > lap) lap = c.lap;
+      if (c.fin) finished++;
+    }
+  }
+  raceOut.phase = !racePhase ? 0 : game.phase === "results" ? 3 : game.raceOnAt(game.raceNow()) ? 2 : 1;
+  raceOut.lastLap = raceOut.phase === 2 && lap >= game.laps - 1; // the leader has one lap to go, or is in
+  raceOut.finished = finished;
+  return raceOut;
+}
+
 /** A new room track gets a new Renderer; the camera tour restarts at its start line. */
 function syncRenderer(): void {
   if (game.track === rendererTrack) return;
@@ -1057,6 +1076,7 @@ function draw(alpha: number, elapsed: number): void {
   // What moves (M4-MOVE: barrels, presses, belts' arrows) at the race tick the own car's drawn step ran
   // at, a spectator's at the latest snapshot's (Game.drawTick); none before a snapshot: a still picture.
   fx.rt = game.drawTick();
+  fx.race = raceView();
   driving(game.car, game.smooth, game.contact, others); // tyre marks: by the cars' driving, not by what the prediction does to them on screen
   renderer.frame(cars, fx, hudView());
 }

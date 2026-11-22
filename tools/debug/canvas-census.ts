@@ -12,7 +12,8 @@
 //   not every one: a session holds at most one at a time, canvas-cap.ts MINIMAPS);
 // - six cars of the three looks that keep changing state (whole, battered, wreck), one hopping,
 //   one falling: every car sheet, every silhouette, the effect sheet;
-// - lightning cells and boosts (the catch-up sheet), the race tick (the obstacle sheet);
+// - lightning cells and boosts (the catch-up sheet), the race tick (the obstacle sheet), a Renderer
+//   (the marshal sheet: every track has its two marshals at the line);
 // - the whole HUD: seven lines top left with the hp bar, the time, the notice, a centre text that
 //   changes through more texts than its pool holds, its subtitle, the banner, the corner, three
 //   debug lines (what ?debug=1 shows), the catch-up cues, and more names over the cars than the
@@ -47,6 +48,7 @@ function kindOf(stack: string): string {
   if (has("newShade")) return "car silhouettes";
   if (has("catchSheet")) return "catch-up sheet";
   if (has("obstacleSheet")) return "obstacle sheet";
+  if (has("marshalSheet")) return "marshal sheet";
   if (has("sharedSheets")) return "effect sheet";
   if (has("sheetOf")) return "font sheets";
   if (has("miniOf")) return "minimaps";
@@ -151,6 +153,7 @@ const BOUND: Record<string, string> = {
   "effect sheet": "one",
   "catch-up sheet": "one (lightning cells, boost flames)",
   "obstacle sheet": "one, whatever the track (M4-WORLD: barrels, press, belt arrows)",
+  "marshal sheet": "one, whatever the track (MARSHALS-1: the two flag marshals at the line and their flags)",
   "font sheets": "one a cut of the font and colour the HUD writes in",
   "minimaps": `one a track drawn in the session (${tracks.length} here: every shipped one and one test track; canvas-cap.ts MINIMAPS = ${MINIMAPS})`,
   "hp bars": "one",
@@ -159,7 +162,7 @@ const BOUND: Record<string, string> = {
   "centre texts": "a fixed pool of 6",
   "HUD labels": "one a line of the HUD: the panel, 7 lines, time, notice, subtitle, banner, corner, 3 debug lines",
 };
-const SPRITES = new Set(["car sheets", "car silhouettes", "effect sheet", "catch-up sheet", "obstacle sheet"]);
+const SPRITES = new Set(["car sheets", "car silhouettes", "effect sheet", "catch-up sheet", "obstacle sheet", "marshal sheet"]);
 const kinds = new Map<string, { n: number; bytes: number; sizes: Map<string, number> }>();
 for (const c of made) {
   const k = kinds.get(c.kind) ?? { n: 0, bytes: 0, sizes: new Map<string, number>() };
@@ -169,7 +172,7 @@ for (const c of made) {
   k.sizes.set(size, (k.sizes.get(size) ?? 0) + 1);
   kinds.set(c.kind, k);
 }
-const order = ["world tiles", "car sheets", "car silhouettes", "effect sheet", "catch-up sheet", "obstacle sheet", "font sheets", "HUD labels", "name tags", "centre texts", "minimaps", "hp bars", "catch-up cue art", "other"];
+const order = ["world tiles", "car sheets", "car silhouettes", "effect sheet", "catch-up sheet", "obstacle sheet", "marshal sheet", "font sheets", "HUD labels", "name tags", "centre texts", "minimaps", "hp bars", "catch-up cue art", "other"];
 const total = made.reduce((s, c) => s + c.width * c.height * 4, 0);
 const mb = (b: number) => (b / 1e6).toFixed(3);
 console.log(`# Canvas census (${frames} frames on ${tracks.map((t) => t.def.name).join(", ")})\n`);
