@@ -129,7 +129,30 @@ export interface PlacedIsland extends Island {
   surfR: readonly Surface[];
 }
 
-export type Feature = Ramp | Gap | Hole | Cell | Water | Dirt | Belt | Tyres | Barrels | Truck | Press | Widen | Island;
+/** What a road carries (the main road or a branch): every feature but a branch. */
+export type RoadFeature = Ramp | Gap | Hole | Cell | Water | Dirt | Belt | Tyres | Barrels | Truck | Press | Widen | Island;
+
+/**
+ * A shortcut road (BR-SCHEMA, PLAN-BRANCH.md 2.1): it leaves the main road at a fork at main s0 and
+ * rejoins it at a merge at main s1, running on its own (its own walls) in between. `side` (-1 left,
+ * +1 right of travel) is the side of the main road it leaves on. Its centreline is the Catmull-Rom
+ * curve through main(s0 - BRANCH_GUIDE), main(s0), `control`, main(s1) and main(s1 + BRANCH_GUIDE):
+ * it starts and ends on the main centreline. halfWidth (>= BRANCH_HALF_MIN) is its own asphalt
+ * half-width past its mouths (in a mouth it is the main road's, PLAN-BRANCH 2.3). Its features and
+ * recovery points are placed in branch distance u (0 at the fork), as a road's in s.
+ */
+export interface Branch {
+  k: "branch";
+  s0: number;
+  s1: number;
+  side: number;
+  control: [number, number][];
+  halfWidth: number;
+  features?: RoadFeature[];
+  recovery?: number[];
+}
+
+export type Feature = RoadFeature | Branch;
 
 export interface TrackDef {
   /** Registry id (e.g. "rust-bowl"): the key in shared/tracks.ts and on the wire. */
@@ -147,8 +170,13 @@ export interface TrackDef {
 /** A hole with its centre in world coordinates (computed once by buildTrack). */
 export interface PlacedHole extends Hole { x: number; y: number }
 
-/** A cell with its centre in world coordinates (buildTrack). Track.cells' order is the snapshot's (cells[i]). */
-export interface PlacedCell extends Cell { x: number; y: number; seg: number }
+/**
+ * A cell with its centre in world coordinates (buildTrack). Track.cells' order is the snapshot's (cells[i]).
+ * BR-SCHEMA: the main track's cells are its own, then every branch's (branch order, each by u): a branch
+ * cell there has `road` (its road, >= 1), s in branch distance u and seg its global segment; a road's
+ * own cells have no `road` (and seg on that road).
+ */
+export interface PlacedCell extends Cell { x: number; y: number; seg: number; road?: number }
 
 /** A tyre mound with its centre in world coordinates (buildTrack). */
 export interface PlacedTyres extends Tyres { x: number; y: number; seg: number }
@@ -189,6 +217,46 @@ export interface PlacedTruck extends Truck {
 
 /** A crusher press placed by buildTrack: the centerline point at s, its heading and right normal. */
 export interface PlacedPress extends Press { x: number; y: number; h: number; nx: number; ny: number; seg: number }
+
+/**
+ * Where a branch's corridor and the main road's part (BR-SCHEMA, PLAN-BRANCH 2.3): the point of the
+ * branch's centreline (at branch distance u) that is first 2 * the mouth's wall (the main road's) from
+ * the main centreline, at the fork walking from it, at the merge walking back from it. s: the main s
+ * of that point (mapS there); (x, y): the gore's nose, half-way between the two centrelines there.
+ * Between the fork and the gore (the mouth) the branch has the main road's width; past it, it tapers
+ * to its own over WIDEN_TAPER. angle: the two centrelines' headings there (radians, >= 0). The nose
+ * is a tyre stack of radius GORE_NOSE_R, in both roads' tyre buckets (one PlacedTyres per road, in its
+ * own coordinates: noseMain on the main road, noseBranch on the branch; never in a road's tyres list).
+ */
+export interface PlacedGore {
+  u: number;
+  s: number;
+  x: number;
+  y: number;
+  angle: number;
+  noseMain: PlacedTyres;
+  noseBranch: PlacedTyres;
+}
+
+/**
+ * A branch as buildTrack places it (BR-SCHEMA, PLAN-BRANCH 2.1). road: the branch as an open road with
+ * the Track shape (its own pts, cum, length, per-sample half-widths and walls, features, buckets and
+ * recovery points; road.roadNo = its road number, its index in Track.branches plus 1). base: its first
+ * global segment (the main road has 0..n-1; this branch base..base + segs - 1, segs = road.pts.length - 1).
+ * mapS[i]: the main s for branch sample i (a projection onto the main road inside each mouth, linear
+ * between the two gores; strictly increasing, validated). A gore is null when the corridors never part
+ * (validateTrack says so; mapS is then linear from s0 to s1).
+ */
+export interface PlacedBranch {
+  road: Track;
+  base: number;
+  s0: number;
+  s1: number;
+  side: number;
+  forkGore: PlacedGore | null;
+  mergeGore: PlacedGore | null;
+  mapS: number[];
+}
 
 export interface Track {
   def: TrackDef;
@@ -248,6 +316,21 @@ export interface Track {
   barrelsFrom: number[];
   pressesFrom: number[];
   trucksFrom: number[];
+  // BR-SCHEMA (PLAN-BRANCH): shortcut roads.
+  /**
+   * 0 on a track (its main road: closed, pts[n-1] connects back to pts[0], cum[n] = length); r >= 1 on
+   * the open road of its branch r - 1 (PlacedBranch.road): its centreline runs from pts[0] to pts[m-1]
+   * and stops (m - 1 segments, cum[m-1] = length, per-segment lists m - 1 long); s never wraps on it.
+   */
+  roadNo: number;
+  /** The track's branches (empty on every shipped track, and on a branch's road). */
+  branches: PlacedBranch[];
+  /**
+   * Per global segment (the main road's, then each branch's from its base): the global segment of
+   * the other road to search too, when this segment's query window (LOCAL_WINDOW either side, clamped
+   * on a branch) touches a mouth; -1 when it touches none. Empty when there are no branches.
+   */
+  mouthAt: number[];
 }
 
 /** What a surface does (Surface.kind). */
@@ -278,11 +361,17 @@ export interface TrackQuery {
   seg: number; // nearest segment index
   side: number; // M4-SCHEMA: +1 right of travel (or on the centerline), -1 left
   readonly lat: number; // signed lateral offset (M4-SCHEMA): +dist right of travel, -dist left (|lat| = dist)
+  /**
+   * BR-SCHEMA: the road the query is on (the queried Track's roadNo: 0 = the main road, b + 1 =
+   * branch b). s and seg are on that road (roadOf(track, q.road)); globalSeg turns seg into a hint.
+   */
+  road: number;
 }
 
 /**
  * nearest()'s result. The side is a small integer (stored unboxed) and lat a getter from it, so the
  * signed lateral adds one tagged slot per query, not a heap number (M4-SCHEMA review: 24 -> 8 bytes).
+ * The road (BR-SCHEMA) is a small integer too.
  */
 class Query implements TrackQuery {
   declare dist: number;
@@ -291,13 +380,15 @@ class Query implements TrackQuery {
   declare s: number;
   declare seg: number;
   declare side: number;
-  constructor(dist: number, nx: number, ny: number, s: number, seg: number, side: number) {
+  declare road: number;
+  constructor(dist: number, nx: number, ny: number, s: number, seg: number, side: number, road: number) {
     this.dist = dist;
     this.nx = nx;
     this.ny = ny;
     this.s = s;
     this.seg = seg;
     this.side = side;
+    this.road = road;
   }
   get lat(): number {
     return this.side < 0 ? -this.dist : this.dist;
@@ -476,6 +567,26 @@ export const PRESS_SIDE_GAP = 24;
  */
 export const TRUCK_SIDE_GAP = 24;
 
+// BR-SCHEMA constants (PLAN-BRANCH 2.1, 2.3, 2.8, advisor changes 1 and 7).
+/** A branch's curve runs through the main centreline this far before its fork and past its merge (its tangents there). */
+export const BRANCH_GUIDE = 100;
+/** A branch's narrowest asphalt half-width (72 wide: LANE_MIN). */
+export const BRANCH_HALF_MIN = 36;
+/** The largest angle between the two centrelines at a gore (degrees). */
+export const GORE_ANGLE_MAX = 35;
+/** The longest mouth, fork to gore (or gore to merge), along either road. */
+export const MOUTH_LEN_MAX = 600;
+/** Plain road kept past every gore, on both roads: no feature there (bots' look-ahead never crosses a mouth). */
+export const MOUTH_CLEAR = 300;
+/**
+ * Outside the mouths and the gores' noses, the corridors (centreline +- wall) of two roads keep at
+ * least this far apart: two cars at facing walls are then >= 56 apart, past a slipstream's reach
+ * (at most 48: 22 + 0.1 x 180 + 8, shared/catchup.ts), so nobody drafts through a wall.
+ */
+export const BRANCH_SEP = 40;
+/** The tyre-stack nose at each gore: its radius (in the tyre mounds' range). */
+export const GORE_NOSE_R = 24;
+
 // ---- the traction area of a puddle (M4-WORLD; moved here from client/gfx/puddle-shape.ts by M4-SURF, unchanged) ----
 // User decisions 2026-11-21: "dirt and water puddles should not be square, it should read as a
 // puddle", and "the traction square" is to be made smaller so that it fits inside the puddle.
@@ -550,13 +661,24 @@ export function buildTrack(def: TrackDef): Track {
     cum.push(cum[i - 1] + Math.hypot(b.x - a.x, b.y - a.y));
   }
   const length = cum[pts.length];
-  const track: Track = {
+  const track = newRoad(def, pts, cum, length, 0);
+  track.checkpoints = [0.25, 0.5, 0.75].map((f) => f * length);
+  const features = def.features ?? [];
+  placeFeatures(track, features, def.recovery?.length ? def.recovery : [0], []);
+  const branches = features.filter((f): f is Branch => f.k === "branch");
+  if (branches.length > 0) buildBranches(track, branches);
+  return track;
+}
+
+/** A road with its centreline and nothing on it yet (buildTrack, buildBranch). */
+function newRoad(def: TrackDef, pts: Vec[], cum: number[], length: number, roadNo: number): Track {
+  return {
     def,
     pts,
     cum,
     length,
     wall: def.halfWidth + def.verge,
-    checkpoints: [0.25, 0.5, 0.75].map((f) => f * length),
+    checkpoints: [],
     ramps: [],
     gaps: [],
     holes: [],
@@ -588,10 +710,21 @@ export function buildTrack(def: TrackDef): Track {
     barrelsFrom: [],
     pressesFrom: [],
     trucksFrom: [],
+    roadNo,
+    branches: [],
+    mouthAt: [],
   };
-  const features = def.features ?? [];
+}
+
+/**
+ * A road's features, per-sample walls, recovery points and buckets (buildTrack's, unchanged for the
+ * main road; BR-SCHEMA: also a branch's road, whose mouths come in as `mouths`, widens of their own).
+ */
+function placeFeatures(track: Track, features: readonly Feature[], rec: readonly number[], mouths: readonly Widen[]): void {
+  const { def, pts, cum } = track;
   // The widens first: the per-sample walls, and the barrels' wall-to-wall run, depend on them.
   for (const f of features) if (f.k === "widen") track.widens.push({ ...f });
+  for (const w of mouths) track.widens.push(w);
   track.widens.sort((a, b) => a.s0 - b.s0);
   for (let i = 0; i < pts.length; i++) {
     const hl = halfAt(track, cum[i], -1), hr = halfAt(track, cum[i], 1);
@@ -655,6 +788,8 @@ export function buildTrack(def: TrackDef): Track {
       case "island":
         track.islands.push(placeIsland(track, f));
         break;
+      case "branch":
+        break; // buildBranches, once the main road is built
     }
   }
   track.ramps.sort((a, b) => a.s - b.s);
@@ -669,10 +804,8 @@ export function buildTrack(def: TrackDef): Track {
   track.trucks.sort((a, b) => a.s - b.s);
   track.presses.sort((a, b) => a.s - b.s);
   track.islands.sort((a, b) => a.s0 - b.s0);
-  const rec = def.recovery?.length ? def.recovery : [0];
   track.recovery = rec.map((r) => wrapS(track, r)).sort((a, b) => a - b);
   buildBuckets(track);
-  return track;
 }
 
 const NO_SURFACES: readonly Surface[] = Object.freeze([]) as readonly Surface[];
@@ -726,7 +859,7 @@ function placeIsland(track: Track, f: Island): PlacedIsland {
  */
 function buildBuckets(track: Track): void {
   const { cum, tyres } = track;
-  const n = track.pts.length;
+  const n = segCount(track); // the segments (BR-SCHEMA: an open road has one fewer than its samples)
   const surfaces: Surface[] = [];
   for (const w of track.water) surfaces.push({ kind: SURF_WATER, ...tractionRect(w), vx: 0 });
   for (const d of track.dirt) surfaces.push({ kind: SURF_DIRT, ...tractionRect(d), vx: 0 });
@@ -750,7 +883,7 @@ function buildBuckets(track: Track): void {
     }
     // The corridor piece of segment i (the vertex normals either end, wall to wall): where a car
     // centre whose nearest segment is i lies. A mound within its radius + TYRES_BUCKET_REACH of it.
-    const j = (i + 1) % n, p = track.pts[i], q = track.pts[j];
+    const j = (i + 1) % track.pts.length, p = track.pts[i], q = track.pts[j];
     const quad: Vec[] = [
       { x: p.x + normals[i].x * track.wallR[i], y: p.y + normals[i].y * track.wallR[i] },
       { x: q.x + normals[j].x * track.wallR[j], y: q.y + normals[j].y * track.wallR[j] },
@@ -759,7 +892,7 @@ function buildBuckets(track: Track): void {
     ];
     const near = tyres.filter((m) => {
       const ds = Math.abs(m.s - (a + b) / 2);
-      if (Math.min(ds, track.length - ds) > 4 * (track.wall + m.r + TYRES_BUCKET_REACH)) return false; // another section
+      if (alongGap(track, ds) > 4 * (track.wall + m.r + TYRES_BUCKET_REACH)) return false; // another section
       return quadDist(quad, m.x, m.y) <= m.r + TYRES_BUCKET_REACH;
     });
     tyresAt.push(near.length ? near : (NO_TYRES as PlacedTyres[]));
@@ -813,7 +946,7 @@ const MOVER_BEHIND = 40;
 function moverBuckets<T>(track: Track, list: readonly T[], lo: (x: T) => number, hi: (x: T) => number, empty: readonly T[]): { at: T[][]; from: number[] } {
   const { cum } = track;
   const at: T[][] = [], from: number[] = [];
-  for (let i = 0; i < track.pts.length; i++) {
+  for (let i = 0; i < segCount(track); i++) {
     const a = cum[i], b = cum[i + 1];
     const near = list.filter((x) => lo(x) - MOVER_BUCKET_REACH < b && hi(x) + MOVER_BUCKET_REACH > a);
     at.push(near.length ? near : (empty as T[]));
@@ -1013,7 +1146,7 @@ export function halfOn(track: Track, seg: number, s: number, side: number): numb
   if (a === b) return a;
   const c0 = track.cum[seg], len = track.cum[seg + 1] - c0;
   let d = wrapS(track, s) - c0;
-  if (d < -track.length / 2) d += track.length; // the last segment's end, wrapped to 0
+  if (d < -track.length / 2 && track.roadNo === 0) d += track.length; // the last segment's end, wrapped to 0 (a closed road's)
   const t = !(len > 0) || d <= 0 ? 0 : d >= len ? 1 : d / len;
   const w0 = a - track.def.halfWidth, w1 = b - track.def.halfWidth; // the widening at either end, as the bake's wL0 / wL1
   return track.def.halfWidth + (w0 + (w1 - w0) * t);
@@ -1081,6 +1214,12 @@ export function truckLipAt(track: Track, s: number, lat: number): PlacedTruck | 
 function nearest(track: Track, x: number, y: number, from: number, count: number): TrackQuery {
   const { pts, cum } = track;
   const n = pts.length;
+  if (track.roadNo > 0) {
+    // BR-SCHEMA: an open road's window is clamped to its segments 0..n-2, never wrapped.
+    const hi = Math.min(n - 2, from + count - 1);
+    from = Math.max(0, Math.min(from, hi));
+    count = hi - from + 1;
+  }
   let best = Infinity, bestSeg = 0, bestT = 0, bx = 0, by = 0;
   for (let k = 0; k < count; k++) {
     const i = (((from + k) % n) + n) % n;
@@ -1102,7 +1241,7 @@ function nearest(track: Track, x: number, y: number, from: number, count: number
   }
   const s = cum[bestSeg] + (cum[bestSeg + 1] - cum[bestSeg]) * bestT;
   // The side: the cross product of the segment's direction and the point (+ = right of travel).
-  return new Query(dist, nx, ny, s, bestSeg, (b.x - a.x) * (y - a.y) - (b.y - a.y) * (x - a.x) < 0 ? -1 : 1);
+  return new Query(dist, nx, ny, s, bestSeg, (b.x - a.x) * (y - a.y) - (b.y - a.y) * (x - a.x) < 0 ? -1 : 1, track.roadNo);
 }
 
 /** Nearest point on the whole centerline. Use only when there is no position history. */
@@ -1128,15 +1267,27 @@ export function isLost(track: Track, q: TrackQuery): boolean {
   return q.dist > wallOf(track, q) * 2;
 }
 
-/** Wrap a distance along the track into [0, length) (exactly s when already inside). */
+/** Wrap a distance along the track into [0, length) (exactly s when already inside); on an open road (BR-SCHEMA) clamp it to [0, length]. */
 function wrapS(track: Track, s: number): number {
   const L = track.length;
+  if (track.roadNo > 0) return s < 0 ? 0 : s > L ? L : s;
   return s >= 0 && s < L ? s : ((s % L) + L) % L;
+}
+
+/** How far apart two places ds apart in s are along the road: the nearer way round a closed road (BR-SCHEMA: just ds on an open one). */
+function alongGap(track: Track, ds: number): number {
+  return track.roadNo > 0 ? ds : Math.min(ds, track.length - ds);
+}
+
+/** The number of segments of a road: pts.length on a closed road, one fewer on an open one (a branch's, BR-SCHEMA). */
+export function segCount(track: Track): number {
+  return track.roadNo > 0 ? track.pts.length - 1 : track.pts.length;
 }
 
 /** Unit direction of travel of segment `seg`. */
 export function segDir(track: Track, seg: number): Vec {
   const { pts } = track;
+  if (track.roadNo > 0 && seg > pts.length - 2) seg = pts.length - 2; // an open road's last sample: its last segment's direction
   const a = pts[seg], b = pts[(seg + 1) % pts.length];
   const l = Math.hypot(b.x - a.x, b.y - a.y) || 1;
   return { x: (b.x - a.x) / l, y: (b.y - a.y) / l };
@@ -1154,7 +1305,7 @@ export function holeAt(track: Track, x: number, y: number, s: number): PlacedHol
   const L = track.length;
   for (const h of track.holes) {
     const ds = Math.abs(wrapS(track, s) - h.s);
-    if (Math.min(ds, L - ds) > h.r + track.wall) continue; // a different part of the track
+    if ((track.roadNo > 0 ? ds : Math.min(ds, L - ds)) > h.r + track.wall) continue; // a different part of the track
     if ((x - h.x) ** 2 + (y - h.y) ** 2 < h.r * h.r) return h;
   }
   return null;
@@ -1175,10 +1326,19 @@ export function lipAt(track: Track, s: number): Ramp | null {
   return null;
 }
 
-/** The last recovery point at or before s, wrapping to the last one of the lap before. */
+/**
+ * The last recovery point at or before s, wrapping to the last one of the lap before. On an open road
+ * (a branch's, BR-SCHEMA advisor change 3) nothing wraps: the last one at or before s, or -1 when none
+ * is (none at all, or all of them past s): the car then goes back to the main road, recoveryFor.
+ */
 export function recoveryAt(track: Track, s: number): number {
   s = wrapS(track, s);
   const rec = track.recovery;
+  if (track.roadNo > 0) {
+    let at = -1;
+    for (const r of rec) if (r <= s) at = r;
+    return at;
+  }
   let best = rec[rec.length - 1];
   for (const r of rec) if (r <= s) best = r;
   return best;
@@ -1187,11 +1347,12 @@ export function recoveryAt(track: Track, s: number): number {
 /** Point and heading on the centerline at distance s (wraps). */
 export function pointAt(track: Track, s: number): { x: number; y: number; h: number; seg: number } {
   const L = track.length;
-  s = ((s % L) + L) % L;
+  const open = track.roadNo > 0; // BR-SCHEMA: on an open road s is clamped to 0..length and the last segment is n - 2
+  s = open ? (s < 0 ? 0 : s > L ? L : s) : ((s % L) + L) % L;
   const { pts, cum } = track;
   // The last sample i (at most n - 1) with cum[i] <= s: a binary search over cum (non-decreasing,
   // cum[0] = 0), the same sample a scan from 0 finds (M4-BOTS: bots call this every tick).
-  let i = 0, hi = pts.length - 1;
+  let i = 0, hi = open ? pts.length - 2 : pts.length - 1;
   while (i < hi) {
     const mid = (i + hi + 1) >> 1;
     if (cum[mid] <= s) i = mid;
@@ -1266,7 +1427,8 @@ interface Piece { seg: number; s0: number; s1: number; ground: boolean; quad: Ve
 
 function vertexNormal(track: Track, i: number): Vec {
   const n = track.pts.length;
-  const a = segDir(track, (i - 1 + n) % n), b = segDir(track, i);
+  // An open road's ends (BR-SCHEMA): the one segment there (segDir clamps the last).
+  const a = segDir(track, track.roadNo > 0 ? Math.max(0, i - 1) : (i - 1 + n) % n), b = segDir(track, i);
   let dx = a.x + b.x, dy = a.y + b.y;
   const l = Math.hypot(dx, dy);
   if (l < 1e-9) { dx = b.x; dy = b.y; } else { dx /= l; dy /= l; }
@@ -1347,17 +1509,12 @@ function quadsOverlap(a: Vec[], b: Vec[]): boolean {
  * The run-up check (every jump can be made from its recovery point) is validateRunUps in
  * shared/weapons.ts.
  */
-export function validateTrack(track: Track): string[] {
-  const errors: string[] = [];
-  const L = track.length;
+/**
+ * A road's own features and recovery points (validateTrack's checks before the crossings, the main
+ * road's and, BR-SCHEMA, each branch's): `zone` says where on the road a feature may lie.
+ */
+function validateRoad(track: Track, errors: string[], zone: (what: string, lo: number, hi: number) => void): void {
   const f1 = (v: number) => v.toFixed(1);
-  const straight = startStraightEnd(track);
-  const zone = (what: string, lo: number, hi: number) => {
-    if (!(lo >= 0 && hi <= L && lo <= hi)) errors.push(`${what}: outside 0..${f1(L)} (or wraps past the start line)`);
-    else if (lo < straight || hi > L - GRID_ZONE) {
-      errors.push(`${what}: in the start zone (grid ${f1(L - GRID_ZONE)}..${f1(L)} or start straight 0..${f1(straight)})`);
-    }
-  };
   for (const r of track.ramps) {
     if (!(r.len > 0)) errors.push(`ramp at s=${f1(r.s)}: length must be > 0`);
     zone(`ramp at s=${f1(r.s)}`, r.s, r.s + r.len + LIP_ZONE);
@@ -1373,6 +1530,7 @@ export function validateTrack(track: Track): string[] {
     if (gapAt(track, h.s)) errors.push(`hole at s=${f1(h.s)}: inside a gap`);
   }
   for (const c of track.cells) {
+    if (c.road !== undefined) continue; // a branch's cell on the main track's list (BR-SCHEMA): its own road checks it
     const at = `${c.air ? "air" : "ground"} cell at s=${f1(c.s)}`;
     zone(at, c.s - CELL_EDGE, c.s + CELL_EDGE);
     if (Math.abs(c.lat) + CELL_EDGE > track.wall) errors.push(`${at}: reaches past the wall`);
@@ -1383,7 +1541,7 @@ export function validateTrack(track: Track): string[] {
       // A little hard to reach: on the kerb (the asphalt's outer CELL_KERB units) or in the dirt.
       if (Math.abs(c.lat) < track.def.halfWidth - CELL_KERB) errors.push(`${at}: lat ${f1(c.lat)} is on the open road (a ground cell sits on the kerb, |lat| >= ${track.def.halfWidth - CELL_KERB}, or in the dirt)`);
       if (gapAt(track, c.s)) errors.push(`${at}: in a gap (no ground under it)`);
-      if (track.holes.some((h) => Math.hypot(h.x - c.x, h.y - c.y) < h.r + CELL_EDGE && Math.min(Math.abs(h.s - c.s), L - Math.abs(h.s - c.s)) < h.r + track.wall)) {
+      if (track.holes.some((h) => Math.hypot(h.x - c.x, h.y - c.y) < h.r + CELL_EDGE && alongGap(track, Math.abs(h.s - c.s)) < h.r + track.wall)) {
         errors.push(`${at}: over a hole`);
       }
     }
@@ -1392,11 +1550,25 @@ export function validateTrack(track: Track): string[] {
     const p = pointAt(track, r);
     const nearHole = track.holes.some((h) => {
       const ds = Math.abs(r - h.s);
-      return Math.min(ds, L - ds) <= h.r + track.wall && Math.hypot(p.x - h.x, p.y - h.y) < h.r + RECOVERY_HOLE_MARGIN;
+      return alongGap(track, ds) <= h.r + track.wall && Math.hypot(p.x - h.x, p.y - h.y) < h.r + RECOVERY_HOLE_MARGIN;
     });
     if (gapAt(track, r) || nearHole || lipAt(track, r)) errors.push(`recovery point s=${f1(r)}: not on solid ground (gap, hole or take-off zone)`);
   }
   validateSchema(track, errors, zone);
+}
+
+export function validateTrack(track: Track): string[] {
+  const errors: string[] = [];
+  const L = track.length;
+  const f1 = (v: number) => v.toFixed(1);
+  const straight = startStraightEnd(track);
+  const zone = (what: string, lo: number, hi: number) => {
+    if (!(lo >= 0 && hi <= L && lo <= hi)) errors.push(`${what}: outside 0..${f1(L)} (or wraps past the start line)`);
+    else if (lo < straight || hi > L - GRID_ZONE) {
+      errors.push(`${what}: in the start zone (grid ${f1(L - GRID_ZONE)}..${f1(L)} or start straight 0..${f1(straight)})`);
+    } else if (track.branches.length > 0) mouthZone(track, errors, what, lo, hi);
+  };
+  validateRoad(track, errors, zone);
 
   const pieces = corridorPieces(track);
   const n = track.pts.length;
@@ -1431,6 +1603,7 @@ export function validateTrack(track: Track): string[] {
   report(closeIndex, (p) =>
     `sections at s=${f1(p.a.s0)} and s=${f1(p.b.s0)} come near but are only ${p.di} segments apart (need > ${indexMin})`,
   );
+  if (track.branches.length > 0) validateBranches(track, errors);
   return errors;
 }
 
@@ -1450,6 +1623,7 @@ export function gridSlotSL(track: Track, slot: number): { s: number; lat: number
 export function curvatureAt(track: Track, i: number): number {
   const { cum } = track;
   const n = track.pts.length;
+  if (track.roadNo > 0 && (i <= 0 || i >= n - 1)) return 0; // an open road's ends (BR-SCHEMA)
   const a = segDir(track, (i - 1 + n) % n), b = segDir(track, i);
   const turn = Math.atan2(a.x * b.y - a.y * b.x, a.x * b.x + a.y * b.y);
   const before = i === 0 ? cum[n] - cum[n - 1] : cum[i] - cum[i - 1];
@@ -1489,7 +1663,7 @@ function feetOverlap(a: Foot, b: Foot): boolean {
 /** Distance from a foot's edge to the point (s, lat), the nearer way round the lap (0 inside). */
 function footDist(track: Track, f: Foot, s: number, lat: number): number {
   let best = Infinity;
-  for (const v of [s - track.length, s, s + track.length]) {
+  for (const v of track.roadNo > 0 ? [s] : [s - track.length, s, s + track.length]) {
     const d = f.circle
       ? Math.hypot(v - f.circle.s, lat - f.circle.lat) - f.circle.r
       : Math.hypot(v - clampTo(v, f.s0, f.s1), lat - clampTo(lat, f.lat0, f.lat1));
@@ -1682,9 +1856,9 @@ function validateSchema(track: Track, errors: string[], zone: (what: string, lo:
     }
   }
 
-  // Widens.
+  // Widens (BR-SCHEMA: a branch's mouths are widens buildTrack makes, not the def's: not checked here).
   const widens: Foot[] = [];
-  for (const w of track.widens) {
+  for (const w of track.roadNo > 0 ? track.widens.filter((x) => !isMouth(x)) : track.widens) {
     const what = `widen ${span(w.s0, w.s1)}`;
     if (!(w.s1 - w.s0 >= 2 * WIDEN_TAPER)) errors.push(`${what}: shorter than its two tapers (${2 * WIDEN_TAPER})`);
     if (!(w.left >= 0 && w.right >= 0 && w.left + w.right > 0)) errors.push(`${what}: left ${w.left} / right ${w.right} must be >= 0 and not both 0`);
@@ -1715,7 +1889,7 @@ function validateSchema(track: Track, errors: string[], zone: (what: string, lo:
   const hazards: Foot[] = [
     ...jumps,
     ...track.holes.map((h) => round(`hole at s=${f1(h.s)}`, h.s, h.lat, h.r)),
-    ...track.cells.filter((c) => !c.air).map((c) => round(`ground cell at s=${f1(c.s)}`, c.s, c.lat, CELL_EDGE)),
+    ...track.cells.filter((c) => !c.air && c.road === undefined).map((c) => round(`ground cell at s=${f1(c.s)}`, c.s, c.lat, CELL_EDGE)),
   ];
   const among = (list: Foot[], why: string) => {
     for (let i = 0; i < list.length; i++) for (let j = i + 1; j < list.length; j++) if (feetOverlap(list[i], list[j])) errors.push(`${list[i].what} overlaps ${list[j].what}${why}`);
@@ -1757,7 +1931,7 @@ function validateSchema(track: Track, errors: string[], zone: (what: string, lo:
       const d = footDist(track, f, r, 0);
       if (d < SOLID_CLEAR) errors.push(`${f.what}: ${f1(d)} from recovery point s=${f1(r)} (solids keep >= ${SOLID_CLEAR})`);
     }
-    for (let k = 0; k < GRID_SLOTS; k++) {
+    for (let k = 0; track.roadNo === 0 && k < GRID_SLOTS; k++) {
       const g = gridSlotSL(track, k);
       const d = footDist(track, f, g.s, g.lat);
       if (d < SOLID_CLEAR) errors.push(`${f.what}: ${f1(d)} from grid slot ${k} (solids keep >= ${SOLID_CLEAR})`);
@@ -1786,6 +1960,482 @@ function validateSchema(track: Track, errors: string[], zone: (what: string, lo:
         errors.push(`${what}: no dry lane of ${DRY_LANE_MIN} at s=${f1(s)} (the widest is ${f1(dry)}) and not on a straight (the road turns ${turn.toFixed(3)} rad over it)`);
       }
       break;
+    }
+  }
+}
+
+// ---- BR-SCHEMA: shortcut roads (PLAN-BRANCH.md 2.1-2.5, 2.8; advisor changes 1, 2, 3, 7) ----------
+// A branch is an open road with the Track shape (PlacedBranch.road). Global segments: the main road's
+// 0..n-1, then each branch's from its base. Nothing drives on a branch yet (BR-PHYS) and nothing draws
+// it (BR-BAKE): this is the data, its queries and its validation. A track without a branch never runs
+// any of this (buildTrack, validateTrack and every query take today's path).
+
+/** A branch's mouth as buildTrack widens it to the main road's width (a def's own widens have no `mouth`). */
+interface MouthWiden extends Widen { mouth: true }
+
+function isMouth(w: Widen): boolean {
+  return (w as Partial<MouthWiden>).mouth === true;
+}
+
+/** buildTrack's branches, once the main road is built: their roads, the gores' noses in both roads' buckets, the cells, mouthAt. */
+function buildBranches(main: Track, defs: readonly Branch[]): void {
+  let base = main.pts.length;
+  for (const bd of defs) {
+    const b = buildBranch(main, bd, main.branches.length + 1, base);
+    main.branches.push(b);
+    base += segCount(b.road);
+  }
+  for (const b of main.branches) {
+    for (const g of [b.forkGore, b.mergeGore]) {
+      if (g === null) continue;
+      addNose(main, g.noseMain);
+      addNose(b.road, g.noseBranch);
+    }
+    // The branch's cells after the main road's (the snapshot's order: shipped indices never move).
+    for (const c of b.road.cells) main.cells.push({ ...c, seg: b.base + c.seg, road: b.road.roadNo });
+  }
+  main.mouthAt = buildMouthAt(main);
+}
+
+/** Where a mouth's walk from the fork (or back from the merge) first finds the centrelines 2 * the mouth's wall apart. */
+interface GoreAt { u: number; s: number; x: number; y: number; angle: number; seg: number; lat: number }
+
+/**
+ * Walk the branch's samples from `from` in direction `dir` (+1 from the fork, -1 back from the merge),
+ * each one's projection onto the main road (a search round the last one's segment, as a car's), up to
+ * the first sample 2 * main.wall from the main centreline: the gore lies between it and the one before
+ * (the distance taken linear in between). proj[j]: the main s of sample j (NaN where not walked).
+ */
+function mouthWalk(main: Track, pts: readonly Vec[], cum: readonly number[], from: number, dir: number, hint: number): { proj: number[]; gore: GoreAt | null } {
+  const proj: number[] = pts.map(() => NaN);
+  const two = 2 * main.wall;
+  let prev = -1, prevD = 0;
+  for (let j = from; j >= 0 && j < pts.length; j += dir) {
+    const q = queryTrackNear(main, pts[j].x, pts[j].y, hint);
+    hint = q.seg;
+    proj[j] = q.s;
+    if (q.dist >= two && prev >= 0) {
+      const t = (two - prevD) / (q.dist - prevD || 1);
+      const u = cum[prev] + (cum[j] - cum[prev]) * t;
+      const x = pts[prev].x + (pts[j].x - pts[prev].x) * t, y = pts[prev].y + (pts[j].y - pts[prev].y) * t;
+      const g = queryTrackNear(main, x, y, hint);
+      const lo = Math.min(prev, j);
+      const bh = Math.atan2(pts[lo + 1].y - pts[lo].y, pts[lo + 1].x - pts[lo].x);
+      const md = segDir(main, g.seg);
+      const dh = bh - Math.atan2(md.y, md.x);
+      // The nose: half-way from the main centreline to the branch's.
+      return {
+        proj,
+        gore: { u, s: g.s, x: x - (g.nx * g.dist) / 2, y: y - (g.ny * g.dist) / 2, angle: Math.abs(Math.atan2(Math.sin(dh), Math.cos(dh))), seg: g.seg, lat: (g.side * g.dist) / 2 },
+      };
+    }
+    prev = j;
+    prevD = q.dist;
+  }
+  return { proj, gore: null };
+}
+
+/** One branch's open road, its gores and mapS (buildBranches). */
+function buildBranch(main: Track, bd: Branch, roadNo: number, base: number): PlacedBranch {
+  const g0 = pointAt(main, bd.s0 - BRANCH_GUIDE), f = pointAt(main, bd.s0), m = pointAt(main, bd.s1), g1 = pointAt(main, bd.s1 + BRANCH_GUIDE);
+  // The open Catmull-Rom curve through main(s0 - BRANCH_GUIDE), main(s0), the control points, main(s1),
+  // main(s1 + BRANCH_GUIDE), from main(s0) to main(s1) (its first and last points exactly those).
+  const c: [number, number][] = [[g0.x, g0.y], [f.x, f.y], ...bd.control, [m.x, m.y], [g1.x, g1.y]];
+  const pts: Vec[] = [];
+  for (let i = 1; i + 2 < c.length; i++) {
+    const p0 = c[i - 1], p1 = c[i], p2 = c[i + 1], p3 = c[i + 2];
+    for (let k = 0; k < SAMPLES_PER_SEGMENT; k++) {
+      const t = k / SAMPLES_PER_SEGMENT;
+      pts.push({ x: catmull(p0[0], p1[0], p2[0], p3[0], t), y: catmull(p0[1], p1[1], p2[1], p3[1], t) });
+    }
+  }
+  pts.push({ x: m.x, y: m.y });
+  const cum: number[] = [0];
+  for (let i = 1; i < pts.length; i++) cum.push(cum[i - 1] + Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y));
+  const length = cum[pts.length - 1];
+  const fw = mouthWalk(main, pts, cum, 0, 1, f.seg), mw = mouthWalk(main, pts, cum, pts.length - 1, -1, m.seg);
+  const fg = fw.gore, mg = mw.gore;
+  // mapS: the projection inside each mouth, linear between the gores (fork and merge exactly s0 and s1).
+  const u0 = fg ? fg.u : 0, sA = fg ? fg.s : bd.s0, u1 = mg ? mg.u : length, sB = mg ? mg.s : bd.s1;
+  const mapS = cum.map((u, j) => {
+    if (j === 0) return bd.s0;
+    if (j === pts.length - 1) return bd.s1;
+    if (fg && u <= fg.u) return fw.proj[j];
+    if (mg && u >= mg.u) return mw.proj[j];
+    return sA + ((u - u0) * (sB - sA)) / (u1 - u0 || 1);
+  });
+  // The mouths (PLAN-BRANCH 2.3): the main road's half-width on both sides from the fork to the gore,
+  // then the branch's own over WIDEN_TAPER (and back before the merge): widens of the branch's road, so
+  // halfOf / wallOf read its per-sample walls (advisor change 2: a road without widens reads the constants).
+  const e = main.def.halfWidth - bd.halfWidth;
+  const mouths: MouthWiden[] = fg && mg
+    ? [
+        { k: "widen", s0: -WIDEN_TAPER, s1: fg.u + WIDEN_TAPER, left: e, right: e, mouth: true },
+        { k: "widen", s0: mg.u - WIDEN_TAPER, s1: length + WIDEN_TAPER, left: e, right: e, mouth: true },
+      ]
+    : [{ k: "widen", s0: -WIDEN_TAPER, s1: length + WIDEN_TAPER, left: e, right: e, mouth: true }]; // the corridors never part (validateTrack says so)
+  const def: TrackDef = {
+    id: `${main.def.id}/branch-${roadNo}`, name: `${main.def.name} shortcut ${roadNo}`, control: bd.control, halfWidth: bd.halfWidth, verge: main.def.verge,
+    features: bd.features, recovery: bd.recovery,
+  };
+  const road = newRoad(def, pts, cum, length, roadNo);
+  placeFeatures(road, bd.features ?? [], bd.recovery ?? [], mouths);
+  const gore = (g: GoreAt | null): PlacedGore | null => {
+    if (g === null) return null;
+    const qb = queryTrackNear(road, g.x, g.y, pointAt(road, g.u).seg);
+    return {
+      u: g.u, s: g.s, x: g.x, y: g.y, angle: g.angle,
+      noseMain: { k: "tyres", s: g.s, lat: g.lat, r: GORE_NOSE_R, x: g.x, y: g.y, seg: g.seg },
+      noseBranch: { k: "tyres", s: qb.s, lat: qb.lat, r: GORE_NOSE_R, x: g.x, y: g.y, seg: qb.seg },
+    };
+  };
+  return { road, base, s0: bd.s0, s1: bd.s1, side: bd.side, forkGore: gore(fg), mergeGore: gore(mg), mapS };
+}
+
+/** A gore's nose into a road's tyre buckets: every segment whose corridor piece comes within its radius + TYRES_BUCKET_REACH (as buildBuckets' mounds). */
+function addNose(track: Track, nose: PlacedTyres): void {
+  const at = track.tyresAt as PlacedTyres[][];
+  const np = track.pts.length;
+  for (let i = 0; i < segCount(track); i++) {
+    const a = track.cum[i], b = track.cum[i + 1];
+    if (alongGap(track, Math.abs(nose.s - (a + b) / 2)) > 4 * (track.wall + nose.r + TYRES_BUCKET_REACH)) continue; // another section
+    const j = (i + 1) % np, p = track.pts[i], q = track.pts[j];
+    const ni = vertexNormal(track, i), nj = vertexNormal(track, j);
+    const quad: Vec[] = [
+      { x: p.x + ni.x * track.wallR[i], y: p.y + ni.y * track.wallR[i] },
+      { x: q.x + nj.x * track.wallR[j], y: q.y + nj.y * track.wallR[j] },
+      { x: q.x - nj.x * track.wallL[j], y: q.y - nj.y * track.wallL[j] },
+      { x: p.x - ni.x * track.wallL[i], y: p.y - ni.y * track.wallL[i] },
+    ];
+    if (quadDist(quad, nose.x, nose.y) > nose.r + TYRES_BUCKET_REACH) continue;
+    at[i] = at[i].length > 0 ? [...at[i], nose] : [nose];
+  }
+}
+
+/**
+ * A mouth's search windows (mouthAt): for one end of a branch, the main segments i0..i1 (not wrapped:
+ * may run below 0 or past n - 1) and the branch's segments j0..j1 that overlap the mouth, each widened
+ * by LOCAL_WINDOW (the branch's clamped to its own).
+ */
+interface MouthZone { branch: number; end: string; i0: number; i1: number; j0: number; j1: number }
+
+function mouthZones(main: Track): MouthZone[] {
+  const out: MouthZone[] = [];
+  const n = main.pts.length, W = LOCAL_WINDOW;
+  main.branches.forEach((b, k) => {
+    const r = b.road, m = segCount(r);
+    const fg = b.forkGore, mg = b.mergeGore;
+    const ends: [string, number, number, number, number][] = fg && mg
+      ? [["fork", b.s0, fg.s, 0, fg.u], ["merge", mg.s, b.s1, mg.u, r.length]]
+      : [["fork and merge", b.s0, b.s1, 0, r.length]];
+    for (const [end, lo, hi, u0, u1] of ends) {
+      let i0 = -1, i1 = -1, j0 = -1, j1 = -1;
+      for (let i = 0; i < n; i++) {
+        if (main.cum[i] < hi && main.cum[i + 1] > lo) {
+          if (i0 < 0) i0 = i;
+          i1 = i;
+        }
+      }
+      for (let j = 0; j < m; j++) {
+        if (r.cum[j] < u1 && r.cum[j + 1] > u0) {
+          if (j0 < 0) j0 = j;
+          j1 = j;
+        }
+      }
+      if (i0 < 0 || j0 < 0) continue;
+      out.push({ branch: k, end, i0: i0 - W, i1: i1 + W, j0: Math.max(0, j0 - W), j1: Math.min(m - 1, j1 + W) });
+    }
+  });
+  return out;
+}
+
+/** The branch segment whose mapS range holds main s (the last sample at or before it), clamped to the branch's segments. */
+function branchSegAt(b: PlacedBranch, s: number): number {
+  const ms = b.mapS;
+  let lo = 0, hi = ms.length - 2;
+  if (!(s >= ms[0])) return 0;
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1;
+    if (ms[mid] <= s) lo = mid;
+    else hi = mid - 1;
+  }
+  return lo;
+}
+
+/** Track.mouthAt (PLAN-BRANCH 2.2): per global segment the other road's segment to search too, or -1. */
+function buildMouthAt(main: Track): number[] {
+  const n = main.pts.length;
+  let total = n;
+  for (const b of main.branches) total += segCount(b.road);
+  const out: number[] = new Array<number>(total).fill(-1);
+  for (const z of mouthZones(main)) {
+    const b = main.branches[z.branch];
+    for (let i = z.i0; i <= z.i1; i++) {
+      const k = ((i % n) + n) % n;
+      out[k] = b.base + branchSegAt(b, (main.cum[k] + main.cum[k + 1]) / 2);
+    }
+    for (let j = z.j0; j <= z.j1; j++) out[b.base + j] = pointAt(main, b.mapS[j]).seg;
+  }
+  return out;
+}
+
+/** The road numbered `road` (0 = the main road, b + 1 = branch b's road). */
+export function roadOf(track: Track, road: number): Track {
+  return road === 0 ? track : track.branches[road - 1].road;
+}
+
+/** The road a global segment g is on (0 for the main road's 0..n-1). */
+export function roadOfSeg(track: Track, g: number): number {
+  if (g < track.pts.length) return 0;
+  const bs = track.branches;
+  for (let k = bs.length - 1; k >= 0; k--) if (g >= bs[k].base) return k + 1;
+  return 0;
+}
+
+/** A global segment's index on its own road. */
+export function localSeg(track: Track, g: number): number {
+  const r = roadOfSeg(track, g);
+  return r === 0 ? g : g - track.branches[r - 1].base;
+}
+
+/** A query's segment as a global one (the seg hint CarState stores). */
+export function globalSeg(track: Track, q: TrackQuery): number {
+  return q.road === 0 ? q.seg : track.branches[q.road - 1].base + q.seg;
+}
+
+/**
+ * The main s of a query (PLAN-BRANCH 2.4): q.s on the main road; on a branch its mapS, interpolated
+ * along the query's segment. Race progress takes this (BR-PHYS wires it).
+ */
+export function mainS(track: Track, q: TrackQuery): number {
+  if (q.road === 0) return q.s;
+  const b = track.branches[q.road - 1], r = b.road, i = q.seg;
+  const c0 = r.cum[i], len = r.cum[i + 1] - c0;
+  const t = !(len > 0) ? 0 : q.s <= c0 ? 0 : q.s >= c0 + len ? 1 : (q.s - c0) / len;
+  return b.mapS[i] + (b.mapS[i + 1] - b.mapS[i]) * t;
+}
+
+/**
+ * Where a fall at s on road `road` recovers (advisor change 3, user decision 6): on the main road its
+ * recovery point at or before s (recoveryAt); on a branch the branch's last recovery point at or before
+ * u, and when there is none, the main road's recovery point at or before the fork (s0).
+ */
+export function recoveryFor(track: Track, road: number, s: number): { road: number; s: number } {
+  if (road === 0) return { road: 0, s: recoveryAt(track, s) };
+  const b = track.branches[road - 1];
+  const r = recoveryAt(b.road, s);
+  return r >= 0 ? { road, s: r } : { road: 0, s: recoveryAt(track, b.s0) };
+}
+
+/**
+ * The nearest road and its query at (x, y) (PLAN-BRANCH 2.2, 2.7), the rule physics and the bake share:
+ * the nearer centreline, on a tie the lower road. Without a hint: every road, whole (the bake's nearest
+ * piece; queryTrack on a track without branches). With a global segment hint: the hint's road round it
+ * (LOCAL_WINDOW either side, clamped on a branch) and, where that window touches a mouth (mouthAt), the
+ * other road round its segment too; on a tie the hint's road. Without branches that is
+ * queryTrackNear(track, x, y, hint) exactly.
+ */
+export function queryRoads(track: Track, x: number, y: number, hint = -1): TrackQuery {
+  const bs = track.branches;
+  if (hint < 0) {
+    let best = queryTrack(track, x, y);
+    for (const b of bs) {
+      const q = queryTrack(b.road, x, y);
+      if (q.dist < best.dist) best = q;
+    }
+    return best;
+  }
+  if (bs.length === 0) return queryTrackNear(track, x, y, hint);
+  const r = roadOfSeg(track, hint);
+  let q = queryTrackNear(roadOf(track, r), x, y, r === 0 ? hint : hint - bs[r - 1].base);
+  const other = track.mouthAt[hint];
+  if (other !== undefined && other >= 0) {
+    const r2 = roadOfSeg(track, other);
+    const q2 = queryTrackNear(roadOf(track, r2), x, y, r2 === 0 ? other : other - bs[r2 - 1].base);
+    if (q2.dist < q.dist) q = q2;
+  }
+  return q;
+}
+
+/** Advisor change 7: a main-road feature lo..hi in a mouth or within MOUTH_CLEAR past its gore (validateTrack's zone). */
+function mouthZone(main: Track, errors: string[], what: string, lo: number, hi: number): void {
+  const f1 = (v: number) => v.toFixed(1);
+  main.branches.forEach((b, k) => {
+    const fg = b.forkGore, mg = b.mergeGore;
+    const ranges: [number, number][] = fg && mg ? [[b.s0, fg.s + MOUTH_CLEAR], [mg.s - MOUTH_CLEAR, b.s1]] : [[b.s0, b.s1]];
+    for (const [r0, r1] of ranges) {
+      if (lo < r1 && hi > r0) {
+        errors.push(`${what}: in a mouth of branch ${k + 1} or within ${MOUTH_CLEAR} of its gore (main s ${f1(r0)}..${f1(r1)}: no main-road feature there)`);
+        return;
+      }
+    }
+  });
+}
+
+/**
+ * The branches' checks (PLAN-BRANCH 2.8, advisor changes 1 and 7; validateTrack runs them when there are
+ * branches). Per branch: its side is -1 or +1, s0 < s1 and both off the start zone; halfWidth >=
+ * BRANCH_HALF_MIN; it is shorter than the main road from s0 to s1 (strictly); its corridor parts from
+ * the main road's at both ends (a gore each); the centrelines meet at <= GORE_ANGLE_MAX at each gore,
+ * and each mouth is <= MOUTH_LEN_MAX along either road; mapS strictly increasing; its features keep
+ * MOUTH_CLEAR past its gores and pass the road checks (validateRoad); its recovery points lie between
+ * its gores, one before its first hazard (a ramp, a gap, a hole or a truck); the gores' noses keep
+ * SOLID_CLEAR from every recovery point; mouths never share a search window (mouthAt has one answer);
+ * and the corridors of different roads (branchSeparation) overlap only in mouths or where one is a gap,
+ * keep >= the walls' difference apart past every gore and >= BRANCH_SEP apart outside the gores' noses.
+ */
+function validateBranches(main: Track, errors: string[]): void {
+  const f1 = (v: number) => v.toFixed(1);
+  const L = main.length;
+  const straight = startStraightEnd(main);
+  main.branches.forEach((b, k) => {
+    const at = `branch ${k + 1} (main ${f1(b.s0)}..${f1(b.s1)})`;
+    const r = b.road;
+    if (!(b.side === -1 || b.side === 1)) errors.push(`${at}: side ${b.side} is not -1 (left) or +1 (right)`);
+    if (!(b.s1 > b.s0)) errors.push(`${at}: s1 must be > s0`);
+    if (!(b.s0 >= straight && b.s1 <= L - GRID_ZONE)) errors.push(`${at}: its fork or merge is in the start zone or off the lap (they lie in ${f1(straight)}..${f1(L - GRID_ZONE)})`);
+    if (!(r.def.halfWidth >= BRANCH_HALF_MIN)) errors.push(`${at}: half-width ${r.def.halfWidth} is narrower than ${BRANCH_HALF_MIN} (a branch is >= ${2 * BRANCH_HALF_MIN} wide)`);
+    if (!(r.length < b.s1 - b.s0)) errors.push(`${at}: ${f1(r.length)} long, not shorter than the main road's ${f1(b.s1 - b.s0)} from its fork to its merge (a shortcut is shorter)`);
+    const fg = b.forkGore, mg = b.mergeGore;
+    if (fg === null || mg === null) {
+      errors.push(`${at}: its corridor never parts from the main road's ${fg === null ? "past its fork" : "before its merge"} (no point of its centreline is ${f1(2 * main.wall)} from the main centreline there)`);
+      return;
+    }
+    if (!(fg.u < mg.u && fg.s < mg.s)) errors.push(`${at}: its gores are out of order (fork gore u=${f1(fg.u)} s=${f1(fg.s)}, merge gore u=${f1(mg.u)} s=${f1(mg.s)})`);
+    for (const [g, name] of [[fg, "fork"], [mg, "merge"]] as const) {
+      if (Math.sign(g.noseMain.lat) !== b.side) errors.push(`${at}: it leaves the main road on its ${g.noseMain.lat < 0 ? "left" : "right"} at its ${name}, not on side ${b.side}`);
+      const deg = (g.angle * 180) / Math.PI;
+      if (!(deg <= GORE_ANGLE_MAX)) errors.push(`${at}: the centrelines meet at ${deg.toFixed(1)} degrees at its ${name} gore (u=${f1(g.u)}), more than ${GORE_ANGLE_MAX}`);
+    }
+    const forkLen = Math.max(fg.u, fg.s - b.s0), mergeLen = Math.max(r.length - mg.u, b.s1 - mg.s);
+    if (!(forkLen <= MOUTH_LEN_MAX)) errors.push(`${at}: its fork mouth is ${f1(forkLen)} long (fork to gore, the longer road), more than ${MOUTH_LEN_MAX}`);
+    if (!(mergeLen <= MOUTH_LEN_MAX)) errors.push(`${at}: its merge mouth is ${f1(mergeLen)} long (gore to merge, the longer road), more than ${MOUTH_LEN_MAX}`);
+    for (let i = 1; i < b.mapS.length; i++) {
+      if (!(b.mapS[i] > b.mapS[i - 1])) {
+        errors.push(`${at}: mapS is not strictly increasing at branch sample ${i} (u=${f1(r.cum[i])}: ${f1(b.mapS[i - 1])} then ${f1(b.mapS[i])})`);
+        break;
+      }
+    }
+    // Its features in u, MOUTH_CLEAR past its gores, and the road's own checks.
+    const lo = fg.u + MOUTH_CLEAR, hi = mg.u - MOUTH_CLEAR;
+    if (!(hi > lo)) errors.push(`${at}: ${f1(mg.u - fg.u)} between its gores, not longer than ${2 * MOUTH_CLEAR} (MOUTH_CLEAR of plain road past each)`);
+    const own: string[] = [];
+    validateRoad(r, own, (what, a, z) => {
+      if (!(a >= lo && z <= hi && a <= z)) own.push(`${what}: outside u ${f1(lo)}..${f1(hi)} (a branch's features keep ${MOUTH_CLEAR} past its gores at u ${f1(fg.u)} and ${f1(mg.u)})`);
+    });
+    for (const e of own) errors.push(`${at}: ${e}`);
+    for (const rp of r.recovery) {
+      if (!(rp >= fg.u && rp <= mg.u)) errors.push(`${at}: recovery point u=${f1(rp)} is in a mouth (a branch's recovery points lie between its gores, u ${f1(fg.u)}..${f1(mg.u)})`);
+    }
+    const first = Math.min(Infinity, ...r.ramps.map((x) => x.s), ...r.gaps.map((x) => x.s0), ...r.holes.map((x) => x.s - x.r), ...r.trucks.map((x) => x.s));
+    if (first < Infinity && !r.recovery.some((rp) => rp < first)) {
+      errors.push(`${at}: no recovery point before its first hazard at u=${f1(first)} (validation keeps one there; a fall before it goes back to the main road before the fork)`);
+    }
+    for (const [g, name] of [[fg, "fork"], [mg, "merge"]] as const) {
+      for (const [road, label] of [[main, "main s"], [r, "branch u"]] as const) {
+        for (const rp of road.recovery) {
+          const p = pointAt(road, rp);
+          const d = Math.hypot(p.x - g.x, p.y - g.y) - GORE_NOSE_R;
+          if (d < SOLID_CLEAR) errors.push(`${at}: the nose of its ${name} gore is ${f1(Math.max(0, d))} from the recovery point at ${label}=${f1(rp)} (solids keep >= ${SOLID_CLEAR})`);
+        }
+      }
+    }
+  });
+  // Mouths never share a search window: mouthAt has one answer per segment.
+  const zones = mouthZones(main), n = main.pts.length;
+  const name = (z: MouthZone) => `the ${z.end} of branch ${z.branch + 1}`;
+  for (let i = 0; i < zones.length; i++) {
+    for (let j = i + 1; j < zones.length; j++) {
+      const a = zones[i], c = zones[j];
+      const mainMeet = [-n, 0, n].some((w) => a.i0 <= c.i1 + w && c.i0 + w <= a.i1);
+      const branchMeet = a.branch === c.branch && a.j0 <= c.j1 && c.j0 <= a.j1;
+      if (mainMeet || branchMeet) errors.push(`${name(a)} and ${name(c)} are within ${LOCAL_WINDOW} segments of each other on the ${mainMeet ? "main road" : "branch"} (two mouths never share a search window)`);
+    }
+  }
+  branchSeparation(main, errors);
+}
+
+/**
+ * The corridors of different roads (PLAN-BRANCH 2.8, advisor change 1). At every sample of each road,
+ * against the nearest point of every other road's centreline (the closest approach of two polylines is
+ * at a vertex of one of them): the gap between the corridors there, the distance less the two facing
+ * walls, is
+ * - free inside a mouth (a branch sample before its gore with the main road's fork section, and the main
+ *   road's samples whose nearest branch point is there: the corridors overlap, with equal walls);
+ * - at least the walls' difference |wA - wB| past every gore (else the nearer road's wall, which physics
+ *   and the bake use, cuts into the other's corridor: advisor change 1), and never an overlap;
+ * - and at least BRANCH_SEP outside the gores' noses (from a gore to the first sample past it whose gap
+ *   is BRANCH_SEP).
+ * Where either point is over a gap (one road jumps the other) nothing is required.
+ */
+function branchSeparation(main: Track, errors: string[]): void {
+  const f1 = (v: number) => v.toFixed(1);
+  const roads = [main, ...main.branches.map((b) => b.road)];
+  const label = (k: number) => (k === 0 ? "the main road" : `branch ${k}`);
+  const coord = (k: number) => (k === 0 ? "s" : "u");
+  const same = SAME_SECTION * main.wall;
+  /** The gap between the corridors of road a at its sample i and road b at its nearest point. */
+  const gapAt_ = (ra: Track, i: number, rb: Track) => {
+    const p = ra.pts[i];
+    const q = queryTrack(rb, p.x, p.y);
+    const qx = p.x - q.nx * q.dist, qy = p.y - q.ny * q.dist;
+    const d = segDir(ra, i);
+    const wA = d.x * (qy - p.y) - d.y * (qx - p.x) < 0 ? ra.wallL[i] : ra.wallR[i];
+    const wB = halfOn(rb, q.seg, q.s, q.side) + rb.def.verge;
+    return { q, gap: q.dist - wA - wB, dw: Math.abs(wA - wB) };
+  };
+  // The gores' noses: from each gore to the first branch sample past it BRANCH_SEP clear of the main road.
+  const open = main.branches.map((b) => {
+    const r = b.road, fg = b.forkGore, mg = b.mergeGore;
+    let fork = Infinity, merge = -Infinity;
+    if (fg && mg) {
+      for (let i = 0; i < r.pts.length; i++) if (r.cum[i] > fg.u && gapAt_(r, i, main).gap >= BRANCH_SEP) { fork = r.cum[i]; break; }
+      for (let i = r.pts.length - 1; i >= 0; i--) if (r.cum[i] < mg.u && gapAt_(r, i, main).gap >= BRANCH_SEP) { merge = r.cum[i]; break; }
+    }
+    return { fork, merge };
+  });
+  /** 1: inside a mouth (free); 2: in a gore's nose (the walls' difference only); 0: elsewhere. */
+  const zoneOf = (k: number, u: number, s: number): number => {
+    const b = main.branches[k - 1], fg = b.forkGore, mg = b.mergeGore, o = open[k - 1];
+    if (fg === null || mg === null) return 1; // reported already: its corridor never parts
+    if (s >= b.s0 - same && s <= fg.s + same) {
+      if (u <= fg.u) return 1;
+      if (u <= o.fork) return 2;
+    }
+    if (s >= mg.s - same && s <= b.s1 + same) {
+      if (u >= mg.u) return 1;
+      if (u >= o.merge) return 2;
+    }
+    return 0;
+  };
+  const shown = new Set<string>();
+  for (let a = 0; a < roads.length; a++) {
+    for (let c = 0; c < roads.length; c++) {
+      if (a === c) continue;
+      const ra = roads[a], rc = roads[c];
+      for (let i = 0; i < ra.pts.length; i++) {
+        const sa = ra.cum[i];
+        const { q, gap, dw } = gapAt_(ra, i, rc);
+        if (gap >= BRANCH_SEP && gap >= dw) continue;
+        if (gapAt(ra, sa) || gapAt(rc, q.s)) continue; // one road jumps the other
+        const zone = a === 0 ? zoneOf(c, q.s, sa) : c === 0 ? zoneOf(a, sa, q.s) : 0;
+        if (zone === 1) continue;
+        const kind = gap < 0 ? "overlap" : gap < dw ? "walls" : zone === 2 ? "" : "near";
+        if (kind === "") continue;
+        const key = `${Math.min(a, c)}|${Math.max(a, c)}|${kind}`;
+        if (shown.has(key)) continue;
+        shown.add(key);
+        const where = `${label(a)} at ${coord(a)}=${f1(sa)} and ${label(c)} at ${coord(c)}=${f1(q.s)}`;
+        if (kind === "overlap") errors.push(`${where}: their corridors overlap (by ${f1(-gap)}) outside a mouth (roads overlap only in a mouth, or where one is a gap)`);
+        else if (kind === "walls") errors.push(`${where}: past a gore their corridors are ${f1(gap)} apart, less than the walls' difference ${f1(dw)} (the nearer road's wall would cut into the other's corridor)`);
+        else errors.push(`${where}: their corridors are ${f1(gap)} apart, less than ${BRANCH_SEP} (outside the mouths and the gores' noses)`);
+      }
+    }
+  }
+  for (const [k, o] of open.entries()) {
+    const b = main.branches[k];
+    if (b.forkGore && b.mergeGore && !(o.fork < Infinity && o.merge > -Infinity)) {
+      errors.push(`branch ${k + 1} (main ${f1(b.s0)}..${f1(b.s1)}): its corridor never gets ${BRANCH_SEP} clear of the main road's`);
     }
   }
 }
