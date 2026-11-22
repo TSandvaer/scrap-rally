@@ -13462,6 +13462,8 @@ import { unionProbe as brUnion } from "../tools/debug/branch-yard";
 const brClock = { t0: 0 };
 const brYard = () => testTrack(BRANCH_YARD.id)!;
 const brShippedIds = ["rust-bowl", "crusher-run", "overpass-knot", "slag-harbour", "breakers-mile"]; // M4-TRACKS added the last two
+/** BR-TRACKS: the shipped tracks without a shortcut (Rust Bowl, Crusher Run, Overpass Knot; Slag Harbour and Breaker's Mile have one each). */
+const brPlainShippedIds = brShippedIds.filter((id) => trackById(id).branches.length === 0);
 /** Branch Yard's three branches as declared: the dirt cut, the jump cut, the narrow cut. */
 const brDefs = () => BRANCH_YARD.features!.filter((f): f is brT.Branch => f.k === "branch");
 /** Branch Yard's loop with these branches and main-road features (and its own recovery points, or these). */
@@ -13473,10 +13475,10 @@ const brF = (v: number) => v.toFixed(1);
 function brTypes(): void {
   brClock.t0 = performance.now();
   // Criterion 1: the types. Every track without a branch: none, no mouthAt, road 0 (shipped and test tracks).
-  const plain = [...brShippedIds.map((id) => trackById(id)), ...TEST_TRACKS.filter((d) => d.id !== BRANCH_YARD.id).map((d) => testTrack(d.id)!)];
+  const plain = [...brPlainShippedIds.map((id) => trackById(id)), ...TEST_TRACKS.filter((d) => d.id !== BRANCH_YARD.id).map((d) => testTrack(d.id)!)];
   const plainErrs = plain.flatMap((t) => validateTrack(t).map((e) => `${t.def.id}: ${e}`));
   check(
-    "branch types: every track without a branch (the five shipped ones, Slag Harbour and Breaker's Mile included, and the other test tracks) has branches [], mouthAt [] and roadNo 0, its queries road 0, and validateTrack (with the branch checks) accepts it",
+    "branch types: every track without a branch (the shipped tracks without a shortcut: Rust Bowl, Crusher Run, Overpass Knot; and the other test tracks) has branches [], mouthAt [] and roadNo 0, its queries road 0, and validateTrack (with the branch checks) accepts it",
     plain.every((t) => t.branches.length === 0 && t.mouthAt.length === 0 && t.roadNo === 0 && queryTrack(t, t.pts[5].x + 3, t.pts[5].y).road === 0) &&
       plainErrs.length === 0 && brShippedIds.every((id) => trackList().some((e) => e.id === id)),
     `${plain.map((t) => t.def.id).join(", ")}${plainErrs.length ? `; ${plainErrs.join(" | ")}` : ""}`,
@@ -13637,7 +13639,7 @@ function brMaps(): void {
   );
   // queryRoads without branches is today's query exactly.
   let same = 0, differ = 0;
-  for (const id of brShippedIds) {
+  for (const id of brPlainShippedIds) {
     const s = trackById(id);
     for (let i = 0; i < s.pts.length; i += 3) {
       const x = s.pts[i].x + 37.3, y = s.pts[i].y - 21.1;
@@ -13647,7 +13649,7 @@ function brMaps(): void {
       else differ++;
     }
   }
-  check("branch queryRoads: on a track without branches it is queryTrackNear (with a hint) and queryTrack (without) exactly", differ === 0 && same > 0, `${same} points the same, ${differ} differ`);
+  check("branch queryRoads: on a track without branches (the shipped tracks without a shortcut: Rust Bowl, Crusher Run, Overpass Knot) it is queryTrackNear (with a hint) and queryTrack (without) exactly", differ === 0 && same > 0, `${same} points the same, ${differ} differ`);
   // On Branch Yard: without a hint the nearer road; with a hint on either road near a mouth (the branch's
   // segment, or the main road's beside it) the same road and distance: physics and the bake agree.
   let pts = 0, agree = 0, nearest = 0;
@@ -15015,7 +15017,7 @@ function bpQuery(): void {
   // Without branches queryTrackNear is the window round the hint, as before (byte for byte: schema-hash, bpShipped);
   // queryMain (the bots' main-road query) is the same there.
   let same = 0, differ = 0;
-  for (const id of brShippedIds) {
+  for (const id of brPlainShippedIds) {
     const s = trackById(id);
     for (let i = 0; i < s.pts.length; i += 2) {
       for (const [dx, dy] of [[31.7, -12.2], [-90.1, 44.3], [3.3, 170.9]]) {
@@ -15028,7 +15030,7 @@ function bpQuery(): void {
       }
     }
   }
-  check("branch query: on the shipped tracks queryTrackNear and queryMain give the same query (road 0) at every probe", differ === 0 && same > 1000, `${same} same, ${differ} differ`);
+  check("branch query: on the shipped tracks without a shortcut (Rust Bowl, Crusher Run, Overpass Knot) queryTrackNear and queryMain give the same query (road 0) at every probe", differ === 0 && same > 1000, `${same} same, ${differ} differ`);
   // On Branch Yard: the hint's road, its window clamped on a branch; the other road in a mouth; a tie to the
   // hint's road; queryRoads with a hint is queryTrackNear exactly.
   const b = t.branches[1], r = b.road, m = bpT.segCount(r), fg = b.forkGore!;
@@ -15928,9 +15930,9 @@ function bbRing(): void {
   // The ring of a track without branches is a replica: its arrays the track's, and a bot driving on it drives as on the track.
   const rows: string[] = [];
   let allSame = true;
-  const ids = [...brShippedIds, ...BB_TEST_TRACKS.map((d) => d.id).filter((id) => bbTestTrack(id)!.branches.length === 0)];
+  const ids = [...brPlainShippedIds, ...BB_TEST_TRACKS.map((d) => d.id).filter((id) => bbTestTrack(id)!.branches.length === 0)];
   for (const id of ids) {
-    const tr = brShippedIds.includes(id) ? bbTrackById(id) : bbTestTrack(id)!;
+    const tr = brPlainShippedIds.includes(id) ? bbTrackById(id) : bbTestTrack(id)!;
     const ring = bbD.routeOf(tr, 0).ring;
     const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
     const arrays = same(ring.pts, tr.pts) && same(ring.cum, tr.cum) && same(ring.halfL, tr.halfL) && same(ring.halfR, tr.halfR) && same(ring.wallL, tr.wallL) && same(ring.wallR, tr.wallR) &&
@@ -15957,7 +15959,7 @@ function bbRing(): void {
     rows.push(`${id} ${arrays ? "arrays same" : "ARRAYS DIFFER"}, ${drv ? "drives the same" : "DRIVES DIFFERENTLY"}`);
   }
   check(
-    "branch bots ring: on every shipped track and every test track without branches the ring of route 0 is a replica (centreline, walls, every feature list and the look-ahead start indices the bots read, by track.ts' rules) and a Hard bot with mistakes on drives on it tick for tick as on the track (60 s)",
+    "branch bots ring: on every shipped track without a shortcut (Rust Bowl, Crusher Run, Overpass Knot) and every test track without branches the ring of route 0 is a replica (centreline, walls, every feature list and the look-ahead start indices the bots read, by track.ts' rules) and a Hard bot with mistakes on drives on it tick for tick as on the track (60 s)",
     allSame && rows.length >= 9,
     rows.join("; "),
   );
@@ -16198,7 +16200,7 @@ function bbShipped(): void {
   // Criterion 3: on the shipped tracks (no branches) no route is ever made: the bots' plan stays unset through a race
   // (botControls takes today's path; byte-identity: hard golden, surf shipped, hard2 identity and branch shipped above).
   const plans: string[] = [];
-  for (const id of brShippedIds) {
+  for (const id of brPlainShippedIds) {
     const sim = new Sim(1);
     const host = sim.add("Host");
     if (id !== sim.room.trackId && sim.room.setTrack(host, id)) throw new Error(id);
@@ -16208,8 +16210,8 @@ function bbShipped(): void {
     plans.push(`${id}: ${bots.map((b) => b.bot!.mem.plan).join("/")}`);
   }
   check(
-    "branch bots shipped: on the five shipped tracks the bots never make a route (plan unset after 20 s of racing): botControls drives them on the track itself, today's path",
-    plans.every((p) => p.endsWith(": -1/-1/-1")) && plans.length === 5,
+    "branch bots shipped: on the shipped tracks without a shortcut (Rust Bowl, Crusher Run, Overpass Knot) the bots never make a route (plan unset after 20 s of racing): botControls drives them on the track itself, today's path",
+    plans.every((p) => p.endsWith(": -1/-1/-1")) && plans.length === 3,
     plans.join("; "),
   );
   console.log(`  BR-BOTS sim-test sections' runtime (bbPlan .. bbShipped): ${((performance.now() - bbClock.t0) / 1000).toFixed(1)} s`);
