@@ -171,3 +171,39 @@ make the bake slower; only 32 colours where marks land; bots may struggle on oil
 
 **Out of scope:** weather, day/night, theme music, animated scenery, a theme picker, themed cars/HUD/menus, re-theming the shipped tracks,
 a moving ford current.
+
+## Advisor changes (binding; Fable 5.2 review 2026-11-22: "sound with changes"; override the text above)
+1. **Palette tables per tile (its art), not per race:** `PAL32`/`PAL_OFF` (world.ts:799-808) and `MARKED`/`SHOWN_I`/`SHOWN` (:2527-2548)
+   are module constants; the pool is LRU across tracks (`claim` :2456-2470; `tileAt` matches `t.home === art.tiles`), so "one theme at a
+   time" is false; `sendMarks` repaints any pool tile through the one `SHOWN` (:2856-2862) and client/preview.ts:678 swaps tracks on one
+   page. Arts are keyed `WeakMap<Track, Art>` (:336), so the `&theme=` override keys by track AND theme.
+2. **`SHADE_I`/`LIT_I` are 64 entries per theme** (built from `PALETTE`, 33 entries, world.ts:91-92; the shadow pass `SHADE_I[v & 63] |
+   (v & OFF)` at :1515 would turn any extra colour 33-63 in shadow into 0 = soot0).
+3. **Per-theme SHADE, LIT and burn tones:** fixed colours shade into theme ramps in palette.ts (`bone0: "gravel0"`, `haz0: "dirt1"`, LIT
+   `soot3: "dirt0"`); the burn tones are `DIRT0`/`DIRT1` (world.ts:2535-2536). Gate with `theme-sheet --check`: luminance SHADE <=
+   colour <= LIT and charred < singed <= soot < base.
+4. **Fix 2.2 item 4:** mounds and the truck are baked into tiles (world.ts:41-45, `C_SOLID` :118) and take theme-table colours; only the
+   barrels and the press slab are sheet sprites on the global `fxPalette()` (obstacles.ts:322, sprites.ts:648-653).
+5. **Census fix moved into M4-TRACKS** (orchestrator, 2026-11-22; its criterion 7 runs the census and its two tracks push the HUD to 9
+   minimaps): derive the count from `trackList().length + 1`, update "a minimap for every track"; total <= 16 MB (fx-alloc.ts:252,
+   looks-alloc.ts:248, fx-sheet.ts:260). Removed from TH-LOOK-1.
+6. **Surfaces:** verge - `onRoad` is `q.dist <= halfOf` (physics.ts:194): require theme surfaces inside the asphalt, or define how they
+   stack with `dirtDrag` on the verge. Oil dry lane - `widestDry` blocks water, islands, tyres and trucks only (track.ts:1507-1516): oil
+   counts as blocked, and water as blocked for oil. Ford cue - "aim upstream" needs a baked direction cue (the belt's are animated arrows,
+   obstacles.ts:14; animation is out of scope). Oil vs water - oil is nearly water (turn 0.4 vs `WATER_TURN` 0.5, grip 0.093 vs 0.123):
+   `theme-tune` prints an A/B against water (exit slip angle, speed loss, lateral offset) before the taste gate.
+7. **Sequencing:** the cap of 3 is full (M4-TRACKS, BR-SCHEMA, HARD-2): TH-LOOK-1 takes the first free slot. TH-LOOK-1 gates BR-BAKE, so
+   it merges the machinery (scrapyard 0 px) with a PROVISIONAL desert and the art is judged later (its merge does not wait on the desert
+   taste gate). THEME-SCHEMA builds the lists (`track.sand`, `oil`, `fords`) and their draw rects, because TH-LOOK-2 (wave D) draws them
+   before THEME-SURF (wave E). THEME-SURF also owns testtracks.ts and shares schema-hash.golden.json with BR-TRACKS under the
+   second-to-merge rule. Keep `Renderer(canvas, track)` (render.ts:176) with its two required arguments (main.ts:144, :967).
+8. **`def.theme` before the field exists:** under `strict` `track.def.theme` does not compile; use one cast in one function in
+   client/gfx/theme.ts with an `isTheme` guard (still compiles after THEME-SCHEMA); TH-LOOK-2 swaps to shared/theme.ts.
+9. **Readability:** water stays blue-grey in every theme (the user's 2026-11-21 decision, palette.ts:6-9; tea-brown water beside black mud
+   and a ford = three browns with three physics); voids stay soot-dominant with the fixed rim ("a street below" must not read as
+   drivable); no decoration on tarmac in any theme; extend the numeric check to the six `CAR_COLORS` (palette.ts:195) against each
+   theme's ground, verge and surfaces, plus rivets and cells, at 390x844@3.
+10. **Gating in `validateSchema`'s surfaces block** (track.ts:1581, :1600-1602) via `themeOf(track.def)`; the existing yards are
+   theme-less and unaffected.
+Adopted suggestions: count contiguous sand plus dirt against the 350 rule; `&theme=` in the art key only in the preview.
+Added open question 9: jungle and the ford ship on a yard only until a third new track exists - acceptable? **Recommended: yes.**
