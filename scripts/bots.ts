@@ -2298,8 +2298,8 @@ async function runLong(ctx: Ctx, bots: Bot[]): Promise<void> {
     };
     // Breaker's Mile: drive, then hold in front of the press, then (stall and) go.
     const certain = id === "breakers-mile";
-    const press = t.presses[0];
-    const stopAt = press.s - LONG_PRESS_DEPTH / 2 - 15 - LONG_PRESS_NOSE; // the car's centre (CAR_LENGTH 30)
+    const press = t.presses[0]; // Breaker's Mile's (Slag Harbour has none: certain is false there)
+    const stopAt = certain ? press.s - LONG_PRESS_DEPTH / 2 - 15 - LONG_PRESS_NOSE : 0; // the car's centre (CAR_LENGTH 30)
     let mode: "drive" | "hold" | "go" = "drive", held = 0;
     const hold = (): Controls => {
       // Brake to a stop at stopAt on the predicted car, never reversing; the driver steers (line 0).
