@@ -1287,11 +1287,11 @@ function ground(): void {
 }
 
 /**
- * The desert's ground (G_DUNES), where the scrapyard has ground(): sand. Its tone drifts in
- * large patches as the dirt's specks do, and where that drift crosses a level a dune's crest
- * runs: a light line with a dark one beside it, the light one up-left, where the sun is. Wind
- * ripples lie in fields: short dashes, a light pixel row over a dark one. A pebble of grit now
- * and then, and sand drifted light against the outside of the wall. Half the tile per call.
+ * The desert's ground (G_DUNES), where the scrapyard has ground(): sand. Its specks thin and
+ * thicken in large patches as the dirt's do; a pebble of grit now and then; sand drifted light
+ * against the outside of the wall. Half the tile per call; on it, with the second half, the
+ * dunes' crests and the wind's ripples (sandMarks), which are drawn where they are and cost the
+ * pixels between them nothing.
  */
 function dunes(): void {
   const art = job.art!, b = buffers(), N = noiseTable();
@@ -1303,86 +1303,137 @@ function dunes(): void {
   for (let y = from; y < from + rows; y++) {
     const Y = by + y;
     const ly = Math.floor(Y / CELL), fy = Y / CELL - ly, sy = fy * fy * (3 - 2 * fy);
-    // The lattice as ground() hashes it (seed 11); and the row's share of a ripple's hash, two rows a ripple.
+    // The lattice as ground() hashes it (seed 11); the row's rows of the noise.
     const hy0 = Math.imul(ly, 668265263) ^ Math.imul(11, 1442695041), hy1 = Math.imul(ly + 1, 668265263) ^ Math.imul(11, 1442695041);
-    const hr = Math.imul(Y >> 1, 668265263) ^ Math.imul(29, 1442695041), upper = (Y & 1) === 0;
-    // Per 8 px cell of the row pair, its ripple: how likely (0..255; 46 and over: none), where
-    // the dash begins in the cell and where it ends.
-    let lx = -1e9, a = 0, c = 0, bb = 0, d = 0, rx = -1e9, rOdds = 255, rFrom = 0, rTo = 0;
-    for (let x = 0; x < S; x++) {
-      const p = y * S + x;
-      if (dist[p] <= R) continue; // the road covers it
-      const X = bx + x;
-      const cell = Math.floor(X / CELL);
-      if (cell !== lx) {
-        lx = cell;
-        const hx0 = Math.imul(cell, 374761393), hx1 = Math.imul(cell + 1, 374761393);
-        let h = Math.imul(hx0 ^ hy0 ^ ((hx0 ^ hy0) >>> 13), 1274126177);
-        a = ((h ^ (h >>> 16)) >>> 0) / 4294967296;
-        h = Math.imul(hx1 ^ hy0 ^ ((hx1 ^ hy0) >>> 13), 1274126177);
-        bb = ((h ^ (h >>> 16)) >>> 0) / 4294967296;
-        h = Math.imul(hx0 ^ hy1 ^ ((hx0 ^ hy1) >>> 13), 1274126177);
-        c = ((h ^ (h >>> 16)) >>> 0) / 4294967296;
-        h = Math.imul(hx1 ^ hy1 ^ ((hx1 ^ hy1) >>> 13), 1274126177);
-        d = ((h ^ (h >>> 16)) >>> 0) / 4294967296;
-      }
-      const fx = X / CELL - cell, sx = fx * fx * (3 - 2 * fx);
-      const patch = a + (bb - a) * sx + (c - a) * sy + (a - bb - c + d) * sx * sy;
-      const n = N[((((Y + (o1 >> 8)) & 255) << 8) | ((X + o1) & 255))];
-      let col = DIRT2;
-      // Wind ripples: a dash in some of the 8 px cells of a row pair, more of them where the sand's tone runs high.
-      const rc = X >> 3;
-      if (rc !== rx) {
-        rx = rc;
-        let rh = Math.imul(rc, 374761393) ^ hr;
-        rh = Math.imul(rh ^ (rh >>> 13), 1274126177);
-        rh ^= rh >>> 16;
-        rOdds = rh & 255;
-        rFrom = (rh >> 8) & 3;
-        rTo = rFrom + 3 + ((rh >> 10) & 3);
-      }
-      if (rOdds < 46) {
-        const at = X & 7;
-        if (at >= rFrom && at < rTo && rOdds < (patch > 0.62 ? 46 : patch > 0.5 ? 12 : 3)) col = upper ? DIRT3 : DIRT1;
-      }
-      // A dune's crest: where the drift crosses one of three levels on its way down toward the
-      // lower right, away from the sun. A light edge on the high side, the slip face's shade on
-      // the low one; both thin out to nothing as the slope turns away from that (a crescent's horns).
-      const lvl = patch * 4, f = lvl - (lvl | 0);
-      let crest = false;
-      if ((f < 0.05 || f > 0.86) && lvl > 0.86 && lvl < 3.05) {
-        const g1 = (bb - a) * (1 - sy) + (d - c) * sy, g2 = (c - a) * (1 - sx) + (d - bb) * sx; // the drift's slope, right and down
-        if (g1 + g2 < 0) {
-          const turn = -(g1 + g2) / Math.sqrt(2 * (g1 * g1 + g2 * g2)); // 1 = straight down toward the lower right
-          const share = turn > 0.55 ? (turn - 0.55) / 0.45 : 0;
-          if (f < 0.05 * share) {
-            col = DIRT3;
-            crest = true;
-          } else if (f > 1 - 0.14 * share) {
-            col = DIRT1;
-            crest = true;
-          }
-        }
-      }
-      if (crest) {
-        // A crest is plain: no speck on it.
-      } else if (N[(((((Y >> 1) + (o3 >> 8)) & 255) << 8) | (((X >> 1) + o3) & 255))] < 1) col = GRAVEL0; // a pebble
-      else if (col === DIRT2) {
-        if (n < 5 + 9 * patch) col = DIRT3;
+    const nRow = ((Y + (o1 >> 8)) & 255) << 8, pRow = (((Y >> 1) + (o3 >> 8)) & 255) << 8, mRow = ((Y + (o2 >> 8)) & 255) << 8;
+    // The row a lattice cell at a time: along it the patches' drift runs from pL by dP (times
+    // the cell's smooth step), worked out once; the cell's pixels in a loop of their own.
+    let x = 0;
+    while (x < S) {
+      const cell = Math.floor((bx + x) / CELL), X0 = cell * CELL;
+      let xe = X0 + CELL - bx; // the cell's end, in the buffer's pixels
+      if (xe > S) xe = S;
+      const hx0 = Math.imul(cell, 374761393), hx1 = Math.imul(cell + 1, 374761393);
+      let h = Math.imul(hx0 ^ hy0 ^ ((hx0 ^ hy0) >>> 13), 1274126177);
+      const a = ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+      h = Math.imul(hx1 ^ hy0 ^ ((hx1 ^ hy0) >>> 13), 1274126177);
+      const bb = ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+      h = Math.imul(hx0 ^ hy1 ^ ((hx0 ^ hy1) >>> 13), 1274126177);
+      const c = ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+      h = Math.imul(hx1 ^ hy1 ^ ((hx1 ^ hy1) >>> 13), 1274126177);
+      const d = ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+      const pL = a + (c - a) * sy, dP = bb + (d - bb) * sy - pL;
+      for (; x < xe; x++) {
+        const p = y * S + x;
+        if (dist[p] <= R) continue; // the road covers it
+        const X = bx + x;
+        const fx = (X - X0) / CELL;
+        const patch = pL + dP * fx * fx * (3 - 2 * fx);
+        // Specks, fewer than the dirt's.
+        const n = N[nRow | ((X + o1) & 255)];
+        let col = DIRT2;
+        if (N[pRow | (((X >> 1) + o3) & 255)] < 1) col = GRAVEL0; // a pebble
+        else if (n < 5 + 9 * patch) col = DIRT3;
         else if (n > 251 - 6 * (1 - patch)) col = DIRT1;
+        // Sand drifted against the wall: light, dense at its foot.
+        const far = dist[p] - R;
+        if (far <= FRINGE_FAR) {
+          const m = N[mRow | ((X + o2) & 255)];
+          if (m < (far <= FRINGE_NEAR ? 120 : 40)) col = m & 3 ? DIRT3 : GRAVEL1;
+        }
+        idx[p] = col;
       }
-      // Sand drifted against the wall: light, dense at its foot.
-      const far = dist[p] - R;
-      if (far <= FRINGE_FAR) {
-        const m = N[((((Y + (o2 >> 8)) & 255) << 8) | ((X + o2) & 255))];
-        if (m < (far <= FRINGE_NEAR ? 120 : 40)) col = m & 3 ? DIRT3 : GRAVEL1;
-      }
-      idx[p] = col;
     }
   }
-  if (from + rows >= S) next();
-  else job.sub++;
-  COST[0] = 262; // about half as much again as ground(): measured, so that a unit is as long here as there
+  // Costed as ground() is, 340 units a tile with the marks (measured, it takes about a quarter
+  // less time than that: tools/debug/world-bench.ts --units).
+  if (from + rows >= S) {
+    sandMarks();
+    next();
+    COST[0] = 155 + SAND_MARKS;
+  } else {
+    job.sub++;
+    COST[0] = 155;
+  }
+}
+
+// The marks of the wind on the sand, laid out on two grids of cells over the plane (a cell's
+// hash says what it holds, so a tile is still a pure function of its place, and a mark that
+// crosses a tile's edge is the same pixels on both sides).
+const DUNE = 92; // a cell of the dunes' grid, view pixels: one crest in most of them
+const DUNE_REACH = 68; // a crest reaches no further than this past its cell (1.2 times the largest radius: the arc is the circle's upper left)
+const RIPPLES = 64; // a cell of the ripples' grid: a field of ripples in some of them
+const SAND_MARKS = 30; // what sandMarks() costs a tile, in cost units (about: it is a few thousand pixels)
+
+/**
+ * The dunes' crests and the wind's ripples, on the sand of the whole tile.
+ * - A crest is an arc that bulges toward the upper left, where the sun is: a light edge on its
+ *   outside and the slip face's shade inside it, broad in the middle and thinning to nothing at
+ *   its two horns (a crescent).
+ * - Ripples lie in fields: a dozen or so short dashes, each a light pixel row over a dark one.
+ * Only sand takes them (not the road, and not the drift at the wall's foot).
+ */
+function sandMarks(): void {
+  const art = job.art!, b = buffers();
+  const { bx, by } = job;
+  const { idx, dist } = b;
+  const clear = art.track.wall + BARRIER + FRINGE_NEAR; // nearer the centreline than this: the wall's foot, the road
+  // Crests.
+  for (let gy = Math.floor((by - DUNE_REACH) / DUNE), gy1 = Math.floor((by + S + DUNE_REACH) / DUNE); gy <= gy1; gy++) {
+    for (let gx = Math.floor((bx - DUNE_REACH) / DUNE), gx1 = Math.floor((bx + S + DUNE_REACH) / DUNE); gx <= gx1; gx++) {
+      let h = Math.imul(gx, 374761393) ^ Math.imul(gy, 668265263) ^ Math.imul(41, 1442695041);
+      h = Math.imul(h ^ (h >>> 13), 1274126177);
+      h ^= h >>> 16;
+      if ((h & 255) >= 184) continue; // no crest in this cell
+      let h2 = Math.imul(h, 40503) ^ (h >>> 9);
+      h2 = Math.imul(h2 ^ (h2 >>> 13), 1274126177);
+      // The circle the arc is part of: its middle, its radius; the arc's middle (up-left of the
+      // circle's, a turn of 225 degrees give or take 28) and half its length (30 to 58 degrees).
+      const r = 24 + ((h >>> 24) & 31);
+      const cx = gx * DUNE + ((((h >>> 8) & 255) * DUNE) >> 8) + (r >> 1), cy = gy * DUNE + ((((h >>> 16) & 255) * DUNE) >> 8) + (r >> 1);
+      const mid = 3.927 + (((h2 & 255) - 128) / 128) * 0.49, half = 0.52 + (((h2 >>> 8) & 255) / 255) * 0.49;
+      const broad = 3 + ((h2 >>> 16) & 3) * 0.7; // the shade at its broadest, pixels
+      const steps = Math.ceil(2 * half * r);
+      const turn = (2 * half) / steps, cd = Math.cos(turn), sd = Math.sin(turn);
+      let ux = Math.cos(mid - half), uy = Math.sin(mid - half);
+      for (let i = 0; i <= steps; i++) {
+        const t = i / steps, w = broad * 4 * t * (1 - t);
+        // The light edge (two pixels of it along the crest's middle), then the shade inward of it.
+        for (let k = w > 2 ? -1 : w > 0.45 ? 0 : 1; k <= w; k++) {
+          const x = Math.floor(cx + (r - k) * ux + 0.5) - bx, y = Math.floor(cy + (r - k) * uy + 0.5) - by;
+          if (x < 0 || y < 0 || x >= S || y >= S) continue;
+          const p = y * S + x;
+          if (dist[p] > clear) idx[p] = k <= 0 ? DIRT3 : DIRT1;
+        }
+        const nx = ux * cd - uy * sd;
+        uy = ux * sd + uy * cd;
+        ux = nx;
+      }
+    }
+  }
+  // Ripples.
+  for (let gy = Math.floor((by - 2) / RIPPLES), gy1 = Math.floor((by + S) / RIPPLES); gy <= gy1; gy++) {
+    for (let gx = Math.floor((bx - 8) / RIPPLES), gx1 = Math.floor((bx + S) / RIPPLES); gx <= gx1; gx++) {
+      let h = Math.imul(gx, 374761393) ^ Math.imul(gy, 668265263) ^ Math.imul(43, 1442695041);
+      h = Math.imul(h ^ (h >>> 13), 1274126177);
+      h ^= h >>> 16;
+      if ((h & 255) >= 104) continue; // no field in this cell
+      for (let k = 0, count = 9 + ((h >>> 8) & 7); k < count; k++) {
+        let q = Math.imul(h ^ Math.imul(k + 1, 0x9e3779b1), 1274126177);
+        q ^= q >>> 15;
+        // Where the dash begins in the cell (its upper row on an even row of the plane) and how long it is.
+        const X = gx * RIPPLES + (q & 63), Y = gy * RIPPLES + ((q >>> 6) & 62), len = 3 + ((q >>> 12) & 3);
+        const y = Y - by;
+        if (y < -1 || y >= S) continue;
+        for (let i = 0; i < len; i++) {
+          const x = X + i - bx;
+          if (x < 0 || x >= S) continue;
+          if (y >= 0 && dist[y * S + x] > clear) idx[y * S + x] = DIRT3;
+          if (y + 1 < S && dist[(y + 1) * S + x] > clear) idx[(y + 1) * S + x] = DIRT1;
+        }
+      }
+    }
+  }
 }
 
 /** What lies on the dirt: stains, wheel ruts, and the junk heaps with their shadows. */
