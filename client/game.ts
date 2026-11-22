@@ -1076,12 +1076,13 @@ export class Game {
    * "Where moving things are drawn"): with an own car, the one its drawn pose was stepped at (its last
    * predicted step, rtAt(latest, pending.length - 1); the latest snapshot's own with nothing pending),
    * so the barrels and presses are drawn where its own step met them; without one (a spectator) the
-   * latest snapshot's. undefined before the first snapshot (a still picture).
+   * latest snapshot's (rtAt(latest, -1): clamped at 0 in the countdown, as the own car's). undefined
+   * before the first snapshot (a still picture).
    */
   drawTick(): number | undefined {
     const s = this.latest;
     if (!s) return undefined;
-    return this.car ? rtAt(s, this.pending.length - 1) : s.rtBase;
+    return rtAt(s, this.car ? this.pending.length - 1 : -1); // a spectator: the snapshot's, clamped at 0 in the countdown (advisor change 9)
   }
 
   /** Boost ticks a cell would give the own car by a snapshot's race distances (0 without a car in it). */

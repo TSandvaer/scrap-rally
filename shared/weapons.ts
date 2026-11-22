@@ -36,6 +36,7 @@ import {
   recoveryAt,
   segDir,
   tractionRect,
+  TRUCK_BAND,
   TRUCK_HALF,
   wallOf,
   type PlacedCell,
@@ -398,9 +399,27 @@ function shotIntoMovers(track: Track, seg: number, x0: number, y0: number, x1: n
     }
   }
   if (trucks !== undefined && trucks.length > 0) {
-    for (const t of trucks) if (segSegDist(x0, y0, x1, y1, t) <= TRUCK_HALF + RIVET_RADIUS) return true;
+    // A rivet whose tick starts in a truck's ramp band (fired from a car riding it) passes that truck,
+    // as the car does (M4-MOVE review F3, the coordinator's call); every other one dies on its body.
+    for (const t of trucks) if (segSegDist(x0, y0, x1, y1, t) <= TRUCK_HALF + RIVET_RADIUS && !rivetInBand(t, x0, y0, x1, y1)) return true;
   }
   return false;
+}
+
+/**
+ * Does a rivet's tick from (x0, y0) to (x1, y1) start in truck t's ramp band, moving forward along it
+ * (a rivet fired from a car riding the band)? In the truck's own frame (its axis from x0, y0 to x1, y1,
+ * TRUCK_HALF in from either end): within TRUCK_BAND of the axis, along it from the rear to the front plus
+ * the rivet's radius and a unit (a rivet just out past the cab still touches the front's round end).
+ */
+function rivetInBand(t: PlacedTruck, x0: number, y0: number, x1: number, y1: number): boolean {
+  const ex = t.x1 - t.x0, ey = t.y1 - t.y0;
+  const l = Math.sqrt(ex * ex + ey * ey) || 1;
+  const ux = ex / l, uy = ey / l;
+  if ((x1 - x0) * ux + (y1 - y0) * uy <= 0) return false; // not moving forward along the truck
+  const along = (x0 - t.x0) * ux + (y0 - t.y0) * uy + TRUCK_HALF; // from the rear
+  const across = -(x0 - t.x0) * uy + (y0 - t.y0) * ux;
+  return along >= 0 && along <= t.len + RIVET_RADIUS + 1 && across >= -TRUCK_BAND && across <= TRUCK_BAND;
 }
 
 /** Squared distance from (px, py) to the segment (x0, y0)..(x1, y1). */

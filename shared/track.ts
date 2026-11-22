@@ -468,6 +468,13 @@ export const BELT_LEN_MIN = 48;
 export const MOVER_CLEAR = 2 * SOLID_CLEAR;
 /** M4-MOVE: a press's side reaches the wall (or an island beside it) or leaves at least this much road (a car, 16 wide, and room). */
 export const PRESS_SIDE_GAP = 24;
+/**
+ * M4-MOVE review F4: the same for a truck's body. 24 = a car's width (16) and 8: the bots' lane round a
+ * truck keeps its centre TRUCK_HALF + 16 off the truck's axis, which a 24 gap leaves inside the wall's
+ * limit; narrower gaps measured 2026-11-22 (review probe): 6-10 a dead end, 14 a squeeze that leaves the
+ * car 3.1 into the body, 18 clean for a car but not for the bots' lane.
+ */
+export const TRUCK_SIDE_GAP = 24;
 
 // ---- the traction area of a puddle (M4-WORLD; moved here from client/gfx/puddle-shape.ts by M4-SURF, unchanged) ----
 // User decisions 2026-11-21: "dirt and water puddles should not be square, it should read as a
@@ -924,9 +931,9 @@ function laneAt(track: Track, s: number, margin: number, prefer: number): number
  * Where a respawn or a recovery puts a car near s (M4-MOVE, PLAN-M4 2.3 "the nearest clear lane"):
  * at s on its nearest clear lane (clearLaneAt, `prefer` the side of an island); when no lane at s is
  * clear (a barrel row's path, wall to wall; a press or a truck leaving no room) just behind what is in
- * the way (its s range less the car's half-length and `margin`), up to twice; failing that, the
- * recovery point at or before s and its lane (validation keeps solids SOLID_CLEAR from it). On a
- * track without barrels, presses and trucks: s and clearLaneAt(s), exactly.
+ * the way (its s range less the car's half-length and `margin`), up to twice, never onto a hole or a
+ * gap; failing that, the recovery point at or before s and its lane (validation keeps solids
+ * SOLID_CLEAR from it). On a track without barrels, presses and trucks: s and clearLaneAt(s), exactly.
  */
 export function clearSpot(track: Track, s: number, margin = 4, prefer = 0): { s: number; lat: number } {
   let at = s;
@@ -942,6 +949,10 @@ export function clearSpot(track: Track, s: number, margin = 4, prefer = 0): { s:
     for (const t of track.trucksAt[seg]) if (meets(t.s, t.s + t.len)) back = Math.min(back, t.s);
     if (back === Infinity) break; // a mound or an island alone: not a mover's doing
     at = wrapS(track, back - CAR_HALF_LEN - margin - 1);
+    // Moved back: never onto a hole or a gap (laneAt does not look for them where nothing else is
+    // near: M4-MOVE review F2); on one, the recovery point below.
+    const p = pointAt(track, at), q = laneAt(track, at, margin, prefer);
+    if (q !== null && overHazard(track, p.x - Math.sin(p.h) * q, p.y + Math.cos(p.h) * q, at)) break;
   }
   const r = recoveryAt(track, s);
   return { s: r, lat: clearLaneAt(track, r, margin, prefer) };
@@ -1526,6 +1537,21 @@ function turnOver(track: Track, s0: number, s1: number): number {
 }
 
 /**
+ * A solid across lat0..lat1 over s0..s1 (a press, a truck's body): the first gap beside it, between a
+ * side and the wall (or an island beside it, sharing that s), that is wider than 0 (it reaches) but
+ * narrower than `min`, at any sample s0..s1; null if none.
+ */
+function sideGap(track: Track, s0: number, s1: number, lat0: number, lat1: number, min: number): { gap: number; s: number } | null {
+  for (const s of samplesIn(track, s0, s1)) {
+    const isle = track.islands.find((i) => s >= i.s0 && s <= i.s1);
+    const left = isle && isle.lat1 <= lat0 ? lat0 - isle.lat1 : lat0 + wallAt(track, s, -1);
+    const right = isle && isle.lat0 >= lat1 ? isle.lat0 - lat1 : wallAt(track, s, 1) - lat1;
+    for (const g of [left, right]) if (g > 1e-9 && g < min) return { gap: g, s };
+  }
+  return null;
+}
+
+/**
  * The structural checks of the M4-SCHEMA features (validateTrack runs them; behavioural checks such
  * as run-ups through water and the bots' lane costs are M4-SURF's):
  * - Ranges: rectangles have s1 > s0 and lat1 > lat0 and stay inside the walls; tyre mounds have
@@ -1618,6 +1644,10 @@ function validateSchema(track: Track, errors: string[], zone: (what: string, lo:
     if (!(t.len >= TRUCK_LEN_MIN && t.len <= TRUCK_LEN_MAX)) errors.push(`${what}: length ${t.len} outside ${TRUCK_LEN_MIN}..${TRUCK_LEN_MAX}`);
     zone(what, t.s, t.s + t.len);
     inside(what, t.s, t.s + t.len, t.lat - TRUCK_HALF, t.lat + TRUCK_HALF);
+    // M4-MOVE review F4: each side of its body reaches the wall (or an island beside it) or leaves
+    // TRUCK_SIDE_GAP: a narrower gap is a dead end, or a squeeze that leaves a car overlapping the body.
+    const gap = sideGap(track, t.s, t.s + t.len, t.lat - TRUCK_HALF, t.lat + TRUCK_HALF, TRUCK_SIDE_GAP);
+    if (gap) errors.push(`${what}: leaves a gap of ${f1(gap.gap)} beside it at s=${f1(gap.s)} (a side reaches the wall or an island, or leaves >= ${TRUCK_SIDE_GAP})`);
     solids.push(box(what, t.s, t.s + t.len, t.lat - TRUCK_HALF, t.lat + TRUCK_HALF));
   }
   for (const p of track.presses) {
@@ -1630,16 +1660,8 @@ function validateSchema(track: Track, errors: string[], zone: (what: string, lo:
     inside(what, p.s - PRESS_DEPTH / 2, p.s + PRESS_DEPTH / 2, p.lat0, p.lat1);
     // M4-MOVE: each side of it reaches the wall (or an island beside it) or leaves a car room to pass:
     // a gap narrower than PRESS_SIDE_GAP would hold a car between the slab and the wall while it is down.
-    for (const s of samplesIn(track, p.s - PRESS_DEPTH / 2, p.s + PRESS_DEPTH / 2)) {
-      const isle = track.islands.find((i) => s >= i.s0 && s <= i.s1);
-      const left = isle && isle.lat1 <= p.lat0 ? p.lat0 - isle.lat1 : p.lat0 + wallAt(track, s, -1);
-      const right = isle && isle.lat0 >= p.lat1 ? isle.lat0 - p.lat1 : wallAt(track, s, 1) - p.lat1;
-      const bad = [left, right].find((g) => g > 1e-9 && g < PRESS_SIDE_GAP);
-      if (bad !== undefined) {
-        errors.push(`${what}: leaves a gap of ${f1(bad)} beside it at s=${f1(s)} (a side reaches the wall or an island, or leaves >= ${PRESS_SIDE_GAP})`);
-        break;
-      }
-    }
+    const gap = sideGap(track, p.s - PRESS_DEPTH / 2, p.s + PRESS_DEPTH / 2, p.lat0, p.lat1, PRESS_SIDE_GAP);
+    if (gap) errors.push(`${what}: leaves a gap of ${f1(gap.gap)} beside it at s=${f1(gap.s)} (a side reaches the wall or an island, or leaves >= ${PRESS_SIDE_GAP})`);
     solids.push(box(what, p.s - PRESS_DEPTH / 2, p.s + PRESS_DEPTH / 2, p.lat0, p.lat1));
   }
   for (const i of track.islands) {
@@ -1706,7 +1728,9 @@ function validateSchema(track: Track, errors: string[], zone: (what: string, lo:
   // M4-MOVE: room along the track round what moves, so a car is only ever squeezed against a wall.
   // A barrel row keeps MOVER_CLEAR (s to s, edge to edge) from every other solid, islands included
   // (a car pushed along the road out of a row lands on open road); a press keeps it from every other
-  // solid but an island beside it (a car under a press is pushed along the road, never across).
+  // solid but an island BESIDE it, one whose s range overlaps the press's (a car under a press is pushed
+  // along the road, never across); an island before or past a press keeps MOVER_CLEAR (M4-MOVE review
+  // F1: 18 before an island's nose, a car pushed out of the slab was pushed back in by the nose).
   const ranges: { what: string; s0: number; s1: number; island: boolean; mover: number }[] = [
     ...track.tyres.map((m) => ({ what: `tyres at s=${f1(m.s)}`, s0: m.s - m.r, s1: m.s + m.r, island: false, mover: 0 })),
     ...track.trucks.map((t) => ({ what: `truck at s=${f1(t.s)}`, s0: t.s, s1: t.s + t.len, island: false, mover: 0 })),
@@ -1718,7 +1742,7 @@ function validateSchema(track: Track, errors: string[], zone: (what: string, lo:
     for (let j = 0; j < ranges.length; j++) {
       const a = ranges[i], b = ranges[j];
       if (i === j || a.mover === 0 || (b.mover !== 0 && j < i)) continue; // each pair once
-      if (a.mover === 2 && b.island) continue; // a press beside an island
+      if (a.mover === 2 && b.island && b.s0 < a.s1 && a.s0 < b.s1) continue; // a press beside an island (they share s): exempt; before or past one: not
       const gap = Math.max(b.s0 - a.s1, a.s0 - b.s1);
       if (gap < MOVER_CLEAR) errors.push(`${a.what}: ${f1(Math.max(0, gap))} along the track from ${b.what} (what moves keeps >= ${MOVER_CLEAR} along the track from other solids)`);
     }

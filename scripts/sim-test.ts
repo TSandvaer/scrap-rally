@@ -13296,7 +13296,116 @@ function moveDraw(): void {
   }
 }
 
-for (const t of [moveBarrels, moveSolids, moveLandings, moveRivets, moveRespawn, moveSweep, moveBuckets, moveParity, moveBots, moveShipped, moveDraw, moveCpu, moveDevFlag]) {
+function moveReview1(): void {
+  // M4-MOVE review 1 (part 1, dc42d82): its findings' repros, now refused or handled.
+  // F1: a press 18 before an island's nose (Split Yard, island A at s 820) is refused; one beside an island still validates.
+  const split = (features: Feature[]) => validateTrack(buildTrack({ ...SPLIT_YARD, id: "move-r1-split", features: [...SPLIT_YARD.features!, ...features] })).join(" | ");
+  const before = split([{ k: "press", s: 790, lat0: -30, lat1: 30, period: 160, down: 50 }]);
+  const beside = split([{ k: "press", s: 1200, lat0: 22, lat1: 112, period: 160, down: 50 }]);
+  check(
+    "move review F1: a press 18 before an island (Split Yard, island at s 820) is refused (MOVER_CLEAR along the track); one beside an island (sharing its s) still validates",
+    before.includes("press at s=790.0") && before.includes("along the track from island") && beside === "",
+    `before: ${before}; beside: ${beside || "valid"}`,
+  );
+  // F2: Move Yard + a hole r14 at s 760/770/775 (it validates): a car wrecked in the s 800 row's path
+  // respawns off the hole (the recovery point), and does not fall on its next steps.
+  const rows: string[] = [];
+  let f2 = true;
+  for (const hs of [760, 770, 775]) {
+    const t = moveWith([...MOVE_YARD.features!, { k: "hole", s: hs, lat: 0, r: 14 }]);
+    const valid = validateTrack(t).length === 0;
+    const c = surfCar(t, 800, 0, 0);
+    moveW.wreckCar(c);
+    c.wreck = 1;
+    const env = moveW.raceEnv(t);
+    moveW.stepRaceCar(c, movePhys.NO_INPUT, BASE_STATS, env);
+    const at = splitSL(t, c);
+    const over = moveTrack.overHazard(t, c.x, c.y, at.s);
+    let fell = false;
+    for (let i = 0; i < 30; i++) {
+      env.rt = i + 1;
+      if (moveW.stepRaceCar(c, { throttle: 0.3, steer: 0 }, BASE_STATS, env) === "fall") fell = true;
+    }
+    f2 &&= valid && !over && !fell;
+    rows.push(`hole at s ${hs}: valid ${valid}, respawned at s=${at.s.toFixed(1)} lat ${at.lat.toFixed(1)}, over a hazard ${over}, fell ${fell}`);
+  }
+  check("move review F2: with a hole just behind a barrel row (it validates), a car wrecked in the row's path is never put back over the hole (the recovery point instead) and does not fall", f2, rows.join("; "));
+  // F3: a rivet fired from a car riding the truck's band passes the truck (as the car does); one fired from
+  // behind the truck, or from a car nosing into its side, dies on it.
+  const yard = moveYard(), tk = yard.trucks[0];
+  const fire = (s: number, lat: number, dh = 0) => {
+    const c = surfCar(yard, s, lat, 330, dh);
+    const sh = moveW.spawnShot(c, 1, "x");
+    let k = 0;
+    while (k < 60 && moveW.moveShot(sh, yard, 100 + k)) k++;
+    return { k, s: splitSL(yard, sh).s, far: sh.travelled };
+  };
+  const band = [-10, 10, 40, 70].map((d) => fire(tk.s + d, tk.lat)); // a car on the band (rear +d)
+  const behind = fire(tk.s - 80, tk.lat), side = fire(tk.s + 50, tk.lat + moveTrack.TRUCK_HALF + 16, -1.2);
+  // A rivet fired back at the truck's front from ahead of it, down the band's lane: dies on the truck.
+  const ahead = (() => {
+    const c = surfCar(yard, tk.s + tk.len + 60, tk.lat, 0, Math.PI);
+    const sh = moveW.spawnShot(c, 1, "x");
+    let k = 0;
+    while (k < 60 && moveW.moveShot(sh, yard, 100 + k)) k++;
+    return { k, s: splitSL(yard, sh).s };
+  })();
+  check(
+    "move review F3: a rivet fired from a car riding the truck's band passes the truck (from rear -10, +10, +40, +70 it flies its range); one fired from 80 behind, from a car nosing into its side, or back at its front from ahead dies on the truck",
+    band.every((b) => b.s > tk.s + tk.len + 20 && b.far > 300) && behind.k <= 6 && behind.s < tk.s + 15 && side.k <= 2 && ahead.k <= 6 && ahead.s > tk.s + tk.len - 15,
+    `band: ${band.map((b) => `${b.k} ticks to s=${b.s.toFixed(0)}`).join(", ")}; behind: ${behind.k} ticks to s=${behind.s.toFixed(0)}; side: ${side.k} ticks; back at its front from ahead: ${ahead.k} ticks to s=${ahead.s.toFixed(0)}`,
+  );
+  // F4: a truck whose side leaves a gap to the wall narrower than TRUCK_SIDE_GAP is refused (14, 6, 18);
+  // one reaching the wall, or leaving 24, validates.
+  const truckAt = (lat: number) => validateTrack(moveWith([{ k: "truck", s: 5950, lat, len: 110 }])).join(" | ");
+  const wall = moveYard().wall; // 108 on the plain road there
+  const gaps = [14, 6, 18, 0, 24].map((g) => ({ g, e: truckAt(wall - moveTrack.TRUCK_HALF - g) }));
+  check(
+    `move review F4: a truck side short of the wall by less than ${moveTrack.TRUCK_SIDE_GAP} is refused (gaps 14, 6, 18), one reaching the wall or leaving ${moveTrack.TRUCK_SIDE_GAP} validates`,
+    gaps.slice(0, 3).every((x) => x.e.includes(`leaves a gap of ${x.g}.0`)) && gaps.slice(3).every((x) => x.e === ""),
+    gaps.map((x) => `gap ${x.g}: ${x.e || "valid"}`).join("; "),
+  );
+  // Note (botdrive): the band takes one car at a time. Two bots on lines 24 and 12 (both in the band)
+  // side by side on the approach: the one behind gives the jump up and goes round; with the yield off
+  // (MOVE.truckYield huge) both go for the band.
+  const pair = (yieldOn: boolean) => {
+    const was = moveBot.MOVE.truckYield;
+    if (!yieldOn) moveBot.MOVE.truckYield = 1e9;
+    try {
+      const a = surfCar(yard, tk.s - 480, 24, 400), b = surfCar(yard, tk.s - 500, 12, 400);
+      const ma = moveBot.newBotMem(24, "normal"), mb = moveBot.newBotMem(12, "normal");
+      ma.weapons = mb.weapons = false;
+      const env = moveW.raceEnv(yard);
+      let jumps = 0, truck = 0, bump = 0;
+      for (let i = 0; i < 150; i++) {
+        env.rt = 500 + i;
+        const view = (c: CarState, o: CarState) => ({ car: c, track: yard, stats: BASE_STATS, raceOn: true, raceSteps: 500 + i, others: [{ x: o.x, y: o.y, solid: o.air === 0, id: "o", vx: o.vx, vy: o.vy }], rt: env.rt });
+        const ca = moveBot.botControls(view(a, b), ma), cb = moveBot.botControls(view(b, a), mb);
+        for (const [c, ctl] of [[a, ca], [b, cb]] as const) if (moveW.stepRaceCar(c, ctl, BASE_STATS, env) === "takeoff") jumps++;
+        if (a.air === 0 && b.air === 0 && collideCars(a, b)) bump++;
+        for (const c of [a, b]) if (c.air === 0 && moveTune.moveContact(yard, c, env.rt) === "truck") truck++;
+      }
+      return { jumps, truck, bump, s: [splitSL(yard, a).s, splitSL(yard, b).s] };
+    } finally {
+      moveBot.MOVE.truckYield = was;
+    }
+  };
+  const on = pair(true), off = pair(false);
+  check(
+    "move review note: two bots whose lines are both in the truck's band arriving together: the one behind gives the jump up and goes round (one take-off, no truck contact); with the yield off both go for the band",
+    on.jumps === 1 && on.truck === 0 && on.s.every((x) => x > tk.s + tk.len) && off.jumps + off.truck + off.bump > on.jumps,
+    `yield on: ${on.jumps} take-off(s), truck contacts ${on.truck}, bumps ${on.bump}; off: ${off.jumps} take-offs, truck contacts ${off.truck}, bumps ${off.bump}`,
+  );
+  // Note (game.ts): a spectator's drawTick is clamped at 0 in the countdown (the own car's already was).
+  const g = new Game(() => ({ send() {}, close() {}, onOpen() {}, onMessage() {}, onClose() {} }) as unknown as Transport, { get: () => null, set() {} });
+  g.latest = { time: 0, rtBase: -95, rtOpen: true, cars: new Map(), shots: new Map(), mines: [] };
+  const countdown = g.drawTick();
+  g.latest.rtBase = 37;
+  const racing = g.drawTick();
+  check("move review note: a spectator's drawTick is 0 in the countdown (rtBase < 0) and the snapshot's race tick while racing", countdown === 0 && racing === 37, `countdown ${countdown}, racing ${racing}`);
+}
+
+for (const t of [moveBarrels, moveSolids, moveLandings, moveRivets, moveRespawn, moveSweep, moveBuckets, moveParity, moveBots, moveShipped, moveDraw, moveReview1, moveCpu, moveDevFlag]) {
   console.log(`\n# ${t.name}`);
   try {
     t();

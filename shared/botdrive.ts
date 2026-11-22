@@ -28,7 +28,9 @@
 // passes under it (pressDown over the same window), so it takes the open side, and where no lane is
 // open it brakes and waits short of the press until it will be up. A parked truck: from MOVE.truckLook
 // before its rear the bot decides once (BotMem.truckS) whether it jumps it: when its seat's racing line
-// lies in the band (advisor change 2: the band takes one car, so by seat) and it will arrive in the
+// lies in the band (advisor change 2: by seat; with the server's six lines 12 apart, one or two seats) and
+// no other car is on the band ahead of it or level (bandTaken: the band takes one car at a time, the one
+// behind gives the jump up while the rear is MOVE.truckYield away) and it will arrive in the
 // band at TRUCK_MIN_SPEED + MOVE.truckMargin or faster (a ramp approach: full throttle up the middle of
 // the band, its usual aim point: the band is narrow, a far aim would not bring it in), or else goes round
 // it (a blocker); a jump given up after a bump goes round.
@@ -691,6 +693,8 @@ export const MOVE = {
   truckMargin: 50,
   /** Going round a truck, from this far before its rear on it keeps the side it is on. */
   truckSide: 40,
+  /** A jump is given up for the lane round the truck when its band is taken (bandTaken) and the rear is still this far ahead. */
+  truckYield: 80,
   /** A barrel's or a press's crossing window is padded by this many ticks either side ... */
   padTicks: 3,
   /** ... plus this share of the ticks until the bot gets there (its arrival is less sure further out). */
@@ -726,6 +730,31 @@ function truckAhead(track: Track, s: number, seg: number, look: number): { t: Pl
   }
   return null;
 }
+
+/**
+ * Is truck t's ramp band taken for a bot at c: another solid car within the band's width (plus half a
+ * car) in the truck's own frame, along it from level with the bot to the end of the take-off zone, and
+ * no further ahead of the bot than the band is long (it will still be on it when the bot gets there)?
+ * The one behind yields (level: both). Others without an id are not cars (BotOther: every car has one).
+ */
+function bandTaken(t: PlacedTruck, c: CarState, others: readonly BotOther[]): boolean {
+  const ex = t.x1 - t.x0, ey = t.y1 - t.y0;
+  const l = Math.sqrt(ex * ex + ey * ey) || 1;
+  const ux = ex / l, uy = ey / l;
+  const rx = t.x0 - ux * TRUCK_HALF, ry = t.y0 - uy * TRUCK_HALF; // the rear's middle
+  const self = (c.x - rx) * ux + (c.y - ry) * uy;
+  for (let i = 0; i < others.length; i++) {
+    const o = others[i];
+    if (!o.solid) continue;
+    const along = (o.x - rx) * ux + (o.y - ry) * uy, across = -(o.x - rx) * uy + (o.y - ry) * ux;
+    if (across < -TRUCK_BAND - CAR_WIDTH / 2 || across > TRUCK_BAND + CAR_WIDTH / 2) continue;
+    if (along >= self && along <= t.len + LIP_ZONE && along - self <= t.len + TRUCK_YIELD_REACH) return true;
+  }
+  return false;
+}
+
+/** bandTaken: how much further than the band is long a car ahead still counts (the lead before the rear, a tick's travel). */
+const TRUCK_YIELD_REACH = 40;
 
 /** The ticks from now (lo .. hi) in which a car `d` ahead of something at along-track speed vf is within `reach` of it, padded (MOVE); into WIN (one object, refilled). */
 const WIN = { lo: 0, hi: 0 };
@@ -1106,10 +1135,12 @@ export function botControls(view: BotView, mem: BotMem): BotControls {
     const toLip = tk.toRear + (tk.t.lip - tk.t.s);
     const arrive = toLip > 0 ? speedAfter(Math.max(0, vf), toLip, view.stats) : vf;
     if (mem.truckS !== tk.t.s) {
-      // Its seat's line in the band (advisor change 2: by seat, so two bots do not share the narrow band), fast enough.
+      // Its seat's line in the band (advisor change 2: by seat; two seats can qualify, bandTaken below keeps them apart), fast enough.
       mem.truckS = tk.t.s;
       mem.truckJump = Math.abs(mem.lateral - tk.t.lat) <= TRUCK_BAND && arrive >= TRUCK_MIN_SPEED + MOVE.truckMargin;
     } else if (mem.truckJump && tk.toRear > CAR_LENGTH && arrive < TRUCK_MIN_SPEED + MOVE.truckMargin / 2) mem.truckJump = false; // slowed: round it
+    // The band takes one car: another car on it (or lined up for it) ahead or level gives the jump up while there is room to go round.
+    if (mem.truckJump && tk.toRear > MOVE.truckYield && bandTaken(tk.t, c, view.others)) mem.truckJump = false;
     if (mem.truckJump) jump = tk.t;
   } else mem.truckS = -1;
   const laneLook = 140 + v * 0.6;
