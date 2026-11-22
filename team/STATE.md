@@ -628,6 +628,10 @@ DEPLOYED (user): live index-CucohtTX.js (curl), bundle holds radius:67. QA12 liv
 tmp/spec-qa-live-12.md; report tmp/qa12-live-report.md): TOUCH-6 + M4-MOVE regression.
 QA12 live PASS (ctx_b97a15d62f9f, released): stick R 67 at 3 sizes, Crusher Run 3 bots 0 falls, 0 console errors. ClickUp complete:
 TOUCH-6, M4-MOVE.
+BR-SCHEMA done: 221beef (branch data, Branch Yard, 19 rule tests; 930/930 + 133/133 x2; shipped SAME; done text tmp/br-schema-done.md).
+Opus reviewer ctx_d7ef3257a313 (tmp/review-br-schema.md). Cap rule (user popup): idle authors in review do not count. TH-LOOK-1
+123jpnbfgj0 (Fable) in flight: ctx_79748d316f06 (~/orca/workspaces/scrap-rally/th-look-1, :3011; spec tmp/spec-th-look-1.md).
+Active authors: M4-TRACKS, HARD-2, TH-LOOK-1 (BR-SCHEMA idle in review).
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
