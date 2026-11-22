@@ -148,7 +148,7 @@ export const MOVE_YARD: TrackDef = {
 // plain road between them; nothing else on it. In order round the lap:
 // - top-right: a dirt cut, a stretch of dirt across the whole shortcut (under ~350 units: the mud rule);
 // - bottom-right: a jump cut, a ramp and a chasm (a recovery point before it), out of sight of the main road;
-// - bottom-left: a narrow cut (72 wide) with pits to steer between.
+// - bottom-left: a narrow cut (80 wide: half-width 40) with pits to steer between.
 // Nothing drives or draws a branch yet (BR-PHYS, BR-BAKE): today it races as its main road.
 // Picked with the dev flag SCRAP_DEV_TRACK=branch-yard (server/room.ts).
 export const BRANCH_YARD: TrackDef = {

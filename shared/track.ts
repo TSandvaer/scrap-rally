@@ -881,20 +881,8 @@ function buildBuckets(track: Track): void {
       tyresAt.push(NO_TYRES as PlacedTyres[]);
       continue;
     }
-    // The corridor piece of segment i (the vertex normals either end, wall to wall): where a car
-    // centre whose nearest segment is i lies. A mound within its radius + TYRES_BUCKET_REACH of it.
-    const j = (i + 1) % track.pts.length, p = track.pts[i], q = track.pts[j];
-    const quad: Vec[] = [
-      { x: p.x + normals[i].x * track.wallR[i], y: p.y + normals[i].y * track.wallR[i] },
-      { x: q.x + normals[j].x * track.wallR[j], y: q.y + normals[j].y * track.wallR[j] },
-      { x: q.x - normals[j].x * track.wallL[j], y: q.y - normals[j].y * track.wallL[j] },
-      { x: p.x - normals[i].x * track.wallL[i], y: p.y - normals[i].y * track.wallL[i] },
-    ];
-    const near = tyres.filter((m) => {
-      const ds = Math.abs(m.s - (a + b) / 2);
-      if (alongGap(track, ds) > 4 * (track.wall + m.r + TYRES_BUCKET_REACH)) return false; // another section
-      return quadDist(quad, m.x, m.y) <= m.r + TYRES_BUCKET_REACH;
-    });
+    const quad = segQuad(track, i, normals);
+    const near = tyres.filter((m) => moundNear(track, quad, a, b, m));
     tyresAt.push(near.length ? near : (NO_TYRES as PlacedTyres[]));
   }
   track.surfAt = surfAt;
@@ -934,6 +922,27 @@ function buildBuckets(track: Track): void {
 }
 
 /**
+ * The corridor piece of segment i (the vertex normals either end, wall to wall): where a car centre
+ * whose nearest segment is i lies (buildBuckets' mounds and, BR-SCHEMA, the gores' noses).
+ */
+function segQuad(track: Track, i: number, normals: readonly Vec[]): Vec[] {
+  const j = (i + 1) % track.pts.length, p = track.pts[i], q = track.pts[j];
+  return [
+    { x: p.x + normals[i].x * track.wallR[i], y: p.y + normals[i].y * track.wallR[i] },
+    { x: q.x + normals[j].x * track.wallR[j], y: q.y + normals[j].y * track.wallR[j] },
+    { x: q.x - normals[j].x * track.wallL[j], y: q.y - normals[j].y * track.wallL[j] },
+    { x: p.x - normals[i].x * track.wallL[i], y: p.y - normals[i].y * track.wallL[i] },
+  ];
+}
+
+/** Does tyre mound m go in the bucket of the segment cum a..b whose corridor piece is `quad`: on its section, within its radius + TYRES_BUCKET_REACH of it? */
+function moundNear(track: Track, quad: readonly Vec[], a: number, b: number, m: PlacedTyres): boolean {
+  const ds = Math.abs(m.s - (a + b) / 2);
+  if (alongGap(track, ds) > 4 * (track.wall + m.r + TYRES_BUCKET_REACH)) return false; // another section
+  return quadDist(quad, m.x, m.y) <= m.r + TYRES_BUCKET_REACH;
+}
+
+/**
  * A car capsule's reach from its centre (15.5) plus a tick's travel (~9 at 537 u/s), and a rivet's
  * swept tick (~24 units at 900 + 537 u/s) plus its radius: a barrel row, a press or a truck goes in
  * the bucket of every segment within this of its s range.
@@ -957,7 +966,7 @@ function moverBuckets<T>(track: Track, list: readonly T[], lo: (x: T) => number,
 }
 
 /** Distance from (x, y) to a convex quad (0 inside it). */
-function quadDist(quad: Vec[], x: number, y: number): number {
+function quadDist(quad: readonly Vec[], x: number, y: number): number {
   let inside = true, best = Infinity;
   let sign = 0;
   for (let k = 0; k < quad.length; k++) {
@@ -1302,10 +1311,9 @@ export function gapAt(track: Track, s: number): Gap | null {
 
 /** The hole whose pit contains (x, y), for a point at distance s along its own section. */
 export function holeAt(track: Track, x: number, y: number, s: number): PlacedHole | null {
-  const L = track.length;
   for (const h of track.holes) {
     const ds = Math.abs(wrapS(track, s) - h.s);
-    if ((track.roadNo > 0 ? ds : Math.min(ds, L - ds)) > h.r + track.wall) continue; // a different part of the track
+    if (alongGap(track, ds) > h.r + track.wall) continue; // a different part of the track
     if ((x - h.x) ** 2 + (y - h.y) ** 2 < h.r * h.r) return h;
   }
   return null;
@@ -1441,7 +1449,7 @@ function corridorPieces(track: Track): Piece[] {
   const n = pts.length;
   const normals = pts.map((_, i) => vertexNormal(track, i));
   const out: Piece[] = [];
-  for (let i = 0; i < n; i++) {
+  for (let i = 0; i < segCount(track); i++) {
     const a = pts[i], b = pts[(i + 1) % n];
     const s0 = cum[i], s1 = cum[i + 1];
     const d = segDir(track, i);
@@ -1570,6 +1578,22 @@ export function validateTrack(track: Track): string[] {
   };
   validateRoad(track, errors, zone);
 
+  sectionCrossings(track, errors, "s", "");
+  if (track.branches.length > 0) validateBranches(track, errors);
+  return errors;
+}
+
+/**
+ * validateTrack's crossing checks on one road (the main road's; BR-SCHEMA, PLAN-BRANCH 2.8: each
+ * branch's too): the ground corridors of two sections of the road (more than SAME_SECTION walls apart
+ * along it) never overlap, and sections whose corridors overlap (gaps included) are more than
+ * 2 * LOCAL_WINDOW + SECTION_INDEX_MARGIN segment indices apart. On a closed road "apart along it" and the
+ * index difference are the shorter way round; on an open road (a branch's) they never wrap. `coord`
+ * names the road's distance in the messages ("s", or "u" on a branch), `prefix` starts each one.
+ */
+function sectionCrossings(track: Track, errors: string[], coord: string, prefix: string): void {
+  const f1 = (v: number) => v.toFixed(1);
+  const open = track.roadNo > 0;
   const pieces = corridorPieces(track);
   const n = track.pts.length;
   const indexMin = 2 * LOCAL_WINDOW + SECTION_INDEX_MARGIN;
@@ -1579,13 +1603,13 @@ export function validateTrack(track: Track): string[] {
     const a = pieces[i];
     for (let j = i + 1; j < pieces.length; j++) {
       const b = pieces[j];
-      const along = Math.min(wrapS(track, b.s0 - a.s1), wrapS(track, a.s0 - b.s1));
+      const along = open ? Math.max(b.s0 - a.s1, a.s0 - b.s1) : Math.min(wrapS(track, b.s0 - a.s1), wrapS(track, a.s0 - b.s1));
       if (along < SAME_SECTION * track.wall) continue;
       if (Math.hypot(a.cx - b.cx, a.cy - b.cy) >= a.rad + b.rad) continue;
       if (!quadsOverlap(a.quad, b.quad)) continue;
       if (a.ground && b.ground) crossings.push({ a, b });
       const di = Math.abs(a.seg - b.seg);
-      const cyc = Math.min(di, n - di);
+      const cyc = open ? di : Math.min(di, n - di);
       if (cyc <= indexMin) closeIndex.push({ a, b, di: cyc });
     }
   }
@@ -1599,12 +1623,10 @@ export function validateTrack(track: Track): string[] {
       errors.push(msg(p));
     }
   };
-  report(crossings, (p) => `ground corridors overlap at s=${f1(p.a.s0)} and s=${f1(p.b.s0)} (cover one with a gap)`);
+  report(crossings, (p) => `${prefix}ground corridors overlap at ${coord}=${f1(p.a.s0)} and ${coord}=${f1(p.b.s0)} (cover one with a gap)`);
   report(closeIndex, (p) =>
-    `sections at s=${f1(p.a.s0)} and s=${f1(p.b.s0)} come near but are only ${p.di} segments apart (need > ${indexMin})`,
+    `${prefix}sections at ${coord}=${f1(p.a.s0)} and ${coord}=${f1(p.b.s0)} come near but are only ${p.di} segments apart (need > ${indexMin})`,
   );
-  if (track.branches.length > 0) validateBranches(track, errors);
-  return errors;
 }
 
 // ---- M4-SCHEMA validation: surfaces, obstacles, split lanes ----------------------------
@@ -2092,22 +2114,12 @@ function buildBranch(main: Track, bd: Branch, roadNo: number, base: number): Pla
   return { road, base, s0: bd.s0, s1: bd.s1, side: bd.side, forkGore: gore(fg), mergeGore: gore(mg), mapS };
 }
 
-/** A gore's nose into a road's tyre buckets: every segment whose corridor piece comes within its radius + TYRES_BUCKET_REACH (as buildBuckets' mounds). */
+/** A gore's nose into a road's tyre buckets: every segment it reaches by buildBuckets' rule for mounds (moundNear). */
 function addNose(track: Track, nose: PlacedTyres): void {
   const at = track.tyresAt as PlacedTyres[][];
-  const np = track.pts.length;
+  const normals = track.pts.map((_, i) => vertexNormal(track, i));
   for (let i = 0; i < segCount(track); i++) {
-    const a = track.cum[i], b = track.cum[i + 1];
-    if (alongGap(track, Math.abs(nose.s - (a + b) / 2)) > 4 * (track.wall + nose.r + TYRES_BUCKET_REACH)) continue; // another section
-    const j = (i + 1) % np, p = track.pts[i], q = track.pts[j];
-    const ni = vertexNormal(track, i), nj = vertexNormal(track, j);
-    const quad: Vec[] = [
-      { x: p.x + ni.x * track.wallR[i], y: p.y + ni.y * track.wallR[i] },
-      { x: q.x + nj.x * track.wallR[j], y: q.y + nj.y * track.wallR[j] },
-      { x: q.x - nj.x * track.wallL[j], y: q.y - nj.y * track.wallL[j] },
-      { x: p.x - ni.x * track.wallL[i], y: p.y - ni.y * track.wallL[i] },
-    ];
-    if (quadDist(quad, nose.x, nose.y) > nose.r + TYRES_BUCKET_REACH) continue;
+    if (!moundNear(track, segQuad(track, i, normals), track.cum[i], track.cum[i + 1], nose)) continue;
     at[i] = at[i].length > 0 ? [...at[i], nose] : [nose];
   }
 }
@@ -2277,7 +2289,9 @@ function mouthZone(main: Track, errors: string[], what: string, lo: number, hi: 
  * branches). Per branch: its side is -1 or +1, s0 < s1 and both off the start zone; halfWidth >=
  * BRANCH_HALF_MIN; it is shorter than the main road from s0 to s1 (strictly); its corridor parts from
  * the main road's at both ends (a gore each); the centrelines meet at <= GORE_ANGLE_MAX at each gore,
- * and each mouth is <= MOUTH_LEN_MAX along either road; mapS strictly increasing; its features keep
+ * and each mouth is <= MOUTH_LEN_MAX along either road; mapS strictly increasing; its own sections pass
+ * the crossing checks (sectionCrossings, not wrapped) and no bend of it is tighter than its inside's reach
+ * (its corridor never folds over itself); its features keep
  * MOUTH_CLEAR past its gores and pass the road checks (validateRoad); its recovery points lie between
  * its gores, one before its first hazard (a ramp, a gap, a hole or a truck); the gores' noses keep
  * SOLID_CLEAR from every recovery point; mouths never share a search window (mouthAt has one answer);
@@ -2319,6 +2333,20 @@ function validateBranches(main: Track, errors: string[]): void {
     // Its features in u, MOUTH_CLEAR past its gores, and the road's own checks.
     const lo = fg.u + MOUTH_CLEAR, hi = mg.u - MOUTH_CLEAR;
     if (!(hi > lo)) errors.push(`${at}: ${f1(mg.u - fg.u)} between its gores, not longer than ${2 * MOUTH_CLEAR} (MOUTH_CLEAR of plain road past each)`);
+    // Its own sections (review 1): the crossing checks of every road, without wrapping (sectionCrossings),
+    // and, since those leave alone what lies within SAME_SECTION walls along it, no bend tighter than its
+    // inside's reach (advisor change 13's rule for a widened bend, at every sample of a branch): a tighter
+    // bend folds its corridor over itself, and nearest() degenerates there.
+    sectionCrossings(r, errors, "u", `${at}: `);
+    for (let i = 0; i < r.pts.length; i++) {
+      const k = curvatureAt(r, i);
+      if (k === 0) continue;
+      const reach = (k > 0 ? r.wallR[i] : r.wallL[i]) - CAR_HALF_WID;
+      if (!(reach < 1 / Math.abs(k))) {
+        errors.push(`${at}: a car centre reaches ${f1(reach)} (the wall less half a car) on the inside of the bend at u=${f1(r.cum[i])}, not below the local radius ${f1(1 / Math.abs(k))} (its corridor folds over itself)`);
+        break;
+      }
+    }
     const own: string[] = [];
     validateRoad(r, own, (what, a, z) => {
       if (!(a >= lo && z <= hi && a <= z)) own.push(`${what}: outside u ${f1(lo)}..${f1(hi)} (a branch's features keep ${MOUTH_CLEAR} past its gores at u ${f1(fg.u)} and ${f1(mg.u)})`);

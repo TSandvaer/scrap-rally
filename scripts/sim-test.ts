@@ -13714,6 +13714,16 @@ function brRules(): void {
   rule("two mouths within a search window of each other are refused (mouthAt has one answer)",
     brErrs([a, { ...b, s0: 7700, control: [[6520, 2900], ...b.control.slice(1)] }]), "the merge of branch 1 and the fork of branch 2 are within 12 segments of each other on the main road");
   rule("a fork in the start zone is refused", brErrs([{ ...a, s0: 100 }]), "its fork or merge is in the start zone or off the lap");
+  // Review 1: a branch road gets the crossing checks too (no wrap on an open road), and no bend tighter than
+  // its inside's reach (the reviewer's repro, a fold: samples u 1303.2 and u 1707.1 are 123.2 apart with
+  // walls 100; its overlapping corridor pieces all lie within 378 along it, under the crossing check's
+  // SAME_SECTION reach of 400, so the bend rule is what refuses it).
+  rule("a branch whose corridor folds over itself (a bend tighter than its inside's reach) is refused (review 1's repro)",
+    brErrs([{ ...a, features: [], control: [[5000, 680], [5250, 820], [5600, 1030], [5950, 1400], [5850, 1350], [6100, 1420], [6380, 1950], [6520, 2200]] }]),
+    "a car centre reaches 92.0 (the wall less half a car) on the inside of the bend at u=1430.9, not below the local radius 21.1 (its corridor folds over itself)");
+  rule("a branch that crosses itself is refused (the crossing check on each branch road, u not wrapped)",
+    brErrs([{ ...a, features: [], control: [[5000, 680], [5250, 820], [5600, 1030], [6150, 1400], [6100, 1900], [5700, 1950], [5550, 1550], [5950, 1350], [6350, 1700], [6520, 2200]] }]),
+    "ground corridors overlap at u=1160.0 and u=3300.8 (cover one with a gap)");
 }
 
 function brYardCheck(): void {
