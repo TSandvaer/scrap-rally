@@ -114,8 +114,36 @@ export const SPLIT_YARD: TrackDef = {
   recovery: [0],
 };
 
+// The M4-MOVE test track (rolling barrels, crusher presses and a parked ramp truck; ClickUp
+// 123jpnbffz5): the Preview Yard's loop with three spaced groups and long plain road between them
+// (the user found the Surf Yard "way too packed"); nothing else on it.
+// - On the top straight two rows of rolling barrels 500 apart: three barrels rolling right at
+//   110 u/s, then two rolling left at 90 (dodge them, or time them).
+// - On the bottom straight a parked ramp truck right of the centre: in its ramp band at 220 u/s or
+//   more a car rides up and jumps the cab (the straight past it is long enough for a boosted flight);
+//   slower, or beside the band, the truck is solid. The road left of it is the way round.
+// - Round the left-hand side two crusher presses 400 apart: the first over the left two thirds of
+//   the road, the second over the right two thirds, on different cycles (take the open side, or time
+//   them).
+// Picked with the dev flag SCRAP_DEV_TRACK=move-yard (server/room.ts).
+export const MOVE_YARD: TrackDef = {
+  id: "move-yard",
+  name: "Move Yard",
+  control: PREVIEW_YARD.control,
+  halfWidth: 64,
+  verge: 44,
+  features: [
+    { k: "barrels", s: 800, n: 3, period: 240, speed: 110 },
+    { k: "barrels", s: 1300, n: 2, period: 220, speed: -90 },
+    { k: "truck", s: 5950, lat: 24, len: 110 },
+    { k: "press", s: 8650, lat0: -64, lat1: 16, period: 160, down: 50 },
+    { k: "press", s: 9050, lat0: -16, lat1: 64, period: 200, down: 60 },
+  ],
+  recovery: [0],
+};
+
 /** Every preview test track, in the order a preview lists them. */
-export const TEST_TRACKS: readonly TrackDef[] = [PREVIEW_YARD, SURF_YARD, SPLIT_YARD];
+export const TEST_TRACKS: readonly TrackDef[] = [PREVIEW_YARD, SURF_YARD, SPLIT_YARD, MOVE_YARD];
 
 const built = new Map<string, Track>(); // built once per id; a Track is never mutated
 
