@@ -140,3 +140,4 @@
 - 2026-11-22 — HARD-2 approved by the user (popup) with the Fable advisor changes ("sound with changes", 10 binding); starts now in the third author slot.
 - 2026-11-22 — PLAN-THEMES approved by the user with the Fable advisor changes ("sound with changes", 10 binding) and all 9 recommended answers; the census HUD-allowance fix moved into M4-TRACKS; TH-LOOK-1 (Fable) takes the first free author slot.
 - 2026-11-22 — M4-MOVE taste (user, Move Yard with Normal bots): barrels approved, parked ramp approved (bots take the ramp sometimes), crusher press approved; bots dodge barrels and go round presses. No follow-up needed.
+- 2026-11-22 — Cap rule (user popup): authors idle in review do not count toward the cap of 3; a short fix round may briefly run as a 4th.
