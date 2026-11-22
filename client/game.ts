@@ -2,7 +2,7 @@
 // the other cars, shots and mines, and the server clock estimate. No DOM access, so the
 // headless bot test drives exactly this code.
 
-import { angleDiff, BASE_STATS, CAR_RADIUS, cloneCar, TICK_HZ, wallLimit, type CarState, type CarStats, type Input } from "../shared/physics";
+import { angleDiff, BASE_STATS, CAR_RADIUS, CAR_WIDTH, cloneCar, islandSide, NOSE_MID, TICK_HZ, wallLimit, type CarState, type CarStats, type Input } from "../shared/physics";
 import {
   CHAT_HISTORY,
   CHAT_MAX,
@@ -94,11 +94,25 @@ export const WALL_HIT_MIN = 50; // units/s into the wall for a wall-hit cue
 /**
  * Speed into the wall a step ended against, from the velocity before the step (collideWalls
  * removes that component, shared/physics.ts): 0 when the car is not at the wall afterwards
- * or was not moving into it. Same normal as the physics (queryTrackNear with the seg hint).
+ * or was not moving into it. Same normal as the physics (queryTrackNear with the seg hint), and
+ * the same per-sample wall on the car's side (wallLimit with the query, M4-SURF part 2). An
+ * island's side is a wall too (collideIslands: the car left against it): the speed into the island
+ * along the right-of-travel normal. A nose, as a tyre mound, gives no wall cue.
  */
 export function wallHitSpeed(before: { vx: number; vy: number }, after: CarState, track: Track): number {
   const q = queryTrackNear(track, after.x, after.y, after.seg);
-  if (q.dist < wallLimit(track) - 0.01) return 0;
+  const isles = track.islandsAt[q.seg];
+  if (isles !== undefined && isles.length > 0) {
+    for (const isle of isles) {
+      if (q.s < isle.s0 + NOSE_MID || q.s > isle.s1 - NOSE_MID) continue;
+      const lo = isle.lat0 - CAR_WIDTH / 2, hi = isle.lat1 + CAR_WIDTH / 2;
+      const at = Math.abs(q.lat - lo) <= 0.01 ? -1 : Math.abs(q.lat - hi) <= 0.01 ? 1 : islandSide(isle, q);
+      if (at === 0) continue;
+      const rx = q.side * q.nx, ry = q.side * q.ny; // the right of travel; into the island: +r on its left side
+      return Math.max(0, at < 0 ? before.vx * rx + before.vy * ry : -(before.vx * rx + before.vy * ry));
+    }
+  }
+  if (q.dist < wallLimit(track, q) - 0.01) return 0;
   return Math.max(0, before.vx * q.nx + before.vy * q.ny);
 }
 

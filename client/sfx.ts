@@ -23,7 +23,7 @@ import {
   type Trigger,
 } from "./soundlogic";
 import type { GameEvent } from "../shared/protocol";
-import { queryTrackNear } from "../shared/track";
+import { halfOf, queryTrackNear } from "../shared/track";
 
 /** Peak level of each effect at gain 1, before the effects volume. */
 const LEVEL: Record<SfxKind, number> = {
@@ -826,7 +826,8 @@ export class RaceSounds {
   private updateGravel(st: EngineState): void {
     const g = this.game;
     const car = g.car!;
-    const off = onGravel(queryTrackNear(g.track, car.x, car.y, car.seg).dist, g.track.def.halfWidth);
+    const q = queryTrackNear(g.track, car.x, car.y, car.seg);
+    const off = onGravel(q.dist, halfOf(g.track, q)); // the per-sample asphalt (M4-SURF part 2: a split's widened road)
     const target = gravelTarget(st, off);
     if (!this.gravel) {
       if (!target.on) return;

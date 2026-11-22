@@ -9998,10 +9998,10 @@ function schemaPreview(): void {
 
 function schemaDataOnly(): void {
   // Data only: a car driven through the preview yard's features that do not act yet (the barrels'
-  // lane, the truck, the press, the splits; M4-MOVE and M4-SURF part 2) steps exactly as on the same
-  // loop without them, server step and all. (Water, dirt, belts and tyre mounds act since M4-SURF
-  // part 1: its own section, below; they are left off the yard for this run.)
-  const acts = (f: Feature) => f.k === "water" || f.k === "dirt" || f.k === "belt" || f.k === "tyres";
+  // lane, the truck, the press; M4-MOVE) steps exactly as on the same loop without them, server step
+  // and all. (Water, dirt, belts and tyre mounds act since M4-SURF part 1, widens and islands since
+  // M4-SURF part 2: their own sections, below; they are left off the yard for this run.)
+  const acts = (f: Feature) => f.k === "water" || f.k === "dirt" || f.k === "belt" || f.k === "tyres" || f.k === "widen" || f.k === "island";
   const yard = buildTrack({ ...PREVIEW_YARD, id: "schema-inert", features: PREVIEW_YARD.features!.filter((f) => !acts(f)) }), bare = buildTrack(SCHEMA_LOOP);
   const run = (t: Track) => {
     const p = pointAt(t, 500);
@@ -10020,7 +10020,7 @@ function schemaDataOnly(): void {
   const a = run(yard), b = run(bare);
   const same = a.length === b.length && a.every((v, i) => Object.is(v, b[i]));
   const s = queryTrackNear(yard, a[a.length - 8], a[a.length - 7], a[a.length - 3]).s;
-  check("schema data only: a car through the preview yard's barrels, truck, press and splits steps bit for bit as on the bare loop (physics does not read them yet)", same && s > 9200 && s < 9800, `28 s at 0.8 throttle from s=500 along the centre line, ended at s=${s.toFixed(0)} (past the belt)`);
+  check("schema data only: a car through the preview yard's barrels, truck and press steps bit for bit as on the bare loop (physics does not read them yet)", same && s > 9200 && s < 9800, `28 s at 0.8 throttle from s=500 along the centre line, ended at s=${s.toFixed(0)} (past the belt)`);
   check("schema data only: GRID_SLOTS = MAX_PLAYERS; gridSlotSL is where gridSlot puts each slot", GRID_SLOTS === MAX_PLAYERS && Array.from({ length: GRID_SLOTS }, (_, k) => {
     const g = gridSlot(yard, k), sl = gridSlotSL(yard, k), p = pointAt(yard, sl.s);
     return Math.hypot(p.x - Math.sin(p.h) * sl.lat - g.x, p.y + Math.cos(p.h) * sl.lat - g.y) < 1e-6;
@@ -10942,7 +10942,9 @@ function surfBots(): void {
   }
   console.log(`  ${rows.join("\n  ")}`);
   check("surf bots: Easy, Normal and Hard bots (Sport, Racer, Truck) all finish 3 laps of the Surf Yard (every surface and mound) with no fall, identically on a rerun", ok, rows.map((r) => r.split(";")[0]).join(" | "));
-  check("surf bots: the bots meet the features (belt ticks, mound contacts) and mostly keep off water and dirt", met.belt > 300 && met.mounds > 0, JSON.stringify(met));
+  // M4-SURF part 2 (the review's F1): the bots now keep clear of the mounds (splitMounds, below: at most
+  // the branch's contact ticks; measured 0 or 1), so the meeting is the belts', the mounds' a bound.
+  check("surf bots: the bots meet the features (belt ticks), touch the mounds no more than on the M4-SURF-1 branch (F1, 113 ticks in all) and mostly keep off water and dirt", met.belt > 300 && met.mounds <= 113, JSON.stringify(met));
 }
 
 function surfShipped(): void {
@@ -11127,7 +11129,775 @@ function surfDevFlag(): void {
   check("surf dev flag: render.yaml does not set SCRAP_DEV_TRACK (off on Render)", !yaml.includes("SCRAP_DEV_TRACK"));
 }
 
-for (const t of [rivets, gating, mines, wrecks, finishing, garage, armDelay, engine, readyCheck, collisions, trackFeatures, roomTrack, jumpsWired, shippedTracks, botDriver, botLaps, mineCap, chatRoom, chatClient, sound, raceSounds, surfaceSounds, audioUnlock, menuHostOnly, menuStop, menuRestart, menuKick, menuLock, menuHandover, menuClient, menuRestartClient, retireRules, retireField, retireRaceEnd, retireGarage, retireRefund, retireOthers, retireNotices, retireClient, pauseRefused, pauseFreeze, pauseResume, pauseHold, pauseAuto, pauseCooldown, pauseGrace, pauseCountdown, pauseControls, pauseClient, musicSwitch, soundMigration, soundLayers, soundServer, soundRandom, soundRoomDrag, soundSliderGrip, soundClient, songs, songPlayer, ghostRivets, minesSetting, minesStay, minesCap, minesFade, minesAtStart, minesCleared, minesPaused, minesClient, botsPointAt, botsAdd, botsKickHost, botsHandover, botsFullRoom, botsSoloStart, botsRace, botsShop, botsTick, botsCpu, botsClient, carsTypes, carsStats, carsPick, carsRejoin, carsBots, carsRunUps, carsBalance, carsCut, carsClient, envRt, envStep, envClient, draftRule, draftStraight, draftClient, draftJumps, draftBots, cellsRule, boostPhysics, cellsServer, cellsClient, cellsValidate, cellsBots, cellsOffCentre, schemaTypes, schemaArrays, schemaLateral, schemaRt, schemaValidate, schemaPreview, schemaDataOnly, hardGolden, hardLevels, hardShop, hardWeapons, hardApex, hardPace, hardTraffic, hardVs, hardClient, hardCpu, touchStickCentre, touchStickClamp, touchStickDead, touchStickCurve, touchStickOutput, touchStickRounding, touchStickOwner, touchMulti, touchRelease, touchMine, touchMerge, surfTraction, surfBuckets, surfWater, surfDirt, surfBelt, surfMounds, surfRivets, surfRespawn, surfValidate, surfLanes, surfBots, surfShipped, surfParity, surfCpu, surfDevFlag]) {
+// ---- split lanes (M4-SURF part 2, PLAN-M4.md 2.6 B, advisor changes 2, 11, 13; ClickUp 123jpnbffz4, 2026-11-21) ----
+// The road widens round an island into two lanes and narrows again past it. The walls are per
+// sample (shared/track.ts halfOf / wallOf: halfAt's value at a query's s and side, through its
+// segment's widens) in physics, isLost, the on-road test, landings, rivets, recovery, the bots and
+// the client's wallHitSpeed; an island is solid for a car on the ground (shared/physics.ts
+// collideIslands: its sides a wall, its noses a tyre mound's bounce); s, checkpoints, laps and
+// positions are unchanged; validateRunUps drives a split once per lane; the bots take a lane per
+// seat and car type (shared/botdrive.ts splitFor). Plus the M4-SURF-1 review's F1 and F2 (laneFor's
+// side locks round mounds, and its look round the lap). Proven on the Split Yard test track
+// (shared/testtracks.ts), picked with the dev flag SCRAP_DEV_TRACK=split-yard.
+
+// This section's imports (hoisted like the ones at the top; namespaces, so no name clashes).
+import * as splitPhys from "../shared/physics";
+import * as splitTrack from "../shared/track";
+import * as splitW from "../shared/weapons";
+import * as splitBot from "../shared/botdrive";
+import * as splitTune from "../tools/debug/split-tune";
+import * as splitProg from "../server/race";
+import { SPLIT_YARD } from "../shared/testtracks";
+import { readFileSync as splitRead } from "node:fs";
+
+const splitClock = { t0: 0 };
+const splitYard = () => testTrack(SPLIT_YARD.id)!;
+/** The Split Yard's loop with no features: the plain road the splits are compared with. */
+const splitBare = () => buildTrack({ ...SPLIT_YARD, id: "split-bare", features: [] });
+
+/** The point `lat` right of the centerline at s, and its query from that segment. */
+function splitQuery(t: Track, s: number, lat: number): ReturnType<typeof queryTrackNear> {
+  const p = pointAt(t, s);
+  return queryTrackNear(t, p.x - Math.sin(p.h) * lat, p.y + Math.cos(p.h) * lat, p.seg);
+}
+
+/** A car's (or a rivet's) track coordinates. */
+function splitSL(t: Track, c: { x: number; y: number; seg: number }): { s: number; lat: number } {
+  const q = queryTrackNear(t, c.x, c.y, c.seg);
+  return { s: q.s, lat: q.lat };
+}
+
+function splitWalls(): void {
+  splitClock.t0 = performance.now();
+  // Shipped tracks (no widen): the per-sample walls are the constants, exactly.
+  let n = 0, diff = 0;
+  for (const e of trackList()) {
+    const t = trackById(e.id);
+    for (let i = 0; i < t.pts.length; i += 3) {
+      for (let lat = -230; lat <= 230; lat += 23) {
+        const q = splitQuery(t, t.cum[i] + 5.3, lat);
+        n++;
+        if (!Object.is(splitTrack.halfOf(t, q), t.def.halfWidth) || !Object.is(splitTrack.wallOf(t, q), t.wall) ||
+            !Object.is(splitPhys.wallLimit(t, q), splitPhys.wallLimit(t)) || splitTrack.isLost(t, q) !== q.dist > t.wall * 2) diff++;
+      }
+    }
+  }
+  check(
+    "split walls: on the shipped tracks (no widen) the per-sample walls are today's constants exactly: halfOf = def.halfWidth, wallOf = track.wall, wallLimit(track, q) = wallLimit(track), isLost = dist > 2 * wall",
+    diff === 0 && n > 3000,
+    `${n} queries, ${diff} differ`,
+  );
+  // The test tracks: halfOf / wallOf are the walls as the bake draws them (client/gfx/world.ts): each
+  // centreline segment's widening at its two ends (widenAt), linear in the query's place along it;
+  // buildTrack's halfL / halfR / wallL / wallR are the per-sample values. And the bake's own rule re-done
+  // round every widen (tools/debug/split-tune.ts drawnGaps): the physics wall and kerb are where the
+  // drawing has them (the exact taper, widenAt at the query's s, was off by up to ~4.8 units).
+  let m = 0, off = 0, arr = 0;
+  for (const d of TEST_TRACKS) {
+    const t = testTrack(d.id)!;
+    for (const w of t.widens) {
+      for (let s = w.s0 - 40; s <= w.s1 + 40; s += 3.1) {
+        for (const lat of [-170, -90, -30, 30, 90, 170]) {
+          const q = splitQuery(t, s, lat);
+          const k = (q.s - t.cum[q.seg]) / (t.cum[q.seg + 1] - t.cum[q.seg]);
+          const w0 = splitTrack.widenAt(t, t.cum[q.seg], q.side), w1 = splitTrack.widenAt(t, t.cum[q.seg + 1], q.side);
+          const drawn = t.def.halfWidth + w0 + (w1 - w0) * k;
+          m++;
+          if (Math.abs(splitTrack.halfOf(t, q) - drawn) > 1e-9 || Math.abs(splitTrack.wallOf(t, q) - (drawn + t.def.verge)) > 1e-9) off++;
+        }
+      }
+    }
+    t.pts.forEach((_, i) => {
+      if (!Object.is(t.halfL[i], splitTrack.halfAt(t, t.cum[i], -1)) || !Object.is(t.halfR[i], splitTrack.halfAt(t, t.cum[i], 1)) ||
+          !Object.is(t.wallL[i], t.halfL[i] + t.def.verge) || !Object.is(t.wallR[i], t.halfR[i] + t.def.verge)) arr++;
+    });
+  }
+  const gaps = splitTune.drawnGaps();
+  check(
+    "split walls: on the test tracks halfOf / wallOf are the walls the bake draws (each segment's widening at its ends, linear along it; halfL / halfR / wallL / wallR the per-sample values), and round every widen the bake's own rule puts the wall and the kerb where the physics does (<= 0.01; the exact taper was further off)",
+    off === 0 && arr === 0 && m > 2000 && gaps.length === 5 && gaps.every((g) => g.now <= 0.01 && g.points > 4000) && Math.max(...gaps.map((g) => g.exact)) > 2,
+    `${m} queries round the widens, ${off} differ; ${arr} samples differ; drawn vs physics per widen: ${gaps.map((g) => `${g.track} ${g.widen.split(" ")[0]} ${g.now.toFixed(4)} (exact taper ${g.exact.toFixed(2)})`).join(", ")}`,
+  );
+  // Driven: a car steered into the left wall beside island A (widened 48) stops at the widened wall
+  // less half a car, and the client's wall cue hears it; on the bare loop it stops at track.wall - 8.
+  const yard = splitYard(), bare = splitBare();
+  const into = (t: Track) => {
+    const c = surfCar(t, 1000, -60, 300, -0.5);
+    const env = raceEnv(t);
+    let widest = 0, cue = 0;
+    for (let k = 0; k < 60; k++) {
+      const before = { vx: c.vx, vy: c.vy };
+      env.rt = k + 1;
+      stepRaceCar(c, { throttle: 1, steer: -1 }, BASE_STATS, env);
+      widest = Math.min(widest, splitSL(t, c).lat);
+      cue = Math.max(cue, wallHitSpeed(before, c, t));
+    }
+    return { widest, cue };
+  };
+  const wide = into(yard), plain = into(bare);
+  const limit = splitTrack.wallAt(yard, 1000, -1) - CAR_WIDTH / 2;
+  check(
+    "split walls: a car steered into the widened left wall beside island A stops at the widened wall less half a car (148, not 100) and the client's wall cue hears it; on the bare loop at track.wall - 8",
+    Math.abs(wide.widest + limit) < 0.01 && limit === 148 && wide.cue >= WALL_HIT_MIN && Math.abs(plain.widest + (bare.wall - CAR_WIDTH / 2)) < 0.01,
+    `widest lat ${wide.widest.toFixed(3)} (limit -${limit}), cue ${wide.cue.toFixed(0)} u/s; bare ${plain.widest.toFixed(3)}`,
+  );
+  // The on-road test: on the widened asphalt (lat -95 beside island A, asphalt to -112) a car keeps a
+  // road car's speed bit for bit (the same as on the bare loop's centre line); on the bare loop -95 is the verge.
+  const speed = (t: Track, lat: number) => {
+    const c = surfCar(t, 900, lat, 200);
+    for (let k = 0; k < 60; k++) stepCar(c, { throttle: 1, steer: 0 }, BASE_STATS, t);
+    return { v: speedOf(c), vx: c.vx, vy: c.vy };
+  };
+  const onWide = speed(yard, -95), onCentre = speed(bare, 0), onVerge = speed(bare, -95);
+  check(
+    "split walls: the on-road test is per sample: at lat -95 beside island A (widened asphalt) a car runs exactly as on the bare loop's centre line; at lat -95 on the bare loop it is on the verge (slower)",
+    Object.is(onWide.vx, onCentre.vx) && Object.is(onWide.vy, onCentre.vy) && onVerge.v < onCentre.v - 20,
+    `after 1 s: ${onWide.v.toFixed(2)} vs ${onCentre.v.toFixed(2)} u/s; verge ${onVerge.v.toFixed(2)}`,
+  );
+  // The gravel sound (client/sfx.ts updateGravel: onGravel with the per-sample asphalt, halfOf): no
+  // gravel on the widened asphalt beside island A, gravel at the same offset on the bare loop's verge;
+  // on the shipped tracks halfOf is def.halfWidth exactly (above), so their sound is unchanged.
+  const sfxSrc = splitRead("client/sfx.ts", "utf8");
+  const gravel = (t: Track, lat: number) => {
+    const q = splitQuery(t, 1000, lat);
+    return onGravel(q.dist, splitTrack.halfOf(t, q));
+  };
+  check(
+    "split walls: the gravel sound reads the per-sample asphalt (client/sfx.ts: onGravel(q.dist, halfOf(g.track, q))): none at lat -95 beside island A (widened asphalt), gravel at -95 on the bare loop and at -120 beside the island (its verge)",
+    sfxSrc.includes("onGravel(q.dist, halfOf(g.track, q))") && !sfxSrc.includes("g.track.def.halfWidth") && !gravel(yard, -95) && gravel(bare, -95) && gravel(yard, -120),
+    `yard -95: ${gravel(yard, -95)}, bare -95: ${gravel(bare, -95)}, yard -120: ${gravel(yard, -120)}`,
+  );
+  // isLost, a landing and a rivet read the widened wall on their side.
+  const lost = (t: Track, lat: number) => splitTrack.isLost(t, splitQuery(t, 1000, lat));
+  const land = (t: Track) => {
+    const c = surfCar(t, 1000, -140, 300);
+    c.air = 1;
+    return stepRaceCar(c, NO_INPUT_SPLIT, BASE_STATS, raceEnv(t));
+  };
+  const rivet = (t: Track) => {
+    const p = pointAt(t, 1000);
+    const s: splitW.Shot = { id: 1, owner: "x", x: p.x - Math.sin(p.h) * -130, y: p.y + Math.cos(p.h) * -130, vx: Math.cos(p.h) * 900, vy: Math.sin(p.h) * 900, seg: p.seg, travelled: 0 };
+    return splitW.moveShot(s, t);
+  };
+  check(
+    "split walls: isLost, a landing and a rivet read the widened wall (156 beside island A): lat -250 is not lost (2 x 156), a car landing at -140 lands and a rivet at -130 flies on; on the bare loop (wall 108) all three end",
+    !lost(yard, -250) && lost(yard, -320) && lost(bare, -250) && land(yard) === null && land(bare) === "fall" && rivet(yard) && !rivet(bare),
+    `lost -250: ${lost(yard, -250)} / bare ${lost(bare, -250)}; landing at -140: ${land(yard)} / bare ${land(bare)}; rivet at -130: ${rivet(yard)} / bare ${rivet(bare)}`,
+  );
+}
+const NO_INPUT_SPLIT = { throttle: 0, steer: 0 };
+
+/** Island A of the Split Yard (820..1580 by -22..22 on the top straight), B (water | dirt) and C (the bend). */
+const splitIsle = (k: number) => splitYard().islands[k];
+
+function splitIslands(): void {
+  const yard = splitYard(), bare = splitBare();
+  // The outline is the drawing's: world.ts's NOSE and TYRE are ISLAND_NOSE and ISLAND_NOSE_ROUND; every
+  // drawn tyre stack of every nose (world.ts's rows) lies inside the nose's outline (its centre on the
+  // core, so the whole stack within ISLAND_NOSE_ROUND of it), and the barrier posts inside the rectangle.
+  const src = splitRead("client/gfx/world.ts", "utf8");
+  const NOSE = Number(/const NOSE = ([\d.]+);/.exec(src)?.[1]), TYRE = Number(/const TYRE = ([\d.]+);/.exec(src)?.[1]);
+  const postsAt = src.includes("for (const lat of [isle.lat0 + 3.2, isle.lat1 - 3.2])");
+  let stacks = 0, outside = 0, worst = 0;
+  for (const d of TEST_TRACKS) {
+    const t = testTrack(d.id)!;
+    for (const isle of t.islands) {
+      const width = isle.lat1 - isle.lat0, mid = (isle.lat0 + isle.lat1) / 2;
+      const across = Math.max(2, Math.round(width / (TYRE * 1.8)));
+      for (const end of [0, 1]) {
+        const core = end ? isle.tail : isle.head;
+        for (let row = 1; row >= 0; row--) {
+          const count = across - row;
+          const s = end ? isle.s1 - TYRE - row * TYRE * 1.9 : isle.s0 + TYRE + row * TYRE * 1.9;
+          for (let j = 0; j < count; j++) {
+            const p = pointAt(t, s), lat = mid + (j - (count - 1) / 2) * ((width - 2 * TYRE) / Math.max(1, across - 1));
+            const d0 = splitQuadDist(core, p.x - Math.sin(p.h) * lat, p.y + Math.cos(p.h) * lat);
+            stacks++;
+            worst = Math.max(worst, d0);
+            if (d0 > 0.1) outside++;
+          }
+        }
+      }
+    }
+  }
+  check(
+    "split islands: the outline is the M4-WORLD drawing's: NOSE 26 = ISLAND_NOSE and TYRE 6.5 = ISLAND_NOSE_ROUND (client/gfx/world.ts), every drawn tyre stack of every nose lies inside the nose's outline (its centre on the core), and the barrier posts (lat0 + 3.2, lat1 - 3.2) inside the island",
+    NOSE === splitTrack.ISLAND_NOSE && TYRE === splitTrack.ISLAND_NOSE_ROUND && postsAt && stacks > 50 && outside === 0,
+    `NOSE ${NOSE}, TYRE ${TYRE}; ${stacks} stacks, ${outside} outside, the farthest centre ${worst.toFixed(3)} off its core`,
+  );
+  // The sides are a wall: a car into island A's left side from the left lane moves exactly as the same
+  // car into the right wall from as far away (same angle, speed, bounce and scrape) of the loop with no
+  // verge (asphalt up to the wall, as up to the island).
+  const A = splitIsle(0);
+  const flat = buildTrack({ ...SPLIT_YARD, id: "split-flat", verge: 0, features: [] });
+  const a = surfCar(yard, 1000, A.lat0 - CAR_WIDTH / 2 - 40, 300, 0.4), b = surfCar(flat, 1000, flat.wall - CAR_WIDTH / 2 - 40, 300, 0.4);
+  let dv = 0, dgap = 0, touched = 0;
+  for (let k = 0; k < 40; k++) {
+    stepRaceCar(a, { throttle: 1, steer: 0 }, BASE_STATS, raceEnv(yard));
+    stepRaceCar(b, { throttle: 1, steer: 0 }, BASE_STATS, raceEnv(flat));
+    dv = Math.max(dv, Math.abs(a.vx - b.vx), Math.abs(a.vy - b.vy));
+    const ga = A.lat0 - CAR_WIDTH / 2 - splitSL(yard, a).lat, gb = flat.wall - CAR_WIDTH / 2 - splitSL(flat, b).lat;
+    dgap = Math.max(dgap, Math.abs(ga - gb));
+    if (ga < 1e-6) touched++;
+  }
+  check(
+    "split islands: an island's side is a wall: a car steered into island A's left side moves exactly as one into the right wall of the loop without a verge from as far (the same bounce WALL_BOUNCE and scrape WALL_SCRAPE)",
+    dv < 1e-6 && dgap < 1e-6 && touched > 10,
+    `largest velocity difference ${dv.toExponential(2)}, gap difference ${dgap.toExponential(2)}; ${touched} ticks against it`,
+  );
+  // The nose is a tyre mound's solid: head-on down island A's middle at full throttle it bounces the car
+  // back at TYRES_RESTITUTION of the speed it hit it with (that tick's speed on the bare loop); the capsule
+  // never overlaps it.
+  const h = surfCar(yard, 700, 0, 300);
+  let vIn = 0, vOut = 0, minGap = Infinity;
+  for (let k = 0; k < 40; k++) {
+    const ref = cloneCar(h);
+    stepRaceCar(ref, { throttle: 1, steer: 0 }, BASE_STATS, raceEnv(bare));
+    stepRaceCar(h, { throttle: 1, steer: 0 }, BASE_STATS, raceEnv(yard));
+    const after = splitAlong(yard, h);
+    if (after < 0 && !vIn) {
+      vIn = splitAlong(bare, ref);
+      vOut = -after;
+    }
+    minGap = Math.min(minGap, splitTune.noseGap(A, h));
+  }
+  check(
+    "split islands: a nose bounces as a tyre mound (the M4-SURF-1 contact): head-on down island A's middle at full throttle the car comes back at TYRES_RESTITUTION (0.8) of the speed it hit it with, and its capsule never overlaps the nose",
+    vIn > 250 && Math.abs(vOut - splitPhys.TYRES_RESTITUTION * vIn) < 0.5 && minGap > -0.01,
+    `in ${vIn.toFixed(1)} u/s, out ${vOut.toFixed(1)} (x${(vOut / vIn).toFixed(3)}); smallest gap to the nose ${minGap.toFixed(3)}`,
+  );
+  // A car that clips a nose's corner (its line 3 outside the island's left edge: its side 5 into it) is
+  // turned into the left lane.
+  const g = surfCar(yard, 700, A.lat0 - 3, 300);
+  let inside = 0;
+  for (let k = 0; k < 90; k++) {
+    stepRaceCar(g, { throttle: 0.6, steer: 0 }, BASE_STATS, raceEnv(yard));
+    const sl = splitSL(yard, g);
+    if (sl.s >= A.s0 && sl.s <= A.s1 && sl.lat > A.lat0 - CAR_WIDTH / 2 + 0.01 && sl.lat < A.lat1 + CAR_WIDTH / 2 - 0.01) inside++;
+  }
+  const gEnd = splitSL(yard, g);
+  check(
+    "split islands: a car clipping a nose's corner (its line 3 outside the island's edge) is turned into the lane beside it and drives on past",
+    inside === 0 && gEnd.s > A.s0 + 60 && gEnd.lat < A.lat0 - CAR_WIDTH / 2 && splitAlong(yard, g) > 100,
+    `after 1.5 s at s ${gEnd.s.toFixed(0)} lat ${gEnd.lat.toFixed(1)}, ${splitAlong(yard, g).toFixed(0)} u/s along the track; ${inside} ticks inside the island's band`,
+  );
+  // A sweep (as schema-hash's walls): cars into every island's sides and noses at a spread of angles and
+  // speeds: after every step no car centre is inside an island's band and no capsule overlaps a nose.
+  let runs = 0, bad = 0, contacts = 0;
+  const firstBad: string[] = [];
+  for (const d of TEST_TRACKS) {
+    const t = testTrack(d.id)!;
+    for (const isle of t.islands) {
+      const starts: [number, number, number][] = [];
+      for (const s of [isle.s0 - 90, isle.s0 - 50]) for (const lat of [isle.lat0 - 2, isle.mid, isle.lat1 + 2, isle.lat0 + 3, isle.lat1 - 3]) for (const dh of [-0.4, 0, 0.4]) starts.push([s, lat, dh]);
+      for (let s = isle.s0 + 40; s < isle.s1 - 40; s += 90) for (const side of [-1, 1]) for (const dh of [0.2, 0.6, 1.2]) starts.push([s, side < 0 ? isle.lat0 - 40 : isle.lat1 + 40, -side * dh]);
+      for (const [s, lat, dh] of starts) {
+        for (const v of [140, 300, 430]) {
+          const c = surfCar(t, s, lat, v, dh);
+          runs++;
+          for (let k = 0; k < 50; k++) {
+            stepRaceCar(c, { throttle: 1, steer: 0 }, BASE_STATS, raceEnv(t));
+            if (c.air || c.fall || c.wreck) break;
+            const q = queryTrackNear(t, c.x, c.y, c.seg);
+            const hit = splitTune.islandContact(t, c);
+            if (hit) contacts++;
+            const inBand = q.s >= isle.s0 + splitPhys.NOSE_MID && q.s <= isle.s1 - splitPhys.NOSE_MID && q.lat > isle.lat0 - CAR_WIDTH / 2 + 0.01 && q.lat < isle.lat1 + CAR_WIDTH / 2 - 0.01;
+            const onRect = q.s >= isle.s0 && q.s <= isle.s1 && q.lat >= isle.lat0 && q.lat <= isle.lat1;
+            // A nose's rule where it applies (the centre before the head's middle or past the tail's);
+            // between them the sides' wall rule holds the centre, as the track's walls do.
+            const atNose = q.s < isle.s0 + splitPhys.NOSE_MID || q.s > isle.s1 - splitPhys.NOSE_MID;
+            if (inBand || onRect || (atNose && splitTune.noseGap(isle, c) < -0.01)) {
+              bad++;
+              if (firstBad.length < 3) firstBad.push(`${d.id} isle ${isle.s0}: start ${s},${lat},${dh} v${v} tick ${k} at ${q.s.toFixed(1)},${q.lat.toFixed(1)} gap ${splitTune.noseGap(isle, c).toFixed(2)}`);
+              break;
+            }
+          }
+        }
+      }
+    }
+  }
+  check(
+    "split islands: a sweep of cars into every island's sides and noses (5 lanes x 3 angles at 2 distances before each head, both sides every 90 units at 3 angles, 140 / 300 / 430 u/s): no car centre ever inside an island's band or on it, no capsule overlapping a nose where the nose's rule holds it",
+    bad === 0 && runs > 500 && contacts > 1000,
+    `${runs} runs, ${contacts} contact ticks, ${bad} bad${firstBad.length ? `: ${firstBad.join("; ")}` : ""}`,
+  );
+  // Airborne: a flight passes over an island (nothing touches it), and a car that lands on one is put
+  // back in the nearer lane by its next driving step, without a fall (the plan's default rule).
+  const fly = surfCar(yard, 780, 0, 400);
+  fly.air = 30;
+  const x0 = fly.x, y0 = fly.y;
+  for (let k = 0; k < 20; k++) stepRaceCar(fly, NO_INPUT_SPLIT, BASE_STATS, raceEnv(yard));
+  let ex = x0, ey = y0;
+  for (let k = 0; k < 20; k++) {
+    ex += fly.vx * DT;
+    ey += fly.vy * DT;
+  }
+  const flewOver = fly.air === 10 && Object.is(fly.x, ex) && Object.is(fly.y, ey) && splitSL(yard, fly).s > A.s0 + 20;
+  const landOn = (lat: number) => {
+    const c = surfCar(yard, 1100, lat, 300);
+    c.air = 1;
+    const ev1 = stepRaceCar(c, NO_INPUT_SPLIT, BASE_STATS, raceEnv(yard));
+    const at1 = splitSL(yard, c).lat;
+    const ev2 = stepRaceCar(c, NO_INPUT_SPLIT, BASE_STATS, raceEnv(yard));
+    return { ev: `${ev1}/${ev2}`, at1, at2: splitSL(yard, c).lat, fall: c.fall };
+  };
+  const right = landOn(5), left = landOn(-5);
+  check(
+    "split islands: a flight passes over an island; a car landing on one lands (no fall) and its next driving step puts it beside the nearer side (lat 5 -> 30, lat -5 -> -30): islands are solid for grounded cars only",
+    flewOver && right.fall === 0 && left.fall === 0 && Math.abs(right.at2 - (A.lat1 + CAR_WIDTH / 2)) < 1e-6 && Math.abs(left.at2 + (A.lat1 + CAR_WIDTH / 2)) < 1e-6 && right.ev === "null/null",
+    `flew to s ${splitSL(yard, fly).s.toFixed(0)}, air ${fly.air}; landing at 5: ${right.ev}, lat ${right.at1.toFixed(1)} -> ${right.at2.toFixed(3)}; at -5: ${left.at1.toFixed(1)} -> ${left.at2.toFixed(3)}`,
+  );
+  // Rivets die on islands and their noses: fired across island A from the left lane, and head-on into
+  // its head; one fired down the lane flies its full range; on the bare loop the first two fly on.
+  const shoot = (t: Track, s: number, lat: number, dh: number) => {
+    const p = pointAt(t, s), hh = p.h + dh;
+    const sh: splitW.Shot = { id: 1, owner: "x", x: p.x - Math.sin(p.h) * lat, y: p.y + Math.cos(p.h) * lat, vx: Math.cos(hh) * 900, vy: Math.sin(hh) * 900, seg: p.seg, travelled: 0 };
+    let k = 0;
+    while (k < 60 && splitW.moveShot(sh, t)) k++;
+    return { k, at: splitSL(t, sh), far: sh.travelled };
+  };
+  const across = shoot(yard, 1000, -80, Math.PI / 2), acrossBare = shoot(bare, 1000, -80, Math.PI / 2);
+  const headOn = shoot(yard, 700, 0, 0), headOnBare = shoot(bare, 700, 0, 0);
+  const lane = shoot(yard, 860, -70, 0);
+  check(
+    "split islands: rivets die on islands and noses: fired across island A from the left lane it dies at its side, head-on it dies at its nose; down the lane it flies its full range; on the bare loop the first two fly on",
+    across.at.lat > A.lat0 - 26 && across.at.lat < A.lat0 + 26 && across.far < 80 && headOn.at.s > A.s0 - 26 && headOn.at.s < A.s0 + 26 &&
+      acrossBare.far > 150 && headOnBare.far > 600 && lane.far > splitW.RIVET_RANGE,
+    `across: died after ${across.far.toFixed(0)} at lat ${across.at.lat.toFixed(1)} (bare ${acrossBare.far.toFixed(0)}); head-on: at s ${headOn.at.s.toFixed(1)} (bare ${headOnBare.far.toFixed(0)}); down the lane ${lane.far.toFixed(0)}`,
+  );
+  // Mines dropped on an island (they do not know the track, as ever): a mine stays where it lands. A car
+  // scraping the island's side reaches one up to 14 inside its edge (CAR_RADIUS + MINE_RADIUS from a
+  // centre held CAR_WIDTH / 2 off the edge), never one 16 inside.
+  const mineAt = (inside: number) => {
+    const p = pointAt(yard, 1200), lat = A.lat0 + inside;
+    return { id: 1, owner: "x", x: p.x - Math.sin(p.h) * lat, y: p.y + Math.cos(p.h) * lat, age: 0 };
+  };
+  const scraper = surfCar(yard, 950, A.lat0 - CAR_WIDTH / 2 - 2, 250, 0.05);
+  const near = mineAt(10), deep = mineAt(16);
+  let hitNear = false, hitDeep = false, scraped = 0;
+  for (let k = 0; k < 150; k++) {
+    stepRaceCar(scraper, { throttle: 0.7, steer: 0.02 }, BASE_STATS, raceEnv(yard));
+    if (splitTune.islandContact(yard, scraper) === "side") scraped++;
+    hitNear ||= splitW.mineHits(near, scraper);
+    hitDeep ||= splitW.mineHits(deep, scraper);
+  }
+  check(
+    "split islands: a mine dropped on an island stays there; a car scraping its side sets off one 10 inside the edge, never one 16 inside (reach 22 from a centre 8 off the edge)",
+    hitNear && !hitDeep && scraped > 60 && splitSL(yard, scraper).s > 1250,
+    `scraped ${scraped} ticks; near ${hitNear}, deep ${hitDeep}`,
+  );
+  // A wreck in a split lane respawns in that lane (clearLaneAt's side: the car's own), never in the island.
+  const B = splitIsle(1);
+  const wreckAt = (lat: number) => {
+    const c = surfCar(yard, 6400, lat, 0);
+    splitW.wreckCar(c);
+    for (let k = 0; k < splitW.WRECK_TICKS; k++) stepRaceCar(c, NO_INPUT_SPLIT, BASE_STATS, raceEnv(yard));
+    return splitSL(yard, c);
+  };
+  const wr = wreckAt(76), wl = wreckAt(-76);
+  check(
+    "split islands: a car wrecked in a split lane respawns at its s in that lane (the right lane's clear lane nearest the centre, the left one's), never in the island",
+    Math.abs(wr.s - 6400) < 0.5 && Math.abs(wl.s - 6400) < 0.5 && wr.lat >= B.lat1 + CAR_WIDTH / 2 + 4 && wr.lat < B.lat1 + 20 && wl.lat <= B.lat0 - CAR_WIDTH / 2 - 4 && wl.lat > B.lat0 - 20,
+    `right lane -> s ${wr.s.toFixed(1)} lat ${wr.lat.toFixed(1)}; left lane -> s ${wl.s.toFixed(1)} lat ${wl.lat.toFixed(1)}`,
+  );
+}
+
+/** The car's velocity along the track's direction at its segment. */
+function splitAlong(t: Track, c: CarState): number {
+  const q = queryTrackNear(t, c.x, c.y, c.seg);
+  const d = segDirSplit(t, q.seg);
+  return c.vx * d.x + c.vy * d.y;
+}
+const segDirSplit = (t: Track, seg: number) => splitTrack.segDir(t, seg);
+
+/** Distance from (x, y) to the convex quad (0 inside it). */
+function splitQuadDist(quad: readonly { x: number; y: number }[], x: number, y: number): number {
+  let sign = 0, inside = true, best = Infinity;
+  for (let k = 0; k < 4; k++) {
+    const a = quad[k], b = quad[(k + 1) % 4];
+    const ex = b.x - a.x, ey = b.y - a.y;
+    const cross = ex * (y - a.y) - ey * (x - a.x);
+    if (Math.abs(cross) > 1e-9) {
+      if (sign === 0) sign = Math.sign(cross);
+      else if (Math.sign(cross) !== sign) inside = false;
+    }
+    const t = clamp(((x - a.x) * ex + (y - a.y) * ey) / (ex * ex + ey * ey || 1), 0, 1);
+    best = Math.min(best, Math.hypot(x - a.x - ex * t, y - a.y - ey * t));
+  }
+  return inside ? 0 : best;
+}
+
+/**
+ * A lap of `t` (and a bit) by a plain lane follower: on the centre line, and from 250 before each
+ * island to just past it in the middle of its lane on `side`; the race progress (server/race.ts)
+ * every tick. The checkpoint and lap events (with the s each happened at), the side it was on at each
+ * island's middle, and whether its distance raced ever went back.
+ */
+function splitLap(t: Track, side: number): { events: string[]; sides: string; back: number; ticks: number } {
+  const p0 = pointAt(t, -60);
+  const c: CarState = { x: p0.x, y: p0.y, h: p0.h, vx: 0, vy: 0, seg: p0.seg, wreck: 0, air: 0, fall: 0, boost: 0 };
+  const prog = splitProg.newProgress(t, c);
+  const env = raceEnv(t);
+  const events: string[] = [];
+  let sides = "", back = 0, ticks = 0, last = splitProg.raceDistance(t, prog);
+  for (; ticks < 60 * 90 && prog.lap < 1; ticks++) {
+    const q = queryTrackNear(t, c.x, c.y, c.seg);
+    const isle = t.islands.find((f) => q.s > f.s0 - 250 && q.s < f.s1 + 40);
+    const lat = isle ? (side < 0 ? (isle.lat0 - isle.outL) / 2 : (isle.lat1 + isle.outR) / 2) : 0;
+    const a = pointAt(t, q.s + 60 + speedOf(c) * 0.2);
+    const tx = a.x - Math.sin(a.h) * lat, ty = a.y + Math.cos(a.h) * lat;
+    env.rt = ticks + 1;
+    stepRaceCar(c, { throttle: 0.75, steer: clamp(angleDiff(c.h, Math.atan2(ty - c.y, tx - c.x)) * 2.2, -1, 1) }, BASE_STATS, env);
+    const s0 = prog.s, cp0 = prog.cp, lap0 = prog.lap;
+    splitProg.advance(t, prog, c);
+    if (prog.cp !== cp0 || prog.lap !== lap0) events.push(`${prog.lap ? "lap" : `cp${prog.cp}`}@${prog.lap ? Math.round(prog.s) : Math.round((s0 + prog.s) / 2)}`);
+    for (const f of t.islands) {
+      const m = (f.s0 + f.s1) / 2;
+      if (s0 < m && prog.s >= m) sides += splitSL(t, c).lat < f.mid ? "L" : "R";
+    }
+    const now = splitProg.raceDistance(t, prog);
+    if (now < last - 1e-9) back++;
+    last = now;
+  }
+  return { events, sides, back, ticks };
+}
+
+function splitProgress(): void {
+  // s, checkpoints, laps and positions are those of the one road: a lap through every left lane and a
+  // lap through every right lane cross the same checkpoints in the same order at the same s, and the
+  // distance raced never goes back. On a Split Yard with a split over the half-lap checkpoint too.
+  const yard = splitYard();
+  const over = buildTrack({ ...SPLIT_YARD, id: "split-cp", features: [...SPLIT_YARD.features!, { k: "widen", s0: 4700, s1: 5500, left: 40, right: 40 }, { k: "island", s0: 4850, s1: 5350, lat0: -24, lat1: 24 }] });
+  const rows: string[] = [];
+  let ok = validateTrack(over).length === 0 && over.checkpoints[1] > 4850 && over.checkpoints[1] < 5350;
+  for (const t of [yard, over]) {
+    const l = splitLap(t, -1), r = splitLap(t, 1);
+    const names = (x: { events: string[] }) => x.events.map((e) => e.split("@")[0]).join();
+    const near = (x: { events: string[] }) => x.events.every((e, i) => Math.abs(Number(e.split("@")[1]) - (i < 3 ? t.checkpoints[i] : 0)) < 12);
+    const good = names(l) === "cp1,cp2,cp3,lap" && names(r) === names(l) && near(l) && near(r) && l.sides === "L".repeat(t.islands.length) && r.sides === "R".repeat(t.islands.length) && l.back === 0 && r.back === 0;
+    ok &&= good;
+    rows.push(`${t.def.id}: left lanes ${l.sides} ${l.events.join(" ")} in ${l.ticks} ticks; right lanes ${r.sides} ${r.events.join(" ")} in ${r.ticks} ticks (the shorter lane is faster where one is)`);
+  }
+  check(
+    "split progress: s, checkpoints, laps and positions are the one road's: a lap through every left lane and one through every right lane cross the same checkpoints in the same order at the same s (one inside a split), the distance raced never going back",
+    ok,
+    rows.join(" | "),
+  );
+}
+
+function splitValidate(): void {
+  // Each lane >= 72 (M4-SCHEMA's rule); an island at least its noses wide and twice as long; advisor
+  // change 13 (the inside of a bend); recovery points and grid slots >= 40 from islands and their noses
+  // (the noses lie inside the island's rectangle, so the solids' rule covers them).
+  const errs = (extra: Feature[], recovery = SPLIT_YARD.recovery) => validateTrack(buildTrack({ ...SPLIT_YARD, id: "split-bad", features: [...SPLIT_YARD.features!, ...extra], recovery })).join(" | ");
+  const narrow = errs([{ k: "widen", s0: 3300, s1: 4500, left: 50, right: 50 }, { k: "island", s0: 3500, s1: 4300, lat0: -10, lat1: 10 }]);
+  const short = errs([{ k: "widen", s0: 3300, s1: 4500, left: 50, right: 50 }, { k: "island", s0: 3800, s1: 3840, lat0: -20, lat1: 20 }]);
+  const lane = errs([{ k: "widen", s0: 3300, s1: 4500, left: 20, right: 50 }, { k: "island", s0: 3500, s1: 4300, lat0: -20, lat1: 20 }]);
+  const bend = validateTrack(buildTrack({ ...SPLIT_YARD, id: "split-bend", features: SPLIT_YARD.features!.map((f) => (f.k === "widen" && f.s0 === 7800 ? { ...f, right: 400 } : f)) })).join(" | ");
+  const nearRec = errs([], [0, 5870]); // 30 before island B's head
+  const nearNose = errs([], [0, 1605]); // 25 past island A's tail
+  const yardOk = validateTrack(splitYard()).length === 0 && validateRunUps(splitYard()).length === 0;
+  check(
+    "split validate: the Split Yard is valid; an island narrower than its noses (26), shorter than two noses, or leaving a lane < 72 is refused; a widen whose inside in a bend reaches past the radius is refused (advisor change 13); a recovery point < 40 from an island's nose (either end) is refused",
+    yardOk && narrow.includes("narrower than its noses (26)") && short.includes("shorter than its two noses (52)") && lane.includes("lane is") && lane.includes("(a split lane is >= 72)") &&
+      bend.includes("nearest() degenerates") && nearRec.includes("from recovery point s=5870.0") && nearNose.includes("from recovery point s=1605.0"),
+    [narrow, short, lane, bend, nearRec, nearNose].map((e) => e.slice(0, 110)).join(" || "),
+  );
+  // Run-ups once per lane: a split before a jump with dirt filling its right lane: driven through the
+  // left lane the run-up makes the jump, through the right lane (slowed in the dirt) it lands short. The
+  // same split without the dirt passes both ways.
+  const jump = (dirt: boolean) => {
+    const f: Feature[] = [
+      { k: "widen", s0: 5300, s1: 6100, left: 40, right: 40 },
+      { k: "island", s0: 5450, s1: 5950, lat0: -24, lat1: 24 },
+      { k: "ramp", s: 6250, len: 80 },
+      { k: "gap", s0: 6330, s1: 6610 },
+    ];
+    if (dirt) f.push({ k: "dirt", s0: 5450, s1: 5950, lat0: 24, lat1: 104 });
+    const t = buildTrack({ ...SPLIT_YARD, id: "split-jump", features: f, recovery: [0, 5100] });
+    return { valid: validateTrack(t), runs: validateRunUps(t) };
+  };
+  const dry = jump(false), dirty = jump(true);
+  check(
+    "split validate: run-ups are driven once per lane: with dirt filling a split's right lane before a jump the run-up through the right lane lands short and the one through the left lane makes it; without the dirt both make it",
+    dry.valid.length === 0 && dry.runs.length === 0 && dirty.valid.length === 0 && dirty.runs.length === 1 && dirty.runs[0].includes("through the right lane of the split") && dirty.runs[0].includes("lands short"),
+    `without dirt: ${dry.runs.length} errors; with dirt: ${dirty.runs.join(" | ")}`,
+  );
+}
+
+function splitBots(): void {
+  // Easy, Normal and Hard: three server bots each (Sport, Racer, Truck by seat), 3 laps of the Split
+  // Yard, and five mixed: all finish, no fall, identically on a rerun (bot ids are random per room, so a
+  // rerun that matches shows nothing is keyed by the id). The lane per seat and car type: the plain
+  // split by the seat's racing line (left for a line left of centre), the water | dirt split by car type
+  // (the truck the dirt, the Sport and the Racer the water), the bend split by its shorter inside lane.
+  const runs: [string, BotLevel[]][] = [["easy", ["easy", "easy", "easy"]], ["normal", ["normal", "normal", "normal"]], ["hard", ["hard", "hard", "hard"]], ["mixed", ["easy", "normal", "hard", "normal", "hard"]]];
+  const lanesOf = [-24, 24, 0, -12, 12]; // server/bots.ts LANES by seat
+  const rows: string[] = [];
+  let ok = true, lanesOk = true, worst = 0;
+  for (const [name, levels] of runs) {
+    const a = splitTune.splitRace(levels), b = splitTune.splitRace(levels);
+    const good = a.phase === "results" && a.finish.length === levels.length && a.falls.every((x) => x === 0) && a.digest === b.digest && JSON.stringify(a.finish) === JSON.stringify(b.finish);
+    ok &&= good;
+    a.lanes.forEach((l, k) => {
+      const want = [(lanesOf[k] >= 0 ? "R" : "L").repeat(3), (a.cars[k] === "truck" ? "R" : "L").repeat(3), "RRR"];
+      lanesOk &&= JSON.stringify(l) === JSON.stringify(want);
+      worst = Math.max(worst, a.sides[k] + a.noses[k]);
+    });
+    rows.push(`${name}: ${a.finish.join(", ")}; falls ${a.falls.join("/")}; island side/nose ticks ${a.sides.map((x, k) => `${x}/${a.noses[k]}`).join(" ")}; lanes ${a.lanes.map((l, k) => `${a.cars[k]}:${l.map((x) => x[0]).join("")}`).join(" ")}; rerun ${a.digest === b.digest ? "identical" : "DIFFERS"}`);
+  }
+  console.log(`  ${rows.join("\n  ")}`);
+  check("split bots: Easy, Normal and Hard bots (Sport, Racer, Truck by seat; and five mixed) all finish 3 laps of the Split Yard with no fall, identically on a rerun", ok, rows.map((r) => r.split(";")[0]).join(" | "));
+  check(
+    "split bots: a lane per seat and car type, every lap: the plain split by the seat's line (seats -24, -12 left; 0, 12, 24 right), the water | dirt split by type (Truck the dirt lane, Sport and Racer the water), the bend split's shorter inside lane for all",
+    lanesOk,
+    rows.map((r) => r.split("; lanes ")[1]?.split(";")[0]).join(" | "),
+  );
+  // Never into an island or a nose: with weapons off (no spin-outs) not one tick against an island at
+  // any level; with weapons (Normal and Hard shoot and drop mines) at most SPLIT_HIT_BOUND ticks per bot
+  // in 3 laps (a spun car sliding into one).
+  let off = 0;
+  for (const level of BOT_LEVELS) {
+    const r = splitTune.splitRace([level, level, level], 3, SPLIT_YARD.id, false);
+    off += r.sides.reduce((x, y) => x + y, 0) + r.noses.reduce((x, y) => x + y, 0) + r.walls.reduce((x, y) => x + y, 0);
+  }
+  check(
+    `split bots: bots never drive into an island or a nose: weapons off, Easy, Normal and Hard touch no island and no wall in 3 laps; weapons on, at most ${SPLIT_HIT_BOUND} island-contact ticks per bot (after a spin-out)`,
+    off === 0 && worst <= SPLIT_HIT_BOUND,
+    `weapons off: ${off} island or wall ticks; weapons on: the most per bot ${worst}`,
+  );
+  // splitSide: by cost (lane length + the surfaces that leave no dry line), the seat on a tie.
+  const yard = splitYard();
+  const [A, B, C] = yard.islands;
+  const st = (type: CarType) => statsFor(type, { engine: 0, tyres: 0, welder: 0 });
+  const sides = {
+    tie: [-24, -1, 0, 12].map((lat) => splitBot.splitSide(A, st("sport"), lat)),
+    types: CAR_TYPES.map((type) => splitBot.splitSide(B, st(type), -24)),
+    bend: CAR_TYPES.map((type) => splitBot.splitSide(C, st(type), -24)),
+  };
+  check(
+    "split bots: splitSide: equal lanes go by the seat's line (left of centre left, the centre and right of it right); water | dirt: the Sport and the Racer the water (left), the Truck the dirt (right); the bend's inside lane (89 units shorter) for every type",
+    JSON.stringify(sides) === JSON.stringify({ tie: [-1, -1, 1, 1], types: [-1, -1, 1], bend: [1, 1, 1] }) && C.lenL - C.lenR > 80,
+    JSON.stringify(sides) + ` (bend lanes ${C.lenL.toFixed(1)} / ${C.lenR.toFixed(1)})`,
+  );
+  // On a plain track there is no split: splitFor is null, laneFor's span path never runs.
+  const none = trackList().every((e) => {
+    const t = trackById(e.id);
+    return t.islands.length === 0 && splitBot.splitFor(t, 100, 3, 0, 400, 0, BASE_STATS) === null;
+  });
+  check("split bots: on the shipped tracks there is no island and splitFor is null (the bots drive as before)", none);
+}
+/** The most island-contact ticks a bot may have in 3 laps of the Split Yard with weapons on (spun by a mine or rivets). */
+const SPLIT_HIT_BOUND = 8;
+
+function splitParity(): void {
+  // stepRaceCar on a clone equals the server's pose bit for bit every tick: a lone server bot of each
+  // level and car type over 2 laps of the Split Yard (both lanes of the plain split by seat, water and
+  // dirt by type), and a scripted player driven into island A's side and head-on into its nose.
+  const rows: string[] = [];
+  let all = true;
+  withDevTrack(SPLIT_YARD.id, () => {
+    for (const [level, car, slot] of [["easy", "sport", 0], ["normal", "racer", 1], ["hard", "truck", 2]] as const) {
+      const sim = new Sim(2);
+      const host = sim.add("Host");
+      if (sim.room.setTrack(host, SPLIT_YARD.id)) throw new Error("dev track refused");
+      const bots: Player[] = [];
+      for (let k = 0; k <= slot; k++) bots.push(sim.room.addBot(host, level, sim.now) as Player);
+      const b = bots[slot];
+      for (const o of bots) if (o !== b) sim.room.kick(host, o.id, sim.now);
+      if (sim.room.setCar(host, car, b.id)) throw new Error("car");
+      b.wallet.ammo.rivets = 0;
+      b.wallet.ammo.mines = 0;
+      sim.room.start(host, sim.now);
+      while (sim.room.phase !== "racing") sim.tick();
+      sim.room.retire(host);
+      const t = sim.room.track;
+      let ctl: splitBot.BotControls | null = null;
+      surfServerBots.botTrace.fn = (p, c) => {
+        if (p === b) ctl = c;
+      };
+      let ticks = 0, mismatch = 0, first = "", lanes = "";
+      try {
+        while (sim.room.phase === "racing" && ticks < 60 * 120) {
+          const clone = cloneCar(b.car!);
+          const s0 = splitSL(t, clone).s;
+          sim.tick();
+          ticks++;
+          if (!b.car || sim.room.phase !== "racing") break;
+          const c = ctl as splitBot.BotControls | null;
+          stepRaceCar(clone, { throttle: c?.throttle ?? 0, steer: c?.steer ?? 0 }, b.stats, raceEnv(t, sim.room.rt, 0));
+          const keys = ["x", "y", "h", "vx", "vy", "seg", "wreck", "air", "fall", "boost"] as const;
+          if (!keys.every((k) => Object.is(clone[k], b.car![k]))) {
+            mismatch++;
+            if (!first) first = `tick ${ticks}: ${keys.filter((k) => !Object.is(clone[k], b.car![k])).join(",")}`;
+          }
+          const s1 = splitSL(t, b.car!);
+          for (const f of t.islands) if (s0 < (f.s0 + f.s1) / 2 && s1.s >= (f.s0 + f.s1) / 2) lanes += s1.lat < f.mid ? "L" : "R";
+        }
+      } finally {
+        surfServerBots.botTrace.fn = null;
+      }
+      const good = mismatch === 0 && ticks > 60 * 30 && b.progress!.fin > 0 && lanes.length === 6;
+      all &&= good;
+      rows.push(`${level} ${car} (seat ${slot}): ${ticks} ticks, ${mismatch} mismatches${first ? ` (${first})` : ""}; lanes ${lanes}`);
+    }
+    // A lone server bot thrown at island A: its car put in the left lane aimed into the side, in front of
+    // the head nose aimed at it (down the middle and at its corner), and in the right lane aimed into the
+    // side; then the bot drives (its controls, botTrace, are what the server applied).
+    const sim = new Sim(1);
+    const host = sim.add("Host");
+    if (sim.room.setTrack(host, SPLIT_YARD.id)) throw new Error("dev track refused");
+    const b = sim.room.addBot(host, "normal", sim.now) as Player;
+    b.wallet.ammo.rivets = 0;
+    b.wallet.ammo.mines = 0;
+    sim.room.start(host, sim.now);
+    while (sim.room.phase !== "racing") sim.tick();
+    sim.room.retire(host);
+    const t = sim.room.track;
+    const A = t.islands[0];
+    let ctl: splitBot.BotControls | null = null;
+    surfServerBots.botTrace.fn = (p, c) => {
+      if (p === b) ctl = c;
+    };
+    let mismatch = 0, sides = 0, noses = 0;
+    try {
+      for (const [s, lat, dh] of [[950, -60, 1.1], [1100, -45, 0.9], [760, 0, 0], [760, A.lat0 - 3, 0], [1300, 60, -1.1], [1450, 45, -0.9]] as const) {
+        const p = pointAt(t, s), h = p.h + dh;
+        b.car = { x: p.x - Math.sin(p.h) * lat, y: p.y + Math.cos(p.h) * lat, h, vx: Math.cos(h) * 320, vy: Math.sin(h) * 320, seg: p.seg, wreck: 0, air: 0, fall: 0, boost: 0 };
+        for (let k = 0; k < 40; k++) {
+          const clone = cloneCar(b.car);
+          sim.tick();
+          const c = ctl as splitBot.BotControls | null;
+          stepRaceCar(clone, { throttle: c?.throttle ?? 0, steer: c?.steer ?? 0 }, b.stats, raceEnv(t, sim.room.rt, 0));
+          const keys = ["x", "y", "h", "vx", "vy", "seg", "wreck", "air", "fall", "boost"] as const;
+          if (!keys.every((kk) => Object.is(clone[kk], b.car![kk]))) mismatch++;
+          const hit = splitTune.islandContact(t, b.car!);
+          if (hit === "side") sides++;
+          else if (hit === "nose") noses++;
+        }
+      }
+    } finally {
+      surfServerBots.botTrace.fn = null;
+    }
+    all &&= mismatch === 0 && sides > 0 && noses > 0;
+    rows.push(`a bot thrown at island A: ${mismatch} mismatches; ${sides} ticks against its sides, ${noses} on its nose`);
+  });
+  console.log(`  ${rows.join("\n  ")}`);
+  check("split parity: stepRaceCar on a clone equals the server's pose bit for bit every tick: a lone server bot per level and type, 2 laps of the Split Yard through both lanes, and one thrown at an island's sides and its nose", all, rows.join(" | "));
+  // The client's prediction over the wire, no lag: three socket-bot cars (Sport, Racer, Truck on lines
+  // -24, 0, 24: both lanes of the plain split) race 1 lap of the Split Yard.
+  const r = withDevTrack(SPLIT_YARD.id, () => carsClientLap(SPLIT_YARD.id));
+  check(
+    `split parity: three client cars (Sport, Racer, Truck) racing the Split Yard over the wire predict it exactly: no state mismatch, no error > ${LARGE_ERR}`,
+    r.ticks.every((x) => x > 0) && r.stateErrs === 0 && r.large === 0 && r.samples > 500 && r.same,
+    `laps ${r.ticks.map((x) => (x / 60).toFixed(1)).join("/")} s; ${r.samples} samples, ${r.stateErrs} state mismatches, ${r.large} > ${LARGE_ERR}, max ${r.maxErr.toFixed(4)}`,
+  );
+}
+
+function splitCpu(): void {
+  // No scan per tick: islands and widens in per-segment buckets. Five server bots (Easy, Normal, Hard,
+  // Normal, Hard), 3 laps of the Split Yard: the median bot step and room tick (the M4-SURF-1 numbers
+  // on the Surf Yard: bot step 0.00133 ms, room tick 0.0135 ms).
+  const r = withDevTrack(SPLIT_YARD.id, () => {
+    const sim = new Sim(3);
+    const host = sim.add("Host");
+    sim.room.setTrack(host, SPLIT_YARD.id);
+    for (const l of ["easy", "normal", "hard", "normal", "hard"] as BotLevel[]) sim.room.addBot(host, l, sim.now);
+    sim.room.start(host, sim.now);
+    while (sim.room.phase !== "racing") sim.tick();
+    sim.room.retire(host);
+    const tickMs: number[] = [];
+    const steps: number[] = [];
+    botTiming.samples = steps;
+    let ticks = 0;
+    try {
+      while (sim.room.phase === "racing" && ticks < 60 * 300) {
+        sim.tickNo++;
+        sim.now += 1000 / 60;
+        const t0 = performance.now();
+        sim.room.tick(sim.tickNo, sim.now);
+        tickMs.push(performance.now() - t0);
+        ticks++;
+      }
+    } finally {
+      botTiming.samples = null;
+    }
+    return { tickMs, steps, phase: sim.room.phase as string };
+  });
+  const pct = (a: number[], p: number) => [...a].sort((x, y) => x - y)[Math.min(a.length - 1, Math.floor(a.length * p))];
+  const med = pct(r.steps, 0.5), tickMed = pct(r.tickMs, 0.5);
+  console.log(`  CPU (Split Yard): bot step median ${med.toFixed(5)} ms, p99 ${pct(r.steps, 0.99).toFixed(5)} ms over ${r.steps.length} steps; room tick with 5 bots median ${tickMed.toFixed(4)} ms, p99 ${pct(r.tickMs, 0.99).toFixed(4)} ms (M4-SURF-1 on the Surf Yard: bot step 0.00133 ms, room tick 0.0135 ms)`);
+  check(
+    "split CPU: on the Split Yard the median bot step stays within the M4-BOTS bound (0.2 ms; target 0.05) and the room tick with 5 bots is printed beside the M4-SURF-1 numbers",
+    r.steps.length > 5 * 3000 && med <= 0.05 && r.phase === "results",
+    `median bot step ${med.toFixed(5)} ms; room tick median ${tickMed.toFixed(4)} ms`,
+  );
+  // stepCar beside an island and on its nose costs about what a step on a plain track does.
+  const time = (t: Track, s: number, lat: number) => {
+    const c = surfCar(t, s, lat, 300);
+    const t0 = performance.now();
+    for (let i = 0; i < 20_000; i++) {
+      const d = { ...c };
+      stepCar(d, { throttle: 1, steer: 0.1 }, BASE_STATS, t);
+    }
+    return ((performance.now() - t0) / 20_000) * 1000;
+  };
+  const plain = time(trackById("rust-bowl"), 3000, 0), side = time(splitYard(), 1000, -31), nose = time(splitYard(), 795, 0);
+  console.log(`  stepCar: ${plain.toFixed(3)} us on Rust Bowl, ${side.toFixed(3)} us against an island's side, ${nose.toFixed(3)} us on a nose`);
+  const added = (performance.now() - splitClock.t0) / 1000;
+  console.log(`  M4-SURF part 2 sim-test sections' runtime (splitWalls .. splitCpu): ${added.toFixed(1)} s`);
+}
+
+function splitMounds(): void {
+  // The M4-SURF-1 review's F1: the mound side locks (MOUNDS: a bot keeps its side of a mound from
+  // MOUNDS.commit before it until MOUNDS.hold past its edge, and sees the mounds after it all the while).
+  // On the Surf Yard every seat's mound-contact ticks are at most the M4-SURF-1 branch's (Easy 17/9/8,
+  // Normal 18/9/10, Hard 18/13/11), with no fall.
+  const branch: Record<BotLevel, number[]> = { easy: [17, 9, 8], normal: [18, 9, 10], hard: [18, 13, 11] };
+  const rows: string[] = [];
+  let ok = true;
+  for (const level of BOT_LEVELS) {
+    const r = surfTune.surfRace(level);
+    ok &&= r.mounds.every((x, k) => x <= branch[level][k]) && r.falls.every((x) => x === 0) && r.phase === "results";
+    rows.push(`${level} ${r.mounds.join("/")} (branch ${branch[level].join("/")}), falls ${r.falls.join("/")}`);
+  }
+  check("split mounds (F1): on the Surf Yard no seat touches the mounds more than on the M4-SURF-1 branch, with no fall", ok, rows.join("; "));
+  // F2: laneFor looks round the lap past the finish line for mounds and surfaces, as for holes.
+  const L = splitBare().length;
+  const near = (features: Feature[]) => {
+    const t = buildTrack({ ...SPLIT_YARD, id: "split-wrap", features });
+    const s = L - 150;
+    return splitBot.laneFor(t, s, pointAt(t, s).seg, 600, -24, -24, BASE_STATS);
+  };
+  const mound = near([{ k: "tyres", s: 330, lat: -24, r: 22 }]), pool = near([{ k: "water", s0: 320, s1: 460, lat0: -64, lat1: 8 }]);
+  check(
+    "split mounds (F2): 150 before the finish line a bot on line -24 sees a mound and a pool just past the line (look 600): its lane clears the mound, and leaves the pool's side",
+    mound.holes === 1 && Math.abs(mound.lane + 24) > 22 + CAR_WIDTH / 2 + 8 && pool.dodge && pool.lane >= 0,
+    `mound: lane ${mound.lane}, ${mound.holes} blocker(s); pool: lane ${pool.lane}, dodge ${pool.dodge}`,
+  );
+}
+
+function splitDevFlag(): void {
+  // SCRAP_DEV_TRACK=split-yard: a new room starts on the Split Yard; unset, it is refused as unknown.
+  const on = withDevTrack(SPLIT_YARD.id, () => {
+    const rooms = new Rooms(1);
+    const x = { conn: new FakeConn(), room: null, player: null } as Session;
+    rooms.onMessage(x, { t: "create", name: "Ann" }, 1000);
+    return { id: x.room!.trackId, same: x.room!.track === testTrack(SPLIT_YARD.id), flag: surfRoom.devTrackId() };
+  });
+  const off = withDevTrack(undefined, () => {
+    const sim = new Sim();
+    const host = sim.add("Host");
+    return sim.room.setTrack(host, SPLIT_YARD.id);
+  });
+  check(
+    "split dev flag: SCRAP_DEV_TRACK=split-yard starts a new room on the Split Yard; unset (the default, and on Render) the host cannot pick it",
+    on.id === SPLIT_YARD.id && on.same && on.flag === SPLIT_YARD.id && off === "Unknown track",
+    `${JSON.stringify(on)}; unset: ${off}`,
+  );
+}
+
+for (const t of [rivets, gating, mines, wrecks, finishing, garage, armDelay, engine, readyCheck, collisions, trackFeatures, roomTrack, jumpsWired, shippedTracks, botDriver, botLaps, mineCap, chatRoom, chatClient, sound, raceSounds, surfaceSounds, audioUnlock, menuHostOnly, menuStop, menuRestart, menuKick, menuLock, menuHandover, menuClient, menuRestartClient, retireRules, retireField, retireRaceEnd, retireGarage, retireRefund, retireOthers, retireNotices, retireClient, pauseRefused, pauseFreeze, pauseResume, pauseHold, pauseAuto, pauseCooldown, pauseGrace, pauseCountdown, pauseControls, pauseClient, musicSwitch, soundMigration, soundLayers, soundServer, soundRandom, soundRoomDrag, soundSliderGrip, soundClient, songs, songPlayer, ghostRivets, minesSetting, minesStay, minesCap, minesFade, minesAtStart, minesCleared, minesPaused, minesClient, botsPointAt, botsAdd, botsKickHost, botsHandover, botsFullRoom, botsSoloStart, botsRace, botsShop, botsTick, botsCpu, botsClient, carsTypes, carsStats, carsPick, carsRejoin, carsBots, carsRunUps, carsBalance, carsCut, carsClient, envRt, envStep, envClient, draftRule, draftStraight, draftClient, draftJumps, draftBots, cellsRule, boostPhysics, cellsServer, cellsClient, cellsValidate, cellsBots, cellsOffCentre, schemaTypes, schemaArrays, schemaLateral, schemaRt, schemaValidate, schemaPreview, schemaDataOnly, hardGolden, hardLevels, hardShop, hardWeapons, hardApex, hardPace, hardTraffic, hardVs, hardClient, hardCpu, touchStickCentre, touchStickClamp, touchStickDead, touchStickCurve, touchStickOutput, touchStickRounding, touchStickOwner, touchMulti, touchRelease, touchMine, touchMerge, surfTraction, surfBuckets, surfWater, surfDirt, surfBelt, surfMounds, surfRivets, surfRespawn, surfValidate, surfLanes, surfBots, surfShipped, surfParity, surfCpu, surfDevFlag, splitWalls, splitIslands, splitProgress, splitValidate, splitBots, splitParity, splitCpu, splitMounds, splitDevFlag]) {
   console.log(`\n# ${t.name}`);
   try {
     t();
