@@ -681,6 +681,8 @@ function reportDrive(tag: string, log: DriveLog, laps: number): void {
 interface PointLog {
   laps: number; seconds: number; steps: number; matched: number; mismatched: string[]; gasSteer: number; fractional: number; brake: number; reverse: number; coast: number; aims: number;
   brakeTests: number; coastTests: number; fireBursts: number; fireWithStick: number; rivetsUsed: number; mineTaps: number; minesStepped: number; minesUsed: number;
+  /** The knob's colour against the last checked step's throttle, sampled while no finger moved; colour changes seen with the thumb still (per-step refresh). */
+  knobSamples: number; knobMatched: number; knobStillChanges: number;
 }
 
 /** Each logged step against point mode's functions for the thumb's offset now (the thumb did not move while they were made). */
@@ -711,7 +713,8 @@ function checkSteps(d: PageDriver, batch: StepLog[], log: PointLog): void {
  * checked against point mode's own functions (the two batches after a change are skipped).
  */
 async function drivePoint(d: PageDriver, laps: number, midRace?: (lap: number) => Promise<void>): Promise<PointLog> {
-  const log: PointLog = { laps: 0, seconds: 0, steps: 0, matched: 0, mismatched: [], gasSteer: 0, fractional: 0, brake: 0, reverse: 0, coast: 0, aims: 0, brakeTests: 0, coastTests: 0, fireBursts: 0, fireWithStick: 0, rivetsUsed: 0, mineTaps: 0, minesStepped: 0, minesUsed: 0 };
+  const log: PointLog = { laps: 0, seconds: 0, steps: 0, matched: 0, mismatched: [], gasSteer: 0, fractional: 0, brake: 0, reverse: 0, coast: 0, aims: 0, brakeTests: 0, coastTests: 0, fireBursts: 0, fireWithStick: 0, rivetsUsed: 0, mineTaps: 0, minesStepped: 0, minesUsed: 0, knobSamples: 0, knobMatched: 0, knobStillChanges: 0 };
+  let stillColour = "";
   let p = await d.cdp.eval<Pose>(POSE);
   const track = findTrack(p.track);
   if (!track) throw new Error(`unknown track ${p.track}`);
@@ -724,8 +727,22 @@ async function drivePoint(d: PageDriver, laps: number, midRace?: (lap: number) =
   while (Date.now() - t0 < 360_000) {
     p = await d.cdp.eval<Pose>(POSE);
     const batch = await d.cdp.eval<StepLog[]>(DRAIN);
-    if (dirty > 0) dirty--;
-    else if (d.stick && p.phase === "racing") checkSteps(d, batch, log);
+    if (dirty > 0) {
+      dirty--;
+      stillColour = "";
+    } else if (d.stick && p.phase === "racing") {
+      checkSteps(d, batch, log);
+      // The knob's colour follows the throttle every step (point mode: the car moves under a still
+      // thumb), not only when the thumb moves: it is the last step's (a step may land in between).
+      if (batch.length) {
+        const v = await d.view();
+        const t = batch[batch.length - 1][0];
+        log.knobSamples++;
+        if (v.colour === (t > 0 ? "gas" : t < 0 ? "brake" : "neutral")) log.knobMatched++;
+        if (stillColour && v.colour !== stillColour) log.knobStillChanges++;
+        stillColour = v.colour;
+      }
+    }
     if (p.fin || p.lap >= laps || (p.phase !== "racing" && p.phase !== "countdown")) break;
     const now = Date.now();
     if (p.lap !== lapSeen) {
@@ -811,6 +828,11 @@ function reportPoint(tag: string, log: PointLog, laps: number): void {
   );
   check(`${tag}: two thumbs at once: FIRE held while the stick drives (steps with throttle and fire both), rivets fired`, log.fireWithStick > 10 && log.rivetsUsed > 0, `${log.fireBursts} bursts, ${log.fireWithStick} steps gas+fire, ${log.rivetsUsed} rivets`);
   check(`${tag}: a MINE tap reaches exactly one step's mine and drops one mine`, log.mineTaps > 0 && log.minesStepped === log.mineTaps && log.minesUsed === log.mineTaps, `${log.mineTaps} taps, ${log.minesStepped} steps with mine, ${log.minesUsed} mines dropped`);
+  check(
+    `${tag}: the knob's colour is the last step's throttle (gas / brake / neutral) while the thumb is still, and it changes with the car under a still thumb (refreshed every step, not only on a move)`,
+    log.knobSamples > 100 && log.knobMatched >= log.knobSamples * 0.97 && log.knobStillChanges > 0,
+    `${log.knobMatched}/${log.knobSamples} samples match, ${log.knobStillChanges} changes with the thumb still`,
+  );
 }
 
 /**
