@@ -697,6 +697,11 @@ Slag Harbour barrel contact can be 0 by design. Both sent back to the author ctx
 TH-LOOK-1 done: c4900c3 (theme machinery + provisional desert; scrapyard bit-identical; speed gate PASS; S7 0.991/1.007; census 14.09 MB;
 975/975 + 145/145; report tmp/th-look-1/REPORT.md; sheets/shots in ~/orca/workspaces/scrap-rally/th-look-1/tmp/th-look/). Fable reviewer
 ctx_765df883d782 (tmp/review-th-look-1.md). Desert preview shown to the user inline (taste is separate; merge does not wait on it).
+TH-LOOK-1 review APPROVE (Fable; cosmetic desert notes on the ticket; mud rim on tarmac beside pools = the user's call). MERGED 2e171f1;
+gate running; ClickUp ready for qa test; workers released, workspace removed; desert sheet + 58 shots saved in tmp/th-look-1/.
+IN FLIGHT: BR-BAKE 123jpnbfghb (Fable) ctx_373cca46924f (~/orca/workspaces/scrap-rally/br-bake, :3011; spec tmp/spec-br-bake.md);
+MARSHALS-1 123jpnbfgjb (Fable) ctx_d2ef6307e5f5 (~/orca/workspaces/scrap-rally/marshals-1, :3016; spec tmp/spec-marshals-1.md).
+BR-PHYS next when THEME-SCHEMA merges (3rd author slot). PUSH GATE: the desert needs the user's OK before Breaker's Mile goes live in it.
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
