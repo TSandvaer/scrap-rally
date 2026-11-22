@@ -753,7 +753,7 @@ function shortcuts(): Scene[] {
         branch: true,
         cam: between(fork),
         cars: (t) => [
-          leave(0, -330 + loop(t * v + 470, span), 16 * side),
+          leave(0, -330 + loop(t * v + 600, span), 16 * side), // past the arrows at the held moment, beside the wedge
           car(yard, 1, b.s0 - 330 + loop(t * v + 610, span), -30 * side, { car: "racer" }),
           leave(2, -330 + loop(t * 290 + 250, span), 24 * side, { car: "truck" }),
           car(yard, 3, b.s0 - 330 + loop(t * 340 + 330, span), -8 * side),
