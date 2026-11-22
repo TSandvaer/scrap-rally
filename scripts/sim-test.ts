@@ -11747,7 +11747,8 @@ function splitWalls(): void {
   const gaps = splitTune.drawnGaps();
   check(
     "split walls: on the test tracks halfOf / wallOf are the walls the bake draws (each segment's widening at its ends, linear along it; halfL / halfR / wallL / wallR the per-sample values), and round every widen the bake's own rule puts the wall and the kerb where the physics does (<= 0.01; the exact taper was further off)",
-    off === 0 && arr === 0 && m > 2000 && gaps.length === 5 && gaps.every((g) => g.now <= 0.01 && g.points > 4000) && Math.max(...gaps.map((g) => g.exact)) > 2,
+    // THEME-SCHEMA: one per widen of the test tracks (5 before the theme yards, whose splits add one each).
+    off === 0 && arr === 0 && m > 2000 && gaps.length === TEST_TRACKS.reduce((k, d) => k + testTrack(d.id)!.widens.length, 0) && gaps.length >= 5 && gaps.every((g) => g.now <= 0.01 && g.points > 4000) && Math.max(...gaps.map((g) => g.exact)) > 2,
     `${m} queries round the widens, ${off} differ; ${arr} samples differ; drawn vs physics per widen: ${gaps.map((g) => `${g.track} ${g.widen.split(" ")[0]} ${g.now.toFixed(4)} (exact taper ${g.exact.toFixed(2)})`).join(", ")}`,
   );
   // Driven: a car steered into the left wall beside island A (widened 48) stops at the widened wall
@@ -14093,6 +14094,352 @@ function longCpu(): void {
 }
 
 for (const t of [longRegistry, longValidate, longTruckCell, longDensityRules, longFeatures, longBots, longParity, longCpu]) {
+  console.log(`\n# ${t.name}`);
+  try {
+    t();
+  } catch (e) {
+    check(`${t.name} threw`, false, String(e));
+  }
+}
+
+// ---- theme field, theme surfaces as data, the theme yards (THEME-SCHEMA, PLAN-THEMES.md 2.1, 2.3, 2.5, 2.6, advisor changes 6, 7, 10; ClickUp 123jpnbfgj1, 2026-11-22) ----
+// This section's imports (hoisted like the ones at the top).
+import * as thT from "../shared/track";
+import * as thTheme from "../shared/theme";
+import * as thW from "../shared/weapons";
+import { BRANCH_YARD as TH_BRANCH_YARD, THEME_LOOP, THEME_YARDS, DUNE_YARD, BLOCK_YARD, CANOPY_YARD } from "../shared/testtracks";
+import { RUST_BOWL as TH_RUST_BOWL, CRUSHER_RUN as TH_CRUSHER_RUN, OVERPASS_KNOT as TH_OVERPASS_KNOT } from "../shared/track";
+import { BREAKERS_MILE as TH_BREAKERS_MILE, SLAG_HARBOUR as TH_SLAG_HARBOUR } from "../shared/longtracks";
+import { botCar as thBotCar, botStep as thBotStep, newBotSeat as thNewSeat } from "../server/bots";
+import { boostTopSpeed as thBoostTop, draftTopSpeed as thDraftTop } from "../shared/catchup";
+import { CAR_TYPES as TH_CAR_TYPES } from "../shared/cars";
+import { statsFor as thStatsFor } from "../shared/shop";
+import { CAR_HP as TH_CAR_HP } from "../shared/weapons";
+
+const thClock = { t0: 0 };
+const thF = (v: number) => v.toFixed(1);
+/** THEME_LOOP (the theme yards' loop) with this theme (undefined = none: the scrapyard), these features and recovery points. */
+const thWith = (theme: thTheme.Theme | undefined, features: Feature[], recovery = [0]) =>
+  buildTrack({ id: "theme-test", name: "Theme Test", ...(theme ? { theme } : {}), control: THEME_LOOP, halfWidth: 64, verge: 44, features, recovery });
+const thErrs = (theme: thTheme.Theme | undefined, features: Feature[], recovery = [0]) => validateTrack(thWith(theme, features, recovery)).join(" | ");
+/** A track built without its defs' `def` fields: what buildTrack makes, the theme aside. */
+const thBuilt = (t: Track) => JSON.stringify(t, (k, v) => (k === "def" ? undefined : v === Infinity ? "Inf" : v));
+
+function thTypes(): void {
+  thClock.t0 = performance.now();
+  // Criterion 1: shared/theme.ts, the field, buildTrack ignores it, validateTrack refuses an unknown one.
+  const named = thTheme.THEMES.join(",");
+  const guard = [thTheme.isTheme("desert"), thTheme.isTheme("city"), thTheme.isTheme("jungle"), thTheme.isTheme("scrapyard"), thTheme.isTheme("beach"), thTheme.isTheme(undefined), thTheme.isTheme(3)];
+  check(
+    "theme types: THEMES is scrapyard, desert, city, jungle; isTheme knows exactly those; themeOf(def) is def.theme or the scrapyard",
+    named === "scrapyard,desert,city,jungle" && guard.join() === "true,true,true,true,false,false,false" &&
+      thTheme.themeOf({}) === "scrapyard" && thTheme.themeOf({ theme: "city" }) === "city" && thTheme.themeOf(TH_RUST_BOWL) === "scrapyard",
+    `${named}; isTheme ${guard.join(",")}`,
+  );
+  const originals = [TH_RUST_BOWL, TH_CRUSHER_RUN, TH_OVERPASS_KNOT];
+  check(
+    "theme types: the three original tracks have no theme field (the scrapyard); Breaker's Mile is desert and Slag Harbour city (shared/longtracks.ts, the field only); the registry serves those defs",
+    originals.every((d) => !("theme" in d) && thTheme.themeOf(d) === "scrapyard") && TH_BREAKERS_MILE.theme === "desert" && TH_SLAG_HARBOUR.theme === "city" &&
+      trackById("breakers-mile").def === TH_BREAKERS_MILE && trackById("slag-harbour").def === TH_SLAG_HARBOUR && trackById("rust-bowl").def === TH_RUST_BOWL,
+    trackList().map((e) => `${e.id}: ${thTheme.themeOf(e.def)}`).join(", "),
+  );
+  // buildTrack ignores it: every shipped track and Branch Yard built with each theme is the same as built without one (but the defs).
+  const plain = [...trackList().map((e) => e.def), TH_BRANCH_YARD];
+  const ignored = plain.map((d) => {
+    const bare = { ...d };
+    delete bare.theme;
+    const ref = thBuilt(buildTrack(bare));
+    return thTheme.THEMES.every((th) => thBuilt(buildTrack({ ...bare, theme: th })) === ref);
+  });
+  const by = buildTrack({ ...TH_BRANCH_YARD, theme: "desert" });
+  check(
+    "theme types: buildTrack ignores the theme: each shipped track and Branch Yard built with every theme equals the one built without (the defs aside); a branch's road carries its track's theme (and none when the track has none)",
+    ignored.every(Boolean) && by.branches.every((b) => b.road.def.theme === "desert") && buildTrack(TH_BRANCH_YARD).branches.every((b) => !("theme" in b.road.def)),
+    `${plain.map((d, k) => `${d.id} ${ignored[k] ? "same" : "DIFFERS"}`).join(", ")}`,
+  );
+  const unknown = validateTrack(buildTrack({ ...TH_RUST_BOWL, theme: "beach" as thTheme.Theme })).join(" | ");
+  const known = thTheme.THEMES.map((th) => validateTrack(buildTrack({ ...TH_RUST_BOWL, theme: th })).join(" | "));
+  check(
+    "theme rule: validateTrack refuses an unknown theme (and accepts every theme, and none, on a track without theme surfaces)",
+    unknown.includes('theme "beach": not a theme') && known.every((e) => e === "") && validateTrack(trackById("rust-bowl")).length === 0,
+    unknown,
+  );
+}
+
+function thLists(): void {
+  // Criterion 2: sand, oil and fords in their own lists (the declared rectangle: the draw rect), sorted, as
+  // felt (themeSurfaces: the traction rect, per segment in themeAt), on branch roads too; never in surfaces /
+  // surfAt (physics and the bots see none of them).
+  const t = thWith("desert", [
+    { k: "sand", s0: 7150, s1: 7400, lat0: 0, lat1: 64 },
+    { k: "sand", s0: 800, s1: 1100, lat0: -64, lat1: 64 },
+    { k: "water", s0: 4000, s1: 4300, lat0: -64, lat1: 0 },
+  ]);
+  const inset = thT.PUDDLE_TRACTION_INSET;
+  const felt = t.themeSurfaces;
+  const segOf = (s: number) => pointAt(t, s).seg;
+  const bucketOk = t.themeAt.length === thT.segCount(t) && t.themeAt.every((list, i) => {
+    const a = t.cum[i], b = t.cum[i + 1];
+    const want = felt.filter((f) => f.s0 < b && f.s1 > a);
+    return list.length === want.length && list.every((f, k) => f === want[k]);
+  });
+  check(
+    "theme lists: buildTrack puts sand in track.sand (sorted by s0, each its declared rectangle, the draw rect), as felt in themeSurfaces (kind SURF_SAND, the traction rect: 12 in) and per segment in themeAt",
+    t.sand.length === 2 && t.sand[0].s0 === 800 && t.sand[1].s0 === 7150 && t.sand[0].lat0 === -64 && t.sand[0].lat1 === 64 && t.sand[0].k === "sand" &&
+      felt.length === 2 && felt.every((f) => f.kind === thT.SURF_SAND && f.vx === 0) && felt[0].s0 === 800 + inset && felt[0].s1 === 1100 - inset && felt[0].lat0 === -64 + inset && felt[1].lat0 === inset &&
+      bucketOk && t.themeAt[segOf(950)].length === 1 && t.themeAt[segOf(3000)].length === 0 && validateTrack(t).length === 0,
+    `sand ${t.sand.map((f) => `${f.s0}..${f.s1}`).join(", ")}; felt ${felt.map((f) => `${f.s0}..${f.s1}/${f.lat0}..${f.lat1}`).join(", ")}`,
+  );
+  const city = thWith("city", [{ k: "oil", s0: 800, s1: 980, lat0: -64, lat1: 64 }]);
+  const jungle = thWith("jungle", [{ k: "ford", s0: 800, s1: 940, lat0: -64, lat1: 64, vx: -60 }]);
+  check(
+    "theme lists: oil in track.oil (kind SURF_OIL), a ford in track.fords with its vx (kind SURF_FORD, the felt drift its vx); each kind only in its own list",
+    city.oil.length === 1 && city.sand.length + city.fords.length === 0 && city.themeSurfaces[0].kind === thT.SURF_OIL &&
+      jungle.fords.length === 1 && jungle.fords[0].vx === -60 && jungle.themeSurfaces[0].kind === thT.SURF_FORD && jungle.themeSurfaces[0].vx === -60 && jungle.sand.length + jungle.oil.length === 0,
+    `oil ${city.oil.length}, fords ${jungle.fords.length} vx ${jungle.fords[0]?.vx}`,
+  );
+  // Never in surfaces / surfAt: physics' lookup (surfaceAt) finds the pool, not the sand; a track without theme surfaces has empty lists.
+  const inSand = pointAt(t, 950), inPool = pointAt(t, 4150);
+  check(
+    "theme lists: the theme surfaces are never in track.surfaces / surfAt (surfaceAt, physics' lookup, finds nothing on the sand and the pool beside it); every shipped track has none (empty lists, themeAt one frozen empty list a segment)",
+    t.surfaces.length === 1 && t.surfaces[0].kind === thT.SURF_WATER && thT.surfaceAt(t, inSand.seg, 950, 0) === null && thT.surfaceAt(t, inPool.seg, 4150, -32)?.kind === thT.SURF_WATER &&
+      trackList().every((e) => {
+        const x = trackById(e.id);
+        return x.sand.length + x.oil.length + x.fords.length + x.themeSurfaces.length === 0 && x.themeAt.length === thT.segCount(x) && x.themeAt.every((l) => l.length === 0 && Object.isFrozen(l));
+      }),
+    `surfaces ${t.surfaces.map((f) => f.kind).join(",")}`,
+  );
+  // On branch roads: Branch Yard (desert) with sand on its dirt cut instead of the dirt.
+  const [a] = TH_BRANCH_YARD.features!.filter((f): f is thT.Branch => f.k === "branch");
+  const bd = { ...TH_BRANCH_YARD, theme: "desert" as const, features: [{ ...a, features: [{ k: "sand" as const, s0: 1200, s1: 1500, lat0: -56, lat1: 56 }] }] };
+  const bt = buildTrack(bd);
+  const road = bt.branches[0].road;
+  check(
+    "theme lists: on a branch road too (Branch Yard as desert, sand on its dirt cut): the branch's road.sand, themeSurfaces and themeAt hold it, the main road's lists none; it validates",
+    road.sand.length === 1 && road.sand[0].s0 === 1200 && road.themeSurfaces.length === 1 && road.themeAt.length === thT.segCount(road) && road.themeAt.some((l) => l.length === 1) &&
+      bt.sand.length === 0 && bt.themeSurfaces.length === 0 && validateTrack(bt).length === 0,
+    `${road.def.id}: sand ${road.sand.map((f) => `${f.s0}..${f.s1}`).join(", ")}; ${validateTrack(bt).join(" | ") || "valid"}`,
+  );
+  // No physics or bot change: three server bots race each theme yard and its twin without the theme
+  // surfaces (and theme): every tick's controls and car states the same.
+  const rows: string[] = [];
+  let same = true;
+  for (const def of THEME_YARDS) {
+    const twin = { ...def, features: def.features!.filter((f) => f.k !== "sand" && f.k !== "oil" && f.k !== "ford") };
+    delete twin.theme;
+    const runs = [buildTrack(def), buildTrack(twin)].map((tr) => {
+      const bots = (["normal", "normal", "easy"] as const).map((level, k) => {
+        const g = gridSlot(tr, k);
+        const carType = thBotCar(k);
+        return {
+          id: `bot${k}`, car: { x: g.x, y: g.y, h: g.h, vx: 0, vy: 0, seg: g.seg, wreck: 0, air: 0, fall: 0, boost: 0 } as CarState,
+          finished: false, hp: TH_CAR_HP, maxHp: TH_CAR_HP, ghost: 0, cooldown: 0, ammo: { rivets: 40, mines: 3 },
+          levels: { engine: 0, tyres: 0, welder: 0 }, stats: thStatsFor(carType, { engine: 0, tyres: 0, welder: 0 }), bot: thNewSeat(level, k, k), carType,
+        };
+      });
+      const env = raceEnv(tr);
+      const out: string[] = [];
+      let far = 0;
+      for (let rt = 1; rt <= 60 * 45; rt++) {
+        const cmds = bots.map((b) => thBotStep(b, bots, tr, true, [], [], rt));
+        bots.forEach((b, k) => {
+          env.rt = rt;
+          out.push(`${cmds[k].cmd.throttle},${cmds[k].cmd.steer},${cmds[k].cmd.buttons},${stepRaceCar(b.car, cmds[k].cmd, b.stats, env) ?? "-"}`);
+          const c = b.car;
+          out.push(`${c.x},${c.y},${c.h},${c.vx},${c.vy},${c.seg},${c.wreck},${c.air},${c.fall}`);
+        });
+        far = Math.max(far, queryTrackNear(tr, bots[0].car.x, bots[0].car.y, bots[0].car.seg).s);
+      }
+      return { trace: out.join(";"), far };
+    });
+    const ok = runs[0].trace === runs[1].trace;
+    same &&= ok && runs[0].far > 7400;
+    rows.push(`${def.id}: ${ok ? "same" : "DIFFERS"} over ${60 * 45} ticks (the lead bot past s ${thF(runs[0].far)})`);
+  }
+  check(
+    "theme lists: no physics or bot change: three server bots on each theme yard drive exactly as on its twin without the theme surfaces (controls and car states every tick, 45 s, over both slots)",
+    same,
+    rows.join("; "),
+  );
+}
+
+function thRules(): void {
+  // Criterion 3: one def per rule that breaks it (THEME_LOOP: the top straight s ~700-3050, the bottom one
+  // ~7050-9350; the right-hand side's tightest bend at s ~4000-4300).
+  const rule = (name: string, bad: string, want: string) => check(`theme rule: ${name}`, bad.includes(want), bad.slice(0, 600));
+  const ok = (name: string, errs: string) => check(`theme rule (allowed): ${name}`, errs === "", errs.slice(0, 600) || "valid");
+  const sandA: Feature = { k: "sand", s0: 800, s1: 1100, lat0: -64, lat1: 64 };
+  const oilA: Feature = { k: "oil", s0: 800, s1: 980, lat0: -64, lat1: 64 };
+  const fordA: Feature = { k: "ford", s0: 800, s1: 940, lat0: -64, lat1: 64, vx: 60 };
+  ok("sand on a desert track, oil on a city track, a ford on a jungle track", [thErrs("desert", [sandA]), thErrs("city", [oilA]), thErrs("jungle", [fordA])].join(""));
+  // Gating (advisor change 10): each kind only on its own theme's tracks.
+  rule("sand on a track that is not desert (a scrapyard one) is refused", thErrs(undefined, [sandA]), "sand 800.0..1100.0: sand lies only on a desert track (this one is scrapyard)");
+  rule("oil on a track that is not city (a desert one) is refused", thErrs("desert", [oilA]), "oil 800.0..980.0: oil lies only on a city track (this one is desert)");
+  rule("a ford on a track that is not jungle (a city one) is refused", thErrs("city", [fordA]), "ford 800.0..940.0: ford lies only on a jungle track (this one is city)");
+  const [a] = TH_BRANCH_YARD.features!.filter((f): f is thT.Branch => f.k === "branch");
+  rule("sand on a branch road of a track that is not desert (Branch Yard, the scrapyard) is refused",
+    validateTrack(buildTrack({ ...TH_BRANCH_YARD, features: [{ ...a, features: [{ k: "sand", s0: 1200, s1: 1500, lat0: -56, lat1: 56 }] }] })).join(" | "),
+    "branch 1 (main 4000.7..7409.6): sand 1200.0..1500.0: sand lies only on a desert track (this one is scrapyard)");
+  // Inside the asphalt (advisor change 6, the verge rule): the declared rectangle, at every sample; a widened road's asphalt counts.
+  rule("a theme surface reaching past the asphalt onto the verge is refused (inside the walls, but not the asphalt)",
+    thErrs("desert", [{ k: "sand", s0: 800, s1: 1100, lat0: -64, lat1: 80 }]), "sand 800.0..1100.0: reaches past the asphalt at s=800.0");
+  ok("sand in a widened split lane (lat 28..124 beside an island, inside the widen's asphalt)", thErrs("desert", [
+    { k: "widen", s0: 8050, s1: 9250, left: 60, right: 60 }, { k: "island", s0: 8200, s1: 9100, lat0: -28, lat1: 28 }, { k: "sand", s0: 8450, s1: 8790, lat0: 28, lat1: 124 },
+  ]));
+  // One surface at a time.
+  const sandOnDirt = thErrs("desert", [{ k: "sand", s0: 800, s1: 1000, lat0: -64, lat1: 64 }, { k: "dirt", s0: 950, s1: 1100, lat0: 0, lat1: 64 }]);
+  check("theme rule: a theme surface overlapping another surface (sand on a dirt patch; together 300 long, inside the mud rule: the overlap is the only error) is refused",
+    sandOnDirt === "dirt 950.0..1100.0 overlaps sand 800.0..1000.0 (one surface at a time)", sandOnDirt);
+  rule("oil overlapping water is refused", thErrs("city", [oilA, { k: "water", s0: 900, s1: 1100, lat0: -64, lat1: 0 }]), "water 900.0..1100.0 overlaps oil 800.0..980.0 (one surface at a time)");
+  // Off take-off zones and recovery points (water's rule).
+  rule("a theme surface on a truck's take-off zone is refused", thErrs("desert", [{ k: "truck", s: 1750, lat: 24, len: 110 }, { k: "sand", s0: 1800, s1: 1900, lat0: 0, lat1: 64 }]), "sand 1800.0..1900.0: on the take-off zone of the truck at s=1750.0");
+  rule("a theme surface on a ramp's take-off zone is refused", thErrs("city", [{ k: "ramp", s: 2000, len: 80 }, { k: "oil", s0: 2050, s1: 2200, lat0: -64, lat1: 0 }]), "oil 2050.0..2200.0: on the take-off zone of the ramp at s=2000.0");
+  rule("a theme surface on a recovery point is refused", thErrs("jungle", [{ ...fordA, s0: 1250, s1: 1390 } as Feature], [0, 1300]), "ford 1250.0..1390.0: on recovery point s=1300.0");
+  // The dry-lane rule: oil counts as blocked for water, water for oil.
+  const pool: Feature = { k: "water", s0: 4000, s1: 4300, lat0: -64, lat1: 0 };
+  const slick: Feature = { k: "oil", s0: 4000, s1: 4200, lat0: 0, lat1: 64 };
+  ok("a pool on the outside half of the bend (its dry lane the inside half), and an oil slick on the inside half alone", [thErrs("city", [pool]), thErrs("city", [slick])].join(""));
+  const both = thErrs("city", [pool, slick]);
+  rule("oil counts as blocked in widestDry: the pool beside an oil slick that fills its dry lane is refused", both, "water 4000.0..4300.0: no dry lane of 48 at s=4000.0 (the widest is 0.0)");
+  rule("water counts as blocked for oil: the oil slick beside the pool is refused (the same def)", both, "oil 4000.0..4200.0: no dry lane of 48 at s=4000.0 (the widest is 0.0)");
+  // Sand: <= 350, and a stretch of sand and dirt (LOOSE_JOIN) <= 350.
+  rule("sand longer than 350 is refused", thErrs("desert", [{ k: "sand", s0: 800, s1: 1160, lat0: -64, lat1: 64 }]), "sand 800.0..1160.0: 360.0 long, longer than 350 (the mud rule)");
+  const sand200: Feature = { k: "sand", s0: 800, s1: 1000, lat0: -64, lat1: 64 };
+  rule("sand and dirt less than LOOSE_JOIN (100) apart, longer than 350 together, are refused (contiguous sand + dirt)",
+    thErrs("desert", [sand200, { k: "dirt", s0: 1050, s1: 1250, lat0: -64, lat1: 64 }]), "sand and dirt 800.0..1250.0: 2 patches less than 100 apart, one stretch of loose ground 450.0 long, longer than 350 (the mud rule)");
+  rule("... and touching ones too (sand right after dirt)", thErrs("desert", [{ k: "dirt", s0: 800, s1: 1000, lat0: -64, lat1: 0 }, { k: "sand", s0: 1000, s1: 1200, lat0: -64, lat1: 64 }]),
+    "sand and dirt 800.0..1200.0: 2 patches less than 100 apart, one stretch of loose ground 400.0 long");
+  ok("sand and dirt 110 apart (more than LOOSE_JOIN: two stretches); and a 700-long dirt lane with no sand (the rule is sand's: Split Yard's dirt stays valid)",
+    thErrs("desert", [sand200, { k: "dirt", s0: 1110, s1: 1310, lat0: -64, lat1: 64 }]) + validateTrack(testTrack("split-yard")!).join(" | "));
+  // Oil: <= 200, water's dry-lane-or-straight rule.
+  rule("oil longer than 200 is refused", thErrs("city", [{ k: "oil", s0: 800, s1: 1010, lat0: -64, lat1: 64 }]), "oil 800.0..1010.0: 210.0 long, longer than 200");
+  rule("oil across the whole road in a bend (no dry lane, not on a straight) is refused", thErrs("city", [{ k: "oil", s0: 4000, s1: 4200, lat0: -64, lat1: 64 }]), "oil 4000.0..4200.0: no dry lane of 48 at s=4000.0 (the widest is 0.0) and not on a straight");
+  ok("oil across the whole road on a straight (the top straight)", thErrs("city", [{ k: "oil", s0: 1500, s1: 1700, lat0: -64, lat1: 64 }]));
+  // Ford: 40-160 long, 20 <= |vx| <= 100, on a straight, no solid within 80 past it.
+  rule("a ford shorter than 40 is refused", thErrs("jungle", [{ ...fordA, s1: 830 } as Feature]), "ford 800.0..830.0: 30.0 long, outside 40..160");
+  rule("a ford longer than 160 is refused", thErrs("jungle", [{ ...fordA, s1: 970 } as Feature]), "ford 800.0..970.0: 170.0 long, outside 40..160");
+  rule("a ford drifting slower than 20 is refused", thErrs("jungle", [{ ...fordA, vx: -10 } as Feature]), "ford 800.0..940.0: drift vx -10 outside 20 <= |vx| <= 100");
+  rule("a ford drifting faster than 100 is refused", thErrs("jungle", [{ ...fordA, vx: 120 } as Feature]), "ford 800.0..940.0: drift vx 120 outside 20 <= |vx| <= 100");
+  rule("a ford in a bend is refused", thErrs("jungle", [{ ...fordA, s0: 4000, s1: 4140 } as Feature]), "ford 4000.0..4140.0: not on a straight (the road turns");
+  rule("a solid within 80 past a ford is refused", thErrs("jungle", [fordA, { k: "tyres", s: 1000, lat: 30, r: 20 }]), "ford 800.0..940.0: tyres at s=1000.0 lies beside it or within 80 past it");
+  rule("a solid beside a ford is refused (a ford in a split lane, the island beside it)", thErrs("jungle", [
+    { k: "widen", s0: 8050, s1: 9250, left: 60, right: 60 }, { k: "island", s0: 8200, s1: 9100, lat0: -28, lat1: 28 }, { k: "ford", s0: 8450, s1: 8590, lat0: 28, lat1: 124, vx: 40 },
+  ]), "ford 8450.0..8590.0: island 8200.0..9100.0 lies beside it or within 80 past it");
+  ok("a mound 85 past a ford (edge to edge), and one before it", thErrs("jungle", [fordA, { k: "tyres", s: 1045, lat: 30, r: 20 }, { k: "tyres", s: 700, lat: 0, r: 20 }]));
+}
+
+/** A theme yard's groups: every feature's footprint along the track, those less than 600 apart joined. */
+function thGroups(t: Track): { groups: { s0: number; s1: number; kinds: string[] }[]; gaps: number[] } {
+  const foot: { s0: number; s1: number; kind: string }[] = [];
+  for (const f of t.def.features ?? []) {
+    switch (f.k) {
+      case "tyres": foot.push({ s0: f.s - f.r, s1: f.s + f.r, kind: "tyres" }); break;
+      case "barrels": foot.push({ s0: f.s - thT.BARREL_R, s1: f.s + thT.BARREL_R, kind: "barrels" }); break;
+      case "truck": foot.push({ s0: f.s, s1: f.s + f.len, kind: "truck" }); break;
+      case "press": foot.push({ s0: f.s - thT.PRESS_DEPTH / 2, s1: f.s + thT.PRESS_DEPTH / 2, kind: "press" }); break;
+      case "ramp": foot.push({ s0: f.s, s1: f.s + f.len + LIP_ZONE, kind: "ramp" }); break;
+      case "hole": foot.push({ s0: f.s - f.r, s1: f.s + f.r, kind: "hole" }); break;
+      case "cell": foot.push({ s0: f.s - 14, s1: f.s + 14, kind: "cell" }); break;
+      case "branch": break;
+      default: foot.push({ s0: f.s0, s1: f.s1, kind: f.k });
+    }
+  }
+  foot.sort((x, y) => x.s0 - y.s0);
+  const groups: { s0: number; s1: number; kinds: string[] }[] = [];
+  for (const f of foot) {
+    const g = groups[groups.length - 1];
+    if (g && f.s0 < g.s1 + 600) {
+      g.s1 = Math.max(g.s1, f.s1);
+      g.kinds.push(f.kind);
+    } else groups.push({ s0: f.s0, s1: f.s1, kinds: [f.kind] });
+  }
+  const gaps = groups.map((g, k) => (k + 1 < groups.length ? groups[k + 1].s0 - g.s1 : t.length - g.s1 + groups[0].s0));
+  return { groups, gaps };
+}
+
+function thYards(): void {
+  // Criterion 4: Dune Yard, Block Yard, Canopy Yard: each its theme surface twice, water with a dry lane, a
+  // mound pair, barrels, a truck, a press, a split with <= 350 of dirt, >= 600 of plain road between groups;
+  // validateTrack, validateRunUps and validateJumpSweep (every type at L0 and L3, at the slipstream's and a
+  // boost's top speeds); picked with SCRAP_DEV_TRACK.
+  const draft = thDraftTop(430), boost = thBoostTop(430);
+  const want: Record<string, { theme: thTheme.Theme; list: "sand" | "oil" | "fords" }> = {
+    "dune-yard": { theme: "desert", list: "sand" }, "block-yard": { theme: "city", list: "oil" }, "canopy-yard": { theme: "jungle", list: "fords" },
+  };
+  const order = ["surface", "truck", "tyres,tyres", "water", "barrels", "press", "surface", "widen,island,dirt"];
+  for (const def of THEME_YARDS) {
+    const t = testTrack(def.id)!;
+    const w = want[def.id];
+    const surf = t[w.list];
+    const { groups, gaps } = thGroups(t);
+    const kinds = groups.map((g) => g.kinds.map((k) => (k === "sand" || k === "oil" || k === "ford" ? "surface" : k)).join(","));
+    const pool = t.water[0], isle = t.islands[0];
+    const turn = Math.abs(pointAt(t, pool.s1).h - pointAt(t, pool.s0).h);
+    const dirtLen = t.dirt.map((d) => d.s1 - d.s0);
+    const errs = [...validateTrack(t)];
+    for (const car of TH_CAR_TYPES) {
+      for (const lv of [0, 3]) {
+        const st = thStatsFor(car, { engine: lv, tyres: lv, welder: lv });
+        errs.push(...thW.validateRunUps(t, st).map((m) => `${car} L${lv}: ${m}`));
+        for (const v of [draft, 473, 537, boost]) errs.push(...thW.validateJumpSweep(t, v, st).map((m) => `${car} L${lv} at ${thF(v)}: ${m}`));
+      }
+    }
+    const ok = thTheme.themeOf(t.def) === w.theme && surf.length === 2 && t.themeSurfaces.length === 2 && t.water.length === 1 && pool.lat1 - pool.lat0 <= 64 && turn > thT.POOL_STRAIGHT_TOLERANCE &&
+      t.tyres.length === 2 && Math.abs(t.tyres[1].s - t.tyres[0].s) <= 300 && t.barrels.length === 1 && t.trucks.length === 1 && t.presses.length === 1 &&
+      t.islands.length === 1 && t.widens.length === 1 && t.dirt.length === 1 && dirtLen[0] <= 350 && t.dirt[0].s0 >= isle.s0 && t.dirt[0].s1 <= isle.s1 && t.dirt[0].lat0 >= isle.lat1 &&
+      kinds.join("|") === order.join("|") && gaps.every((g) => g >= 600) && errs.length === 0;
+    check(
+      `theme yard ${def.name} (${w.theme}): its ${w.list} twice, a pool with a dry lane in a bend, a mound pair, barrels, a truck, a press, a split with <= 350 of dirt, in 8 groups >= 600 apart; validateTrack, validateRunUps and validateJumpSweep (every type, L0 and L3, at ${thF(draft)}, 473, 537 and ${thF(boost)}) pass`,
+      ok,
+      `length ${thF(t.length)}; ${w.list} ${surf.map((f) => `${f.s0}..${f.s1} (${f.s1 - f.s0} long, lat ${f.lat0}..${f.lat1}${"vx" in f ? `, vx ${f.vx}` : ""})`).join(", ")}; pool ${pool.s0}..${pool.s1} lat ${pool.lat0}..${pool.lat1} (dry lane ${64 - pool.lat1} wide, the road turns ${turn.toFixed(3)} rad); dirt ${dirtLen.join(",")}; groups ${groups.map((g, k) => `${kinds[k]} ${thF(g.s0)}..${thF(g.s1)}`).join(" / ")}; gaps ${gaps.map(thF).join(", ")} (shortest ${thF(Math.min(...gaps))})${errs.length ? `; ${errs.join(" | ")}` : ""}`,
+    );
+    const on = withDevTrack(def.id, () => {
+      const rooms = new Rooms(1);
+      const x = { conn: new FakeConn(), room: null, player: null } as Session;
+      rooms.onMessage(x, { t: "create", name: "Ann" }, 1000);
+      return { id: x.room!.trackId, same: x.room!.track === testTrack(def.id), flag: surfRoom.devTrackId() };
+    });
+    const off = withDevTrack(undefined, () => {
+      const sim = new Sim();
+      const host = sim.add("Host");
+      return sim.room.setTrack(host, def.id);
+    });
+    check(
+      `theme yard ${def.name}: SCRAP_DEV_TRACK=${def.id} starts a new room on it; unset (the default, and on Render) the host cannot pick it; it is not in the lobby's list`,
+      on.id === def.id && on.same && on.flag === def.id && off === "Unknown track" && !trackList().some((e) => e.id === def.id),
+      `${JSON.stringify(on)}; unset: ${off}`,
+    );
+  }
+  check(
+    "theme yards: Dune Yard, Block Yard, Canopy Yard share THEME_LOOP and every obstacle (only the theme and the two theme surfaces differ)",
+    [DUNE_YARD, BLOCK_YARD, CANOPY_YARD].every((d) => d.control === THEME_LOOP && JSON.stringify(d.features!.filter((f) => f.k !== "sand" && f.k !== "oil" && f.k !== "ford")) === JSON.stringify(DUNE_YARD.features!.filter((f) => f.k !== "sand"))),
+  );
+}
+
+function thShipped(): void {
+  // Criterion 6: schema-hash --check: the 5 shipped tracks and Branch Yard SAME on every part (a theme is a
+  // def field; schema-hash hashes built arrays and behaviour), the yards on lines of their own.
+  let out = "";
+  let ok = true;
+  try {
+    out = surfExec(process.execPath, ["--import", "tsx", "tools/debug/schema-hash.ts", "--check"], { encoding: "utf8" });
+  } catch (e) {
+    ok = false;
+    out = String((e as { stdout?: string }).stdout ?? e);
+  }
+  const lines = out.split("\n").filter((l) => /^(SAME|DIFF|NEW |GONE) /.test(l));
+  const shipped = ["rust-bowl", "crusher-run", "overpass-knot", "slag-harbour", "breakers-mile"].flatMap((id) => ["built", "queries", "botsDirect", "room", "walls"].map((p) => `SAME  ${id} ${p}`));
+  const branch = ["built", "queries", "branches"].map((p) => `SAME  branch-yard ${p}`);
+  const yards = THEME_YARDS.flatMap((d) => ["built", "queries", "features"].map((p) => `${d.id} ${p}`));
+  check(
+    "theme shipped: schema-hash --check: every part of the five shipped tracks (Breaker's Mile desert and Slag Harbour city now) and of Branch Yard SAME; the three yards hashed on lines of their own (built, queries, features), none DIFF or GONE",
+    ok && [...shipped, ...branch].every((l) => lines.includes(l)) && yards.every((y) => lines.some((l) => l.endsWith(` ${y}`) && (l.startsWith("SAME") || l.startsWith("NEW ")))) && !lines.some((l) => /^(DIFF|GONE)/.test(l)),
+    lines.filter((l) => !l.startsWith("SAME")).join("; ") || `${lines.length} parts SAME`,
+  );
+  console.log(`  THEME-SCHEMA sim-test sections' runtime (thTypes .. thShipped): ${((performance.now() - thClock.t0) / 1000).toFixed(1)} s`);
+}
+
+for (const t of [thTypes, thLists, thRules, thYards, thShipped]) {
   console.log(`\n# ${t.name}`);
   try {
     t();
