@@ -37,12 +37,16 @@
 //                    with the stick (point mode) pointed behind the car from rest (reverse, red),
 //                    ahead (gas, green) and inside the dead zone (grey) with FIRE held (screenshots),
 //                    the gate and the knob at the shipped R, from a landing at each corner of the zone
-//                    every way past the dead zone (rate mode: full lock both ways, gas and brake),
+//                    every way past the dead zone, the diagonals too (rate mode: full lock both ways,
+//                    gas and brake),
 //                    the stick's zone (right of the split, under the speaker and ☰ to the bottom, over
 //                    the view, drawing nothing), the weapons and the Chat button against the HUD,
 //                    minimap, banner/ping, speaker and ☰; the Chat button tappable (no zone over it);
 //                    no scroll or zoom from a pinch or a double tap on the view or the zone; portrait
 //                    also the pause banner's touch wording.
+//   reach-rate-portrait / reach-rate-landscape / reach-rate-small  390x844 / 844x390 / 360x740,
+//                    ?debug=1 with mode "rate" stored (TOUCH-6, R 67): in the race the gate and the
+//                    knob at R, and from each corner of the zone full lock both ways, gas and brake.
 //   desktop          1280x720 with no touch: the controls never show in a race.
 // Each pass runs in a browser of its own (see main()). Needs the dev server: PORT=3006 npm run dev.
 // Exit code 1 if a check fails.
@@ -69,7 +73,7 @@ const arg = (name: string, def: string) => {
 const URL = arg("url", "http://127.0.0.1:3006");
 const SESSION = arg("session", "stick-drive");
 const OUT = path.resolve(arg("out", "tmp/touch-drive"));
-const ONLY = arg("only", "drive-portrait,drive-landscape,rate-portrait,tune-portrait,tune-landscape,tune-plain,look-portrait,look-landscape,look-small,desktop").split(",");
+const ONLY = arg("only", "drive-portrait,drive-landscape,rate-portrait,tune-portrait,tune-landscape,tune-plain,look-portrait,look-landscape,look-small,reach-rate-portrait,reach-rate-landscape,reach-rate-small,desktop").split(",");
 const LAPS = Number(arg("laps", "3")); // drive-portrait: laps by touch (3 = the whole race, then the finish and the results)
 const MID = !process.argv.includes("--no-mid"); // drive-portrait: the menu, chat and key checks mid-race
 // The page must stay visible: Chrome holds touch input for a hidden page (an occluded window on macOS)
@@ -611,7 +615,7 @@ async function stickChecks(d: PageDriver, tag: string): Promise<void> {
   );
   // Round the gate: up (gas), up-right, right, down-right, down (brake), down-left, left, up-left,
   // far up-right (past R, still on screen: the knob stops on R; 0.7 R across keeps it on a 390 px
-  // screen from the zone's middle at R 95), and back to the centre.
+  // screen from the zone's middle at R 67), and back to the centre.
   const k = Math.round(R * 0.6);
   const stops: [string, number, number][] = [["up", 0, -k], ["up-right", Math.round(R * 0.4), -k], ["right", k, 0], ["down-right", Math.round(R * 0.4), k], ["down", 0, k], ["down-left", -Math.round(R * 0.4), k], ["left", -k, 0], ["up-left", -Math.round(R * 0.4), -k], ["far up-right", Math.round(R * 0.7), -Math.round(R * 1.3)], ["centre", 0, 0]];
   const got: string[] = [];
@@ -1410,6 +1414,88 @@ function hudBoxes(view: Box): Record<string, Box> {
   };
 }
 
+/**
+ * The stick at the page's R (d.params): the gate drawn 2R, the knob 0.8R; from a landing at each
+ * corner of the zone (2 px in) the thumb slid R away, or to the screen's last pixel: rate mode
+ * reaches full lock both ways (the knob at least steerLock R sideways: 0.9 R), gas and brake (the
+ * knob's colour); point mode reaches past the dead zone every way, the diagonals too (the knob more
+ * than pointDead R out, coloured). The gate's centre is where stickCentre puts it (shifted in at the
+ * edges). The screenshot: from the bottom-right corner, the thumb at the screen's last pixel.
+ */
+async function reachCheck(d: PageDriver, tag: string, w: number, h: number, Z: Box, shotName: string): Promise<void> {
+  const P = d.params;
+  const R = P.radius;
+  const point = P.mode === "point";
+  const lockPx = R * P.steerLock;
+  const deadPx = R * P.pointDead;
+  const D = R / Math.SQRT2; // a diagonal R out
+  const clampTo = (v: number, hi: number) => Math.max(0, Math.min(hi, Math.round(v)));
+  const corners: [string, number, number][] = [["top-left", Z.left + 2, Z.top + 2], ["top-right", Z.left + Z.width - 2, Z.top + 2], ["bottom-left", Z.left + 2, Z.top + Z.height - 2], ["bottom-right", Z.left + Z.width - 2, Z.top + Z.height - 2]];
+  const reach: string[] = [];
+  let reachOk = true;
+  let drawn = { gate: 0, knob: 0 };
+  for (const [name, x, y] of corners) {
+    await d.thumbDown(x, y);
+    await sleep(80);
+    const v0 = await d.view();
+    if (!drawn.gate) drawn = await d.cdp.eval<{ gate: number; knob: number }>(`({ gate: document.getElementById('touch-base').getBoundingClientRect().width, knob: document.getElementById('touch-knob').getBoundingClientRect().width })`);
+    const { cx, cy } = d.stick!;
+    const slide = async (tx: number, ty: number) => {
+      await d.fingers.at(RIGHT, clampTo(tx, w - 1), clampTo(ty, h - 1));
+      await sleep(70);
+      return d.view();
+    };
+    const l = await slide(cx - R, cy);
+    const r = await slide(cx + R, cy);
+    if (name === "bottom-right") await d.shot(shotName); // the centre shifted in, the thumb at the last pixel: full lock / pointed right
+    const g = await slide(cx, cy - R);
+    const b = await slide(cx, cy + R);
+    const diag: StickView[] = [];
+    if (point) for (const [sx, sy] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) diag.push(await slide(cx + sx * D, cy + sy * D));
+    await d.thumbUp();
+    await sleep(60);
+    const placed = Math.abs(v0.cx - cx) < 0.6 && Math.abs(v0.cy - cy) < 0.6;
+    const ok = point
+      ? placed && [l, r, g, b, ...diag].every((k) => Math.hypot(k.kx, k.ky) > deadPx && k.colour !== "neutral")
+      : placed && l.kx <= -lockPx + 0.05 && r.kx >= lockPx - 0.05 && g.colour === "gas" && b.colour === "brake";
+    reachOk &&= ok;
+    const diagText = diag.length ? `, diagonals (knob out) ${diag.map((k) => `${Math.hypot(k.kx, k.ky).toFixed(0)} ${k.colour}`).join(" / ")}` : "";
+    reach.push(`${name} ${Math.round(x)},${Math.round(y)} -> centre ${v0.cx.toFixed(1)},${v0.cy.toFixed(1)}: knob left ${l.kx} ${l.colour}, right ${r.kx} ${r.colour}, up ${g.ky} ${g.colour}, down ${b.ky} ${b.colour}${diagText}${ok ? "" : " (FAIL)"}`);
+  }
+  check(
+    point
+      ? `${tag}: the gate is drawn at 2R (${2 * R} px) and the knob at 0.8R (${0.8 * R} px); from a landing at each corner of the stick's zone the thumb points past the dead zone (knob > ${deadPx.toFixed(1)} px out, coloured) every way on screen, the diagonals too`
+      : `${tag}: the gate is drawn at 2R (${2 * R} px) and the knob at 0.8R (${0.8 * R} px); from a landing at each corner of the stick's zone full lock both ways (knob >= ${lockPx.toFixed(1)} px sideways), gas and brake are reached on screen`,
+    Math.abs(drawn.gate - 2 * R) < 0.5 && Math.abs(drawn.knob - 0.8 * R) < 0.5 && reachOk,
+    `gate ${drawn.gate}, knob ${drawn.knob}; ${reach.join(" | ")}`,
+  );
+}
+
+/**
+ * Rate mode's reach on screen at a phone size (TOUCH-6, R 67): ?debug=1 with mode "rate" stored
+ * (the A/B switch); in the race the gate and the knob at R, and from each corner of the zone full
+ * lock both ways, gas and brake (reachCheck).
+ */
+async function reachRate(d: PageDriver, name: string, w: number, h: number): Promise<void> {
+  const tag = `reach rate ${w}x${h}`;
+  const STORE = "scrap-rally:stick";
+  await d.device(w, h, true);
+  await d.load("?debug=1");
+  await d.cdp.eval(`localStorage.setItem('${STORE}', JSON.stringify({ mode: 'rate' })), true`);
+  await d.load("?debug=1");
+  d.params = await d.cdp.eval<StickParams>("scrapDebug.touchPad.stickParams()");
+  check(`${tag}: with mode rate stored (?debug=1) the page's stick is rate mode, every other value the default (R ${STICK_DEFAULTS.radius})`, JSON.stringify(d.params) === JSON.stringify({ ...STICK_DEFAULTS, mode: "rate" }), JSON.stringify(d.params));
+  try {
+    await d.race();
+    await d.until("the controls", "!document.getElementById('touch').classList.contains('hidden')", 5000);
+    await d.until("the race", "window.scrapDebug.game.phase === 'racing'", 10_000);
+    const L = await d.cdp.eval<Layout>(LAYOUT);
+    await reachCheck(d, tag, w, h, L.zone, `reach-rate-${name}-${w}x${h}`);
+  } finally {
+    await d.cdp.eval(`localStorage.removeItem('${STORE}'), true`).catch(() => undefined);
+  }
+}
+
 async function look(d: PageDriver, tag: string, w: number, h: number): Promise<void> {
   const size = `${w}x${h}`;
   const orient = tag.split(" ")[1];
@@ -1497,52 +1583,7 @@ async function look(d: PageDriver, tag: string, w: number, h: number): Promise<v
   const L = await d.cdp.eval<Layout>(LAYOUT);
   await d.fingers.liftAll();
   d.stick = null;
-  // The stick at the shipped R: the gate 2R, the knob 0.8R; from a landing at each corner of the
-  // zone (2 px in) the thumb slid R away, or to the screen's last pixel: rate mode reaches full lock
-  // both ways (the knob at least steerLock R sideways: 0.9 R), gas and brake (the knob's colour);
-  // point mode reaches past the dead zone every way (the knob more than pointDead R out, coloured).
-  // The gate's centre is where stickCentre puts it (shifted in at the edges).
-  const lockPx = R * STICK_DEFAULTS.steerLock;
-  const deadPx = R * STICK_DEFAULTS.pointDead;
-  const clampTo = (v: number, hi: number) => Math.max(0, Math.min(hi, Math.round(v)));
-  const Z = L.zone;
-  const corners: [string, number, number][] = [["top-left", Z.left + 2, Z.top + 2], ["top-right", Z.left + Z.width - 2, Z.top + 2], ["bottom-left", Z.left + 2, Z.top + Z.height - 2], ["bottom-right", Z.left + Z.width - 2, Z.top + Z.height - 2]];
-  const reach: string[] = [];
-  let reachOk = true;
-  let drawn = { gate: 0, knob: 0 };
-  for (const [name, x, y] of corners) {
-    await d.thumbDown(x, y);
-    await sleep(80);
-    const v0 = await d.view();
-    if (!drawn.gate) drawn = await d.cdp.eval<{ gate: number; knob: number }>(`({ gate: document.getElementById('touch-base').getBoundingClientRect().width, knob: document.getElementById('touch-knob').getBoundingClientRect().width })`);
-    const { cx, cy } = d.stick!;
-    const slide = async (tx: number, ty: number) => {
-      await d.fingers.at(RIGHT, clampTo(tx, w - 1), clampTo(ty, h - 1));
-      await sleep(70);
-      return d.view();
-    };
-    const l = await slide(cx - R, cy);
-    const r = await slide(cx + R, cy);
-    if (name === "bottom-right") await d.shot(`reach-${orient}-${size}`); // the centre shifted in, the thumb at the last pixel: full lock
-    const g = await slide(cx, cy - R);
-    const b = await slide(cx, cy + R);
-    await d.thumbUp();
-    await sleep(60);
-    const placed = Math.abs(v0.cx - cx) < 0.6 && Math.abs(v0.cy - cy) < 0.6;
-    const ok =
-      P.mode === "point"
-        ? placed && [l, r, g, b].every((k) => Math.hypot(k.kx, k.ky) > deadPx && k.colour !== "neutral")
-        : placed && l.kx <= -lockPx + 0.05 && r.kx >= lockPx - 0.05 && g.colour === "gas" && b.colour === "brake";
-    reachOk &&= ok;
-    reach.push(`${name} ${Math.round(x)},${Math.round(y)} -> centre ${v0.cx.toFixed(1)},${v0.cy.toFixed(1)}: knob left ${l.kx} ${l.colour}, right ${r.kx} ${r.colour}, up ${g.ky} ${g.colour}, down ${b.ky} ${b.colour}${ok ? "" : " (FAIL)"}`);
-  }
-  check(
-    P.mode === "point"
-      ? `${tag}: the gate is drawn at 2R (${2 * R} px) and the knob at 0.8R (${0.8 * R} px); from a landing at each corner of the stick's zone the thumb points past the dead zone (knob > ${deadPx} px out, coloured) every way on screen`
-      : `${tag}: the gate is drawn at 2R (${2 * R} px) and the knob at 0.8R (${0.8 * R} px); from a landing at each corner of the stick's zone full lock both ways (knob >= ${lockPx} px sideways), gas and brake are reached on screen`,
-    Math.abs(drawn.gate - 2 * R) < 0.5 && Math.abs(drawn.knob - 0.8 * R) < 0.5 && reachOk,
-    `gate ${drawn.gate}, knob ${drawn.knob}; ${reach.join(" | ")}`,
-  );
+  await reachCheck(d, tag, w, h, L.zone, `reach-${orient}-${size}`);
   // Sizes and places.
   const small = L.caps.filter((c) => c.width < 56 || c.height < 56);
   check(`${tag}: FIRE and MINE are at least 56 CSS px`, L.caps.length === 2 && small.length === 0, `${L.caps.length} caps, smallest ${Math.min(...L.caps.map((c) => Math.min(c.width, c.height)))} px`);
@@ -1661,6 +1702,9 @@ async function main(): Promise<void> {
     ["look-portrait", (d) => look(d, "look portrait", 390, 844)],
     ["look-landscape", (d) => look(d, "look landscape", 844, 390)],
     ["look-small", (d) => look(d, "look small", 360, 740)],
+    ["reach-rate-portrait", (d) => reachRate(d, "portrait", 390, 844)],
+    ["reach-rate-landscape", (d) => reachRate(d, "landscape", 844, 390)],
+    ["reach-rate-small", (d) => reachRate(d, "small", 360, 740)],
     ["desktop", desktop],
   ];
   for (const [name, pass] of passes) {

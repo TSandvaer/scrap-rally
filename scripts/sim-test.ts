@@ -10104,15 +10104,15 @@ function touchStickCentre(): void {
   );
   // Near the right and the bottom edge the centre moves in just as far as full lock (0.9 R + 8 px)
   // and the gas/brake dead zone (0.3 R + 8 px) need: from there both are still reachable on screen.
-  const lockIn = SP.radius * SP.steerLock + 8; // R 95: 93.5 px
-  const gasIn = SP.radius * SP.throttleDead + 8; // R 95: 36.5 px
+  const lockIn = SP.radius * SP.steerLock + 8; // R 67: 68.3 px
+  const gasIn = SP.radius * SP.throttleDead + 8; // R 67: 28.1 px
   const right = touchRun([stickDown(2, 385, 560)]).stick!;
   const bottom = touchRun([stickDown(3, 290, 842)]).stick!;
   const corner = touchRun([stickDown(4, 389, 843)]).stick!;
   const [ix, iy] = [Math.floor(390 - lockIn) - 1, Math.floor(844 - gasIn) - 1]; // just inside both reaches: no shift
   const inside = touchRun([stickDown(5, ix, iy)]).stick!;
   check(
-    `touch stick: a thumb landing near the right or bottom edge moves the centre in (right: to 390 - ${lockIn}; bottom: to 844 - ${gasIn}; a corner: both); further in it stays`,
+    `touch stick: a thumb landing near the right or bottom edge moves the centre in (right: to 390 - ${lockIn.toFixed(1)}; bottom: to 844 - ${gasIn.toFixed(1)}; a corner: both); further in it stays`,
     right.cx === 390 - lockIn && right.cy === 560 && bottom.cx === 290 && bottom.cy === 844 - gasIn && corner.cx === 390 - lockIn && corner.cy === 844 - gasIn && inside.cx === ix && inside.cy === iy,
     `right ${right.cx},${right.cy}; bottom ${bottom.cx},${bottom.cy}; corner ${corner.cx},${corner.cy}; inside ${inside.cx},${inside.cy}`,
   );
@@ -10167,7 +10167,7 @@ function touchStickClamp(): void {
   );
   // A thumb far up keeps its steer (sideways offset, capped at R), as a thumb holding gas drifts up.
   const R = SP.radius;
-  const sideways = Math.round(0.75 * R); // R 95: 71 px, about 0.52 steer on curve 3
+  const sideways = Math.round(0.75 * R); // R 67: 50 px, about 0.52 steer on curve 3
   const highRight = at(sideways, -2.5 * R);
   check(
     "touch stick: a thumb pushed far up still steers by its sideways offset (gas held, the thumb drifting up)",
@@ -10196,7 +10196,9 @@ function touchStickDead(): void {
   );
   // Throttle dead zone: 0.3 R up or down; past it full gas or brake, nothing in between.
   const td = R * SP.throttleDead;
-  const thr = [-td / 2, -td, -(td + 1), -R, td / 2, td, td + 1, R].map((dy) => at(0, dy).throttle);
+  // Exactly at 0.3 R the offset goes to stickControls as it is: through the reducer's screen point
+  // (560 - td) it comes back 2e-14 px further out at R 67 (20.1 px is not exact in binary; R 95's 28.5 was).
+  const thr = [-td / 2, -td, -(td + 1), -R, td / 2, td, td + 1, R].map((dy) => (Math.abs(dy) === td ? stickControls(0, dy, SP)[0] : at(0, dy).throttle));
   check(`touch stick: throttle dead zone: nothing within 0.3 R (${td} px) up or down; past it up is full gas (1), down brake/reverse (-1), never a fraction`, thr.join(",") === "0,0,1,1,0,0,-1,-1", thr.join(","));
   // Sideways only (past full lock), with a little vertical wobble inside the dead zone: steer, no gas or brake.
   const side = [at(R * SP.steerLock + 2, td / 2), at(-(R * SP.steerLock + 2), -td / 2)];
@@ -10216,12 +10218,12 @@ function touchStickCurve(): void {
   const quarter = at(dz + span / 4, 0).steer; // a quarter of the way: 0.25 ^ 3 = 0.016
   const threeQ = at(dz + (3 * span) / 4, 0).steer; // three quarters: 0.75 ^ 3 = 0.42
   const lockAt = at(lock, 0).steer;
-  const past = at(lock + 8, 0).steer;
+  const past = at((lock + R) / 2, 0).steer; // between full lock and R (R 67: 6.7 px apart)
   const symmetric = xs.every((dx) => at(-dx, 0).steer === -at(dx, 0).steer);
   check(
-    `touch stick: steer rises with the sideways offset up the curve (a quarter of the way 0.25^3 = 0.02, three quarters 0.75^3 = 0.42), full lock (1, the keyboard's) at 0.9 R = ${lock} px, inside R; left mirrors right`,
-    rising && quarter === 0.02 && threeQ === 0.42 && lockAt === 1 && past === 1 && lock + 8 < R && symmetric,
-    `quarter ${quarter}, three quarters ${threeQ}, at ${lock} px ${lockAt}, at ${lock + 8} px ${past}; rising ${rising}, symmetric ${symmetric}`,
+    `touch stick: steer rises with the sideways offset up the curve (a quarter of the way 0.25^3 = 0.02, three quarters 0.75^3 = 0.42), full lock (1, the keyboard's) at 0.9 R = ${lock.toFixed(1)} px, inside R and held out to R; left mirrors right`,
+    rising && quarter === 0.02 && threeQ === 0.42 && lockAt === 1 && past === 1 && lock < R && symmetric,
+    `quarter ${quarter}, three quarters ${threeQ}, at ${lock.toFixed(1)} px ${lockAt}, at ${((lock + R) / 2).toFixed(2)} px ${past}; rising ${rising}, symmetric ${symmetric}`,
   );
   // The curve and the lock are parameters: linear halfway is 0.5; a lock at 0.5 R gives 1 at 0.5 R.
   const linear = { ...SP, steerCurve: 1 };
@@ -10326,7 +10328,7 @@ function touchStickOwner(): void {
     ctlText(twoUp),
   );
   const firstUp = touchRun([stickDown(2, 340, 700), { t: "up", id: 1 }, stickMove(2, 380, 650)], one);
-  const fresh = touchRun([stickDown(3, 280, 600)], firstUp); // clear of the right edge's shift (from 296.5)
+  const fresh = touchRun([stickDown(3, 280, 600)], firstUp); // clear of the right edge's shift (from 321.7 at R 67)
   check(
     "touch stick owner: when the first finger lifts the stick is gone; a finger that landed while it was owned stays ignored; a new finger takes the stick at its own point",
     firstUp.stick === null && ctlText(firstUp) === "t0 s0" && fresh.stick?.id === 3 && fresh.stick.cx === 280 && fresh.stick.cy === 600,
@@ -10478,13 +10480,14 @@ function touchMerge(): void {
       delete g.HTMLTextAreaElement;
     }
   }
-  // The defaults: point mode (TOUCH-5) with its values, and rate mode's the user's (TOUCH-4), full lock
-  // inside R; in rate mode the stick's direct function agrees with the reducer.
+  // The defaults: point mode (TOUCH-5) with its values, R 67 (TOUCH-6: the user's point-mode tuning),
+  // and rate mode's the user's (TOUCH-4), full lock inside R; in rate mode the stick's direct
+  // function agrees with the reducer.
   const direct = stickControls(40, -30, SP);
   const viaPad = at(40, -30);
   check(
-    "touch merge: the defaults are point mode (TOUCH-5: dead zone 0.3 R, full lock 35° off, brake past 110°) and the user's TOUCH-4 rate values (full lock inside R, 0.9 R, past a small dead zone); stickControls is what the reducer reads in rate mode",
-    JSON.stringify(STICK_DEFAULTS) === '{"mode":"point","radius":95,"steerDead":0.12,"steerLock":0.9,"steerCurve":3,"throttleDead":0.3,"split":0.5,"pointDead":0.3,"aimFull":35,"brakeAngle":110}' &&
+    "touch merge: the defaults are point mode (TOUCH-5: dead zone 0.3 R, full lock 35° off, brake past 110°) at R 67 (TOUCH-6) and the user's TOUCH-4 rate values (full lock inside R, 0.9 R, past a small dead zone); stickControls is what the reducer reads in rate mode",
+    JSON.stringify(STICK_DEFAULTS) === '{"mode":"point","radius":67,"steerDead":0.12,"steerLock":0.9,"steerCurve":3,"throttleDead":0.3,"split":0.5,"pointDead":0.3,"aimFull":35,"brakeAngle":110}' &&
       STICK_DEFAULTS.steerLock < 1 && STICK_DEFAULTS.steerDead < STICK_DEFAULTS.steerLock && direct[0] === viaPad.throttle && direct[1] === viaPad.steer && direct[1] > 0,
     JSON.stringify(STICK_DEFAULTS),
   );
@@ -10540,11 +10543,11 @@ function touchPointAim(): void {
     bad.length === 0 && moved.length === 0,
     [...bad, ...moved].join(", ") || dirs.map(([n, , , d]) => `${n} ${d}°`).join(", "),
   );
-  // The dead zone: up to pointDead x R (0.3 x 95 = 28.5 px) no aim; just past it, an aim.
+  // The dead zone: up to pointDead x R (0.3 x 67 = 20.1 px) no aim; just past it, an aim.
   const dz = PT.pointDead * PT.radius;
   const inside = [[dz, 0], [0, -dz], [-dz * 0.7, dz * 0.7], [0, 0]].every(([dx, dy]) => pointAim(dx, dy, PT) === null);
   const past = pointAim(dz + 0.5, 0, PT) === 0 && pointAim(0, -(dz + 0.5), PT) === -Math.PI / 2;
-  check(`touch point: no aim inside the dead zone (up to ${dz} px, every way); just past it the thumb's direction`, inside && past);
+  check(`touch point: no aim inside the dead zone (up to ${dz.toFixed(1)} px, every way); just past it the thumb's direction`, inside && past);
 }
 
 function touchPointSteer(): void {
@@ -10621,28 +10624,37 @@ function touchPointDead(): void {
     JSON.stringify(viaRead[0]),
   );
   // The centre near an edge in point mode keeps pointDead x R + 8 px from every edge, so every
-  // direction can be pointed past the dead zone on screen, from any landing in the zone.
-  const keep = PT.pointDead * PT.radius + 8; // 36.5 px
+  // direction can be pointed past the dead zone on screen, from any landing in the zone (TOUCH-6:
+  // every whole degree from the zone's corners, edge middles and middle; the thumb as far along that
+  // direction as the screen (x 0..w-1, y 0..h-1) and R allow must be past the dead zone and point
+  // exactly that way).
+  const keep = PT.pointDead * PT.radius + 8; // R 67: 28.1 px
   const corner = stickCentre(389, 843, TOUCH_GEO.screen, PT);
   const topLeft = stickCentre(1, 1, TOUCH_GEO.screen, PT);
   const unreached: string[] = [];
+  let rays = 0, shortest = Infinity;
   for (const [w, h] of [[390, 844], [844, 390], [360, 740]]) {
     const geo: PadGeometry = { ...TOUCH_GEO, screen: { left: 0, top: 0, width: w, height: h } };
-    for (const x of [w * PT.split, w - 1]) {
-      for (const y of [92, h - 1]) {
+    const [zl, zt] = [w * PT.split, 92];
+    for (const x of [zl, (zl + w - 1) / 2, w - 1]) {
+      for (const y of [zt, (zt + h - 1) / 2, h - 1]) {
         const st = reducePad(PAD_IDLE, stickDown(1, x, y), geo, PT).stick!;
-        for (let deg = -180; deg < 180; deg += 45) {
-          const tx = Math.max(0, Math.min(w - 1, st.cx + PT.radius * Math.cos(deg * TDEG)));
-          const ty = Math.max(0, Math.min(h - 1, st.cy + PT.radius * Math.sin(deg * TDEG)));
-          if (pointAim(tx - st.cx, ty - st.cy, PT) === null) unreached.push(`${w}x${h} ${x},${y} ${deg}°`);
+        for (let deg = -180; deg < 180; deg++) {
+          const [ux, uy] = [Math.cos(deg * TDEG), Math.sin(deg * TDEG)];
+          const run = (c: number, u: number, hi: number) => (u > 1e-12 ? (hi - c) / u : u < -1e-12 ? -c / u : Infinity); // to the screen's edge
+          const t = Math.min(PT.radius, run(st.cx, ux, w - 1), run(st.cy, uy, h - 1));
+          rays++;
+          shortest = Math.min(shortest, t);
+          const aim = pointAim(t * ux, t * uy, PT);
+          if (aim === null || Math.abs(touchWrap(aim - deg * TDEG)) > 1e-9) unreached.push(`${w}x${h} ${x},${y} ${deg}°: ${t.toFixed(1)} px`);
         }
       }
     }
   }
   check(
-    `touch point: a thumb landing at an edge puts the centre ${keep} px in (the dead zone + 8 px) on every side; from the zone's corners at 390x844, 844x390 and 360x740 all 8 directions reach past the dead zone on screen`,
-    corner.join(",") === `${390 - keep},${844 - keep}` && topLeft.join(",") === `${keep},${keep}` && unreached.length === 0,
-    `corner ${corner.join(",")}, top-left ${topLeft.join(",")}${unreached.length ? `; unreached ${unreached.join(" | ")}` : ""}`,
+    `touch point: a thumb landing at an edge puts the centre ${keep.toFixed(1)} px in (the dead zone + 8 px) on every side; from the zone's corners, edge middles and middle at 390x844, 844x390 and 360x740 every whole degree can be pointed on screen past the dead zone (${(PT.pointDead * PT.radius).toFixed(1)} px)`,
+    corner.join(",") === `${390 - keep},${844 - keep}` && topLeft.join(",") === `${keep},${keep}` && rays === 3 * 9 * 360 && unreached.length === 0 && shortest > PT.pointDead * PT.radius,
+    `corner ${corner.map((v) => v.toFixed(1)).join(",")}, top-left ${topLeft.map((v) => v.toFixed(1)).join(",")}; ${rays} directions, the shortest on-screen reach ${shortest.toFixed(1)} px${unreached.length ? `; unreached ${unreached.slice(0, 6).join(" | ")}` : ""}`,
   );
 }
 
