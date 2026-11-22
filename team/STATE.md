@@ -634,6 +634,11 @@ Opus reviewer ctx_d7ef3257a313 (tmp/review-br-schema.md). Cap rule (user popup):
 Active authors: M4-TRACKS, HARD-2, TH-LOOK-1 (BR-SCHEMA idle in review).
 MARSHALS-1 123jpnbfgjb (Fable) on the board: two flag marshals at the start/finish line; starts after TH-LOOK-1 merges (render.ts),
 beside BR-BAKE; asks before touching client/main.ts or game.ts (HARD-2).
+M4-TRACKS done: 4d4e97b (Slag Harbour 19,324 / Breaker's Mile 20,426; Normal laps 51.8-59.0 s, 0 falls; density plain 89.4/90.6 %,
+shortest gaps 1041/1338, mud 330; census fixed: HUD allowance from trackList().length+1; 907/907 + 143/143 x2; report
+tmp/m4-tracks/m4-tracks-report.md). Conflicts with br-schema (sim-test, golden): second to merge resolves. Opus reviewer ctx_ca6629690be1
+(tmp/review-m4-tracks.md). TASTE COPY :3009 = M4-TRACKS 4d4e97b (worktree split-taste, no dev flag; node pid 16214, npm pid 16191);
+the Move Yard copy is stopped. Active authors: HARD-2, TH-LOOK-1 (M4-TRACKS + BR-SCHEMA idle in review). Nothing else startable yet.
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
