@@ -681,6 +681,11 @@ new 35/35; gate green x2). Quick reviewer ctx_27271d92a5da (tmp/review-tracks-fl
 vary (6..42, never 0 so far).
 DEPLOYED (user): live index-CAou9HUR.js (curl), page has translate="no" + notranslate. QA13 live worker dispatched (muted; spec
 tmp/spec-qa-live-13.md; report tmp/qa13-live-report.md): new tracks, NOSELECT-1, HARD-2 off live, stick regression.
+THEME-SCHEMA done: 8f793f7 (theme field; sand/oil/ford as data, kept out of surfaces/surfAt; validation + gating; Dune/Block/Canopy Yards;
+Breaker's Mile desert, Slag Harbour city; 993/993 + 143/143; report tmp/theme-schema/THEME-SCHEMA-report.md). Conflicts with main and
+th-look-1 only in sim-test/README appends. Opus reviewer ctx_70f3da126e82 (tmp/review-theme-schema.md). GATE BEFORE THE NEXT PUSH:
+once THEME-SCHEMA + TH-LOOK-1 are both on main, the LIVE Breaker's Mile draws the provisional desert -> the user must approve the desert
+(or the theme field is held back) before pushing. Active authors: TH-LOOK-1 only; BR-PHYS waits for THEME-SCHEMA's merge.
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
