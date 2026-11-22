@@ -398,6 +398,7 @@ async function run(ctx: Ctx, bots: Bot[]): Promise<void> {
   await runMove(ctx, bots);
   await runLong(ctx, bots);
   await runHard2(ctx, bots);
+  await runBranch(ctx, bots);
 }
 
 const lost = new Map<string, (ConnReason | undefined)[]>();
@@ -2437,5 +2438,81 @@ async function runHard2(ctx: Ctx, bots: Bot[]): Promise<void> {
     H.game.leave();
     if (old === undefined) delete process.env.SCRAP_DEV_BOTS;
     else process.env.SCRAP_DEV_BOTS = old;
+  }
+}
+
+// ---- branch roads over sockets (BR-PHYS, PLAN-BRANCH.md 2.2, ClickUp 123jpnbfgha, 2026-11-22) ----------
+// This section's imports (hoisted like the ones at the top).
+import { RouteDriver as BrRoute } from "../tools/debug/branch-walls";
+import { roadOfSeg as brRoadOfSeg } from "../shared/track";
+
+/**
+ * The client's prediction through the shortcuts over a lagged link (PLAN-BRANCH 2.2: the replay starts
+ * from the server's exact global segment, so prediction and server agree on the road): on Branch Yard
+ * (the server started with SCRAP_DEV_TRACK=branch-yard, set for this section only) a lagged scripted
+ * socket car (80±10 ms; tools/debug/branch-walls.ts RouteDriver, through all three shortcuts and every
+ * mouth) races an unlagged socket bot (its AI driver keeps the main road, past every mouth). The scripted
+ * car keeps a median reconciliation error below 0.5 and the lagged bound (no error above 50, at most 4
+ * state mismatches); the bot on the main road keeps its median below 0.5; both finish.
+ */
+async function runBranch(ctx: Ctx, bots: Bot[]): Promise<void> {
+  const old = process.env.SCRAP_DEV_TRACK;
+  process.env.SCRAP_DEV_TRACK = "branch-yard";
+  const H = new Bot("Hotel7", ctx.url, 24);
+  const S = new Bot("Sierra7", ctx.url, 0, { lag: 80, jitter: 10 });
+  bots.push(H, S);
+  for (const b of [H, S]) b.weapons = false;
+  let room: ReturnType<typeof ctx.server.rooms.rooms.get> | undefined;
+  let tick: ((t: number, now: number) => void) | null = null;
+  try {
+    H.game.create(H.name);
+    await waitFor("branch: H welcome", () => !!H.game.you, 3000);
+    S.game.join(H.game.code, S.name);
+    await waitFor("branch: S in H's room", () => H.game.players.length === 2 && !!S.game.you, 3000);
+    room = ctx.server.rooms.rooms.get(H.game.code)!;
+    await waitFor("branch: both clients on Branch Yard", () => H.game.trackId === "branch-yard" && S.game.trackId === "branch-yard", 3000);
+    const yard = surfTestTrack("branch-yard")!;
+    check(
+      "branch over sockets: with SCRAP_DEV_TRACK=branch-yard a new room starts on Branch Yard, and both clients build that track",
+      room.trackId === "branch-yard" && H.game.trackId === "branch-yard" && S.game.track === yard && H.game.track === yard,
+      `room ${room.trackId}, clients ${H.game.trackId} / ${S.game.trackId}`,
+    );
+    const drv = new BrRoute(yard, [1, 2, 3], 0);
+    S.script = () => (S.game.car ? { ...drv.controls(S.game.car), fire: false, mine: false } : NO_CONTROLS);
+    // Server state: ticks each car spends on a branch (the scripted one through the shortcuts; the bot in mouths).
+    const r = room;
+    tick = r.tick.bind(r);
+    const on = { s: 0, h: 0, roads: new Set<number>() };
+    r.tick = (t: number, now: number) => {
+      tick!(t, now);
+      if (r.phase !== "racing") return;
+      const sc = r.players.get(S.game.you)?.car, hc = r.players.get(H.game.you)?.car;
+      if (sc && sc.seg >= yard.pts.length) {
+        on.s++;
+        on.roads.add(brRoadOfSeg(yard, sc.seg));
+      }
+      if (hc && hc.seg >= yard.pts.length) on.h++;
+    };
+    const e0 = S.game.recErrors.length, st0 = S.game.recStateErrors, h0 = H.game.recErrors.length;
+    const rows = await runRace("branch", bots, H, [H, S]);
+    const s = stats(S.game.recErrors.slice(e0)), sh = stats(H.game.recErrors.slice(h0));
+    const st = S.game.recStateErrors - st0;
+    console.log(
+      `      Sierra7 (80±10 ms, scripted through every shortcut) and Hotel7 (bot, main road) on Branch Yard: Sierra7 ${on.s} server ticks on a branch (roads ${[...on.roads].join(",")}), Hotel7 ${on.h} (in mouths); ` +
+        `Sierra7 rec err n=${s.n} median=${s.median.toFixed(3)} p95=${s.p95.toFixed(3)} max=${s.max.toFixed(2)}, state mismatches ${st}, rtt=${S.game.rtt.toFixed(1)}ms; Hotel7 rec err n=${sh.n} median=${sh.median.toFixed(3)} max=${sh.max.toFixed(2)}; ` +
+        `finish ${rows.map((x) => `${x.name} ${(x.timeMs / 1000).toFixed(2)}s`).join(", ")}`,
+    );
+    check(
+      "branch over sockets: a lagged scripted car (80±10 ms) races through all three shortcuts and every mouth: both finish, it keeps a median reconciliation error below 0.5, no error above 50, at most 4 state mismatches; the unlagged socket bot on the main road keeps its median below 0.5",
+      rows.length === 2 && rows.every((x) => x.timeMs > 0) && on.s > 300 && on.roads.size === 3 && s.n > 500 && s.median < 0.5 && s.max <= 50 && st <= 4 &&
+        sh.n > 500 && sh.median < 0.5 && H.errors.length + S.errors.length === 0,
+      `on a branch ${on.s} ticks (roads ${[...on.roads].join(",")}); median ${s.median.toFixed(3)}, max ${s.max.toFixed(2)}, state mismatches ${st}; bot median ${sh.median.toFixed(3)}`,
+    );
+  } finally {
+    S.script = null;
+    if (room && tick) room.tick = tick;
+    for (const b of [H, S]) b.game.leave();
+    if (old === undefined) delete process.env.SCRAP_DEV_TRACK;
+    else process.env.SCRAP_DEV_TRACK = old;
   }
 }
