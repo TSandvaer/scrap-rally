@@ -7,7 +7,8 @@
 // their ids (server/room.ts devTrackId, M4-SURF: off by default and on Render). They build and pass
 // validateTrack.
 
-import { buildTrack, type Track, type TrackDef } from "./track";
+import type { Theme } from "./theme";
+import { buildTrack, type Feature, type Track, type TrackDef } from "./track";
 
 // A long loop: a straight top side (s ~600-1800, heading +x), a gentle right-hand side, a straight
 // bottom side (s ~5800-7000, heading -x) and a left-hand side bending right.
@@ -190,8 +191,76 @@ export const BRANCH_YARD: TrackDef = {
   recovery: [0, 3600, 8800, 14900],
 };
 
+// ---- the theme yards (THEME-SCHEMA, PLAN-THEMES.md 2.5; ClickUp 123jpnbfgj1) -------------------------
+// One roomy yard per theme (user decision 1), each with its theme's surface twice and one of every M4
+// obstacle, in spaced groups with plain road between them (the user's density rule; at least 600 units
+// between two groups, sim-test). The loop is the Preview Yard's with its top and bottom straights 1200
+// longer (12596 round; the straights s ~700-3050 and ~7050-9350), so that a ford, which lies on a
+// straight, and a ramp truck's landing have room. In order round the lap, the same on all three:
+// - top straight: the theme surface (slot A, s 800, across the whole road), then a parked ramp truck
+//   right of centre (s 1750) with room for a boosted flight, then a tyre-mound pair (s 2700, 2880);
+// - right-hand side: a pool on the outside half of its tightest bend (s 4000-4300; the inside stays dry,
+//   the dry lane), a row of rolling barrels (s 5000), a crusher press over the left of the road (s 6300);
+// - bottom straight: the theme surface again (slot B, s 7150), then a split round an island whose right
+//   lane has 340 units of dirt (the mud rule, <= 350);
+// - left-hand side and the start: plain road.
+// The theme surfaces do nothing yet (THEME-SURF makes them act; TH-LOOK-2 and TH-LOOK-3 draw them):
+// today each yard races as its theme-less twin. Picked with the dev flag SCRAP_DEV_TRACK=dune-yard,
+// block-yard or canopy-yard (server/room.ts).
+
+/** The theme yards' loop: the Preview Yard's, its top and bottom straights 1200 longer. */
+export const THEME_LOOP: [number, number][] = [
+  [800, 600], [1400, 600], [2000, 600], [2600, 600], [3200, 600], [3800, 600], [4400, 600], [4900, 800], [5100, 1300], [5100, 1900],
+  [4900, 2400], [4400, 2600], [3800, 2600], [3200, 2600], [2600, 2600], [2000, 2600], [1400, 2600], [800, 2600], [400, 2400], [200, 1900],
+  [200, 1300], [400, 800],
+];
+
+/** A theme yard: THEME_LOOP, its theme, its theme surface in slot A (top straight) and slot B (bottom straight), the obstacles between. */
+function themeYard(id: string, name: string, theme: Theme, slotA: Feature, slotB: Feature): TrackDef {
+  return {
+    id,
+    name,
+    theme,
+    control: THEME_LOOP,
+    halfWidth: 64,
+    verge: 44,
+    features: [
+      slotA,
+      { k: "truck", s: 1750, lat: 24, len: 110 },
+      { k: "tyres", s: 2700, lat: -30, r: 24 },
+      { k: "tyres", s: 2880, lat: 30, r: 24 },
+      { k: "water", s0: 4000, s1: 4300, lat0: -64, lat1: 0 },
+      { k: "barrels", s: 5000, n: 3, period: 240, speed: 110 },
+      { k: "press", s: 6300, lat0: -64, lat1: 16, period: 160, down: 50 },
+      slotB,
+      { k: "widen", s0: 8050, s1: 9250, left: 60, right: 60 },
+      { k: "island", s0: 8200, s1: 9100, lat0: -28, lat1: 28 },
+      { k: "dirt", s0: 8450, s1: 8790, lat0: 28, lat1: 124 },
+    ],
+    recovery: [0],
+  };
+}
+
+/** Desert: two sand patches, 300 across the whole road and 250 on the right half (each <= 350, the mud rule). */
+export const DUNE_YARD: TrackDef = themeYard("dune-yard", "Dune Yard", "desert",
+  { k: "sand", s0: 800, s1: 1100, lat0: -64, lat1: 64 },
+  { k: "sand", s0: 7150, s1: 7400, lat0: 0, lat1: 64 });
+
+/** City: two oil slicks, 180 across the whole road and 180 on the left half (each <= 200; on the straights). */
+export const BLOCK_YARD: TrackDef = themeYard("block-yard", "Block Yard", "city",
+  { k: "oil", s0: 800, s1: 980, lat0: -64, lat1: 64 },
+  { k: "oil", s0: 7150, s1: 7330, lat0: -64, lat1: 0 });
+
+/** Jungle: two fords across the whole road on the straights, 140 long, drifting right at 60 u/s and left at 60. */
+export const CANOPY_YARD: TrackDef = themeYard("canopy-yard", "Canopy Yard", "jungle",
+  { k: "ford", s0: 800, s1: 940, lat0: -64, lat1: 64, vx: 60 },
+  { k: "ford", s0: 7150, s1: 7290, lat0: -64, lat1: 64, vx: -60 });
+
+/** The theme yards, one per theme but the scrapyard (PLAN-THEMES 2.5). */
+export const THEME_YARDS: readonly TrackDef[] = [DUNE_YARD, BLOCK_YARD, CANOPY_YARD];
+
 /** Every preview test track, in the order a preview lists them. */
-export const TEST_TRACKS: readonly TrackDef[] = [PREVIEW_YARD, SURF_YARD, SPLIT_YARD, MOVE_YARD, BRANCH_YARD];
+export const TEST_TRACKS: readonly TrackDef[] = [PREVIEW_YARD, SURF_YARD, SPLIT_YARD, MOVE_YARD, BRANCH_YARD, ...THEME_YARDS];
 
 const built = new Map<string, Track>(); // built once per id; a Track is never mutated
 

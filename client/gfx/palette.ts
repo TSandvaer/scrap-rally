@@ -109,6 +109,125 @@ export const LIT: Readonly<Record<PaletteName, PaletteName>> = {
   water: "steel1",
 };
 
+// ---- themes ---------------------------------------------------------------------------
+//
+// A track's surroundings (PLAN-THEMES.md 2.2): scrapyard, desert, city, jungle. A theme has the
+// same 32 role names in colours of its own (the ground is `dirt` whether it is packed earth or
+// sand), the same kind of SHADE and LIT links between them, and up to 31 colours more for the
+// pixels of the baked world that take no track marks (a barrier, a prop, a void): the palette
+// indices after `water`. What a mine's burn leaves is the theme's own too.
+// - FIXED names have the same colour in every theme: soot (pits, voids, outlines), bone and
+//   hazard (chevrons, lips, stripes), the signals, and the water, which stays blue-grey
+//   wherever it lies (user decision 2026-11-21).
+// - Cars, effects, cells, the obstacle sheet and the HUD keep the global 32 above, whatever the
+//   theme: a theme recolours the baked world, nothing else.
+// The tables a theme's tiles are made with are built in gfx/theme.ts (sceneryOf);
+// tools/debug/theme-sheet.ts --check holds every theme to the rules.
+
+/** The names whose colour no theme changes. */
+export const FIXED: readonly PaletteName[] = ["soot0", "soot1", "soot2", "soot3", "bone0", "bone1", "bone2", "haz0", "haz1", "haz2", "blast", "red", "green", "water"];
+
+/** One of a theme's colours beyond the 32 and `water`; `shade` and `lit` name a role or another extra of the theme. */
+export interface Extra {
+  name: string;
+  hex: string;
+  shade: string;
+  lit: string;
+}
+
+/**
+ * What a burn leaves on a colour, by how light the colour is (four bands of luminance: under
+ * 45, under 85, under 150, lighter): `singed` and, deeper, `charred`. Names of roles or extras;
+ * a pixel shows the darker of the tone here and its own cast-shadow tone (gfx/world.ts, track marks).
+ */
+export interface Burn {
+  singed: readonly [string, string, string, string];
+  charred: readonly [string, string, string, string];
+}
+
+export interface ThemePalette {
+  colours: Readonly<Record<PaletteName, string>>;
+  shade: Readonly<Record<PaletteName, PaletteName>>;
+  lit: Readonly<Record<PaletteName, PaletteName>>;
+  extras: readonly Extra[];
+  burn: Burn;
+}
+
+/** The scrapyard: the palette above, as it is. */
+export const SCRAPYARD_PALETTE: ThemePalette = {
+  colours: P,
+  shade: SHADE,
+  lit: LIT,
+  extras: [],
+  burn: { singed: ["soot2", "soot3", "dirt0", "dirt1"], charred: ["soot1", "soot2", "soot3", "dirt0"] },
+};
+
+/**
+ * The desert, "noon on the dunes" (PROVISIONAL: the user judges the look later). Our own
+ * colours. The ground is pale ochre sand (`dirt`), the verge a darker grit (`gravel`), the
+ * kerbs terracotta and bone (`rust`), the tarmac the scrapyard's with a warm tint and as dark.
+ * Steel stays steel: ramps, plates and the truck are metal here too, and the water keeps its
+ * edge and its glints. The extras: sandstone (the barrier's blocks), canyon rock (a gap's
+ * layered walls, outcrops), burlap (sandbags), cactus green, and the two warm chars of a burn
+ * (sand has no dark tone of its own to burn to).
+ */
+export const DESERT_PALETTE: ThemePalette = {
+  colours: {
+    ...P,
+    // Sand. dirt0 is sand in a cast shadow, a little cooler.
+    dirt0: "#7b6650",
+    dirt1: "#ab8c58",
+    dirt2: "#c9a86e",
+    dirt3: "#dcc08a",
+    // Grit: the verge, darker and greyer than the sand, so a rivet and a cell show on it.
+    gravel0: "#695842",
+    gravel1: "#857052",
+    gravel2: "#a08a66",
+    // Tarmac, tinted warm.
+    tar0: "#2d2924",
+    tar1: "#3e3932",
+    tar2: "#4c453b",
+    tar3: "#6a6253",
+    // Clay and terracotta: rust1 is the red clay of a dirt patch, rust2 the kerb.
+    rust0: "#5e3323",
+    rust1: "#9a4a2c",
+    rust2: "#c0603c",
+    rust3: "#df8455",
+  },
+  shade: {
+    ...SHADE,
+    dirt0: "tar2", dirt1: "gravel0", dirt2: "dirt0", dirt3: "dirt1",
+    gravel0: "tar1", gravel1: "rust0", gravel2: "gravel0",
+    bone0: "gravel0",
+    haz0: "rust0",
+  },
+  lit: {
+    ...LIT,
+    soot3: "rust0",
+    dirt0: "dirt1", dirt1: "dirt2", dirt2: "dirt3", dirt3: "bone1",
+    gravel0: "gravel1", gravel1: "gravel2", gravel2: "bone0",
+  },
+  extras: [
+    { name: "stone0", hex: "#5f4c3a", shade: "soot3", lit: "stone1" },
+    { name: "stone1", hex: "#8f7758", shade: "stone0", lit: "stone2" },
+    { name: "stone2", hex: "#d6c19c", shade: "stone1", lit: "stone3" },
+    { name: "stone3", hex: "#f0e2c0", shade: "stone2", lit: "stone3" },
+    { name: "canyon0", hex: "#3a231a", shade: "soot2", lit: "canyon1" },
+    { name: "canyon1", hex: "#5a3122", shade: "canyon0", lit: "canyon2" },
+    { name: "canyon2", hex: "#7d4a30", shade: "canyon1", lit: "canyon3" },
+    { name: "canyon3", hex: "#a36a45", shade: "canyon2", lit: "rust3" },
+    { name: "bag0", hex: "#6e6247", shade: "soot3", lit: "bag1" },
+    { name: "bag1", hex: "#a09068", shade: "bag0", lit: "bag2" },
+    { name: "bag2", hex: "#c9bb92", shade: "bag1", lit: "bone2" },
+    { name: "cactus0", hex: "#3f5a3a", shade: "soot3", lit: "cactus1" },
+    { name: "cactus1", hex: "#5f7f4c", shade: "cactus0", lit: "cactus2" },
+    { name: "cactus2", hex: "#8fa868", shade: "cactus1", lit: "bag2" },
+    { name: "char0", hex: "#3b2e23", shade: "soot3", lit: "char1" },
+    { name: "char1", hex: "#4e3e2c", shade: "char0", lit: "gravel0" },
+  ],
+  burn: { singed: ["soot2", "soot3", "char0", "char1"], charred: ["soot1", "soot2", "soot3", "char0"] },
+};
+
 /**
  * style.css :root mirrored: the palette entry each CSS variable takes. Six equal today's CSS
  * value exactly; --line (#4a3a2b), --panel (rgba(22,17,13,0.92)) and --err (#ff8b6b) move

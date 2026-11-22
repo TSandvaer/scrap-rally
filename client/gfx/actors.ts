@@ -39,6 +39,7 @@ import { MINE_BLINK_FAST_TICKS } from "../../shared/weapons";
 import type { CarView, DrawPose, WorldFx } from "../render";
 import { Obstacles } from "./obstacles";
 import { P } from "./palette";
+import { sceneryFor, type Scenery } from "./theme";
 import { BLAST_FRAMES, BURNT, carSheet, catchSheet, CELL, CELL_FRAMES, CX_AIR, CX_AIR_GONE, CX_GONE, CX_GROUND, CX_SHADE, DENTED, FLAME, FLAME_AT, FLAME_COLS, FLAME_FRAMES, FLAME_HEADINGS, FLAME_LOW, FX_BLAST, FX_COLS, FX_MINE, FX_PUFF, FX_SPARK, HEADING_STEP, HEADINGS, lookOf, RACER, SHADOW_ALPHA, shadeSheet, sharedSheets, SPARK_FRAMES, SPARK_KINDS, spriteFrame, spritesFor, WHOLE, type SharedSheets } from "./sprites";
 import { MARK, marksCleared, scorch, skid, VIEW_H, VIEW_W, ZOOM } from "./world";
 
@@ -326,16 +327,22 @@ export class Actors {
   private dustNext = 0;
   private dustLive = 0; // a count that is never too low: 0 = nothing to step or draw
   private readonly rng = new Uint32Array(1);
+  private readonly dustYoung: string; // the dust's two tones: the track's theme's (bone in the scrapyard, sand in the desert)
+  private readonly dustOld: string;
   private readonly moving: Obstacles; // what moves on the road (barrels, presses, a belt's arrows)
   private readonly wide: boolean; // the road is widened somewhere: its edge is not everywhere halfWidth out
 
+  /** `scenery`: the track's theme as the Renderer resolved it (a caller without one gets the track's own). */
   constructor(
     private readonly ctx: CanvasRenderingContext2D,
     private readonly track: Track,
+    scenery: Scenery = sceneryFor(track),
   ) {
     spritesFor(ctx);
     this.rng[0] = 0x9e3779b9;
-    this.moving = new Obstacles(ctx, track);
+    this.dustYoung = scenery.dust[0];
+    this.dustOld = scenery.dust[1];
+    this.moving = new Obstacles(ctx, track, scenery);
     this.wide = track.widens.length > 0;
   }
 
@@ -759,7 +766,7 @@ export class Actors {
     const ctx = this.ctx, life = this.dustLife;
     // Young specks in the lighter tone, old ones a step down: two passes, two fill styles.
     for (let pass = 0; pass < 2; pass++) {
-      ctx.fillStyle = pass ? P.bone0 : P.bone1;
+      ctx.fillStyle = pass ? this.dustOld : this.dustYoung;
       for (let k = 0; k < DUST; k++) {
         const left = life[k];
         if (left <= 0 || (pass ? left > DUST_FADE : left <= DUST_FADE)) continue;
