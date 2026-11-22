@@ -414,6 +414,7 @@ interface Thing {
   x1: number;
   y1: number;
   tyres: Float64Array; // T_TYRES: x, y, radius (view pixels) and paint (palette index) of each, the lowest first
+  lie: Float64Array; // T_TYRES: per piece the way it lies, a cosine and a sine (a sandbag's long side: bags())
   junk: Junk | null; // T_JUNK
   truck: TruckArt | null; // T_TRUCK
 }
@@ -777,21 +778,30 @@ function furnish(art: Art): void {
   };
   // A thing's box, from the view-pixel box of what is drawn: room for its shadow down-right.
   const thing = (kind: number, x0: number, y0: number, x1: number, y1: number, more: Partial<Thing>): void => {
-    art.things.push({ kind, x0: Math.floor(x0) - 2, y0: Math.floor(y0) - 2, x1: Math.ceil(x1) + 9, y1: Math.ceil(y1) + 10, tyres: new Float64Array(0), junk: null, truck: null, ...more });
+    art.things.push({ kind, x0: Math.floor(x0) - 2, y0: Math.floor(y0) - 2, x1: Math.ceil(x1) + 9, y1: Math.ceil(y1) + 10, tyres: new Float64Array(0), lie: new Float64Array(0), junk: null, truck: null, ...more });
   };
   /** A heap of tyres as a thing: `list` holds x, y (world units), paint of each, the lowest first. */
   const heap = (list: number[]): void => {
-    const out = new Float64Array((list.length / 3) * 4);
-    let x0 = BIG, y0 = BIG, x1 = -BIG, y1 = -BIG;
-    for (let k = 0; k * 3 < list.length; k++) {
+    const count = list.length / 3;
+    const out = new Float64Array(count * 4), lie = new Float64Array(count * 2);
+    let x0 = BIG, y0 = BIG, x1 = -BIG, y1 = -BIG, mx = 0, my = 0;
+    for (let k = 0; k < count; k++) {
       const x = list[k * 3] * ZOOM, y = list[k * 3 + 1] * ZOOM, r = TYRE * ZOOM;
       out.set([x, y, r, list[k * 3 + 2]], k * 4);
       x0 = Math.min(x0, x - r);
       x1 = Math.max(x1, x + r);
       y0 = Math.min(y0, y - r);
       y1 = Math.max(y1, y + r);
+      mx += x / count;
+      my += y / count;
     }
-    thing(T_TYRES, x0, y0, x1, y1, { tyres: out });
+    // The way each piece lies (a theme whose pieces are not round): across the way to the heap's middle; the one in the middle as it fell.
+    for (let k = 0; k < count; k++) {
+      const dx = out[k * 4] - mx, dy = out[k * 4 + 1] - my, far = Math.hypot(dx, dy);
+      lie[k * 2] = far < 0.5 ? 0.8 : -dy / far;
+      lie[k * 2 + 1] = far < 0.5 ? 0.6 : dx / far;
+    }
+    thing(T_TYRES, x0, y0, x1, y1, { tyres: out, lie });
   };
 
   // Painted flat, in this order: the surfaces first (they never overlap each other), then what
@@ -2154,7 +2164,7 @@ function things(): void {
   for (let done = 0; job.row < job.nt && done < 3; done++) {
     const t = list[tcand[job.row++]];
     if (t.kind === T_TYRES) {
-      if (job.art!.dress.mound === MOUND_BAGS) bags(t.tyres);
+      if (job.art!.dress.mound === MOUND_BAGS) bags(t.tyres, t.lie);
       else tyres(t.tyres);
       cost += 4 + t.tyres.length * 1.5;
     } else if (t.kind === T_TRUCK) {
@@ -2201,35 +2211,20 @@ function propBox(): void {
 /**
  * A heap of sandbags (MOUND_BAGS), where the scrapyard has a heap of tyres: the same places and
  * paints (x, y, radius, paint each; view pixels), the lowest first. Each is a sack lying round
- * the heap's middle, its corners cut, a seam along it, in the sun with its shadow on what lies under it.
+ * the heap's middle (`lie`: a cosine and a sine each), its corners cut, a seam along it, in the
+ * sun with its shadow on what lies under it.
  */
-function bags(a: Float64Array): void {
+function bags(a: Float64Array, lie: Float64Array): void {
   const { mask } = buffers();
   const { bx, by } = job;
-  let cx = 0, cy = 0;
-  for (let k = 0; k < a.length; k += 4) {
-    cx += a[k];
-    cy += a[k + 1];
-  }
-  cx = cx / (a.length / 4) - bx;
-  cy = cy / (a.length / 4) - by;
   for (let k = 0; k < a.length; k += 4) {
     const x = a[k] - bx, y = a[k + 1] - by, r = a[k + 2], c = a[k + 3] | 0;
     if (x + r + 8 < 0 || y + r + 8 < 0 || x - r - 2 > S || y - r - 2 > S) continue;
-    // Its long side lies across the way to the heap's middle; the one in the middle lies as it fell.
-    let ux = cy - y, uy = x - cx;
-    const ul = Math.sqrt(ux * ux + uy * uy);
-    if (ul < 0.5) {
-      ux = 0.8;
-      uy = 0.6;
-    } else {
-      ux /= ul;
-      uy /= ul;
-    }
+    // Its long side lies as the heap was laid out (`lie`: worked out with the art, not here).
     AT[0] = x;
     AT[1] = y;
-    AT[2] = ux;
-    AT[3] = uy;
+    AT[2] = lie[k >> 1];
+    AT[3] = lie[(k >> 1) + 1];
     const L = r * 1.12, W = r * 0.78, cut = r * 0.36;
     polyN = 8;
     Q[0] = -L + cut, Q[1] = -W;
@@ -2421,6 +2416,7 @@ let polyN = 0;
 // pixels and the cosine and sine of its turn. Q: the shape, as each function says.
 const AT = new Float64Array(4);
 const Q = new Float64Array(4);
+
 
 /** A rectangle Q[2] x Q[3] centred (Q[0], Q[1]) in the frame AT, as the polygon. */
 function rect(): void {
