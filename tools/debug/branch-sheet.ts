@@ -1010,7 +1010,9 @@ async function allocOne(t: Track, theme: Theme): Promise<void> {
   const { worldStats } = await import("../../client/gfx/world");
   const { Renderer } = await import("../../client/render");
   const option = (name: string, fallback: number) => (args.includes(name) ? Number(args[args.indexOf(name) + 1]) : fallback);
-  const WARM = option("--warm", 30000), FRAMES = option("--frames", 6000), INTERVAL = option("--interval", 128);
+  // A long warm-up: what a lap runs only a few times (a pit's painter, the gap's void) is compiled for
+  // good late, and until then its fractions are boxed (after 30000 frames: some 25 bytes a frame still).
+  const WARM = option("--warm", 120000), FRAMES = option("--frames", 6000), INTERVAL = option("--interval", 128);
   const SPEED = 430, DT = 1000 / 60;
   const track = themedTrack(t, theme);
   // The way round that takes every shortcut, a frame at a time: its points, and the road's half-width there.
@@ -1098,7 +1100,7 @@ function alloc(): void {
   const self = fileURLToPath(import.meta.url);
   const pass = args.filter((a, i) => ["--warm", "--frames", "--interval"].includes(a) || ["--warm", "--frames", "--interval"].includes(args[i - 1]));
   console.log("# Rule 1 on Branch Yard: bytes a frame allocates (tools/debug/branch-sheet.ts --alloc)\n");
-  console.log("Renderer.frame, six cars round the way that takes every shortcut at 430 u/s (on the verge every other lap); warm frames first, then 6000 measured (--warm, --frames); V8's sampling heap profiler, objects collected since included.\n");
+  console.log("Renderer.frame, six cars round the way that takes every shortcut at 430 u/s (on the verge every other lap); 120000 warm frames first, then 6000 measured (--warm, --frames); V8's sampling heap profiler, objects collected since included.\n");
   console.log("| theme | frames a lap | tiles baked while measured | client/ bytes a frame | outside | the same with the control (an object a frame) | charged to |");
   console.log("|---|---:|---:|---:|---:|---:|---|");
   for (const theme of THEMES) process.stdout.write(execFileSync(process.execPath, [...process.execArgv, self, "--alloc-one", theme, ...pass], { encoding: "utf8", maxBuffer: 16 << 20 }));
