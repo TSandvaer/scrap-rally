@@ -14,10 +14,24 @@
 //                                                to the main centreline, and to the main corridor's edge), every
 //                                                main-road hazard's to the shortcut's centreline; the BR-BAKE
 //                                                review's rule (client/gfx/world.ts predict(): > 240)
+//   npx tsx tools/debug/br-tracks.ts --shots --out <dir>   the taste pictures, in headless Chrome: each shortcut's fork,
+//                                                hazard and merge (the preview's tour, &scene=tour&road=1, held at
+//                                                that point of the shortcut with its pack of six) at 1280x720 and
+//                                                390x844@3, in the track's own look. The working tree is built into
+//                                                a temp folder and served on 127.0.0.1:--port (default 3011); the
+//                                                browser session is brtracks-<pid>, its audio muted (and the game's
+//                                                M), closed at the end.
 //   --track slag-harbour|breakers-mile          one track only (default both)
 //
 // Its fallCost and hazardClearance are used by scripts/sim-test.ts (section BR-TRACKS).
 
+import { execFile } from "node:child_process";
+import { createReadStream, existsSync, mkdirSync, mkdtempSync, rmSync, statSync } from "node:fs";
+import http from "node:http";
+import os from "node:os";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 import type { BotLevel } from "../../shared/botdrive";
 import { CAR_TYPES, type CarType } from "../../shared/cars";
 import type { CarState } from "../../shared/physics";
@@ -143,10 +157,83 @@ export function hazardClearance(t: Track): Clearance[] {
   return out;
 }
 
-function main(): void {
+// ---- the taste pictures (headless Chrome) ------------------------------------------------------------
+
+const ROOT = path.resolve(fileURLToPath(new URL("../..", import.meta.url)));
+const run = promisify(execFile);
+const MIME: Record<string, string> = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".svg": "image/svg+xml", ".png": "image/png", ".json": "application/json", ".woff2": "font/woff2" };
+const SIZES = [
+  { name: "1280x720", w: 1280, h: 720, scale: 1 },
+  { name: "390x844@3", w: 390, h: 844, scale: 3 },
+];
+
+/** Where each picture is held: u along the shortcut (the tour's &s on &road=1; its camera stands ahead of its lead car). */
+export function shotPlaces(t: Track): { name: string; u: number }[] {
+  const b = t.branches[0], r = b.road;
+  const hazard = Math.min(...r.ramps.map((x) => x.s), ...r.gaps.map((g) => g.s0), ...r.holes.map((h) => h.s - h.r));
+  return [
+    { name: "fork", u: Math.max(0, (b.forkGore?.u ?? 200) - 260) },
+    { name: "hazard", u: hazard - 140 },
+    { name: "merge", u: (b.mergeGore?.u ?? r.length - 200) - 80 },
+  ];
+}
+
+async function shots(ids: string[], out: string, port: number): Promise<void> {
+  mkdirSync(out, { recursive: true });
+  const dist = mkdtempSync(path.join(os.tmpdir(), "br-tracks-dist-"));
+  const session = `brtracks-${process.pid}`;
+  const ab = async (more: string[]): Promise<string> => (await run("agent-browser", ["--session", session, ...more], { timeout: 120_000, maxBuffer: 64 << 20 })).stdout.trim();
+  let server: http.Server | null = null, opened = false;
+  try {
+    console.error("building the working tree ...");
+    await run(path.join(ROOT, "node_modules", ".bin", "vite"), ["build", "--outDir", dist, "--emptyOutDir", "--logLevel", "warn"], { cwd: ROOT, maxBuffer: 16 << 20 });
+    server = http.createServer((req, res) => {
+      const pathname = decodeURIComponent(new URL(req.url ?? "/", "http://x").pathname);
+      let file = path.join(dist, pathname === "/" ? "index.html" : pathname);
+      if (!file.startsWith(dist + path.sep) || !existsSync(file) || !statSync(file).isFile()) file = path.join(dist, "index.html");
+      res.writeHead(200, { "content-type": MIME[path.extname(file)] ?? "application/octet-stream", "cache-control": "no-store" });
+      createReadStream(file).pipe(res);
+    });
+    await new Promise<void>((done, fail) => {
+      server!.once("error", fail);
+      server!.listen(port, "127.0.0.1", () => done());
+    });
+    await ab(["--args", "--mute-audio", "open", "about:blank"]);
+    opened = true;
+    for (const size of SIZES) {
+      await ab(["set", "viewport", String(size.w), String(size.h), String(size.scale)]);
+      for (const id of ids) {
+        for (const pl of shotPlaces(trackById(id))) {
+          const file = path.join(out, `${id}-${pl.name}-${size.name}.png`);
+          await ab(["open", `http://127.0.0.1:${port}/?${new URLSearchParams({ debug: "1", preview: "1", freeze: "1", scene: "tour", track: id, road: "1", s: pl.u.toFixed(0), hud: "0" })}`]);
+          // Silent: the game's M too (a synthetic key, never a pressed one).
+          await ab(["eval", "window.dispatchEvent(new KeyboardEvent('keydown', { key: 'm', code: 'KeyM' })); true"]);
+          await new Promise((done) => setTimeout(done, 700)); // a held scene is redrawn every frame: any frame after the first will do
+          await ab(["screenshot", file]);
+          console.log(`${file}  (u ${pl.u.toFixed(0)})`);
+        }
+      }
+    }
+  } finally {
+    if (opened) await ab(["close"]).catch(() => "");
+    if (server) {
+      server.closeAllConnections();
+      server.close();
+    }
+    rmSync(dist, { recursive: true, force: true });
+  }
+}
+
+async function main(): Promise<void> {
   const args = process.argv.slice(2);
   const one = args.includes("--track") ? args[args.indexOf("--track") + 1] : null;
   const ids = one ? [one] : BR_TRACK_IDS;
+  if (args.includes("--shots")) {
+    const out = args.includes("--out") ? args[args.indexOf("--out") + 1] : "";
+    if (!out) throw new Error("br-tracks --shots: give --out <dir>");
+    await shots(ids, path.resolve(out), Number(args.includes("--port") ? args[args.indexOf("--port") + 1] : 3011));
+    return;
+  }
   for (const id of ids) {
     const t = trackById(id), b = t.branches[0];
     console.log(`## ${t.def.name} (${id}): shortcut main ${b.s0}..${b.s1} (${(b.s1 - b.s0).toFixed(0)}), ${b.road.length.toFixed(0)} long, half-width ${b.road.def.halfWidth}`);
@@ -165,4 +252,4 @@ function main(): void {
   }
 }
 
-if (process.argv[1]?.endsWith("br-tracks.ts")) main();
+if (process.argv[1]?.endsWith("br-tracks.ts")) await main();
