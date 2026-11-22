@@ -103,3 +103,41 @@ All start after M4-TRACKS merges. At most 2 workers at a time, never on the same
 5. How does the minimap show them? **The same line style as the main road.**
 
 **Out of scope:** graph tracks (option C), branches off branches, two branches in one mouth, a moving fork gate, shortcuts on Rust Bowl, Crusher Run and Overpass Knot, a track editor.
+
+## Advisor changes (binding; Fable 5.2 review 2026-11-22: "sound with changes"; override the text above)
+
+Confirmed by reading: nothing sends, stores or renders `seg` modulo n (the only wrap is inside `nearest`, track.ts:962-963); hint
+stores physics.ts:133, :235, weapons.ts:249, :277, :339 and :324 (`spawnShot` copies `c.seg`); hint reads race.ts:16, :31, game.ts:103,
+:824, sfx.ts:829, botdrive.ts:908, scripts/bots.ts:92, room.ts:556, :1201; contact.ts, render.ts, hud.ts, catchup.ts, combat.ts,
+server/bots.ts never touch it; ShotSnap carries no seg. Would break: tools/debug/surf-tune.ts:116, :207 (`tyresAt[c.seg]`),
+schema-hash.ts:83 (hashes it).
+1. **Road choice past the gore:** the cross-search runs on past the gore (`LOCAL_WINDOW` 12, track.ts:379) into the branch's taper; with
+   walls 108 and 80 a point 100 from main and 90 from the branch is inside the main verge but nearer the branch, so physics would pull the
+   car through the wall while the bake (raw `d2 < best`, world.ts:1004-1022) draws barrier there. Validate "gap between corridors >= |wall
+   difference|" at every point past the gore (or choose by distance minus wall in both physics and bake); `branch-walls` probes to 12
+   segments past each gore.
+2. **A branch road gets a non-empty `widens`:** `halfOf`/`wallOf` return the constants when `track.widens.length === 0` (track.ts:876-877,
+   :899-900); otherwise the mouth width in halfL/R is ignored and the union breaks.
+3. **`recoveryAt` for branches:** `let best = rec[rec.length - 1]` (track.ts:1058) is undefined on an empty list (NaN in `place`) and
+   wraps to the last point when none lies before u; `place` (weapons.ts:270-281) takes a road and writes the global seg. Resolve 2.5 vs
+   2.8: a fall before the first branch recovery point goes back to the main recovery point before s0 (open question 6), and validation
+   still requires a branch recovery point before the first hazard.
+4. **Wrap-assuming code to rework** (beyond 1-2.5's list): track.ts `halfOn` :888, `segDir` :1014, `holeAt` :1033, `minSelfClearance`
+   :1114, the crossing check's `along` :1286 and cyclic index :1292; weapons.ts `clearLane` :440-446, `validateRunUps` :529, `runUp` :565,
+   `validateJumpSweep` :619, `shotIntoIslands` :351; botdrive.ts `ahead` :255-257, `laneFor` :399, `headAhead` :552, `splitFor` :615,
+   `headingIntoHole` :650-652, `trackCoords` :787, :813, :843; client hud.ts:533, actors.ts:236-242.
+5. **Re-derive the weapons/physics call sites after M4-MOVE merges** (new per-seg sites on TSandvaer/m4-move: `trucksAt[q.seg]`
+   weapons.ts:272, `shotIntoMovers(track, q.seg, ...)` :373, :383, physics.ts:188).
+6. **Bots: every look-ahead walks the ROUTE, not the queried road** (`MOUTH_CLEAR` 300 does not cover `RAMP_APPROACH` 650,
+   botdrive.ts:122, the split look 140 + 1.2 v, :525-526, or laneFor's 140 + 0.6 v, :921); past a gore the cursor takes the car's actual
+   road (a bot bumped onto the other road must not aim through the wall); `cellLane` (:760) filters cells by road.
+7. **Mouths clear on the main road too:** no main-road feature in a mouth or within `MOUTH_CLEAR` of a gore.
+8. **schema-hash coverage:** `hashBuilt`/`hashQueries` (schema-hash.ts:91-133) cover only main pts and hints below n, and test tracks are
+   not hashed. BR-SCHEMA owns schema-hash.ts and adds Branch Yard + branch hashing, emitted only when `branches` is non-empty; BR-PHYS
+   asserts `queryTrackNear` equals `queryRoads` (physics vs drawing).
+9. **Progress text corrected:** a road flip moves s by up to ~dist x sin 35° (~55 near the nose), not "a few units"; harmless because
+   `advance` returns on `d <= 0` and counts only the next target (race.ts:37-42).
+Adopted suggestions: check `near` (64 entries, world.ts:812) does not overflow in a mouth; owners for the unowned hint readers
+scripts/bots.ts:92 (BR-PHYS), tools/debug/world-sheet.ts:254 (BR-BAKE), surf-tune.ts (BR-PHYS). Open question 6 added below.
+6. (open question) A fall before the first branch recovery point: back onto the main road? **Recommended: yes, the main recovery point
+   before the fork** (validation still puts a branch recovery point before the branch's first hazard).
