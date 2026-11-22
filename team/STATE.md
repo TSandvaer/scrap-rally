@@ -689,6 +689,9 @@ once THEME-SCHEMA + TH-LOOK-1 are both on main, the LIVE Breaker's Mile draws th
 QA13 live PASS (ctx_51bfb3ee9585, released; tmp/qa13-live-report.md): 5 tracks listed, races on both new tracks 0 falls (Normal 51.9-58.9 s),
 no-select works, Bot tune absent live, stick ok. ClickUp complete: M4-TRACKS, NOSELECT-1, HARD-2. HARD-3 ticket created ('to do',
 waits for the user's pasted values).
+THEME-SCHEMA review 1 REQUEST_CHANGES (ctx_70f3da126e82 kept): map-sheet.ts:214 probe on a 1-px step (6 false FAILs on the yards) + pin the
+widen count to 8. Fix round + merge main sent to ctx_0362282f9fe4. Review notes added to THEME-SURF (ford traction rect) and THEME-TRACKS
+(track-density footprints).
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
