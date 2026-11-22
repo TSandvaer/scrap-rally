@@ -62,9 +62,11 @@
 // Crusher Run (the tour: grid, a bend, the scrap-filled gap, the chasm), the figure-eight's
 // crossing and holes, and the Preview Yard scenes. Each as the whole window in the theme, and
 // for the shipped tracks also as a pair, the track's own look beside it: `pair-<name>-<size>.png`.
-// It also counts the colours of the game canvas in every themed shot at 390x844@3 that are not
-// of the theme's table, a sprite's or the HUD's (none expected: the canvas is scaled without
-// smoothing, so the table's contrast figures hold on that screen).
+// For every themed shot at 390x844@3 it also holds the screen against the game canvas: every
+// device pixel inside the canvas's box must have one of the colours the 640 x 360 canvas itself
+// holds (the canvas is scaled without smoothing, so no colour is mixed on the way and the
+// table's contrast figures are that screen's; exit code 1 otherwise), and it says how many of
+// the canvas's colours are the theme's table's (the others are the sprites', the effects' and the HUD's).
 //
 // --alloc: does a theme's own code allocate in a frame (PLAN-GFX.md rule 1)? The other probes
 // (bake-alloc.ts, world-alloc.ts) drive the tracks as they are, which is the scrapyard; this one
@@ -1062,6 +1064,7 @@ async function shots(theme: Theme, out: string, port: number): Promise<void> {
     const sc = sceneryOf(theme);
     const table = new Set(sc.hex.slice(0, sc.count).map((h) => parseInt(h.slice(1), 16)));
     const lines: string[] = [];
+    let mixed = 0, held = 0;
     for (const size of SIZES) {
       await ab(["set", "viewport", String(size.w), String(size.h), String(size.scale)]);
       for (const sh of SHOTS) {
@@ -1075,7 +1078,20 @@ async function shots(theme: Theme, out: string, port: number): Promise<void> {
           const seen = await canvasColours();
           let own = 0;
           for (const c of seen) if (table.has(c)) own++;
-          lines.push(`  (game canvas: ${seen.size} colours, ${own} of them the theme's table's; the others are sprites', effects' and the HUD's)`);
+          // The screen inside the canvas's box (a device pixel in from its edges): only the canvas's own colours?
+          const box = JSON.parse(JSON.parse(await ab(["eval", "JSON.stringify((({x, y, width, height}) => [x, y, width, height])(document.getElementById('view').getBoundingClientRect()))"])) as string) as number[];
+          const x0 = Math.ceil(box[0] * size.scale) + 1, y0 = Math.ceil(box[1] * size.scale) + 1, x1 = Math.floor((box[0] + box[2]) * size.scale) - 1, y1 = Math.floor((box[1] + box[3]) * size.scale) - 1;
+          let other = 0, inside = 0;
+          for (let y = y0; y < y1; y++) {
+            for (let x = x0; x < x1; x++) {
+              const o = (y * themed.w + x) * 4;
+              inside++;
+              if (!seen.has((themed.data[o] << 16) | (themed.data[o + 1] << 8) | themed.data[o + 2])) other++;
+            }
+          }
+          mixed += other;
+          held += inside;
+          lines.push(`  (game canvas: ${seen.size} colours, ${own} of them the theme's table's; on the screen ${inside} device pixels in its box, ${other} of a colour the canvas does not hold)`);
         }
         if (sh.pair) {
           const plain = await shot(query, path.join(scratch, "plain.png"));
@@ -1090,6 +1106,8 @@ async function shots(theme: Theme, out: string, port: number): Promise<void> {
       }
     }
     console.log(lines.join("\n"));
+    console.log(`\n${mixed === 0 && held > 0 ? "ok  " : "FAIL"}  at 390x844@3 every device pixel inside the game canvas's box has a colour the canvas itself holds: ${held} pixels in ${SHOTS.length} shots, ${mixed} of another colour (the canvas is scaled without smoothing: a contrast figure of the palette is that screen's)`);
+    if (mixed !== 0 || held === 0) process.exitCode = 1;
   } finally {
     await cleanup();
   }
@@ -1265,7 +1283,7 @@ if (args.includes("--check")) {
   const theme = arg("--theme") ?? "desert";
   if (!isTheme(theme)) throw new Error(`unknown theme ${theme}`);
   await shots(theme, path.resolve(arg("--out") ?? path.join(ROOT, "tmp", "th-look", "shots")), Number(arg("--port") ?? 3011));
-  process.exit(0);
+  process.exit(process.exitCode ?? 0);
 } else {
   const theme = arg("--theme") ?? "desert";
   if (!isTheme(theme)) throw new Error(`unknown theme ${theme}`);
