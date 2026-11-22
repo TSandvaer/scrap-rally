@@ -41,7 +41,9 @@ export interface Cell { k: "cell"; s: number; lat: number; air?: boolean }
 // act (M4-SURF part 1: shared/physics.ts stepCar reads the per-segment buckets below, the bots
 // cost their lanes by them, rivets die on mounds); widens and islands act (M4-SURF part 2: the walls
 // are per sample, halfOf / wallOf; islands are solid, shared/physics.ts collideIslands; the bots
-// pick a lane round each); barrels, trucks and presses are still data only (M4-MOVE adds them).
+// pick a lane round each); rolling barrels, crusher presses and parked ramp trucks act (M4-MOVE: solid
+// in shared/physics.ts stepCar at the race tick, the truck's ramp band in weapons.ts stepRaceCar, rivets
+// die on them, the bots dodge, time and jump them).
 // Track coordinates: s along the centerline, lat across it (+ = right of travel, as a hole's).
 
 /** Water (cars aquaplane on it, shared/physics.ts): a rectangle s0..s1 by lat0..lat1; felt inside tractionRect. */
@@ -208,7 +210,7 @@ export interface Track {
   wallL: number[];
   wallR: number[];
   // M4-SCHEMA features, each sorted by s (s0). Water, dirt, belts, tyre mounds, widens and islands act
-  // (M4-SURF); barrels, trucks and presses are data only so far (M4-MOVE).
+  // (M4-SURF); barrels, trucks and presses act (M4-MOVE).
   water: Water[];
   dirt: Dirt[];
   belts: Belt[];
