@@ -6,7 +6,7 @@
 //    lost or late snapshot is harmless (safe for an unreliable transport later).
 //  - events (`ev`, `room`, `welcome`, ...): things that must arrive exactly once.
 
-import type { BotLevel } from "./botdrive";
+import type { BotLevel, BotTune } from "./botdrive";
 import type { CarType } from "./cars";
 import type { Levels } from "./shop";
 import type { RoomSound } from "./sound";
@@ -123,7 +123,11 @@ export type ClientMsg =
   // Lobby only (M4-CARS): pick the car type to race with (shared/cars.ts CarType); free, any
   // number of times. With `bot` (a bot's player id): the host picks that bot's car. An unknown
   // type, a race under way, a guest naming a bot or an id that is not a bot is refused with an err.
-  | { t: "car"; id: CarType; bot?: string };
+  | { t: "car"; id: CarType; bot?: string }
+  // Host only, lobby only, dev flag only (HARD-2: SCRAP_DEV_BOTS=1): the Hard bots' Bot tune knob
+  // (shared/botdrive.ts BotTune, clamped into BOT_TUNE_RANGE), from the next race. Without the flag,
+  // from a guest, outside the lobby or with a value that is not a finite number: refused with an err.
+  | ({ t: "botTune" } & BotTune);
 
 /**
  * One line of room chat. say = a player's message (from = their id); join / leave = a player
@@ -236,6 +240,9 @@ export type ServerMsg =
       // The host's mines setting (MINES-1): what the next race begins with ("stay" in a new room).
       mines: MineMode;
       players: PlayerInfo[];
+      // The host's Bot tune knob (HARD-2): what the next race begins with. Sent only when the server
+      // runs with the dev flag SCRAP_DEV_BOTS=1 (absent: off, as on Render; the panel stays hidden).
+      botTune?: BotTune;
     }
   | { t: "err"; msg: string; code?: ErrCode }
   | {
