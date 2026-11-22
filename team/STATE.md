@@ -665,6 +665,8 @@ NOSELECT-1 review APPROVE (ctx_f8c216751a4b, released). MERGED c59d6f1; gate run
 ClickUp ready for qa test; workspace removed. Note: the clipboard-failure fallback toast is unselectable (plain-http LAN or denied clipboard only).
 BR-SCHEMA fix round 1 done: 7fdd7ef (66eb911 sectionCrossings on branch roads + a new bend rule refusing the fold; nits; main merged;
 schema-hash 28/28; 946/946, bots 142-143/143 (known flake once)). Re-review sent to ctx_d7ef3257a313.
+NOSELECT-1 gate on main c59d6f1: check 0, sim 907/907, build ok (index-ByulflMS.js), bots 142/143 = only the known breakers-mile flake
+(2nd time on main; passed in BR-SCHEMA's run 2). Waiting on the M4-TRACKS author's fix before any push.
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
