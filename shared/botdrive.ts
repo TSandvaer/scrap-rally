@@ -1419,9 +1419,9 @@ export function botControls(view: BotView, mem: BotMem): BotControls {
   if (errs) {
     landed = mem.flew;
     mem.flew = false;
-    const hp = view.hp ?? -1;
-    hit = hp >= 0 && mem.hp >= 0 && hp < mem.hp;
-    mem.hp = hp;
+    const hpNow = view.hp ?? -1;
+    hit = hpNow >= 0 && mem.hp >= 0 && hpNow < mem.hp;
+    mem.hp = hpNow;
   }
   const track = view.track;
   const q = queryTrackNear(track, c.x, c.y, c.seg);

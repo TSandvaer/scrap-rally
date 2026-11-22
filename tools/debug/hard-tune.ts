@@ -29,6 +29,15 @@
 // per track, twice (Hard on the first three seats, then Normal): places, and each bot's scrap.
 //
 //   npx tsx tools/debug/hard-tune.ts --traffic | --vs [--set ...]
+//
+// --mistakes (HARD-2): the Bot tune knob's table: 3 Hard bots in traffic (weapons off, or on with
+// --weapons), 3 laps, every shipped track and the Surf, Split and Move Yards, every car set, per
+// mistake rate and size (--rates 0.5,1,2,3 --sizes 0.5,1 --pace 1 --aim 2.5): lap time and its loss
+// against rate 0, falls (after a hit, within 3 s of a mistake), wall and obstacle contacts, dirt,
+// wrecks, the mistakes begun per lap by kind and any step of one in an excluded zone. --paces: the
+// same for the pace knob (0, 0.25, 0.5, 0.75, 1) at --rate (default 0).
+//
+//   npx tsx tools/debug/hard-tune.ts --mistakes [--rates 1,3 --sizes 1 --weapons] | --paces [--rate 1 --size 0.5]
 
 import { createHash, type Hash } from "node:crypto";
 import { Game } from "../../client/game";
@@ -716,7 +725,28 @@ function main(): void {
     console.log(`(${((performance.now() - t0) / 1000).toFixed(1)} s)`);
     return;
   }
-  console.log("Usage: npx tsx tools/debug/hard-tune.ts --golden | --pace | --sweep k=a,b,c [--sweep2 k=a,b] | --traffic | --vs  [--set k=v,...]");
+  if (process.argv.includes("--mistakes") || process.argv.includes("--paces")) {
+    const nums = (name: string, def: number[]) => (arg(name) ?? def.join()).split(",").map(Number);
+    const weapons = process.argv.includes("--weapons");
+    const pace = Number(arg("pace") ?? 1), aim = Number(arg("aim") ?? HARD.rivetSlack);
+    const t0 = performance.now();
+    const base = tuneTraffic("rate 0 (today's Hard)", undefined, MISTAKE_TRACKS, ["hard", "hard", "hard"], weapons).row;
+    console.log(`3 Hard bots, weapons ${weapons ? "on" : "off"}, ${MISTAKE_TRACKS.join(", ")} x mix/sport/racer/truck, 3 laps:`);
+    console.log(tuneLine(base, base));
+    if (process.argv.includes("--mistakes")) {
+      for (const size of nums("sizes", [0.5, 1])) {
+        for (const rate of nums("rates", [0.5, 1, 2, 3])) {
+          console.log(tuneLine(tuneTraffic(`rate ${rate} size ${size}`, tuneOf({ rate, size, pace, aim }), MISTAKE_TRACKS, ["hard", "hard", "hard"], weapons).row, base));
+        }
+      }
+    } else {
+      const rate = Number(arg("rate") ?? 0), size = Number(arg("size") ?? HARD.mistakeSize);
+      for (const p of [0, 0.25, 0.5, 0.75, 1]) console.log(tuneLine(tuneTraffic(`pace ${p} rate ${rate}`, tuneOf({ rate, size, pace: p, aim }), MISTAKE_TRACKS, ["hard", "hard", "hard"], weapons).row, base));
+    }
+    console.log(`(${((performance.now() - t0) / 1000).toFixed(1)} s)`);
+    return;
+  }
+  console.log("Usage: npx tsx tools/debug/hard-tune.ts --golden | --pace | --sweep k=a,b,c [--sweep2 k=a,b] | --traffic | --vs  [--set k=v,...] | --mistakes | --paces");
 }
 
 if (process.argv[1]?.endsWith("hard-tune.ts")) main();
