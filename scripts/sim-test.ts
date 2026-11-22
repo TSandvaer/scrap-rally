@@ -14101,6 +14101,519 @@ for (const t of [longRegistry, longValidate, longTruckCell, longDensityRules, lo
   }
 }
 
+// ---- HARD-2: Hard bots make human mistakes + a dev Bot tune knob (PLAN-M4.md addendum 2026-11-22 and its binding advisor changes, ClickUp 123jpnbfghz, 2026-11-22) ----
+
+// This section's imports (hoisted like the ones at the top).
+import * as h2Bot from "../shared/botdrive";
+import * as h2Tune from "../tools/debug/hard-tune";
+import * as h2Seat from "../server/bots";
+import { devBotsOn as h2DevBotsOn } from "../server/room";
+import { testTrack as h2TestTrack } from "../shared/testtracks";
+import { readFileSync as h2Read } from "node:fs";
+
+/** When the HARD-2 sections began (their runtime is printed and bounded at the end). */
+const h2Clock = { t0: 0 };
+
+/** The races of the HARD-2 sections, run once per label (the table reuses the gate's runs). */
+const h2Memo = new Map<string, ReturnType<typeof h2Tune.tuneTraffic>>();
+function h2Traffic(label: string, tune: h2Bot.BotTune | undefined, tracks: readonly string[], levels: BotLevel[], weapons: boolean): ReturnType<typeof h2Tune.tuneTraffic> {
+  const key = `${label}|${JSON.stringify(tune)}|${tracks.join()}|${levels.join()}|${weapons}`;
+  let r = h2Memo.get(key);
+  if (!r) h2Memo.set(key, (r = h2Tune.tuneTraffic(label, tune, tracks, levels, weapons)));
+  return r;
+}
+
+const H2_3 = ["hard", "hard", "hard"] as BotLevel[];
+const H2_5 = ["hard", "hard", "hard", "hard", "hard"] as BotLevel[];
+
+function hard2Params(): void {
+  h2Clock.t0 = performance.now();
+  const H = h2Bot.HARD;
+  const before = JSON.stringify(H);
+  const def = h2Bot.botTuneDefaults();
+  const p1 = h2Bot.hardParams(def), p0 = h2Bot.hardParams({ ...def, pace: 0 }), ph = h2Bot.hardParams({ ...def, pace: 0.5 });
+  const moved = (p: h2Bot.HardParams) => (Object.keys(H) as (keyof h2Bot.HardParams)[]).filter((k) => !Object.is(p[k], H[k])).join();
+  check(
+    "hard2 params: BotMem.hard is HARD itself by default (every level); mistakeRate 0 by default; the knob's defaults are today's Hard (rate 0, pace 1, aim = rivetSlack); hardParams never changes HARD",
+    newBotMem(0, "hard").hard === H && newBotMem(-24, "normal").hard === H && newBotMem(12, "easy").hard === H && h2Seat.newBotSeat("hard", 3, 1).mem.hard === H &&
+      H.mistakeRate === 0 && def.rate === 0 && def.pace === 1 && def.aim === H.rivetSlack && def.size === H.mistakeSize && JSON.stringify(H) === before,
+    `defaults ${JSON.stringify(def)}`,
+  );
+  check(
+    "hard2 params: pace 1 is HARD's corner, brakeBand and bendLook themselves (Object.is, no interpolation); pace 0 is Normal's 1, 25, 1; the pace knob moves only those three (apex, cells, weapons, mines stay Hard's)",
+    Object.is(p1.corner, H.corner) && Object.is(p1.brakeBand, H.brakeBand) && Object.is(p1.bendLook, H.bendLook) && moved(p1) === "" && p1 !== H &&
+      p0.corner === 1 && p0.brakeBand === 25 && p0.bendLook === 1 && moved(p0) === "corner,brakeBand,bendLook" && moved(ph) === "corner,brakeBand,bendLook" &&
+      ph.corner > 1 && ph.corner < H.corner && ph.brakeBand > H.brakeBand && ph.brakeBand < 25 && ph.bendLook > H.bendLook && ph.bendLook < 1 &&
+      moved(h2Bot.hardParams({ ...def, rate: 2, size: 0.8, aim: 9 })) === "rivetSlack,mistakeRate,mistakeSize",
+    `pace 0: ${p0.corner}/${p0.brakeBand}/${p0.bendLook}; 0.5: ${ph.corner.toFixed(4)}/${ph.brakeBand}/${ph.bendLook}; 1: ${p1.corner}/${p1.brakeBand}/${p1.bendLook}`,
+  );
+  // withHard (the tuner) still sweeps: the default reference is HARD, so a change to it is the bot's.
+  const swept = h2Tune.withHard({ apex: 0, mistakeRate: 2 }, () => {
+    const m = newBotMem(0, "hard");
+    return `${m.hard.apex},${m.hard.mistakeRate}`;
+  });
+  check("hard2 params: withHard (tools/debug/hard-tune.ts) still sweeps a bot's constants (its BotMem.hard is HARD)", swept === "0,2" && H.apex === 20 && H.mistakeRate === 0, swept);
+  // The seed: a server seat's slot; a socket bot's from its lane, signed (mirrored lanes differ).
+  const seeds = [0, 1, 2, 3, 4, 5].map((slot) => h2Seat.newBotSeat("hard", slot, slot + 1).mem.seed);
+  check(
+    "hard2 params: the mistakes' seed is the server seat's slot; a socket bot's comes from its lane (mirrored lanes -24 and 24 differ), as the mine offset",
+    seeds.join() === "0,1,2,3,4,5" && newBotMem(24).seed === 168 && newBotMem(-24).seed === -168 && newBotMem(0).seed === 0,
+    `slots -> ${seeds.join()}; lanes -24/0/24 -> ${[-24, 0, 24].map((l) => newBotMem(l).seed).join("/")}`,
+  );
+  // The draw: deterministic, in [0, 1), spread.
+  const draws: number[] = [];
+  for (let seed = 0; seed < 6; seed++) for (let lap = 0; lap < 3; lap++) for (let seg = 0; seg < 400; seg += 7) draws.push(h2Bot.mistakeDraw(seed, lap, seg, 4));
+  const mean = draws.reduce((a, b) => a + b, 0) / draws.length;
+  const low = draws.filter((x) => x < 0.25).length / draws.length;
+  check(
+    "hard2 params: mistakeDraw is deterministic (same inputs, same value), in [0, 1) and spread (mean ~0.5, a quarter below 0.25)",
+    draws.every((x, i) => x >= 0 && x < 1 && x === h2Bot.mistakeDraw(Math.floor(i / 174), Math.floor((i % 174) / 58), (i % 58) * 7, 4)) && Math.abs(mean - 0.5) < 0.05 && Math.abs(low - 0.25) < 0.05,
+    `${draws.length} draws: mean ${mean.toFixed(3)}, below 0.25 ${(low * 100).toFixed(1)}%`,
+  );
+}
+
+function hard2Identity(): void {
+  // Rate 0 through the knob (the dev message, flag on, today's values): the Hard streams are today's
+  // (SURF_HARD_GOLDEN); a knob far from today's leaves Easy and Normal byte-identical (HARD_GOLDEN).
+  const def = h2Bot.botTuneDefaults();
+  const wild = { rate: 3, size: 1, pace: 0, aim: 20 };
+  const got: Record<string, string> = {};
+  for (const t of HARD_TRACKS) got[`${t} hard`] = h2Tune.goldenServer(t, H2_3, 2, 3, def).hash;
+  got["client overpass-knot hard"] = h2Tune.goldenClient("overpass-knot", 2, "hard", 1, false, def).hash;
+  const bad = Object.keys(SURF_HARD_GOLDEN).filter((k) => got[k] !== SURF_HARD_GOLDEN[k]);
+  check(
+    "hard2 identity: with the dev flag on and the knob at today's values (rate 0, pace 1) sent by the host, Hard bots drive, shoot and shop byte-identically to today (SURF_HARD_GOLDEN: server bots on every shipped track, two races; the socket-bot path)",
+    bad.length === 0 && Object.keys(got).length === 4,
+    bad.map((k) => `${k}: ${got[k]?.slice(0, 12)} != ${SURF_HARD_GOLDEN[k].slice(0, 12)}`).join("; ") || "4 hashes match",
+  );
+  const en: string[] = [];
+  for (const t of HARD_TRACKS) {
+    for (const level of ["easy", "normal"] as BotLevel[]) {
+      const h = h2Tune.goldenServer(t, [level, level, level], 2, 3, wild).hash;
+      if (h !== HARD_GOLDEN[`${t} ${level}`]) en.push(`${t} ${level}: ${h.slice(0, 12)} != ${HARD_GOLDEN[`${t} ${level}`].slice(0, 12)}`);
+    }
+  }
+  check("hard2 identity: with the knob at rate 3, size 1, pace 0, aim 20, Easy and Normal bots drive byte-identically to before M4-HARD (HARD_GOLDEN, every shipped track, two races)", en.length === 0, en.join("; ") || "6 hashes match");
+  // Mistakes do change Hard (else the identity above proves nothing), the same way on a rerun.
+  const on = { ...def, rate: 3, size: 1 };
+  const a = h2Tune.goldenServer("rust-bowl", H2_3, 1, 3, on).hash, b = h2Tune.goldenServer("rust-bowl", H2_3, 1, 3, on).hash;
+  check(
+    "hard2 identity: with mistakes on (rate 3) a Hard race's stream differs from today's, and is identical on a rerun",
+    a === b && a !== h2Tune.goldenServer("rust-bowl", H2_3, 1, 3, def).hash,
+    `${a.slice(0, 12)} (rerun ${b.slice(0, 12)})`,
+  );
+}
+
+function hard2Mistakes(): void {
+  // Falls 0 in traffic (advisor change 10): 3 and 5 Hard bots (seats 0-4), 3 laps, every shipped
+  // track and the Surf, Split and Move Yards, every car set (the mix, all Sport, Racer, Truck).
+  const cfgs: [string, h2Bot.BotTune][] = [["rate 1 size 0.5", h2Tune.tuneOf({ rate: 1, size: 0.5 })], ["rate 3 size 1", h2Tune.tuneOf({ rate: 3, size: 1 })]];
+  const kinds = { "late-brake": 0, wide: 0, wobble: 0, hesitate: 0 } as Record<h2Bot.MistakeKind, number>;
+  const lines: string[] = [];
+  let offOk = true, onOk = true, zones = 0;
+  for (const levels of [H2_3, H2_5]) {
+    for (const [label, tune] of cfgs) {
+      for (const weapons of [false, true]) {
+        const r = h2Traffic(`${label} ${levels.length}H ${weapons ? "weapons" : "no weapons"}`, tune, h2Tune.MISTAKE_TRACKS, levels, weapons).row;
+        for (const k of h2Bot.MISTAKE_KINDS) kinds[k] += r.mistakes[k];
+        zones += r.badZone;
+        if (weapons) onOk &&= r.falls - r.hitFalls === 0 && r.mistakeFalls === 0;
+        else offOk &&= r.falls === 0;
+        lines.push(`${r.label}: falls ${r.falls} (${r.hitFalls} within 3 s of being hit, ${r.mistakeFalls} within 3 s of a mistake), ${r.perLap.toFixed(2)} mistakes/lap, ${r.wrecks} wrecks`);
+      }
+    }
+  }
+  for (const l of lines) console.log(`  ${l}`);
+  check(
+    "hard2 mistakes: falls 0 with mistakes on in traffic, weapons off: 3 and 5 Hard bots, 3 laps, the shipped tracks and the Surf, Split and Move Yards, every car set, rate 1 size 0.5 and rate 3 size 1",
+    offOk,
+    lines.filter((l) => l.includes("no weapons")).join("; "),
+  );
+  check(
+    "hard2 mistakes: with weapons on as well, no fall but after being hit by a rivet or a mine (the weapons' falls, as at rate 0), none within 3 s of a mistake",
+    onOk,
+    lines.filter((l) => !l.includes("no weapons")).join("; "),
+  );
+  check(
+    "hard2 mistakes: every kind fires when the rate is above 0 (late brake, wide line, wobble after a landing, hesitation after a pass or a hit), counted per kind",
+    h2Bot.MISTAKE_KINDS.every((k) => kinds[k] > 0),
+    h2Bot.MISTAKE_KINDS.map((k) => `${k} ${kinds[k]}`).join(", "),
+  );
+  check(
+    "hard2 mistakes: no step of a mistake in an excluded zone (independent check: a feature from 15 behind to 650 ahead, the slipstream, a back-up, reversing, backing off an island)",
+    zones === 0,
+    `${zones} steps`,
+  );
+  // Rerun identical (the gate's heaviest run, weapons on).
+  const again = h2Tune.tuneTraffic("rerun", cfgs[1][1], h2Tune.MISTAKE_TRACKS, H2_5, true);
+  const first = h2Traffic(`rate 3 size 1 5H weapons`, cfgs[1][1], h2Tune.MISTAKE_TRACKS, H2_5, true);
+  check("hard2 mistakes: a rerun is identical (5 Hard bots, weapons on, rate 3 size 1, every track and car set: every tally, lap and mistake)", JSON.stringify(again.runs) === JSON.stringify(first.runs));
+  // The lap from both adapters: the server's bots err on every lap of a 3-lap race; the socket bots
+  // (BotDriver over the Game, the lap from its snapshots) too, identically on a rerun, no state mismatch.
+  const laps = new Set<number>();
+  {
+    // A 3-lap room race of 3 Hard bots on Rust Bowl: onMistake's lap argument.
+    const room = new Room("H2LP", 3, CAR_HP);
+    const host = room.addPlayer("Host", { conn: { send() {}, close() {} }, room: null, player: null } as Session, 1000) as Player;
+    const bots = [0, 1, 2].map(() => room.addBot(host, "hard", 1000) as Player);
+    let now = 1000, tick = 0;
+    h2Tune.withDevBots(() => room.setBotTune(host, cfgs[1][1]) ?? room.start(host, now));
+    for (const b of bots) b.bot!.mem.onMistake = (_k, _z, _s, lap) => void laps.add(lap);
+    while (room.phase !== "racing") room.tick(++tick, (now += 1000 / 60));
+    room.retire(host);
+    for (let i = 0; i < 60 * 300 && room.phase === "racing"; i++) room.tick(++tick, (now += 1000 / 60));
+  }
+  const ca = h2Tune.goldenClient("rust-bowl", 2, "hard", 1, false, cfgs[1][1]), cb = h2Tune.goldenClient("rust-bowl", 2, "hard", 1, false, cfgs[1][1]);
+  const cl = new Set(ca.mistakes!.map((m) => m.lap));
+  check(
+    "hard2 mistakes: the lap reaches the draw from both adapters: server bots err on laps 1, 2 and 3; socket bots (BotDriver, the lap from the snapshots) on laps 1 and 2 of a 2-lap race, all finish, no state mismatch, identically on a rerun",
+    [0, 1, 2].every((l) => laps.has(l)) && cl.has(0) && cl.has(1) && ca.finish[0].every((f) => f > 0) && ca.stateErrs === 0 && ca.hash === cb.hash && ca.mistakes!.length > 0,
+    `server laps ${[...laps].sort().map((l) => l + 1).join(",")}; socket: ${ca.mistakes!.length} mistakes on laps ${[...cl].sort().map((l) => l + 1).join(",")} (${h2Bot.MISTAKE_KINDS.map((k) => `${k} ${ca.mistakes!.filter((m) => m.kind === k).length}`).join(", ")}), finish ${ca.finish[0].map((f) => (f / 1000).toFixed(2)).join("/")} s, state mismatches ${ca.stateErrs}`,
+  );
+}
+
+/** A Hard bot's memory with mistakes certain (chance 1) and a mistake under way. */
+function h2Mem(lane = 0): BotMem {
+  const m = newBotMem(lane, "hard");
+  m.hard = { ...h2Bot.HARD, mistakeRate: 100, mistakeSize: 1 };
+  m.useWake = false;
+  m.weapons = false;
+  return m;
+}
+
+function hard2Latch(): void {
+  // Cleared in resetBotMem, in the air/fall/wreck return and by the socket bot between races.
+  const t = trackById("rust-bowl");
+  const p = pointAt(t, 1000);
+  const car = (extra: Partial<CarState> = {}): CarState => ({ x: p.x, y: p.y, h: p.h, vx: Math.cos(p.h) * 400, vy: Math.sin(p.h) * 400, seg: p.seg, wreck: 0, air: 0, fall: 0, boost: 0, ...extra });
+  const busy = (): h2Bot.Mistake => ({ kind: "wide", size: 0.5, from: 0, end: 400, delay: 0, t: 3, n: 360, sign: 1 });
+  const m = h2Mem();
+  m.mistake = busy();
+  m.inBend = true;
+  m.flew = true;
+  m.hp = 50;
+  resetBotMem(m);
+  const reset = m.mistake === null && !m.inBend && !m.flew && m.hp === -1 && m.seed === 0 && m.hard.mistakeRate === 100;
+  const airs = (["air", "fall", "wreck"] as const).map((k) => {
+    const mm = h2Mem();
+    mm.mistake = busy();
+    botControls({ car: car({ [k]: 10 }), track: t, stats: BASE_STATS, raceOn: true, raceSteps: 600, others: [] }, mm);
+    return mm.mistake === null && mm.flew === (k === "air");
+  });
+  const g = new Game(() => ({ send() {}, close() {}, onOpen() {}, onMessage() {}, onClose() {} }) as unknown as Transport, { get: () => null, set() {} });
+  const d = new BotDriver(g, 24, "hard");
+  const dm = (d as unknown as { mem: BotMem }).mem;
+  dm.mistake = busy();
+  dm.inBend = true;
+  dm.flew = true;
+  dm.hp = 40;
+  d.controls(); // no car: between races
+  check(
+    "hard2 latch: a mistake (and the bend latch, the landing edge, the hit edge) is forgotten by resetBotMem (the settings stay), in the air/fall/wreck return (in the air the landing edge is set), and by the socket bot between races",
+    reset && airs.every(Boolean) && dm.mistake === null && !dm.inBend && !dm.flew && dm.hp === -1 && dm.seed === 168,
+    `reset ${reset}; air/fall/wreck ${airs.join("/")}; socket bot ${dm.mistake === null && dm.hp === -1}`,
+  );
+  // Triggers, directly (chance 1): a bend entry, a landing, a hit (BotView.hp from both adapters:
+  // botStep passes the player's hp, BotDriver the snapshot's), each only when free; never in the
+  // first 3 s; and a hesitation is a lift that a ramp approach still beats (throttle 1).
+  let s0 = -1;
+  for (let s = 200; s < t.length && s0 < 0; s += 10) {
+    const b = Math.abs(angleDiff(pointAt(t, s + 20).h, pointAt(t, s + 20 + Math.max(120, 360) * h2Bot.HARD.bendLook).h));
+    if (b < 0.1 && h2Bot.mistakeClear(t, s)) s0 = s;
+  }
+  const q = pointAt(t, s0);
+  const straight: CarState = { x: q.x, y: q.y, h: q.h, vx: Math.cos(q.h) * 400, vy: Math.sin(q.h) * 400, seg: q.seg, wreck: 0, air: 0, fall: 0, boost: 0 };
+  const view = (hp: number, steps = 600) => ({ car: { ...straight }, track: t, stats: BASE_STATS, raceOn: true, raceSteps: steps, others: [], hp, lap: 1 });
+  const seen: string[] = [];
+  const hm = h2Mem();
+  hm.onMistake = (k, _z, s, lap) => void seen.push(`${k}@lap${lap}`);
+  const t1 = botControls(view(100), hm).throttle;
+  const t2 = botControls(view(80), hm).throttle; // hit
+  const early = h2Mem();
+  botControls(view(100, 100), early);
+  botControls(view(80, 100), early);
+  const landed = h2Mem();
+  botControls({ ...view(100), car: { ...straight, air: 5 } }, landed);
+  botControls(view(100), landed);
+  // botStep (the server adapter) passes p.hp and the lap.
+  const seat = h2Seat.newBotSeat("hard", 2, 1);
+  seat.mem.hard = hm.hard;
+  seat.steps = 600;
+  const laps: number[] = [];
+  seat.mem.onMistake = (k, _z, _s, lap) => void laps.push(lap);
+  const fighter = { id: "b", car: { ...straight }, finished: false, hp: 100, maxHp: 100, ghost: 0, cooldown: 0, ammo: { rivets: 0, mines: 0 }, levels: { engine: 0, tyres: 0, welder: 0 }, stats: BASE_STATS, bot: seat, carType: "sport" as CarType };
+  h2Seat.botStep(fighter, [fighter], t, true, [], undefined, 0, 2);
+  fighter.hp = 70;
+  fighter.car = { ...straight };
+  h2Seat.botStep(fighter, [fighter], t, true, [], undefined, 0, 2);
+  // BotDriver (the socket adapter) passes the snapshot's hp and lap.
+  const sg = { car: { ...straight }, track: t, stats: { ...BASE_STATS }, raceOn: () => true, otherPoses: () => [], visibleMines: () => [], raceTickNow: () => 0, you: "me", latest: { time: 0, cars: new Map([["me", { hp: 100, lap: 1 }]]), shots: new Map(), mines: [] } } as unknown as Game;
+  const sd = new BotDriver(sg, 0, "hard");
+  sd.tune({ rate: 100, size: 1, pace: 1, aim: h2Bot.HARD.rivetSlack });
+  const sk: string[] = [];
+  sd.onMistake = (k, _z, _s, lap) => void sk.push(`${k}@lap${lap}`);
+  for (let i = 0; i < 200; i++) sd.controls(); // past the first 3 s of its race steps
+  (sg.latest!.cars.get("me") as unknown as { hp: number }).hp = 60;
+  sd.controls();
+  check(
+    "hard2 latch: a hit (hp drop) begins a hesitation (a lift: throttle 1 -> 0) when free; not in the first 3 s after GO; a landing (the c.air edge) begins a wobble; both adapters feed hp and the lap (botStep: the player's; BotDriver: the snapshot's)",
+    s0 >= 0 && seen.join() === "hesitate@lap1" && t1 === 1 && t2 === 0 && early.mistake === null && landed.mistake?.kind === "wobble" && laps.join() === "2" && sk.join() === "hesitate@lap1",
+    `straight at s ${s0}; direct ${seen.join() || "none"}, throttle ${t1} -> ${t2}; early ${early.mistake?.kind ?? "none"}; landing ${landed.mistake?.kind ?? "none"}; botStep laps ${laps.join() || "none"}; BotDriver ${sk.join() || "none"}`,
+  );
+  // A wide line is reported (onMistake: the server log, the counts) only once it is driven: at a bend
+  // entry whose draw is "wide", a mine on the outside lane leaves it nowhere to run wide, so no mistake
+  // begins and none is reported; without the mine the same bend reports "wide" (review nit 2).
+  let e0 = -1;
+  for (let s = 200; s < t.length && e0 < 0; s += 5) {
+    const at = (x: number) => Math.abs(angleDiff(pointAt(t, x + 20).h, pointAt(t, x + 20 + 360 * h2Bot.HARD.bendLook).h));
+    if (at(s) > 0.5 && at(s - 5) <= 0.5 && h2Bot.mistakeClear(t, s)) e0 = s;
+  }
+  const ep = pointAt(t, e0);
+  const eturn = angleDiff(pointAt(t, e0 + 20).h, pointAt(t, e0 + 20 + 360 * h2Bot.HARD.bendLook).h);
+  const entry: CarState = { x: ep.x, y: ep.y, h: ep.h, vx: Math.cos(ep.h) * 400, vy: Math.sin(ep.h) * 400, seg: ep.seg, wreck: 0, air: 0, fall: 0, boost: 0 };
+  const mq = pointAt(t, e0 + 100), out = -Math.sign(eturn) * 20;
+  const wideAt = (seed: number, mine: boolean) => {
+    const m = h2Mem();
+    m.seed = seed;
+    const said: string[] = [];
+    m.onMistake = (k) => void said.push(k);
+    const mines = mine ? [{ x: mq.x - Math.sin(mq.h) * out, y: mq.y + Math.cos(mq.h) * out }] : [];
+    botControls({ car: { ...entry }, track: t, stats: BASE_STATS, raceOn: true, raceSteps: 600, others: [], mines, lap: 1 }, m);
+    return { said: said.join(), kind: m.mistake?.kind ?? "none" };
+  };
+  let wseed = -1;
+  for (let seed = 0; seed < 64 && wseed < 0; seed++) if (wideAt(seed, false).said === "wide") wseed = seed;
+  const free = wseed >= 0 ? wideAt(wseed, false) : null, blocked = wseed >= 0 ? wideAt(wseed, true) : null;
+  check(
+    "hard2 latch: a wide line is reported only once it is driven: with a mine on the outside lane no mistake begins and none is reported; the same bend entry without it reports \"wide\" (review nit 2)",
+    e0 >= 0 && !!free && !!blocked && free.said === "wide" && free.kind === "wide" && blocked.said === "" && blocked.kind === "none",
+    `bend entry at s ${e0} (turn ${eturn.toFixed(2)}), seed ${wseed}: free ${free?.said || "none"} / ${free?.kind}; mine on the outside lane ${blocked?.said || "nothing reported"} / ${blocked?.kind}`,
+  );
+  // Exclusions: mistakeClear holds nowhere a feature lies within MISTAKE_LOOK ahead (or beside), and
+  // the start of a mistake needs it. Crusher Run: before its ramps and holes, no; far from them, yes.
+  const cr = trackById("crusher-run");
+  const lip = cr.ramps[0].s + cr.ramps[0].len;
+  const crClear = [1000, lip - h2Bot.MISTAKE_LOOK + 10, lip - 300, cr.holes[0].s, cr.holes[0].s - 900].map((s) => h2Bot.mistakeClear(cr, s));
+  const share = (id: string) => {
+    const tt = h2TestTrack(id) ?? trackById(id);
+    let n = 0, k = 0;
+    for (let s = 0; s < tt.length; s += 25, k++) if (h2Bot.mistakeClear(tt, s)) n++;
+    return `${id} ${((n / k) * 100).toFixed(0)}%`;
+  };
+  check(
+    `hard2 latch: mistakeClear (MISTAKE_LOOK ${h2Bot.MISTAKE_LOOK} = RAMP_APPROACH 650 + a mistake's 500) is false within that look before Crusher Run's first ramp or a hole, true far from them`,
+    h2Bot.MISTAKE_LOOK > 650 && crClear.join() === "true,false,false,false,false",
+    `s 1000 / lip - ${h2Bot.MISTAKE_LOOK - 10} / lip - 300 / at a hole / 900 before it: ${crClear.join("/")}; share of the lap where one may begin: ${["rust-bowl", ...h2Tune.MISTAKE_TRACKS.slice(1)].map(share).join(", ")}`,
+  );
+}
+
+function hard2Table(): void {
+  // REPORT + gate: lap-time loss and wall/obstacle contacts per rate (sizes 0.5 and 1) and per pace
+  // (0, 0.25, 0.5, 0.75, 1), 3 Hard bots in traffic (weapons off, so the driving alone shows), every
+  // track and car set; and a lone bot's lap per pace on the shipped tracks (every type, lanes -24/0/24).
+  const tracks = h2Tune.MISTAKE_TRACKS;
+  const base = h2Traffic("rate 0 (today's Hard)", undefined, tracks, H2_3, false).row;
+  const rows: h2Tune.TuneRow[] = [];
+  for (const size of [0.5, 1]) for (const rate of [0.5, 1, 2, 3]) rows.push(h2Traffic(`rate ${rate} size ${size}`, h2Tune.tuneOf({ rate, size }), tracks, H2_3, false).row);
+  console.log(`  per rate (3 Hard bots, weapons off, ${tracks.length} tracks x 4 car sets, 3 laps):`);
+  console.log(`  ${h2Tune.tuneLine(base, base)}`);
+  for (const r of rows) console.log(`  ${h2Tune.tuneLine(r, base)}`);
+  const paces = [0, 0.25, 0.5, 0.75, 1];
+  const prow = paces.map((pace) => h2Traffic(`pace ${pace} rate 0`, pace === 1 ? undefined : h2Tune.tuneOf({ pace }), tracks, H2_3, false).row);
+  const solo = paces.map((pace) => {
+    let lap = 0, n = 0, falls = 0, walls = 0, dirt = 0;
+    for (const track of HARD_TRACKS) {
+      for (const car of CAR_TYPES) {
+        for (const lane of [-24, 0, 24]) {
+          const [r] = h2Tune.runRaces({ track, levels: ["hard"], cars: [car], lanes: [lane], weapons: false, tune: h2Tune.tuneOf({ pace }) });
+          lap += r.lapTicks.reduce((a, b) => a + b, 0);
+          n += r.lapTicks.length;
+          falls += r.falls;
+          walls += r.walls;
+          dirt += r.dirt;
+        }
+      }
+    }
+    return { pace, lap: lap / n, falls, walls, dirt };
+  });
+  console.log("  per pace (rate 0): a lone bot's mean lap on the shipped tracks (every type, lanes -24/0/24) | traffic as above:");
+  paces.forEach((pace, i) => console.log(`  pace ${pace.toFixed(2)}: solo ${(solo[i].lap / 60).toFixed(3)} s (+${((solo[i].lap / solo[4].lap - 1) * 100).toFixed(2)}% on pace 1), falls ${solo[i].falls}, walls ${solo[i].walls}, dirt ${solo[i].dirt} | ${h2Tune.tuneLine(prow[i], prow[4])}`));
+  const all = [base, ...rows, ...prow];
+  const loss = (r: h2Tune.TuneRow) => r.lap / base.lap - 1;
+  check(
+    "hard2 table: every rate and every pace drives without a fall (traffic, weapons off, every track and car set); mistakes cost lap time (rate 1 and up, both sizes, more at size 1 than 0.5 for rates 2 and 3)",
+    all.every((r) => r.falls === 0 && r.badZone === 0) && rows.filter((_, i) => i % 4 >= 1).every((r) => loss(r) > 0) && loss(rows[6]) > loss(rows[2]) && loss(rows[7]) > loss(rows[3]),
+    rows.map((r) => `${r.label} ${(loss(r) * 100).toFixed(2)}%`).join(", "),
+  );
+  check(
+    "hard2 table: the pace knob slows the bends step by step from today's Hard (1) to Normal's bend pace (0), no fall or wall contact alone",
+    solo.every((r, i) => r.falls === 0 && r.walls === 0 && (i === 0 || r.lap < solo[i - 1].lap)),
+    solo.map((r) => `${r.pace}: ${(r.lap / 60).toFixed(3)} s`).join(", "),
+  );
+}
+
+function hard2Knob(): void {
+  // The dev message: refused without the flag (unset, or anything but "1"), from a guest, outside the
+  // lobby and with a value that is not a finite number; clamped; the room message carries botTune only
+  // under the flag; a race snapshots it at beginRace (HARD itself without one).
+  const msg = (v: Partial<Record<keyof h2Bot.BotTune, unknown>>) => ({ t: "botTune", rate: 1, size: 0.5, pace: 1, aim: 2.5, ...v }) as unknown as ClientMsg;
+  const off = ["", "0", "true", undefined].map((flag) =>
+    h2Tune.withEnv("SCRAP_DEV_BOTS", flag, () => {
+      const R = botRooms();
+      R.send(R.ann, msg({}));
+      const m = lastRoomMsg(R.ann.conn);
+      return { on: h2DevBotsOn(), errs: errMsgs(R.ann.conn).map((x) => x.msg).join(), field: !!m && "botTune" in m };
+    }),
+  );
+  check(
+    "hard2 knob: without the flag (unset, empty, \"0\", \"true\": only SCRAP_DEV_BOTS=1 is on) the host's botTune is refused and the room message has no botTune",
+    off.every((x) => !x.on && x.errs === "Bot tuning is off on this server" && !x.field),
+    off.map((x) => `${x.errs || "accepted"}, field ${x.field}`).join("; "),
+  );
+  h2Tune.withDevBots(() => {
+    const R = botRooms();
+    const { room, ann, bo, send } = R;
+    send(ann, { t: "addBot", level: "hard" });
+    send(ann, { t: "addBot", level: "normal" });
+    const first = lastRoomMsg(bo.conn)?.botTune;
+    send(bo, msg({ rate: 2 }));
+    const guest = errMsgs(bo.conn).map((x) => x.msg).join();
+    const bads = [{ rate: NaN }, { size: Infinity }, { pace: "1" }, { aim: null }, { rate: undefined }].map((v) => {
+      const n = errMsgs(ann.conn).length;
+      send(ann, msg(v));
+      return errMsgs(ann.conn).slice(n).map((x) => x.msg).join();
+    });
+    send(ann, msg({ rate: 99, size: -1, pace: 0.5, aim: 7 }));
+    const clamped = lastRoomMsg(bo.conn)?.botTune;
+    check(
+      "hard2 knob: with SCRAP_DEV_BOTS=1 a new room shows today's values; a guest's botTune is refused; NaN, Infinity, a string, null or a missing value is refused; the host's is clamped (rate 99 -> 3, size -1 -> 0) and goes to everyone in the room message",
+      JSON.stringify(first) === JSON.stringify(h2Bot.botTuneDefaults()) && guest === "Only the host can tune the bots" && bads.every((b) => b === "Bad bot tune") &&
+        JSON.stringify(clamped) === JSON.stringify({ rate: 3, size: 0, pace: 0.5, aim: 7 }),
+      `new room ${JSON.stringify(first)}; guest: ${guest}; bad: ${bads.join(" | ")}; clamped ${JSON.stringify(clamped)}`,
+    );
+    send(bo, { t: "ready", ready: true });
+    send(ann, { t: "start" });
+    R.step(1);
+    const bots = R.bots();
+    const snap = bots.map((b) => b.bot!.mem.hard);
+    const params = snap[0];
+    let racing = 0;
+    while (room.phase !== "racing" && racing++ < 400) R.step(1);
+    const n = errMsgs(ann.conn).length;
+    send(ann, msg({ rate: 1 }));
+    const inRace = errMsgs(ann.conn).slice(n).map((x) => x.msg).join();
+    check(
+      "hard2 knob: the race begins with the knob (beginRace: every bot's BotMem.hard one new object with rate 3, size 0, the pace-0.5 constants, rivetSlack 7; HARD unchanged; the server's mistake log on); in a race the message is refused",
+      room.phase === "racing" && snap.every((h) => h === params) && params !== h2Bot.HARD && params.mistakeRate === 3 && params.mistakeSize === 0 && params.rivetSlack === 7 &&
+        params.corner === h2Bot.hardParams({ rate: 3, size: 0, pace: 0.5, aim: 7 }).corner && h2Bot.HARD.mistakeRate === 0 && h2Bot.HARD.rivetSlack === 2.5 &&
+        bots.every((b) => b.bot!.mem.onMistake !== null) && inRace === "The bots can only be tuned in the lobby",
+      `phase ${room.phase}; params ${JSON.stringify({ rate: params.mistakeRate, size: params.mistakeSize, corner: params.corner, slack: params.rivetSlack })}; in a race: ${inRace}`,
+    );
+  });
+  // A race without a knob (or the flag off) runs with HARD itself.
+  {
+    const sim = new Sim(1);
+    const host = sim.add("Host");
+    const b = sim.room.addBot(host, "hard", sim.now) as Player;
+    b.bot!.mem.hard = h2Bot.hardParams(h2Tune.tuneOf({ rate: 2 })); // left over: beginRace puts HARD back
+    sim.room.start(host, sim.now);
+    check("hard2 knob: a race with no knob set runs its bots with HARD itself and no mistake log", b.bot!.mem.hard === h2Bot.HARD && b.bot!.mem.onMistake === null);
+  }
+  // The server log under the flag: each mistake one line (seat, lap, s, kind); none without the flag.
+  const logRace = (flag: boolean) => {
+    const lines: string[] = [];
+    const log = console.log;
+    console.log = (...a: unknown[]) => void lines.push(a.join(" "));
+    try {
+      const run = () => {
+        const sim = new Sim(1);
+        const host = sim.add("Host");
+        for (let i = 0; i < 3; i++) sim.room.addBot(host, "hard", sim.now);
+        if (flag) sim.room.setBotTune(host, h2Tune.tuneOf({ rate: 3, size: 1 }));
+        sim.room.start(host, sim.now);
+        while (sim.room.phase !== "racing") sim.tick();
+        sim.room.retire(host);
+        for (let i = 0; i < 60 * 120 && sim.room.phase === "racing"; i++) sim.tick();
+      };
+      if (flag) h2Tune.withDevBots(run);
+      else h2Tune.withEnv("SCRAP_DEV_BOTS", undefined, run);
+    } finally {
+      console.log = log;
+    }
+    return lines.filter((l) => l.startsWith("[bots] "));
+  };
+  const on = logRace(true), quiet = logRace(false);
+  const shape = /^\[bots\] room TEST race tick \d+: (Gasket|Lugnut|Piston) \(bot\) seat [0-2] lap 1 s \d+: (late-brake|wide|wobble|hesitate) \(size \d\.\d\d\)$/;
+  check(
+    "hard2 knob: under the flag each mistake is one server log line (room, race tick, bot, seat, lap, s, kind, size); without it none",
+    on.length > 0 && on.every((l) => shape.test(l)) && quiet.length === 0,
+    `${on.length} lines, e.g. "${on[0] ?? ""}"; without the flag ${quiet.length}`,
+  );
+  // Over the wire: the Game learns the flag from the room message and Game.tuneBots sends the knob.
+  const wire = (flag: boolean) =>
+    h2Tune.withEnv("SCRAP_DEV_BOTS", flag ? "1" : undefined, () => {
+      const rooms = new Rooms(1);
+      const A = wiredGame(rooms, { now: 1000 });
+      A.game.create("Ann");
+      A.open();
+      A.flush();
+      const seen = A.game.botTune ? { ...A.game.botTune } : null;
+      A.game.tuneBots({ rate: 1.5, size: 0.25, pace: 0.75, aim: 4 });
+      A.flush();
+      const after = A.game.botTune;
+      A.game.leave();
+      return { seen, after, left: A.game.botTune };
+    });
+  const won = wire(true), woff = wire(false);
+  check(
+    "hard2 knob: over the wire the Game learns the knob from the room message only under the flag (null without), Game.tuneBots sets it, and leaving the room forgets it",
+    JSON.stringify(won.seen) === JSON.stringify(h2Bot.botTuneDefaults()) && JSON.stringify(won.after) === JSON.stringify({ rate: 1.5, size: 0.25, pace: 0.75, aim: 4 }) && won.left === null &&
+      woff.seen === null && woff.after === null,
+    `flag on: ${JSON.stringify(won.seen)} -> ${JSON.stringify(won.after)}; off: ${JSON.stringify(woff.seen)} -> ${JSON.stringify(woff.after)}`,
+  );
+  const yaml = h2Read("render.yaml", "utf8"), docker = h2Read("Dockerfile", "utf8");
+  check("hard2 knob: render.yaml and the Dockerfile set no SCRAP_ variable (the knob is off on Render)", !yaml.includes("SCRAP_") && !docker.includes("SCRAP_"));
+}
+
+function hard2Cpu(): void {
+  // 1 human (retired at GO) + 5 Hard bots with mistakes on (rate 3, size 1), 3 laps of Crusher Run.
+  const sim = new Sim(3);
+  const host = sim.add("Host");
+  sim.room.setTrack(host, "crusher-run");
+  for (let i = 0; i < 5; i++) sim.room.addBot(host, "hard", sim.now);
+  h2Tune.withDevBots(() => sim.room.setBotTune(host, h2Tune.tuneOf({ rate: 3, size: 1 })) ?? sim.room.start(host, sim.now));
+  for (const p of sim.room.players.values()) if (p.bot) p.bot.mem.onMistake = null;
+  while (sim.room.phase !== "racing") sim.tick();
+  sim.room.retire(host);
+  const steps: number[] = [];
+  botTiming.samples = steps;
+  try {
+    for (let i = 0; i < 60 * 300 && sim.room.phase === "racing"; i++) sim.tick();
+  } finally {
+    botTiming.samples = null;
+  }
+  const med = [...steps].sort((a, b) => a - b)[Math.floor(steps.length / 2)];
+  const p99 = [...steps].sort((a, b) => a - b)[Math.floor(steps.length * 0.99)];
+  console.log(`  CPU: Hard bot step with mistakes on, median ${(med * 1000).toFixed(2)} us, p99 ${(p99 * 1000).toFixed(2)} us over ${steps.length} steps (hard CPU above: the same without)`);
+  check(
+    "hard2 CPU: with mistakes on (rate 3, size 1) the median Hard bot step stays <= 0.05 ms (the M4-BOTS gate fails above 0.2 ms)",
+    steps.length > 5 * 3000 && med <= 0.2 && (sim.room.phase as string) === "results",
+    `median bot step ${med.toFixed(5)} ms (${med <= 0.05 ? "within" : "OVER"} the 0.05 ms target)`,
+  );
+  const added = (performance.now() - h2Clock.t0) / 1000;
+  console.log(`  HARD-2 sections' runtime (hard2Params .. hard2Cpu): ${added.toFixed(1)} s`);
+  check("hard2 CPU: the HARD-2 sim-test sections add at most 90 s (printed)", added <= 90, `${added.toFixed(1)} s`);
+}
+
+for (const t of [hard2Params, hard2Identity, hard2Mistakes, hard2Latch, hard2Table, hard2Knob, hard2Cpu]) {
+  console.log(`\n# ${t.name}`);
+  try {
+    t();
+  } catch (e) {
+    check(`${t.name} threw`, false, String(e));
+  }
+}
+
 const failed = checks.filter((c) => !c.ok);
 console.log(`\n${checks.length - failed.length}/${checks.length} checks passed`);
 process.exit(failed.length ? 1 : 0);

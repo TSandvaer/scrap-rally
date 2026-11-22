@@ -47,7 +47,7 @@ import { gridSlot, type Track } from "../shared/track";
 import { DEFAULT_TRACK_ID, isTrackId, trackById } from "../shared/tracks";
 import { testTrack } from "../shared/testtracks";
 import { BTN_RIVET, CAR_HP, cellReach, DEFAULT_MINE_MODE, GHOST_TICKS, isMineMode, mineCount, NO_COMMAND, raceEnv, stepRaceCar, WEAPONS_ARM_MS, type Command, type MineMode } from "../shared/weapons";
-import { isBotLevel, type BotLevel } from "../shared/botdrive";
+import { botTuneDefaults, cleanBotTune, HARD, hardParams, isBotLevel, type BotLevel, type BotTune, type MistakeKind } from "../shared/botdrive";
 import { DEFAULT_CAR, isCarType, type CarType } from "../shared/cars";
 import { BOT_SLOTS, botCar, botName, botStep, maxBotsFromEnv, newBotSeat, resetBotSeat, shopBot, type BotSeat } from "./bots";
 import { Combat, solid, type Fighter } from "./combat";
@@ -69,6 +69,18 @@ export interface Conn {
 export function devTrackId(): string | null {
   const id = process.env.SCRAP_DEV_TRACK;
   return id && testTrack(id) ? id : null;
+}
+
+/**
+ * Dev only (HARD-2, ClickUp 123jpnbfghz): env SCRAP_DEV_BOTS=1 lets a room's host tune the Hard bots
+ * with the Bot tune knob ({t:"botTune"}: mistake rate and size, pace, rivet aim; lobby only, from
+ * the next race) and prints each Hard bot's mistake in the server log. Unset (the default, and on
+ * Render: render.yaml sets no SCRAP_ variable) or any other value: off, the message is refused and
+ * the room message carries no botTune. Read when a message comes, a race begins or the room message
+ * goes out.
+ */
+export function devBotsOn(): boolean {
+  return process.env.SCRAP_DEV_BOTS === "1";
 }
 
 /** A room's track by id: a shipped one, or with the dev flag on (devTrackId) a test track. */
@@ -239,6 +251,9 @@ export class Room {
   private mineMode: MineMode = DEFAULT_MINE_MODE;
   private readonly minesBudget: Bucket = { tokens: MINES_BURST, at: -Infinity };
   private botsAdded = 0; // bots added so far (add order)
+  // The host's Bot tune knob (HARD-2, dev flag SCRAP_DEV_BOTS only): null = today's Hard. A race
+  // runs with the one set as it began (beginRace snapshots it into the bots' memory).
+  private botTune: BotTune | null = null;
 
   constructor(
     readonly code: string,
@@ -540,10 +555,18 @@ export class Room {
    * a stop or a restart can give back what the race used.
    */
   private beginRace(now: number): void {
+    // HARD-2: the bots' constants for this race (the dev knob's, else HARD itself) and, under the
+    // dev flag, each mistake in the server log.
+    const dev = devBotsOn();
+    const params = dev && this.botTune ? hardParams(this.botTune) : HARD;
     for (const q of this.players.values()) {
       q.ready = !!q.bot; // everyone readies again next time; a bot is always ready
       q.retired = false;
-      if (q.bot) resetBotSeat(q.bot);
+      if (q.bot) {
+        resetBotSeat(q.bot);
+        q.bot.mem.hard = params;
+        q.bot.mem.onMistake = dev ? this.mistakeLog(q) : null;
+      }
     }
     this.combat.reset();
     this.combat.mode = this.mineMode; // this race's, whatever the host sets while it runs
@@ -917,6 +940,33 @@ export class Room {
   }
 
   /**
+   * Host only, lobby only, dev flag only (HARD-2, devBotsOn): the Bot tune knob. Every value a finite
+   * number (else refused), clamped into BOT_TUNE_RANGE; it applies from the next race (beginRace).
+   */
+  setBotTune(p: Player, v: unknown): string | null {
+    if (!devBotsOn()) return "Bot tuning is off on this server";
+    if (p.id !== this.hostId) return "Only the host can tune the bots";
+    if (this.phase !== "lobby") return "The bots can only be tuned in the lobby";
+    const t = cleanBotTune(v);
+    if (!t) return "Bad bot tune";
+    this.botTune = t;
+    this.broadcastRoom();
+    return null;
+  }
+
+  /** The knob as a race would begin with it (dev flag on), else null. */
+  get botTuning(): BotTune | null {
+    return devBotsOn() ? (this.botTune ?? botTuneDefaults()) : null;
+  }
+
+  /** HARD-2, dev flag: a Hard bot's mistakes, one server log line each (seat, lap, s, kind), to match what the host saw. */
+  private mistakeLog(q: Player): (kind: MistakeKind, size: number, s: number, lap: number) => void {
+    return (kind, size, s, lap) =>
+      !q.finished && // a finished car rolls on: what it does then is no part of the race
+      console.log(`[bots] room ${this.code} race tick ${this.raceTick}: ${q.name} seat ${q.bot?.slot} lap ${lap + 1} s ${s.toFixed(0)}: ${kind} (size ${size.toFixed(2)})`);
+  }
+
+  /**
    * Lobby only (M4-CARS): pick the car type to race with, free and any number of times; with
    * `botId` the host picks that bot's car. The race locks it: beginRace sets the stats from it
    * and nothing changes it again until the lobby. The player gets a garage message (their own
@@ -1015,7 +1065,7 @@ export class Room {
     const racers = [...this.players.values()].filter((p) => p.car); // a retired player has none
     // Bots decide from the start-of-tick poses, before any car steps (no jitter buffer).
     const botCmds = new Map<Player, { cmd: Command; minePress: boolean }>();
-    for (const p of racers) if (p.bot) botCmds.set(p, botStep(p as Player & { bot: BotSeat }, racers, this.track, racing, this.combat.mines, this.cellBack, this.raceTick));
+    for (const p of racers) if (p.bot) botCmds.set(p, botStep(p as Player & { bot: BotSeat }, racers, this.track, racing, this.combat.mines, this.cellBack, this.raceTick, p.progress?.lap ?? 0));
     // The slipstream (M4-DRAFT, shared/catchup.ts) from the same start-of-tick poses.
     const drafts = draftsFor(racers.map((p) => ({ car: p.car!, ghost: p.ghost > 0, finished: p.finished })), this.drafts);
     const prev = new Map<string, { x: number; y: number; down: boolean }>();
@@ -1265,6 +1315,7 @@ export class Room {
       song: this._song,
       mines: this.mineMode,
       players: this.info(),
+      ...(devBotsOn() ? { botTune: this.botTuning! } : {}), // HARD-2: only under the dev flag
     });
   }
 
@@ -1425,6 +1476,12 @@ export class Rooms {
         if (!session.room || !session.player) return;
         const res = session.room.addBot(session.player, msg.level, now, this.botCount() < this.maxBots);
         if (typeof res === "string") err(res);
+        return;
+      }
+      case "botTune": {
+        if (!session.room || !session.player) return;
+        const e = session.room.setBotTune(session.player, msg);
+        if (e) err(e);
         return;
       }
       case "pause":
