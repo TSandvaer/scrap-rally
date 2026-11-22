@@ -155,3 +155,8 @@ BR-SCHEMA runs in parallel with M4-TRACKS instead of after it: M4-TRACKS puts Sl
 shared/longtracks.ts (registry in shared/tracks.ts) and stays out of shared/track.ts; BR-SCHEMA owns shared/track.ts,
 shared/testtracks.ts and tools/debug/schema-hash.ts. Shared: sim-test appends and schema-hash.golden.json entries; the second to merge
 merges main first and re-runs `schema-hash --write` showing every other entry unchanged. The later waves keep their order.
+
+## Implementation note (orchestrator, 2026-11-22): how the Branch Yard fly-through (S8) is judged
+Like S7 (PLAN-THEMES): per-frame draw cost on frames without a bake step against the same frames without shortcuts (BR-BAKE: 1.015 /
+0.982), and the whole lap against the dearest shipped lap (0.893). The lap mean is higher (1.19) because a second road means 1.19x the
+bake units - more road to bake, not slower drawing.
