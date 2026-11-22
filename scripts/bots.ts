@@ -395,6 +395,7 @@ async function run(ctx: Ctx, bots: Bot[]): Promise<void> {
   await runHard(ctx, bots);
   await runSurf(ctx, bots);
   await runSplit(ctx, bots);
+  await runMove(ctx, bots);
 }
 
 const lost = new Map<string, (ConnReason | undefined)[]>();
@@ -2140,6 +2141,116 @@ async function runSplit(ctx: Ctx, bots: Bot[]): Promise<void> {
       `lanes ${ls} / ${lh}; contacts ${contacts}; median ${s.median.toFixed(3)}, max ${s.max.toFixed(2)}; state mismatches ${st}`,
     );
   } finally {
+    if (room && tick) room.tick = tick;
+    for (const b of [H, S]) b.game.leave();
+    if (old === undefined) delete process.env.SCRAP_DEV_TRACK;
+    else process.env.SCRAP_DEV_TRACK = old;
+  }
+}
+
+// ---- rolling barrels, crusher presses, the parked ramp truck (M4-MOVE, PLAN-M4.md section 3 and advisor change 9, ClickUp 123jpnbffz5) ----
+
+// This section's imports (hoisted like the ones at the top).
+import { MOVE as MOVE_BOTS } from "../shared/botdrive";
+import { moveContact } from "../tools/debug/move-tune";
+
+/**
+ * Over a lagged link (PLAN-M4 Notes 2026-11-20: after an input gap the client's live race tick can be
+ * off by up to ~7 ticks for about a round trip, so a barrel at ~110 u/s can be mispredicted by up to
+ * ~13 units in that window): a lagged socket bot (80±10 ms, line 0) races an unlagged one (line 24)
+ * on the Move Yard, the server started with SCRAP_DEV_TRACK=move-yard (set for this section only).
+ * Both bots are blind to the barrels and presses (botdrive MOVE.see false) so they drive into them (the
+ * lagged one on line 0, under both presses), and the lagged one is stalled for 30 steps (an underrun:
+ * nothing predicted or sent) just before the first row of barrels and again before the first press, so
+ * its contacts come while its race tick is skewed. Its median reconciliation error
+ * stays below 0.5; the large ones are bounded: at most MOVE_LAGGED.over13 above 13 units (the barrel's
+ * skew bound), none above MOVE_LAGGED.max, at most 4 state mismatches.
+ */
+const MOVE_LAGGED = { over13: 4, max: 40 }; // measured (3 runs, 2026-11-22): 0 above 13, max 6.66-6.89, live rt skew up to 7 ticks
+async function runMove(ctx: Ctx, bots: Bot[]): Promise<void> {
+  const old = process.env.SCRAP_DEV_TRACK;
+  process.env.SCRAP_DEV_TRACK = "move-yard";
+  const H = new Bot("Hotel5", ctx.url, 24);
+  const S = new Bot("Uniform", ctx.url, 0, { lag: 80, jitter: 10 });
+  bots.push(H, S);
+  for (const b of [H, S]) b.weapons = false;
+  let stall = 0, stalls = 0;
+  const step = S.step.bind(S);
+  S.step = () => {
+    if (stall > 0) stall--; // no game.step: nothing predicted, nothing sent (an underrun)
+    else step();
+  };
+  let room: ReturnType<typeof ctx.server.rooms.rooms.get> | undefined;
+  let tick: ((t: number, now: number) => void) | null = null;
+  MOVE_BOTS.see = false;
+  try {
+    H.game.create(H.name);
+    await waitFor("move: H welcome", () => !!H.game.you, 3000);
+    S.game.join(H.game.code, S.name);
+    await waitFor("move: S in H's room", () => H.game.players.length === 2 && !!S.game.you, 3000);
+    room = ctx.server.rooms.rooms.get(H.game.code)!;
+    await waitFor("move: both clients on the Move Yard", () => H.game.trackId === "move-yard" && S.game.trackId === "move-yard", 3000);
+    const yard = surfTestTrack("move-yard")!;
+    check(
+      "move over sockets: with SCRAP_DEV_TRACK=move-yard a new room starts on the Move Yard, and both clients build that track",
+      room.trackId === "move-yard" && H.game.trackId === "move-yard" && S.game.track === yard && H.game.track === yard,
+      `room ${room.trackId}, clients ${H.game.trackId} / ${S.game.trackId}`,
+    );
+    const r = room;
+    tick = r.tick.bind(r);
+    // The lagged bot's contact ticks (server state, at the room's race tick), H's truck jumps, and the
+    // race tick the server applied each of S's inputs at (for the skew).
+    const met = { barrel: 0, press: 0, truck: 0, jumps: 0 };
+    const truth = new Map<number, number>();
+    let last = -1, wasAir = false;
+    r.tick = (t: number, now: number) => {
+      tick!(t, now);
+      if (r.phase !== "racing") return;
+      const p = r.players.get(S.game.you);
+      if (p && p.car && p.ack !== last) {
+        last = p.ack;
+        truth.set(p.ack, r.rt);
+      }
+      const c = p?.car;
+      if (c && !p.progress?.fin && c.air === 0 && c.fall === 0) {
+        const q = queryTrackNear(r.track, c.x, c.y, c.seg);
+        // Stalled once before the first row of barrels and once before the first press.
+        const at = stalls === 0 ? r.track.barrels[0].s : stalls === 1 ? r.track.presses[0].s : -1;
+        if (at > 0 && q.s > at - 220 && q.s < at) {
+          stalls++;
+          stall = 30;
+        }
+        const hit = moveContact(r.track, c, r.rt);
+        if (hit) met[hit]++;
+      }
+      const hc = r.players.get(H.game.you)?.car;
+      if (hc) {
+        if (hc.air > 0 && !wasAir) met.jumps++;
+        wasAir = hc.air > 0;
+      }
+    };
+    const e0 = S.game.recErrors.length, st0 = S.game.recStateErrors, log0 = S.game.rtLog.length;
+    const rows = await runRace("move", bots, H, [H, S]);
+    const errs = S.game.recErrors.slice(e0);
+    const s = stats(errs);
+    const over13 = errs.filter((x) => x > 13).length;
+    const st = S.game.recStateErrors - st0;
+    const log = S.game.rtLog.slice(log0).filter(([seq]) => truth.has(seq));
+    const live = absStats(log.map(([seq, rt0]) => rt0 - truth.get(seq)!));
+    console.log(
+      `      Uniform (80±10 ms, line 0, blind, stalled 30 steps before the barrels and before the first press) and Hotel5 (line 24) on the Move Yard: Uniform's contact ticks barrel ${met.barrel}, press ${met.press}, truck ${met.truck}; Hotel5's truck jumps ${met.jumps}; ` +
+        `rt skew live max ${live.max} (exact ${(100 * live.exact).toFixed(1)}%); rec err n=${s.n} median=${s.median.toFixed(3)} p95=${s.p95.toFixed(3)} max=${s.max.toFixed(2)}, ${over13} > 13; state mismatches ${st}; ` +
+        `finish ${rows.map((x) => `${x.name} ${(x.timeMs / 1000).toFixed(2)}s`).join(", ")}`,
+    );
+    check(
+      `move over sockets: a lagged bot (80±10 ms), blind to the barrels and presses and stalled before the barrels (its race tick skewed), races the Move Yard and hits them: both finish, the unlagged one jumps the truck, it keeps a median reconciliation error below 0.5, at most ${MOVE_LAGGED.over13} errors above 13 units (a barrel's skew bound), none above ${MOVE_LAGGED.max}, at most 4 state mismatches`,
+      rows.length === 2 && rows.every((x) => x.timeMs > 0) && stalls === 2 && met.barrel + met.press > 0 && met.jumps >= 1 &&
+        s.n > 500 && s.median < 0.5 && over13 <= MOVE_LAGGED.over13 && s.max <= MOVE_LAGGED.max && st <= 4 && H.errors.length + S.errors.length === 0,
+      `contacts barrel ${met.barrel} / press ${met.press} / truck ${met.truck}; jumps ${met.jumps}; median ${s.median.toFixed(3)}, max ${s.max.toFixed(2)}, ${over13} > 13; skew live max ${live.max}; state mismatches ${st}`,
+    );
+  } finally {
+    MOVE_BOTS.see = true;
+    S.step = step;
     if (room && tick) room.tick = tick;
     for (const b of [H, S]) b.game.leave();
     if (old === undefined) delete process.env.SCRAP_DEV_TRACK;
