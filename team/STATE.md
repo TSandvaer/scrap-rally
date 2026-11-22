@@ -618,6 +618,10 @@ HARD-2 approved (Fable "sound with changes", 10 binding; user popup). HARD-2 123
 M4-TRACKS asked: (A) extend airCellReach in shared/weapons.ts to fly truck lips -> yes (weapons.ts joins it for that); edits to
 pre-existing 'every registered track' checks -> yes, loop over the 3 originals; surfShipped rule (3 originals SAME, others SAME or new)
 sent to BR-SCHEMA too. PLAN-THEMES review still running; TH-LOOK-1 waits for approval AND a free slot.
+PLAN-THEMES approved (Fable "sound with changes", 10 binding; user popup, recommended answers). Tickets: TH-LOOK-1 123jpnbfgj0 (Fable;
+first free slot) -> THEME-SCHEMA 123jpnbfgj1 (after BR-SCHEMA + M4-TRACKS, before BR-PHYS) -> TH-LOOK-2 123jpnbfgj2 (after BR-BAKE) ->
+THEME-SURF 123jpnbfgj3 (after BR-BOTS) + TH-LOOK-3 123jpnbfgj4 -> THEME-TRACKS 123jpnbfgj5. Census HUD fix sent to M4-TRACKS.
+TOUCH-6 gate green on 4282640 (893/893 + 133/133, build index-CucohtTX.js). Next: push popup (MOVE + TOUCH-6).
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
