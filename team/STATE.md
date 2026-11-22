@@ -622,6 +622,7 @@ PLAN-THEMES approved (Fable "sound with changes", 10 binding; user popup, recomm
 first free slot) -> THEME-SCHEMA 123jpnbfgj1 (after BR-SCHEMA + M4-TRACKS, before BR-PHYS) -> TH-LOOK-2 123jpnbfgj2 (after BR-BAKE) ->
 THEME-SURF 123jpnbfgj3 (after BR-BOTS) + TH-LOOK-3 123jpnbfgj4 -> THEME-TRACKS 123jpnbfgj5. Census HUD fix sent to M4-TRACKS.
 TOUCH-6 gate green on 4282640 (893/893 + 133/133, build index-CucohtTX.js). Next: push popup (MOVE + TOUCH-6).
+PUSHED (user popup): origin/main = 28e251c (TOUCH-6 + M4-MOVE). Expected live bundle after Manual Deploy: index-CucohtTX.js.
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
