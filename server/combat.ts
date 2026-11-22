@@ -117,13 +117,14 @@ export class Combat {
    * Move shots and mines, apply hits, run wreck/ghost/repair timers. Racing phase only.
    * recovered: fighters whose car stepRaceCar placed at a recovery point this tick (the room
    * gave them GHOST_TICKS before the car-car pass; it starts counting down next tick, like
-   * the ghost after a wreck respawn).
+   * the ghost after a wreck respawn). rt: this tick's race tick, the one the cars stepped at
+   * (M4-MOVE: rivets die on the barrels and presses where they are then).
    */
-  step(fighters: Fighter[], prev: Map<string, { x: number; y: number }>, recovered: ReadonlySet<Fighter> = new Set()): void {
+  step(fighters: Fighter[], prev: Map<string, { x: number; y: number }>, recovered: ReadonlySet<Fighter>, rt: number): void {
     const live: Shot[] = [];
     for (const s of this.shots) {
       const x0 = s.x, y0 = s.y;
-      let alive = moveShot(s, this.track);
+      let alive = moveShot(s, this.track, rt);
       if (alive) {
         for (const f of fighters) {
           if (f.id === s.owner || !solid(f)) continue;

@@ -9997,10 +9997,10 @@ function schemaPreview(): void {
 }
 
 function schemaDataOnly(): void {
-  // Data only: a car driven through the preview yard's features that do not act yet (the barrels'
-  // lane, the truck, the press; M4-MOVE) steps exactly as on the same loop without them, server step
-  // and all. (Water, dirt, belts and tyre mounds act since M4-SURF part 1, widens and islands since
-  // M4-SURF part 2: their own sections, below; they are left off the yard for this run.)
+  // Data only, until M4-MOVE: the preview yard's barrels, truck and press act now (M4-MOVE's own
+  // section, at the end); this check proves the truck does. (Water, dirt, belts and tyre mounds act since
+  // M4-SURF part 1, widens and islands since M4-SURF part 2: their own sections, below; they are left
+  // off the yard for this run.)
   const acts = (f: Feature) => f.k === "water" || f.k === "dirt" || f.k === "belt" || f.k === "tyres" || f.k === "widen" || f.k === "island";
   const yard = buildTrack({ ...PREVIEW_YARD, id: "schema-inert", features: PREVIEW_YARD.features!.filter((f) => !acts(f)) }), bare = buildTrack(SCHEMA_LOOP);
   const run = (t: Track) => {
@@ -10018,9 +10018,31 @@ function schemaDataOnly(): void {
     return out;
   };
   const a = run(yard), b = run(bare);
-  const same = a.length === b.length && a.every((v, i) => Object.is(v, b[i]));
   const s = queryTrackNear(yard, a[a.length - 8], a[a.length - 7], a[a.length - 3]).s;
-  check("schema data only: a car through the preview yard's barrels, truck and press steps bit for bit as on the bare loop (physics does not read them yet)", same && s > 9200 && s < 9800, `28 s at 0.8 throttle from s=500 along the centre line, ended at s=${s.toFixed(0)} (past the belt)`);
+  // M4-MOVE: they act now. The same drive up the truck's ramp band (its lat) takes off from the truck on
+  // the yard (an air tick) and not on the bare loop, so the two runs part there.
+  const band = (t: Track) => {
+    const tk = yard.trucks[0];
+    const p = pointAt(t, tk.s - 300);
+    const c: CarState = { x: p.x - Math.sin(p.h) * tk.lat, y: p.y + Math.cos(p.h) * tk.lat, h: p.h, vx: Math.cos(p.h) * 330, vy: Math.sin(p.h) * 330, seg: p.seg, wreck: 0, air: 0, fall: 0, boost: 0 };
+    const env = raceEnv(t);
+    let air = 0;
+    for (let rt = 1; rt <= 90; rt++) {
+      env.rt = rt;
+      // Along the band's lane (the truck stands in a gentle bend): aim 60 ahead on it.
+      const q = queryTrackNear(t, c.x, c.y, c.seg);
+      const aim = pointAt(t, q.s + 60), ax = aim.x - Math.sin(aim.h) * tk.lat, ay = aim.y + Math.cos(aim.h) * tk.lat;
+      stepRaceCar(c, { throttle: 1, steer: c.air > 0 ? 0 : clamp(angleDiff(c.h, Math.atan2(ay - c.y, ax - c.x)) * 2, -1, 1) }, BASE_STATS, env);
+      if (c.air > 0) air++;
+    }
+    return { air, x: c.x, y: c.y };
+  };
+  const ya = band(yard), ba = band(bare);
+  check(
+    "schema data only (M4-MOVE: they act now): driven up the preview yard's truck band at speed a car takes off from the truck, on the bare loop it does not, and the runs part; the centre-line run still reaches past the belt",
+    ya.air > 20 && ba.air === 0 && Math.hypot(ya.x - ba.x, ya.y - ba.y) > 1 && s > 9200 && s < 9800 && a.length === b.length,
+    `${ya.air} air ticks on the yard, ${ba.air} on the bare loop; 28 s at 0.8 throttle from s=500 along the centre line ended at s=${s.toFixed(0)} (past the belt)`,
+  );
   check("schema data only: GRID_SLOTS = MAX_PLAYERS; gridSlotSL is where gridSlot puts each slot", GRID_SLOTS === MAX_PLAYERS && Array.from({ length: GRID_SLOTS }, (_, k) => {
     const g = gridSlot(yard, k), sl = gridSlotSL(yard, k), p = pointAt(yard, sl.s);
     return Math.hypot(p.x - Math.sin(p.h) * sl.lat - g.x, p.y + Math.cos(p.h) * sl.lat - g.y) < 1e-6;
@@ -11287,7 +11309,7 @@ function surfRivets(): void {
     const c = surfCar(t, m.s - 200, lat, 0);
     const s = surfW.spawnShot(c, 1, "a");
     let ticks = 0;
-    while (ticks < 40 && surfW.moveShot(s, t)) ticks++;
+    while (ticks < 40 && surfW.moveShot(s, t, 0)) ticks++; // rt: no barrels or presses here
     return { ticks, s: queryTrackNear(t, s.x, s.y, s.seg).s };
   };
   const hit = shoot(m.lat), edge = shoot(m.lat + m.r + surfW.RIVET_RADIUS - 0.5), past = shoot(m.lat - m.r - surfW.RIVET_RADIUS - 1);
@@ -11769,7 +11791,7 @@ function splitWalls(): void {
   const rivet = (t: Track) => {
     const p = pointAt(t, 1000);
     const s: splitW.Shot = { id: 1, owner: "x", x: p.x - Math.sin(p.h) * -130, y: p.y + Math.cos(p.h) * -130, vx: Math.cos(p.h) * 900, vy: Math.sin(p.h) * 900, seg: p.seg, travelled: 0 };
-    return splitW.moveShot(s, t);
+    return splitW.moveShot(s, t, 0); // rt: no barrels or presses here
   };
   check(
     "split walls: isLost, a landing and a rivet read the widened wall (156 beside island A): lat -250 is not lost (2 x 156), a car landing at -140 lands and a rivet at -130 flies on; on the bare loop (wall 108) all three end",
@@ -11945,7 +11967,7 @@ function splitIslands(): void {
     const p = pointAt(t, s), hh = p.h + dh;
     const sh: splitW.Shot = { id: 1, owner: "x", x: p.x - Math.sin(p.h) * lat, y: p.y + Math.cos(p.h) * lat, vx: Math.cos(hh) * 900, vy: Math.sin(hh) * 900, seg: p.seg, travelled: 0 };
     let k = 0;
-    while (k < 60 && splitW.moveShot(sh, t)) k++;
+    while (k < 60 && splitW.moveShot(sh, t, 0)) k++; // rt: no barrels or presses here
     return { k, at: splitSL(t, sh), far: sh.travelled };
   };
   const across = shoot(yard, 1000, -80, Math.PI / 2), acrossBare = shoot(bare, 1000, -80, Math.PI / 2);
@@ -12397,6 +12419,1018 @@ for (const t of [rivets, gating, mines, wrecks, finishing, garage, armDelay, eng
     check(`${t.name} threw`, false, String(e));
   }
 }
+// ---- rolling barrels, crusher presses, the parked ramp truck (M4-MOVE, PLAN-M4.md 2.3, 2.4, section 3, advisor changes 5-7 and 9; ClickUp 123jpnbffz5, 2026-11-22) ----
+
+// This section's imports (hoisted like the ones at the top).
+import * as movePhys from "../shared/physics";
+import * as moveTrack from "../shared/track";
+import * as moveW from "../shared/weapons";
+import * as moveBot from "../shared/botdrive";
+import * as moveTune from "../tools/debug/move-tune";
+import { MOVE_YARD } from "../shared/testtracks";
+import { CAR_TYPES as MOVE_CAR_TYPES } from "../shared/cars";
+import { statsFor as moveStatsFor } from "../shared/shop";
+
+const moveClock = { t0: 0 };
+const moveYard = () => testTrack(MOVE_YARD.id)!;
+/** The Move Yard's loop with `features` instead of its own. */
+const moveWith = (features: Feature[], recovery: number[] = [0]) => buildTrack({ ...MOVE_YARD, id: "move-test", features, recovery });
+/** How far the car's capsule is from barrel k of row b at rt (< 0 = overlapping; NaN: in the gutter). */
+function moveBarrelGap(b: moveTrack.PlacedBarrels, k: number, rt: number, c: CarState): number {
+  const lat = moveTrack.barrelLat(b, k, rt);
+  if (lat !== lat) return NaN;
+  const bx = b.x + b.nx * lat, by = b.y + b.ny * lat, ux = Math.cos(c.h), uy = Math.sin(c.h);
+  const t = clamp((bx - c.x) * ux + (by - c.y) * uy, -movePhys.CAPSULE_HALF, movePhys.CAPSULE_HALF);
+  return Math.hypot(c.x + ux * t - bx, c.y + uy * t - by) - moveTrack.BARREL_R - movePhys.CAPSULE_R;
+}
+/** The first race tick >= from at which press p is in state `state`. */
+function moveTickOf(p: moveTrack.Press, state: number, from = 0): number {
+  let rt = from;
+  while (moveTrack.pressState(p, rt) !== state) rt++;
+  return rt;
+}
+
+function moveBarrels(): void {
+  moveClock.t0 = performance.now();
+  const t = moveYard(), b = t.barrels[0];
+  const reach = moveTrack.BARREL_R + movePhys.CAPSULE_R;
+  // Push-out and bounce: cars overlapping barrel 0 at rt 30 from 24 directions and 4 headings, at rest
+  // or moving: after collideBarrels the capsule just touches it, the speed into the barrel relative to
+  // it comes back out x BARREL_RESTITUTION, along it unchanged, the heading never changes.
+  const rt = 30, lat = moveTrack.barrelLat(b, 0, rt), bx = b.x + b.nx * lat, by = b.y + b.ny * lat;
+  const vbx = b.nx * b.speed, vby = b.ny * b.speed;
+  let worst = 0, worstV = 0, cases = 0, heading = true;
+  for (let a = 0; a < 24; a++) {
+    for (const dh of [0, 0.7, 1.57, 2.6]) {
+      for (const v of [0, 250]) {
+        const ang = (a / 24) * 2 * Math.PI, d = reach - 4;
+        const h = ang + dh;
+        const c: CarState = { x: bx + Math.cos(ang) * d, y: by + Math.sin(ang) * d, h, vx: -Math.cos(ang) * v, vy: -Math.sin(ang) * v, seg: b.seg, wreck: 0, air: 0, fall: 0, boost: 0 };
+        if (moveBarrelGap(b, 0, rt, c) >= 0) continue;
+        const v0x = c.vx, v0y = c.vy;
+        movePhys.collideBarrels(c, [b], rt);
+        cases++;
+        worst = Math.max(worst, Math.abs(moveBarrelGap(b, 0, rt, c)));
+        heading &&= c.h === h;
+        // The normal: from the barrel to the closest point of the car's axis after the push.
+        const ux = Math.cos(c.h), uy = Math.sin(c.h);
+        const k = clamp((bx - c.x) * ux + (by - c.y) * uy, -movePhys.CAPSULE_HALF, movePhys.CAPSULE_HALF);
+        let nx = c.x + ux * k - bx, ny = c.y + uy * k - by;
+        const nl = Math.hypot(nx, ny);
+        nx /= nl;
+        ny /= nl;
+        const in0 = (v0x - vbx) * nx + (v0y - vby) * ny, out = (c.vx - vbx) * nx + (c.vy - vby) * ny;
+        const tan0 = -(v0x - vbx) * ny + (v0y - vby) * nx, tan1 = -(c.vx - vbx) * ny + (c.vy - vby) * nx;
+        const want = in0 < 0 ? -movePhys.BARREL_RESTITUTION * in0 : in0;
+        worstV = Math.max(worstV, Math.abs(out - want), Math.abs(tan1 - tan0));
+      }
+    }
+  }
+  check(
+    `move barrels: a car capsule is pushed fully out of a barrel (touching after), its speed into it relative to the rolling barrel comes back out x ${movePhys.BARREL_RESTITUTION} (the barrel's velocity is added), along it unchanged; no yaw kick: the heading never changes`,
+    cases > 150 && worst < 1e-6 && worstV < 1e-6 && heading,
+    `${cases} overlapping cases; largest gap after ${worst.toExponential(2)}, largest velocity error ${worstV.toExponential(2)}`,
+  );
+  // A barrel is never pushed: its place is barrelLat(rt) alone, before and after cars hit it.
+  const before = Array.from({ length: 240 }, (_, r) => moveTrack.barrelLat(b, 0, r));
+  const sim = withDevTrack(MOVE_YARD.id, () => moveTune.moveRace(["normal", "normal"], 1, false));
+  const after = Array.from({ length: 240 }, (_, r) => moveTrack.barrelLat(b, 0, r));
+  check("move barrels: a barrel is never pushed: barrelLat is the same before and after a race of cars", before.every((v, i) => Object.is(v, after[i])) && sim.phase === "results", `race ${sim.phase}`);
+
+  // Advisor change 6, a pinned car: stopped against the right wall at the row of barrels rolling right,
+  // every barrel of 3 cycles reaches it. It is squeezed (pushed along the road out of the row), never
+  // left overlapping a barrel at the end of a tick, never turned (steer 0, no yaw kick), and never faster
+  // than (1 + restitution) x the barrel's speed; it never passes through (its centre stays on its side).
+  let overlap = Infinity, maxV = 0, turned = 0, squeezed = 0, flipped = 0, runs = 0;
+  for (const ds of [0, 4, -4, 9, -9]) {
+    for (const dh of [0, 0.5, -0.5, Math.PI / 2, Math.PI]) {
+      const wall = t.wallR[pointAt(t, b.s).seg];
+      const c = surfCar(t, b.s + ds, wall - movePhys.CAR_WIDTH / 2, 0, dh);
+      const h0 = c.h, side0 = Math.sign(ds || -1);
+      const env = moveW.raceEnv(t);
+      runs++;
+      for (let r = 1; r <= 3 * b.period; r++) {
+        env.rt = r;
+        const x0 = c.x, y0 = c.y;
+        moveW.stepRaceCar(c, { throttle: 0, steer: 0 }, BASE_STATS, env);
+        for (let k = 0; k < b.n; k++) {
+          const g = moveBarrelGap(b, k, r, c);
+          if (g === g) overlap = Math.min(overlap, g);
+        }
+        maxV = Math.max(maxV, speedOf(c));
+        if (c.h !== h0) turned++;
+        const q = queryTrackNear(t, c.x, c.y, c.seg);
+        if (Math.hypot(c.x - x0, c.y - y0) > 3) squeezed++;
+        if (ds !== 0 && Math.sign(q.s - b.s) !== side0) flipped++;
+      }
+    }
+  }
+  check(
+    "move barrels: a car pinned against the wall where the barrels reach it is squeezed out along the road: never left overlapping a barrel, never turned (no yaw kick spins it up), never faster than twice the barrel's speed (no explosion), never through to the row's other side",
+    overlap > -1e-6 && turned === 0 && maxV <= 2 * Math.abs(b.speed) && squeezed > 0 && flipped === 0,
+    `${runs} runs of 3 cycles: closest ${overlap.toFixed(6)} (0 = touching), turned ${turned} ticks, top speed ${maxV.toFixed(1)} u/s (barrel ${Math.abs(b.speed)}), ${squeezed} ticks pushed > 3 units, ${flipped} through`,
+  );
+  // Driven straight at a row from 9 lanes x 12 start ticks at 200..500 u/s: never left overlapping a barrel.
+  let worstDrive = Infinity, hits = 0;
+  for (let lane = -64; lane <= 64; lane += 16) {
+    for (let r0 = 0; r0 < b.period; r0 += 20) {
+      for (const v of [200, 350, 500]) {
+        const c = surfCar(t, b.s - 120, lane, v);
+        const env = moveW.raceEnv(t);
+        for (let i = 0; i < 70; i++) {
+          env.rt = r0 + i;
+          const v0 = speedOf(c);
+          moveW.stepRaceCar(c, { throttle: 1, steer: 0 }, BASE_STATS, env);
+          if (speedOf(c) < v0 - 30) hits++;
+          for (let k = 0; k < b.n; k++) {
+            const g = moveBarrelGap(b, k, env.rt, c);
+            if (g === g) worstDrive = Math.min(worstDrive, g);
+          }
+        }
+      }
+    }
+  }
+  check("move barrels: driven at a row of barrels from 9 lanes, 12 start ticks and 3 speeds, a car is never left overlapping one (hits happen)", worstDrive > -1e-6 && hits > 20, `${hits} hits; closest ${worstDrive.toFixed(6)}`);
+}
+
+function moveSolids(): void {
+  const t = moveYard();
+  // The press: solid only while down. A car at 300 u/s into its middle: while it is down it bounces off
+  // the back face with the wall's rule (WALL_BOUNCE, WALL_SCRAPE); while it is up it drives through.
+  const g = t.presses[0];
+  const into = (rt0: number) => {
+    const c = surfCar(t, g.s - 60, -30, 300);
+    const env = moveW.raceEnv(t);
+    let vMin = Infinity;
+    for (let i = 0; i < 30; i++) {
+      env.rt = rt0 + i;
+      moveW.stepRaceCar(c, { throttle: 0, steer: 0 }, BASE_STATS, env);
+      vMin = Math.min(vMin, (c.vx * Math.cos(g.h) + c.vy * Math.sin(g.h)));
+    }
+    return { s: splitSL(t, c).s, vMin };
+  };
+  const down = moveTickOf(g, moveTrack.PRESS_DOWN), up = moveTickOf(g, moveTrack.PRESS_UP, down);
+  const shut = into(down), open = into(up);
+  // The bounce's numbers: a car moving into its back face at v (along the press's heading) comes out at WALL_BOUNCE x v, times the scrape.
+  const back = moveTrack.PRESS_DEPTH / 2 + movePhys.CAPSULE_HALF + movePhys.CAPSULE_R - 2, gx = Math.cos(g.h), gy = Math.sin(g.h);
+  const c0: CarState = { x: g.x - gx * back + g.nx * -30, y: g.y - gy * back + g.ny * -30, h: g.h, vx: gx * 200, vy: gy * 200, seg: g.seg, wreck: 0, air: 0, fall: 0, boost: 0 };
+  movePhys.collidePresses(c0, [g], down);
+  const vOut = -(c0.vx * Math.cos(g.h) + c0.vy * Math.sin(g.h));
+  check(
+    `move press: down it is solid (a car bounces off its face: the speed into it back x ${0.35}, then x ${0.97}, as at a wall); up it is not there`,
+    shut.s < g.s - moveTrack.PRESS_DEPTH / 2 && shut.vMin < 0 && open.s > g.s + moveTrack.PRESS_DEPTH / 2 + 20 && Math.abs(vOut - 200 * 0.35 * 0.97) < 1e-6,
+    `down: stopped at s=${shut.s.toFixed(1)} (face ${g.s - moveTrack.PRESS_DEPTH / 2}), bounced back at ${(-shut.vMin).toFixed(0)} u/s; up: through to s=${open.s.toFixed(0)}; out at ${vOut.toFixed(3)} u/s from 200`,
+  );
+  // It comes down on a car: every pose under it (along x across x heading) is pushed out to the nearer
+  // open side along the road (in front of it or behind it), all the way out, never left inside.
+  let trapped = 0, poses = 0, behind = 0, ahead = 0, worstMove = 0;
+  for (let ds = -moveTrack.PRESS_DEPTH / 2 - 10; ds <= moveTrack.PRESS_DEPTH / 2 + 10; ds += 2) {
+    for (let lat = g.lat0 - 10; lat <= g.lat1 + 10; lat += 6) {
+      for (const dh of [0, 0.4, 1.2, Math.PI / 2, 2.5, Math.PI]) {
+        const c = surfCar(t, g.s + ds, lat, 0, dh);
+        const env = moveW.raceEnv(t, down);
+        const x0 = c.x, y0 = c.y;
+        moveW.stepRaceCar(c, { throttle: 0, steer: 0 }, BASE_STATS, env);
+        poses++;
+        const p = moveTune.moveContact(t, c, down, -1e-6);
+        if (p === "press") trapped++;
+        const q = splitSL(t, c);
+        if (Math.hypot(c.x - x0, c.y - y0) > 0.01) {
+          if (q.s < g.s) behind++;
+          else ahead++;
+          worstMove = Math.max(worstMove, Math.hypot(c.x - x0, c.y - y0));
+        }
+      }
+    }
+  }
+  check(
+    "move press: coming down on a car anywhere under it (or partly), any heading, it pushes the car out to the nearer open side (behind it or in front), all the way: never trapped inside",
+    trapped === 0 && behind > 50 && ahead > 50,
+    `${poses} poses: trapped ${trapped}; pushed behind ${behind}, in front ${ahead}; the largest push ${worstMove.toFixed(1)} units`,
+  );
+
+  // The truck: a solid capsule (side hits pushed sideways), its band rides at TRUCK_MIN_SPEED or more.
+  const tk = t.trucks[0];
+  const run = (lat: number, v: number, throttle: number, ticks = 120) => {
+    const c = surfCar(t, tk.s - 150, lat, v);
+    const env = moveW.raceEnv(t);
+    const evs: string[] = [];
+    let air = 0, sideMin = Infinity, vOff = 0;
+    for (let i = 0; i < ticks; i++) {
+      env.rt = i + 1;
+      const v0 = speedOf(c);
+      const ev = moveW.stepRaceCar(c, { throttle, steer: 0 }, BASE_STATS, env);
+      if (ev) evs.push(ev);
+      if (ev === "takeoff") vOff = v0;
+      if (c.air > 0 && air === 0) air = c.air;
+      const q = splitSL(t, c);
+      if (c.air === 0 && q.s > tk.s && q.s < tk.s + tk.len) sideMin = Math.min(sideMin, Math.abs(q.lat - tk.lat));
+    }
+    return { evs, air, end: splitSL(t, c), sideMin, c, vOff };
+  };
+  const fast = run(tk.lat, 330, 1), slow = run(tk.lat, 150, 0.2), beside = run(tk.lat + moveTrack.TRUCK_HALF + 2, 330, 1);
+  check(
+    `move truck: in its band at ${moveTrack.TRUCK_MIN_SPEED} u/s or more a car rides up and takes off at the lip (an ordinary jump: airTicksFor its speed, no x1.3 and no air-total field in CarState); slower the band is solid (it stops at the rear); beside the band its body pushes the car out sideways`,
+    fast.evs[0] === "takeoff" && fast.air === moveW.airTicksFor(fast.vOff) - 1 && fast.end.s > tk.s + tk.len + 150 &&
+      slow.evs.length === 0 && slow.end.s < tk.s && speedOf(slow.c) < 5 &&
+      beside.evs.length === 0 && beside.end.s > tk.s + tk.len && beside.sideMin >= moveTrack.TRUCK_HALF + movePhys.CAR_WIDTH / 2 - 0.5,
+    `fast: ${fast.evs.join(",")} at ${fast.vOff.toFixed(0)} u/s (air ${fast.air + 1} ticks = airTicksFor), at s=${fast.end.s.toFixed(0)}; slow: stopped at s=${slow.end.s.toFixed(1)} (rear ${tk.s}); beside: kept ${beside.sideMin.toFixed(1)} off its axis, at s=${beside.end.s.toFixed(0)}`,
+  );
+  // The band below 220: a car riding up that slows under TRUCK_MIN_SPEED on the band (brakes) is
+  // pushed off sideways (the band is solid), never left inside the body. And the lateral lip test: a
+  // car at speed just outside the band (truckLipAt false) does not take off, it is a side hit.
+  const braked = (() => {
+    const c = surfCar(t, tk.s + 10, tk.lat + 3, 235);
+    const env = moveW.raceEnv(t);
+    const evs: string[] = [];
+    for (let i = 0; i < 40; i++) {
+      env.rt = i + 1;
+      const ev = moveW.stepRaceCar(c, { throttle: -1, steer: 0 }, BASE_STATS, env);
+      if (ev) evs.push(ev);
+    }
+    return { evs, gap: moveTune.moveContact(t, c, 41, -1e-6), lat: splitSL(t, c).lat };
+  })();
+  const edge = run(tk.band1 + 1, 330, 1);
+  check(
+    "move truck: the band below 220 u/s is solid: a car braking on it is pushed out of the body sideways (never left inside); a lateral lip test: just outside the band at speed it does not take off",
+    braked.evs.length === 0 && braked.gap !== "truck" && Math.abs(braked.lat - tk.lat) >= moveTrack.TRUCK_HALF + movePhys.CAPSULE_R - 0.5 &&
+      !moveTrack.truckLipAt(t, tk.lip + 1, tk.band1 + 1) && !!moveTrack.truckLipAt(t, tk.lip + 1, tk.band1) && !edge.evs.includes("takeoff"),
+    `braked: ${braked.evs.join(",") || "no event"}, ended ${Math.abs(braked.lat - tk.lat).toFixed(1)} off its axis; at lat ${tk.band1 + 1}: ${edge.evs.join(",") || "no take-off"}`,
+  );
+  // Airborne cars pass over everything: a flight's velocity is unchanged over a barrel row, a press
+  // that is down and the truck (a car launched over each, in the air the whole way).
+  const over = (s: number, lat: number, rt0: number) => {
+    const c = surfCar(t, s - 60, lat, 400);
+    c.air = 40;
+    const env = moveW.raceEnv(t);
+    const v0 = [c.vx, c.vy];
+    for (let i = 0; i < 25; i++) {
+      env.rt = rt0 + i;
+      moveW.stepRaceCar(c, movePhys.NO_INPUT, BASE_STATS, env);
+    }
+    return c.vx === v0[0] && c.vy === v0[1] && c.air === 15;
+  };
+  const b = t.barrels[0];
+  check("move air: a car in the air passes over a row of barrels, a press that is down and the truck untouched", over(b.s, 0, 20) && over(b.s, 30, 70) && over(g.s, -30, down - 10) && over(tk.s + 40, tk.lat, 1));
+}
+
+function moveLandings(): void {
+  // M4-MOVE owns the landing over a solid: a flight that comes down overlapping a solid is not a fall;
+  // the next driving step's contact puts the car out of it (never left inside, no speed explosion):
+  // a truck (sideways off its body), an island (into the nearer lane: M4-SURF part 2's rule), a tyre
+  // mound (pushed out of the circle), a barrel (the same, at the tick it lands), a press that is down
+  // (along the road to the nearer open side).
+  const yard = moveYard();
+  const solids = moveWith([
+    { k: "tyres", s: 1000, lat: 0, r: 24 },
+    { k: "widen", s0: 5750, s1: 7050, left: 60, right: 60 },
+    { k: "island", s0: 5900, s1: 6900, lat0: -28, lat1: 28 },
+  ]);
+  const g = yard.presses[0], tk = yard.trucks[0], b = yard.barrels[0];
+  const down = moveTickOf(g, moveTrack.PRESS_DOWN);
+  // The barrel at the tick the flight lands (rt 31): where it is then.
+  const bl = moveTrack.barrelLat(b, 0, 31);
+  const cases: { what: string; t: Track; s: number; lat: number; rt: number; probe: (c: CarState, rt: number) => boolean }[] = [
+    { what: "truck (beside its band)", t: yard, s: tk.s + tk.len / 2, lat: tk.band1 + 3, rt: 1, probe: (c, rt) => moveTune.moveContact(yard, c, rt, -1e-6) === "truck" },
+    { what: "island", t: solids, s: 6400, lat: 5, rt: 1, probe: (c) => splitTune.islandContact(solids, c) !== null && Math.abs(splitSL(solids, c).lat) < 28 + movePhys.CAR_WIDTH / 2 - 0.01 },
+    { what: "tyre mound", t: solids, s: 1000, lat: 3, rt: 1, probe: (c) => surfTune.touchesMound(solids, c) && Math.hypot(c.x - solids.tyres[0].x, c.y - solids.tyres[0].y) < 24 + 8 - 0.01 },
+    { what: "barrel", t: yard, s: b.s, lat: bl, rt: 31, probe: (c, rt) => moveTune.moveContact(yard, c, rt, -1e-6) === "barrel" },
+    { what: "press", t: yard, s: g.s, lat: -30, rt: down + 2, probe: (c, rt) => moveTune.moveContact(yard, c, rt, -1e-6) === "press" },
+  ];
+  const rows: string[] = [];
+  let ok = true;
+  for (const k of cases) {
+    // In the air for its last tick, landing on the solid's middle at 300 u/s along the road.
+    const c = surfCar(k.t, k.s - 5, k.lat, 300);
+    c.air = 1;
+    const env = moveW.raceEnv(k.t, k.rt - 1);
+    let ev = moveW.stepRaceCar(c, movePhys.NO_INPUT, BASE_STATS, env);
+    const landed = c.air === 0 && c.fall === 0 && ev === null, inside = k.probe(c, env.rt);
+    let maxV = speedOf(c), outAfter = -1;
+    for (let i = 1; i <= 6; i++) {
+      env.rt = k.rt - 1 + i;
+      ev = moveW.stepRaceCar(c, movePhys.NO_INPUT, BASE_STATS, env);
+      maxV = Math.max(maxV, speedOf(c));
+      if (outAfter < 0 && !k.probe(c, env.rt)) outAfter = i;
+    }
+    const good = landed && inside && outAfter === 1 && !k.probe(c, env.rt) && c.fall === 0 && maxV <= 300 * 1.01;
+    ok &&= good;
+    rows.push(`${k.what}: landed on it ${landed && inside}, out after ${outAfter} driving step(s), top speed ${maxV.toFixed(0)}`);
+  }
+  // Landing in a truck's band at speed is on its ramp: it rides on and takes off at the lip again.
+  const deck = surfCar(yard, tk.s + 30, tk.lat, 300);
+  deck.air = 1;
+  const env = moveW.raceEnv(yard);
+  const evs: string[] = [];
+  for (let i = 0; i < 20; i++) {
+    env.rt = i + 1;
+    const ev = moveW.stepRaceCar(deck, movePhys.NO_INPUT, BASE_STATS, env);
+    if (ev) evs.push(ev);
+  }
+  rows.push(`in the truck's band at 300 u/s: ${evs.join(",")}`);
+  check("move landings: a flight that lands overlapping a solid (a truck beside its band, an island, a tyre mound, a barrel, a press that is down) is not a fall; the next driving step puts the car out of it for good, no faster than it came; landing in a truck's band at speed rides its ramp to the lip", ok && evs.join() === "takeoff", rows.join("; "));
+}
+
+function moveRivets(): void {
+  // Rivets die on solids (PLAN-M4 2.3): on a barrel where barrelLat puts it at the shot's race tick (one
+  // that is in the gutter is not there), on a press while it is down (not while it is up), on a truck's body.
+  const t = moveYard(), b = t.barrels[0], g = t.presses[0], tk = t.trucks[0];
+  const fly = (s: number, lat: number, rt0: number) => {
+    const p = pointAt(t, s);
+    const sh: moveW.Shot = { id: 1, owner: "x", x: p.x - Math.sin(p.h) * lat, y: p.y + Math.cos(p.h) * lat, vx: Math.cos(p.h) * 900, vy: Math.sin(p.h) * 900, seg: p.seg, travelled: 0 };
+    let k = 0;
+    while (k < 40 && moveW.moveShot(sh, t, rt0 + k)) k++;
+    return splitSL(t, sh).s;
+  };
+  // Barrel 0 near the middle of its run at rt 54 (it has rolled 99 of 198): a rivet aimed at where it
+  // will be when the rivet gets there, and one at a tick it is in the gutter.
+  const rtHit = 54, latHit = moveTrack.barrelLat(b, 0, rtHit + 6);
+  let gutter = 0;
+  while (moveTrack.barrelLat(b, 0, gutter + 6) === moveTrack.barrelLat(b, 0, gutter + 6) || [1, 2].some((k) => moveTrack.barrelLat(b, k, gutter + 6) === moveTrack.barrelLat(b, k, gutter + 6) && Math.abs(moveTrack.barrelLat(b, k, gutter + 6) - latHit) < 30)) gutter++;
+  const hitB = fly(b.s - 90, latHit, rtHit), missB = fly(b.s - 90, latHit, gutter);
+  const down = moveTickOf(g, moveTrack.PRESS_DOWN), up = moveTickOf(g, moveTrack.PRESS_UP, down);
+  const hitP = fly(g.s - 120, -30, down), missP = fly(g.s - 120, -30, up);
+  const hitT = fly(tk.s - 100, tk.lat, 1);
+  check(
+    "move rivets: a rivet dies on a barrel where it is at the shot's race tick (passes where it is in the gutter), on a press while it is down (passes while it is up), on a truck's body",
+    hitB < b.s + 15 && missB > b.s + 50 && hitP < g.s + 15 && missP > g.s + 50 && hitT < tk.s + 15,
+    `barrel: died at s=${hitB.toFixed(0)} (row ${b.s}), gutter: on to ${missB.toFixed(0)}; press down: ${hitP.toFixed(0)}, up: ${missP.toFixed(0)} (at ${g.s}); truck: ${hitT.toFixed(0)} (rear ${tk.s})`,
+  );
+  // No damage: a race on the Move Yard with weapons off has no hit and no wreck event.
+  const evs: GameEvent[] = [];
+  withDevTrack(MOVE_YARD.id, () => {
+    const sim = new Sim(1);
+    const host = sim.add("Host");
+    if (sim.room.setTrack(host, MOVE_YARD.id)) throw new Error("dev track refused");
+    for (const l of ["normal", "hard"] as BotLevel[]) (sim.room.addBot(host, l, sim.now) as Player).bot!.mem.weapons = false;
+    moveBot.MOVE.see = false; // blind: they hit the barrels and presses
+    try {
+      sim.room.start(host, sim.now);
+      while (sim.room.phase !== "racing") sim.tick();
+      sim.room.retire(host);
+      let n = 0;
+      while (sim.room.phase === "racing" && n++ < 60 * 120) sim.tick();
+    } finally {
+      moveBot.MOVE.see = true;
+    }
+    evs.push(...sim.events);
+  });
+  check("move rivets: no damage: two bots blind to the barrels and presses race the Move Yard with weapons off: no hit, no wreck", evs.filter((e) => e.k === "hit" || e.k === "wreck").length === 0 && evs.some((e) => e.k === "finish"), `${evs.length} events: ${[...new Set(evs.map((e) => e.k))].join(",")}`);
+}
+
+function moveRespawn(): void {
+  // Respawns and recoveries pick the nearest clear lane, away from the barrels' path, the presses and
+  // the trucks (clearSpot): a car wrecked anywhere round each is put down clear of it; validation keeps
+  // them >= 40 from the recovery points and the grid.
+  const t = moveYard();
+  const rows: string[] = [];
+  let bad = 0, n = 0, moved = 0;
+  const clear = (c: CarState) => {
+    const box = (s0: number, s1: number, lat0: number, lat1: number) => {
+      const q = splitSL(t, c);
+      return q.s + 15 > s0 && q.s - 15 < s1 && q.lat + 8 > lat0 && q.lat - 8 < lat1;
+    };
+    for (const b of t.barrels) if (box(b.s - moveTrack.BARREL_R, b.s + moveTrack.BARREL_R, -Infinity, Infinity)) return false;
+    for (const g of t.presses) if (box(g.s - moveTrack.PRESS_DEPTH / 2, g.s + moveTrack.PRESS_DEPTH / 2, g.lat0, g.lat1)) return false;
+    for (const k of t.trucks) if (box(k.s, k.s + k.len, k.lat - moveTrack.TRUCK_HALF, k.lat + moveTrack.TRUCK_HALF)) return false;
+    return true;
+  };
+  for (const [what, s0, s1] of [["barrels", t.barrels[0].s - 30, t.barrels[0].s + 30], ["press", t.presses[0].s - 30, t.presses[0].s + 30], ["truck", t.trucks[0].s - 20, t.trucks[0].s + t.trucks[0].len + 20]] as const) {
+    let ok = 0, tried = 0;
+    for (let s = s0; s <= s1; s += 3) {
+      for (const lat of [-50, -20, 0, 20, 50]) {
+        const c = surfCar(t, s, lat, 0);
+        moveW.wreckCar(c);
+        c.wreck = 1;
+        moveW.stepRaceCar(c, movePhys.NO_INPUT, BASE_STATS, moveW.raceEnv(t));
+        tried++;
+        n++;
+        if (clear(c) && c.wreck === 0 && Math.abs(splitSL(t, c).lat) <= 64 - 8) ok++;
+        else bad++;
+        if (Math.abs(splitSL(t, c).s - s) > 1) moved++;
+      }
+    }
+    rows.push(`${what}: ${ok}/${tried} clear`);
+  }
+  // On a track without them: clearSpot is s and clearLaneAt(s), exactly (shipped tracks and the Surf Yard).
+  let same = true;
+  for (const tr of [trackById("rust-bowl"), trackById("crusher-run"), surfYard(), splitYard()]) {
+    for (let s = 0; s < tr.length; s += 37) same &&= JSON.stringify(moveTrack.clearSpot(tr, s, 4, 20)) === JSON.stringify({ s, lat: moveTrack.clearLaneAt(tr, s, 4, 20) });
+  }
+  // A recovery: a car that fell is put at the recovery point's clear lane.
+  const fell = surfCar(t, 3000, 0, 0);
+  fell.fall = 1;
+  moveW.stepRaceCar(fell, movePhys.NO_INPUT, BASE_STATS, moveW.raceEnv(t));
+  check(
+    "move respawn: a car wrecked in a barrel row's path, under a press or at the truck respawns clear of them (on a clear lane, or just behind a row that leaves none); without them clearSpot is clearLaneAt exactly",
+    bad === 0 && moved > 20 && same && clear(fell) && Math.hypot(fell.x - pointAt(t, 0).x, fell.y - pointAt(t, 0).y) < 1e-9,
+    `${rows.join("; ")} (${moved} of ${n} moved back along the road); the fall recovered at the recovery point s=0`,
+  );
+  // Validation: what moves keeps SOLID_CLEAR from the recovery points and the grid, and MOVER_CLEAR along
+  // the track from every other solid (a press may sit beside an island).
+  const errs = (features: Feature[], recovery = [0]) => validateTrack(moveWith(features, recovery)).join(" | ");
+  const nearRec = errs([{ k: "barrels", s: 1000, n: 2, period: 200, speed: 100 }], [0, 1030]);
+  const nearPress = errs([{ k: "press", s: 3000, lat0: -64, lat1: 0, period: 150, down: 40 }], [0, 2975]);
+  const nearTruck = errs([{ k: "truck", s: 5950, lat: 0, len: 110 }], [0, 5930]);
+  const rowMound = errs([{ k: "barrels", s: 1000, n: 2, period: 200, speed: 100 }, { k: "tyres", s: 1060, lat: 30, r: 20 }]);
+  const pressIsland = errs([{ k: "widen", s0: 5750, s1: 7050, left: 60, right: 60 }, { k: "island", s0: 5900, s1: 6900, lat0: -28, lat1: 28 }, { k: "press", s: 6500, lat0: 28, lat1: 124, period: 180, down: 60 }]);
+  const pressGap = errs([{ k: "press", s: 3000, lat0: -64, lat1: 95, period: 150, down: 40 }]), pressWall = errs([{ k: "press", s: 3000, lat0: -64, lat1: 108, period: 150, down: 40 }]);
+  const rowIsland = errs([{ k: "widen", s0: 5750, s1: 7050, left: 60, right: 60 }, { k: "island", s0: 5900, s1: 6900, lat0: -28, lat1: 28 }, { k: "barrels", s: 6940, n: 2, period: 260, speed: 100 }]);
+  check(
+    `move validate: a barrel row, a press or a truck within ${moveTrack.SOLID_CLEAR} of a recovery point is refused; a row within ${moveTrack.MOVER_CLEAR} along the track of a mound or an island is refused; a press beside an island is fine; a press side short of the wall by less than ${moveTrack.PRESS_SIDE_GAP} is refused, one at the wall is fine; the Move Yard is valid`,
+    nearRec.includes("from recovery point") && nearPress.includes("from recovery point") && nearTruck.includes("from recovery point") && rowMound.includes("along the track from tyres") &&
+      pressIsland === "" && rowIsland.includes("along the track from island") && pressGap.includes("leaves a gap of 13.0") && pressWall === "" &&
+      validateTrack(moveYard()).length === 0 && moveW.validateRunUps(moveYard()).length === 0,
+    `row: ${nearRec}; press: ${nearPress}; truck: ${nearTruck}; row by a mound: ${rowMound}; press by an island: ${pressIsland || "valid"}; row past an island: ${rowIsland}; press 13 short of the wall: ${pressGap}; press to the wall: ${pressWall || "valid"}`,
+  );
+}
+
+function moveSweep(): void {
+  // Advisor change 7: the overspeed sweep covers the truck's lip at 473 (the draft) and 537 u/s (a
+  // boost) for every car type, at L0 and L3, on the Move Yard and the Preview Yard; and it catches a
+  // truck whose boosted flight lands past a bend's wall.
+  const rows: string[] = [];
+  let ok = true;
+  for (const tr of [moveYard(), testTrack(PREVIEW_YARD.id)!]) {
+    for (const v of [473, 537]) {
+      for (const car of MOVE_CAR_TYPES) {
+        for (const lv of [0, 3]) {
+          const e = moveW.validateJumpSweep(tr, v, moveStatsFor(car, { engine: lv, tyres: lv, welder: lv }));
+          if (e.length) {
+            ok = false;
+            rows.push(`${tr.def.id} ${v} ${car} L${lv}: ${e.join("; ")}`);
+          }
+        }
+      }
+    }
+  }
+  // A truck left of the centre at the start of the bend into the left-hand side: a fast flight comes
+  // down past the bend's wall (from ~456 u/s), a slow one lands.
+  const bad = moveWith([{ k: "truck", s: 7300, lat: -30, len: 110 }]);
+  const e537 = moveW.validateJumpSweep(bad, 537), e300 = moveW.validateJumpSweep(bad, 300);
+  check(
+    "move sweep: every truck jump on the Move Yard and the Preview Yard lands at every arrival speed up to 473 and 537 u/s, every car type at L0 and L3; a truck whose boosted flight lands past a wall is caught",
+    ok && e537.some((e) => e.includes("truck jump") && e.includes("but not at")) && e300.length === 0,
+    `${rows.join(" | ") || "all land"}; a truck at s=7300 lat -30: up to 537: ${e537[0] ?? "none"}; up to 300: ${e300.length} problems`,
+  );
+}
+
+function moveBuckets(): void {
+  // Every barrel row, press and truck a car capsule (any heading, plus a tick) or a rivet's swept tick
+  // can touch is in that segment's bucket; on the shipped tracks every bucket is the one frozen empty list.
+  const t = moveYard();
+  let seed = 7;
+  const rnd = () => ((seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648);
+  let missed = 0, touches = 0;
+  for (let i = 0; i < 60_000; i++) {
+    const f = [t.barrels[0].s, t.barrels[1].s, t.presses[0].s, t.presses[1].s, t.trucks[0].s, t.trucks[0].s + t.trucks[0].len][i % 6];
+    const s = f + (rnd() * 2 - 1) * 60, lat = (rnd() * 2 - 1) * (t.wall - 8);
+    const p = pointAt(t, s);
+    const x = p.x - Math.sin(p.h) * lat, y = p.y + Math.cos(p.h) * lat;
+    const q = queryTrackNear(t, x, y, p.seg);
+    const h = rnd() * 2 * Math.PI, ux = Math.cos(h), uy = Math.sin(h);
+    const c: CarState = { x, y, h, vx: 0, vy: 0, seg: q.seg, wreck: 0, air: 0, fall: 0, boost: 0 };
+    for (const b of t.barrels) {
+      for (let r = 0; r < b.period; r += 7) {
+        for (let k = 0; k < b.n; k++) {
+          const g = moveBarrelGap(b, k, r, c);
+          if (!(g < 9)) continue; // + a tick at 537 u/s
+          touches++;
+          if (!t.barrelsAt[q.seg].includes(b)) missed++;
+        }
+      }
+    }
+    // A press: the car's capsule plus a tick (or a rivet's swept tick ending here, 24 + its radius) within its box.
+    const sq = splitSL(t, c).s;
+    for (const g of t.presses) {
+      const near = Math.abs(sq - g.s) < moveTrack.PRESS_DEPTH / 2 + Math.max(movePhys.CAPSULE_HALF + movePhys.CAPSULE_R + 9, 24 + moveW.RIVET_RADIUS) && lat > g.lat0 - 40 && lat < g.lat1 + 40;
+      if (near && !t.pressesAt[q.seg].includes(g)) missed++;
+      if (near) touches++;
+    }
+    // A truck: a point of the car's axis within its body plus the car's radius and a tick, or a rivet's
+    // swept tick (from 24 back along a random heading to here) within its body plus the rivet's radius.
+    for (const k of t.trucks) {
+      const e = { x: k.x1 - k.x0, y: k.y1 - k.y0 };
+      const dist = (px: number, py: number) => {
+        const m = clamp(((px - k.x0) * e.x + (py - k.y0) * e.y) / (e.x * e.x + e.y * e.y), 0, 1);
+        return Math.hypot(px - k.x0 - e.x * m, py - k.y0 - e.y * m);
+      };
+      let near = false;
+      for (let a = -1; a <= 1 && !near; a += 0.25) near = dist(x + ux * a * movePhys.CAPSULE_HALF, y + uy * a * movePhys.CAPSULE_HALF) < moveTrack.TRUCK_HALF + movePhys.CAPSULE_R + 9;
+      for (let a = 0; a <= 1 && !near; a += 0.05) near = dist(x - ux * 24 * a, y - uy * 24 * a) < moveTrack.TRUCK_HALF + moveW.RIVET_RADIUS;
+      if (near) {
+        touches++;
+        if (!t.trucksAt[q.seg].includes(k)) missed++;
+      }
+    }
+    // A barrel: a rivet's swept tick ending here (24 back along the heading) within its radius plus the rivet's.
+    for (const b of t.barrels) {
+      for (let r = 0; r < b.period; r += 7) {
+        for (let k = 0; k < b.n; k++) {
+          const bl = moveTrack.barrelLat(b, k, r);
+          if (bl !== bl) continue;
+          const bx = b.x + b.nx * bl, by = b.y + b.ny * bl;
+          let hit = false;
+          for (let a = 0; a <= 1 && !hit; a += 0.05) hit = Math.hypot(x - ux * 24 * a - bx, y - uy * 24 * a - by) <= moveTrack.BARREL_R + moveW.RIVET_RADIUS;
+          if (!hit) continue;
+          touches++;
+          if (!t.barrelsAt[q.seg].includes(b)) missed++;
+        }
+      }
+    }
+  }
+  const shipped = ["rust-bowl", "crusher-run", "overpass-knot"].map((id) => trackById(id));
+  const empty = shipped.every((tr) => [tr.barrelsAt, tr.pressesAt, tr.trucksAt].every((at) => at.every((x) => x.length === 0 && x === at[0]) && Object.isFrozen(at[0])));
+  check(
+    "move buckets: every barrel row, press and truck a car capsule (any heading, plus a tick) or a rivet's swept tick can touch is in that segment's bucket; on the shipped tracks every bucket is one frozen empty list",
+    missed === 0 && touches > 1000 && empty,
+    `${touches} touches checked, ${missed} missing; shipped empty ${empty}`,
+  );
+  // The bucketed take-off test (stepRaceCar's) is truckLipAt's: at every point of the band's take-off zone and round it.
+  let diff = 0, inZone = 0;
+  const tk = t.trucks[0];
+  for (let s = tk.lip - 6; s < tk.lip + moveTrack.LIP_ZONE + 6; s += 0.5) {
+    for (let lat = tk.band0 - 4; lat <= tk.band1 + 4; lat += 1) {
+      const c = surfCar(t, s, lat, 300);
+      const q = queryTrackNear(t, c.x, c.y, c.seg);
+      const env = moveW.raceEnv(t);
+      const ev = moveW.stepRaceCar(cloneCar(c), movePhys.NO_INPUT, BASE_STATS, env);
+      const want = !!moveTrack.truckLipAt(t, q.s, q.lat);
+      if (want) inZone++;
+      if ((ev === "takeoff") !== want) diff++;
+    }
+  }
+  check("move buckets: stepRaceCar takes off from a truck exactly where truckLipAt says (its take-off zone x its band)", diff === 0 && inZone > 200, `${inZone} points in the zone, ${diff} differ`);
+}
+
+function moveParity(): void {
+  // stepRaceCar on a clone equals the server's pose bit for bit every tick at the room's race tick:
+  // lone server bots (each level and type) over 2 laps of the Move Yard, seeing and blind to the barrels
+  // and presses (blind: they hit them), and one thrown at a barrel row, a press while it is down and the truck.
+  const rows: string[] = [];
+  let all = true, contacts = 0;
+  withDevTrack(MOVE_YARD.id, () => {
+    for (const see of [true, false]) {
+      for (const [level, car, slot] of [["easy", "sport", 0], ["normal", "racer", 1], ["hard", "truck", 2]] as const) {
+        const sim = new Sim(2);
+        const host = sim.add("Host");
+        if (sim.room.setTrack(host, MOVE_YARD.id)) throw new Error("dev track refused");
+        const bots: Player[] = [];
+        for (let k = 0; k <= slot; k++) bots.push(sim.room.addBot(host, level, sim.now) as Player);
+        const b = bots[slot];
+        for (const o of bots) if (o !== b) sim.room.kick(host, o.id, sim.now);
+        if (sim.room.setCar(host, car, b.id)) throw new Error("car");
+        b.wallet.ammo.rivets = 0;
+        b.wallet.ammo.mines = 0;
+        sim.room.start(host, sim.now);
+        while (sim.room.phase !== "racing") sim.tick();
+        sim.room.retire(host);
+        const t = sim.room.track;
+        let ctl: moveBot.BotControls | null = null;
+        surfServerBots.botTrace.fn = (p, c) => {
+          if (p === b) ctl = c;
+        };
+        moveBot.MOVE.see = see;
+        let ticks = 0, mismatch = 0, first = "", hit = 0;
+        try {
+          while (sim.room.phase === "racing" && ticks < 60 * 120) {
+            const clone = cloneCar(b.car!);
+            sim.tick();
+            ticks++;
+            if (!b.car || sim.room.phase !== "racing") break;
+            const c = ctl as moveBot.BotControls | null;
+            moveW.stepRaceCar(clone, { throttle: c?.throttle ?? 0, steer: c?.steer ?? 0 }, b.stats, moveW.raceEnv(t, sim.room.rt, 0));
+            const keys = ["x", "y", "h", "vx", "vy", "seg", "wreck", "air", "fall", "boost"] as const;
+            if (!keys.every((k) => Object.is(clone[k], b.car![k]))) {
+              mismatch++;
+              if (!first) first = `tick ${ticks}: ${keys.filter((k) => !Object.is(clone[k], b.car![k])).join(",")}`;
+            }
+            if (b.car.air === 0 && moveTune.moveContact(t, b.car, sim.room.rt)) hit++;
+          }
+        } finally {
+          surfServerBots.botTrace.fn = null;
+          moveBot.MOVE.see = true;
+        }
+        contacts += hit;
+        const good = mismatch === 0 && ticks > 60 * 30 && b.progress!.fin > 0;
+        all &&= good;
+        rows.push(`${see ? "seeing" : "blind"} ${level} ${car}: ${ticks} ticks, ${mismatch} mismatches${first ? ` (${first})` : ""}, ${hit} contact ticks`);
+      }
+    }
+    // A lone server bot thrown at a row of barrels (at a tick a barrel crosses its lane), a press as it
+    // comes down and the truck's band slow and fast, and at its side.
+    const sim = new Sim(1);
+    const host = sim.add("Host");
+    if (sim.room.setTrack(host, MOVE_YARD.id)) throw new Error("dev track refused");
+    const b = sim.room.addBot(host, "normal", sim.now) as Player;
+    b.wallet.ammo.rivets = 0;
+    b.wallet.ammo.mines = 0;
+    sim.room.start(host, sim.now);
+    while (sim.room.phase !== "racing") sim.tick();
+    sim.room.retire(host);
+    const t = sim.room.track;
+    let ctl: moveBot.BotControls | null = null;
+    surfServerBots.botTrace.fn = (p, c) => {
+      if (p === b) ctl = c;
+    };
+    let mismatch = 0, hits = 0;
+    try {
+      const tk = t.trucks[0];
+      for (const [s, lat, v, dh] of [[t.barrels[0].s - 40, 30, 300, 0], [t.barrels[1].s - 30, -20, 250, 0.3], [t.presses[0].s - 30, -30, 200, 0], [t.presses[1].s - 10, 30, 100, 0], [tk.s - 30, tk.lat, 150, 0], [tk.s - 30, tk.lat, 350, 0], [tk.s + 30, tk.lat + 40, 200, -0.8]] as const) {
+        const p = pointAt(t, s), h = p.h + dh;
+        b.car = { x: p.x - Math.sin(p.h) * lat, y: p.y + Math.cos(p.h) * lat, h, vx: Math.cos(h) * v, vy: Math.sin(h) * v, seg: p.seg, wreck: 0, air: 0, fall: 0, boost: 0 };
+        moveBot.MOVE.see = false;
+        for (let k = 0; k < 60; k++) {
+          const clone = cloneCar(b.car);
+          sim.tick();
+          const c = ctl as moveBot.BotControls | null;
+          moveW.stepRaceCar(clone, { throttle: c?.throttle ?? 0, steer: c?.steer ?? 0 }, b.stats, moveW.raceEnv(t, sim.room.rt, 0));
+          const keys = ["x", "y", "h", "vx", "vy", "seg", "wreck", "air", "fall", "boost"] as const;
+          if (!keys.every((kk) => Object.is(clone[kk], b.car![kk]))) mismatch++;
+          if (b.car.air === 0 && moveTune.moveContact(t, b.car, sim.room.rt)) hits++;
+        }
+      }
+    } finally {
+      surfServerBots.botTrace.fn = null;
+      moveBot.MOVE.see = true;
+    }
+    all &&= mismatch === 0 && hits > 0;
+    rows.push(`a bot thrown at the barrels, the presses and the truck: ${mismatch} mismatches, ${hits} contact ticks`);
+  });
+  console.log(`  ${rows.join("\n  ")}`);
+  check("move parity: stepRaceCar on a clone at the room's race tick equals the server's pose bit for bit every tick: a lone server bot per level and type over 2 laps of the Move Yard, seeing and blind to the barrels and presses, and one thrown at each", all && contacts > 0, rows.join(" | "));
+  // The client's prediction over the wire, no lag: three socket-bot cars (Sport, Racer, Truck on lines
+  // -24, 0, 24) race 1 lap of the Move Yard at their predicted race tick.
+  const r = withDevTrack(MOVE_YARD.id, () => carsClientLap(MOVE_YARD.id));
+  check(
+    `move parity: three client cars (Sport, Racer, Truck) racing the Move Yard over the wire predict it exactly (barrels and presses at their predicted race tick): no state mismatch, no error > ${LARGE_ERR}`,
+    r.ticks.every((x) => x > 0) && r.stateErrs === 0 && r.large === 0 && r.samples > 500 && r.same,
+    `laps ${r.ticks.map((x) => (x / 60).toFixed(1)).join("/")} s; ${r.samples} samples, ${r.stateErrs} state mismatches, ${r.large} > ${LARGE_ERR}, max ${r.maxErr.toFixed(4)}`,
+  );
+}
+
+/** The bounds on the Move Yard's bot races (moveBots): per bot, weapons off, then on (a mine or a rivet can spin a bot into one). */
+const MOVE_BOUNDS = { off: { barrel: 0, press: 0, truck: 0 }, on: { barrel: 4, press: 4, truck: 4 } };
+
+function moveBots(): void {
+  // Easy, Normal and Hard (Sport, Racer, Truck by add order) race 3 laps of the Move Yard: every bot
+  // finishes with no fall, contacts within MOVE_BOUNDS, identically on a rerun. The bot on the seat whose
+  // line is in the truck's band jumps it every lap, the others go round; with the barrels and presses
+  // unseen (MOVE.see false) they hit them (the baseline the dodging is measured against).
+  const rows: string[] = [];
+  let ok = true;
+  const sum = (a: number[]) => a.reduce((x, y) => x + y, 0);
+  for (const weapons of [false, true]) {
+    const bound = weapons ? MOVE_BOUNDS.on : MOVE_BOUNDS.off;
+    for (const level of ["easy", "normal", "hard"] as BotLevel[]) {
+      const a = moveTune.moveRace([level, level, level], 3, weapons), b = moveTune.moveRace([level, level, level], 3, weapons);
+      const good = a.phase === "results" && a.finish.length === 3 && a.falls.every((x) => x === 0) && a.digest === b.digest &&
+        a.barrels.every((x) => x <= bound.barrel) && a.presses.every((x) => x <= bound.press) && a.trucks.every((x) => x <= bound.truck) &&
+        a.jumps[1] >= 3 && a.jumps[0] === 0 && a.jumps[2] === 0;
+      ok &&= good;
+      rows.push(`${level}${weapons ? " +weapons" : ""}: ${a.finish.join(" ")}, falls ${sum(a.falls)}, barrel ${a.barrels.join("/")} press ${a.presses.join("/")} truck ${a.trucks.join("/")}, jumps ${a.jumps.join("/")}${a.digest === b.digest ? "" : " RERUN DIFFERS"}`);
+    }
+  }
+  const five = moveTune.moveRace(["hard", "normal", "easy", "hard", "normal"], 3, true);
+  const fiveOk = five.phase === "results" && five.finish.length === 5 && five.falls.every((x) => x === 0) && five.digest === moveTune.moveRace(["hard", "normal", "easy", "hard", "normal"], 3, true).digest &&
+    five.barrels.every((x) => x <= MOVE_BOUNDS.on.barrel) && five.presses.every((x) => x <= MOVE_BOUNDS.on.press) && five.trucks.every((x) => x <= MOVE_BOUNDS.on.truck);
+  rows.push(`5 bots +weapons: falls ${sum(five.falls)}, barrel ${five.barrels.join("/")} press ${five.presses.join("/")} truck ${five.trucks.join("/")}, jumps ${five.jumps.join("/")}`);
+  moveBot.MOVE.see = false;
+  let blind: moveTune.MoveRace;
+  try {
+    blind = moveTune.moveRace(["normal", "normal", "normal"], 3, false);
+  } finally {
+    moveBot.MOVE.see = true;
+  }
+  console.log(`  ${rows.join("\n  ")}\n  blind normal: barrel ${blind.barrels.join("/")} press ${blind.presses.join("/")}`);
+  check(
+    `move bots: Easy, Normal and Hard finish 3 laps of the Move Yard with no fall, identically on a rerun; per bot at most ${MOVE_BOUNDS.off.barrel}/${MOVE_BOUNDS.off.press}/${MOVE_BOUNDS.off.truck} barrel/press/truck contact ticks with weapons off, ${MOVE_BOUNDS.on.barrel}/${MOVE_BOUNDS.on.press}/${MOVE_BOUNDS.on.truck} with them on (5 bots too); the seat on the truck's band jumps it every lap, the others go round`,
+    ok && fiveOk,
+    rows.join(" | "),
+  );
+  check("move bots: blind to the barrels and presses (MOVE.see false) Normal bots hit them: the dodging and the timing are what keeps the seeing bots off them", sum(blind.barrels) > 0 && sum(blind.presses) > 0, `barrel ${blind.barrels.join("/")}, press ${blind.presses.join("/")}`);
+  // Wait at a press that leaves no lane (wall to wall): a lone bot stops short of it while it is down and
+  // drives through once it is up, without touching it.
+  const t = moveWith([{ k: "press", s: 3000, lat0: -108, lat1: 108, period: 200, down: 90 }]);
+  const run = (rt0: number) => {
+    const c = surfCar(t, 2400, 0, 380);
+    const mem = moveBot.newBotMem(0, "normal");
+    mem.weapons = false;
+    const env = moveW.raceEnv(t);
+    let touched = 0, stood = 0, passed = -1;
+    for (let i = 0; i < 600 && passed < 0; i++) {
+      env.rt = rt0 + i;
+      const ctl = moveBot.botControls({ car: c, track: t, stats: BASE_STATS, raceOn: true, raceSteps: i, others: [], rt: env.rt }, mem);
+      moveW.stepRaceCar(c, ctl, BASE_STATS, env);
+      if (moveTune.moveContact(t, c, env.rt)) touched++;
+      if (speedOf(c) < 20) stood++;
+      if (splitSL(t, c).s > 3040) passed = env.rt;
+    }
+    return { touched, stood, passed };
+  };
+  const waits = [0, 40, 80, 120, 160].map(run);
+  check(
+    "move bots: at a press across the whole road a bot brakes and waits short of it while it will be down, then drives through: never touching it, from 5 start ticks",
+    waits.every((w) => w.touched === 0 && w.passed > 0) && waits.some((w) => w.stood > 20),
+    waits.map((w) => `stood ${w.stood} ticks, through at rt ${w.passed}, touched ${w.touched}`).join("; "),
+  );
+}
+
+function moveShipped(): void {
+  // The shipped tracks: no barrels, presses or trucks, so nothing about them changes (schema-hash
+  // --check, surfShipped above, holds every part SAME); the preview test tracks still validate with
+  // what moves now solid; the Preview Yard keeps its features (M4-WORLD draws them).
+  const shipped = ["rust-bowl", "crusher-run", "overpass-knot"].map((id) => trackById(id));
+  check(
+    "move shipped: no shipped track has a barrel, a press or a truck; every test track validates and its run-ups work",
+    shipped.every((t) => t.barrels.length + t.presses.length + t.trucks.length === 0) && TEST_TRACKS.every((d) => validateTrack(testTrack(d.id)!).length === 0 && moveW.validateRunUps(testTrack(d.id)!).length === 0),
+  );
+}
+
+function moveCpu(): void {
+  // No scan per tick: barrels, presses and trucks in per-segment buckets. Five server bots (Easy, Normal,
+  // Hard, Normal, Hard), 3 laps of the Move Yard: the median bot step and room tick beside the
+  // M4-SURF-2 numbers (bot step 0.00129 ms, room tick 0.0134 ms on the Split Yard).
+  const r = withDevTrack(MOVE_YARD.id, () => {
+    const sim = new Sim(3);
+    const host = sim.add("Host");
+    sim.room.setTrack(host, MOVE_YARD.id);
+    for (const l of ["easy", "normal", "hard", "normal", "hard"] as BotLevel[]) sim.room.addBot(host, l, sim.now);
+    sim.room.start(host, sim.now);
+    while (sim.room.phase !== "racing") sim.tick();
+    sim.room.retire(host);
+    const tickMs: number[] = [];
+    const steps: number[] = [];
+    botTiming.samples = steps;
+    let ticks = 0;
+    try {
+      while (sim.room.phase === "racing" && ticks < 60 * 300) {
+        sim.tickNo++;
+        sim.now += 1000 / 60;
+        const t0 = performance.now();
+        sim.room.tick(sim.tickNo, sim.now);
+        tickMs.push(performance.now() - t0);
+        ticks++;
+      }
+    } finally {
+      botTiming.samples = null;
+    }
+    return { tickMs, steps, phase: sim.room.phase as string };
+  });
+  const pct = (a: number[], p: number) => [...a].sort((x, y) => x - y)[Math.min(a.length - 1, Math.floor(a.length * p))];
+  const med = pct(r.steps, 0.5), tickMed = pct(r.tickMs, 0.5);
+  console.log(`  CPU (Move Yard): bot step median ${med.toFixed(5)} ms, p99 ${pct(r.steps, 0.99).toFixed(5)} ms over ${r.steps.length} steps; room tick with 5 bots median ${tickMed.toFixed(4)} ms, p99 ${pct(r.tickMs, 0.99).toFixed(4)} ms (M4-SURF-2 on the Split Yard: bot step 0.00129 ms, room tick 0.0134 ms)`);
+  check(
+    "move CPU: on the Move Yard the median bot step stays within the M4-BOTS bound (0.2 ms; target 0.05) and the room tick with 5 bots is printed beside the M4-SURF-2 numbers",
+    r.steps.length > 5 * 3000 && med <= 0.05 && r.phase === "results",
+    `median bot step ${med.toFixed(5)} ms; room tick median ${tickMed.toFixed(4)} ms`,
+  );
+  // stepCar at a barrel row, a press that is down and the truck costs about what a step on a plain track does.
+  const t = moveYard(), g = t.presses[0];
+  const down = moveTickOf(g, moveTrack.PRESS_DOWN);
+  const time = (tr: Track, s: number, lat: number, rt: number) => {
+    const c = surfCar(tr, s, lat, 300);
+    const t0 = performance.now();
+    for (let i = 0; i < 20_000; i++) {
+      const d = { ...c };
+      stepCar(d, { throttle: 1, steer: 0.1 }, BASE_STATS, tr, 0, rt);
+    }
+    return ((performance.now() - t0) / 20_000) * 1000;
+  };
+  const plain = time(trackById("rust-bowl"), 3000, 0, 0), row = time(t, t.barrels[0].s - 20, 0, 30), press = time(t, g.s - 30, -30, down), truck = time(t, t.trucks[0].s + 50, t.trucks[0].lat + 30, 0);
+  console.log(`  stepCar: ${plain.toFixed(3)} us on Rust Bowl, ${row.toFixed(3)} us at a barrel row, ${press.toFixed(3)} us at a press that is down, ${truck.toFixed(3)} us beside the truck`);
+  console.log(`  M4-MOVE sim-test sections' runtime (moveBarrels .. moveDevFlag): ${((performance.now() - moveClock.t0) / 1000).toFixed(1)} s`);
+}
+
+function moveDevFlag(): void {
+  // SCRAP_DEV_TRACK=move-yard: a new room starts on the Move Yard; unset, it is refused as unknown.
+  const on = withDevTrack(MOVE_YARD.id, () => {
+    const rooms = new Rooms(1);
+    const x = { conn: new FakeConn(), room: null, player: null } as Session;
+    rooms.onMessage(x, { t: "create", name: "Ann" }, 1000);
+    return { id: x.room!.trackId, same: x.room!.track === testTrack(MOVE_YARD.id), flag: surfRoom.devTrackId() };
+  });
+  const off = withDevTrack(undefined, () => {
+    const sim = new Sim();
+    const host = sim.add("Host");
+    return sim.room.setTrack(host, MOVE_YARD.id);
+  });
+  check(
+    "move dev flag: SCRAP_DEV_TRACK=move-yard starts a new room on the Move Yard; unset (the default, and on Render) the host cannot pick it",
+    on.id === MOVE_YARD.id && on.same && on.flag === MOVE_YARD.id && off === "Unknown track",
+    `${JSON.stringify(on)}; unset: ${off}`,
+  );
+}
+
+function moveDraw(): void {
+  // Where what moves is drawn (PLAN-M4 section 3): Game.drawTick, the race tick main.ts gives the
+  // renderer (WorldFx.rt), is the race tick the server applies the step that made the drawn own car
+  // at (zero lag, over the wire: every frame of a lap of the Move Yard); a spectator (retired, no car)
+  // gets the latest snapshot's; before the first snapshot there is none (a still picture).
+  const realNow = performance.now.bind(performance);
+  const clock = { now: 1_000_000 };
+  performance.now = () => clock.now;
+  try {
+    const out = withDevTrack(MOVE_YARD.id, () => {
+      const rooms = new Rooms(1);
+      const ws = [wiredGame(rooms, clock), wiredGame(rooms, clock)];
+      const before = ws[0].game.drawTick();
+      ws[0].game.create("Car0");
+      ws[0].open();
+      ws[0].flush();
+      const room = [...rooms.rooms.values()][0];
+      ws[1].game.join(room.code, "Car1");
+      ws[1].open();
+      for (const w of ws) w.flush();
+      ws[1].game.setReady(true);
+      for (const w of ws) w.flush();
+      ws[0].game.start();
+      ws[0].flush();
+      const driver = new BotDriver(ws[1].game, 0);
+      driver.weapons = false;
+      // The server's race tick for each of Car1's inputs (by seq, at the tick it applied it).
+      const truth = new Map<number, number>();
+      const tick = room.tick.bind(room);
+      let last = -1;
+      room.tick = (t: number, now: number) => {
+        tick(t, now);
+        const p = room.players.get(ws[1].game.you);
+        if (p && p.car && p.ack !== last && room.phase === "racing") {
+          last = p.ack;
+          truth.set(p.ack, room.rt);
+        }
+      };
+      const drawn = new Map<number, number | undefined>();
+      let retired = false, spectator = 0, spectatorOk = 0;
+      for (let i = 0; i < 60 * 60 && !room.players.get(ws[1].game.you)?.progress?.fin; i++) {
+        clock.now += 1000 / 60;
+        rooms.step(clock.now);
+        for (const w of ws) w.flush();
+        ws[0].game.step(NO_CONTROLS, 1000 / 60);
+        ws[1].game.step(driver.controls(), 1000 / 60);
+        if (room.phase === "racing") drawn.set(ws[1].game.seq - 1, ws[1].game.drawTick());
+        if (room.phase === "racing" && !retired && room.rt > 30) {
+          ws[0].game.retire();
+          retired = true;
+        }
+        if (retired && !ws[0].game.car && ws[0].game.latest) {
+          spectator++;
+          if (ws[0].game.drawTick() === ws[0].game.latest.rtBase) spectatorOk++;
+        }
+      }
+      let same = 0, n = 0;
+      for (const [seq, rt] of truth) {
+        if (!drawn.has(seq)) continue;
+        n++;
+        if (drawn.get(seq) === rt) same++;
+      }
+      return { before, same, n, spectator, spectatorOk };
+    });
+    check(
+      "move draw: Game.drawTick (WorldFx.rt) is the race tick the server applied the step that made the drawn own car at, every frame of a lap (zero lag); a spectator's is the latest snapshot's; none before a snapshot",
+      out.before === undefined && out.n > 1000 && out.same === out.n && out.spectator > 100 && out.spectatorOk === out.spectator,
+      `${out.same}/${out.n} frames; spectator ${out.spectatorOk}/${out.spectator}`,
+    );
+  } finally {
+    performance.now = realNow;
+  }
+}
+
+function moveReview1(): void {
+  // M4-MOVE review 1 (part 1, dc42d82): its findings' repros, now refused or handled.
+  // F1: a press 18 before an island's nose (Split Yard, island A at s 820) is refused; one beside an island still validates.
+  const split = (features: Feature[]) => validateTrack(buildTrack({ ...SPLIT_YARD, id: "move-r1-split", features: [...SPLIT_YARD.features!, ...features] })).join(" | ");
+  const before = split([{ k: "press", s: 790, lat0: -30, lat1: 30, period: 160, down: 50 }]);
+  const beside = split([{ k: "press", s: 1200, lat0: 22, lat1: 112, period: 160, down: 50 }]);
+  check(
+    "move review F1: a press 18 before an island (Split Yard, island at s 820) is refused (MOVER_CLEAR along the track); one beside an island (sharing its s) still validates",
+    before.includes("press at s=790.0") && before.includes("along the track from island") && beside === "",
+    `before: ${before}; beside: ${beside || "valid"}`,
+  );
+  // F2: Move Yard + a hole r14 at s 760/770/775 (it validates): a car wrecked in the s 800 row's path
+  // respawns off the hole (the recovery point), and does not fall on its next steps.
+  const rows: string[] = [];
+  let f2 = true;
+  for (const hs of [760, 770, 775]) {
+    const t = moveWith([...MOVE_YARD.features!, { k: "hole", s: hs, lat: 0, r: 14 }]);
+    const valid = validateTrack(t).length === 0;
+    const c = surfCar(t, 800, 0, 0);
+    moveW.wreckCar(c);
+    c.wreck = 1;
+    const env = moveW.raceEnv(t);
+    moveW.stepRaceCar(c, movePhys.NO_INPUT, BASE_STATS, env);
+    const at = splitSL(t, c);
+    const over = moveTrack.overHazard(t, c.x, c.y, at.s);
+    let fell = false;
+    for (let i = 0; i < 30; i++) {
+      env.rt = i + 1;
+      if (moveW.stepRaceCar(c, { throttle: 0.3, steer: 0 }, BASE_STATS, env) === "fall") fell = true;
+    }
+    f2 &&= valid && !over && !fell;
+    rows.push(`hole at s ${hs}: valid ${valid}, respawned at s=${at.s.toFixed(1)} lat ${at.lat.toFixed(1)}, over a hazard ${over}, fell ${fell}`);
+  }
+  check("move review F2: with a hole just behind a barrel row (it validates), a car wrecked in the row's path is never put back over the hole (the recovery point instead) and does not fall", f2, rows.join("; "));
+  // F3: a rivet fired from a car riding the truck's band passes the truck (as the car does); one fired from
+  // behind the truck, or from a car nosing into its side, dies on it.
+  const yard = moveYard(), tk = yard.trucks[0];
+  const fire = (s: number, lat: number, dh = 0) => {
+    const c = surfCar(yard, s, lat, 330, dh);
+    const sh = moveW.spawnShot(c, 1, "x");
+    let k = 0;
+    while (k < 60 && moveW.moveShot(sh, yard, 100 + k)) k++;
+    return { k, s: splitSL(yard, sh).s, far: sh.travelled };
+  };
+  const band = [-10, 10, 40, 70].map((d) => fire(tk.s + d, tk.lat)); // a car on the band (rear +d)
+  const behind = fire(tk.s - 80, tk.lat), side = fire(tk.s + 50, tk.lat + moveTrack.TRUCK_HALF + 16, -1.2);
+  // Review 2 (F3-edge): rivets fired from behind straight along the truck's axis, at every lane across
+  // -16..16 (truck frame, step 0.5) and 30 phases (100-115 behind its rear): none passes the truck (before
+  // the fix, ones at |across| 9.5-14 came round the body's round rear corner into the band and passed).
+  const ex = tk.x1 - tk.x0, ey = tk.y1 - tk.y0, el = Math.hypot(ex, ey), tux = ex / el, tuy = ey / el;
+  const rx = tk.x0 - tux * moveTrack.TRUCK_HALF, ry = tk.y0 - tuy * moveTrack.TRUCK_HALF; // the rear's middle
+  let edgePass = 0, edgeRuns = 0;
+  for (let c = -16; c <= 16; c += 0.5) {
+    for (let ph = 0; ph < 15; ph += 0.5) {
+      const back = 100 + ph, x = rx - tux * back - tuy * c, y = ry - tuy * back + tux * c;
+      const sh: moveW.Shot = { id: 1, owner: "x", x, y, vx: tux * 900, vy: tuy * 900, seg: queryTrackNear(yard, x, y, pointAt(yard, tk.s - back).seg).seg, travelled: 0 };
+      let k = 0;
+      while (k < 40 && moveW.moveShot(sh, yard, 100 + k)) k++;
+      edgeRuns++;
+      if ((sh.x - rx) * tux + (sh.y - ry) * tuy > tk.len + 10) edgePass++;
+    }
+  }
+  // A rivet fired back at the truck's front from ahead of it, down the band's lane: dies on the truck.
+  const ahead = (() => {
+    const c = surfCar(yard, tk.s + tk.len + 60, tk.lat, 0, Math.PI);
+    const sh = moveW.spawnShot(c, 1, "x");
+    let k = 0;
+    while (k < 60 && moveW.moveShot(sh, yard, 100 + k)) k++;
+    return { k, s: splitSL(yard, sh).s };
+  })();
+  check(
+    "move review F3: a rivet fired from a car riding the truck's band passes the truck (from rear -10, +10, +40, +70 it flies its range); one fired from 80 behind, from behind at any lane across -16..16 (the round rear corners: review 2), from a car nosing into its side, or back at its front from ahead dies on the truck",
+    band.every((b) => b.s > tk.s + tk.len + 20 && b.far > 300) && behind.k <= 6 && behind.s < tk.s + 15 && side.k <= 2 && ahead.k <= 6 && ahead.s > tk.s + tk.len - 15 &&
+      edgeRuns === 1950 && edgePass === 0,
+    `band: ${band.map((b) => `${b.k} ticks to s=${b.s.toFixed(0)}`).join(", ")}; behind: ${behind.k} ticks to s=${behind.s.toFixed(0)}; side: ${side.k} ticks; back at its front from ahead: ${ahead.k} ticks to s=${ahead.s.toFixed(0)}; from behind at every lane across -16..16 x 30 phases: ${edgePass}/${edgeRuns} pass`,
+  );
+  // F4: a truck whose side leaves a gap to the wall narrower than TRUCK_SIDE_GAP is refused (14, 6, 18);
+  // one reaching the wall, or leaving 24, validates.
+  const truckAt = (lat: number) => validateTrack(moveWith([{ k: "truck", s: 5950, lat, len: 110 }])).join(" | ");
+  const wall = moveYard().wall; // 108 on the plain road there
+  const gaps = [14, 6, 18, 0, 24].map((g) => ({ g, e: truckAt(wall - moveTrack.TRUCK_HALF - g) }));
+  check(
+    `move review F4: a truck side short of the wall by less than ${moveTrack.TRUCK_SIDE_GAP} is refused (gaps 14, 6, 18), one reaching the wall or leaving ${moveTrack.TRUCK_SIDE_GAP} validates`,
+    gaps.slice(0, 3).every((x) => x.e.includes(`leaves a gap of ${x.g}.0`)) && gaps.slice(3).every((x) => x.e === ""),
+    gaps.map((x) => `gap ${x.g}: ${x.e || "valid"}`).join("; "),
+  );
+  // Note (botdrive): the band takes one car at a time. Two bots on lines 24 and 12 (both in the band)
+  // side by side on the approach: the one behind gives the jump up and goes round; with the yield off
+  // (MOVE.truckYield huge) both go for the band.
+  const pair = (yieldOn: boolean) => {
+    const was = moveBot.MOVE.truckYield;
+    if (!yieldOn) moveBot.MOVE.truckYield = 1e9;
+    try {
+      const a = surfCar(yard, tk.s - 480, 24, 400), b = surfCar(yard, tk.s - 515, 12, 400); // 35 apart: not touching at the start
+      const ma = moveBot.newBotMem(24, "normal"), mb = moveBot.newBotMem(12, "normal");
+      ma.weapons = mb.weapons = false;
+      const env = moveW.raceEnv(yard);
+      let jumps = 0, truck = 0, bump = 0;
+      for (let i = 0; i < 150; i++) {
+        env.rt = 500 + i;
+        const view = (c: CarState, o: CarState) => ({ car: c, track: yard, stats: BASE_STATS, raceOn: true, raceSteps: 500 + i, others: [{ x: o.x, y: o.y, solid: o.air === 0, id: "o", vx: o.vx, vy: o.vy }], rt: env.rt });
+        const ca = moveBot.botControls(view(a, b), ma), cb = moveBot.botControls(view(b, a), mb);
+        for (const [c, ctl] of [[a, ca], [b, cb]] as const) if (moveW.stepRaceCar(c, ctl, BASE_STATS, env) === "takeoff") jumps++;
+        if (a.air === 0 && b.air === 0 && collideCars(a, b)) bump++;
+        for (const c of [a, b]) if (c.air === 0 && moveTune.moveContact(yard, c, env.rt) === "truck") truck++;
+      }
+      return { jumps, truck, bump, s: [splitSL(yard, a).s, splitSL(yard, b).s] };
+    } finally {
+      moveBot.MOVE.truckYield = was;
+    }
+  };
+  const on = pair(true), off = pair(false);
+  check(
+    "move review note: two bots whose lines are both in the truck's band arriving together: the one behind gives the jump up and goes round (one take-off, no truck contact, no bump); with the yield off both go for the band",
+    on.jumps === 1 && on.truck === 0 && on.bump === 0 && on.s.every((x) => x > tk.s + tk.len) && off.jumps + off.truck + off.bump > on.jumps,
+    `yield on: ${on.jumps} take-off(s), truck contacts ${on.truck}, bumps ${on.bump}; off: ${off.jumps} take-offs, truck contacts ${off.truck}, bumps ${off.bump}`,
+  );
+  // Note (game.ts): a spectator's drawTick is clamped at 0 in the countdown (the own car's already was).
+  const g = new Game(() => ({ send() {}, close() {}, onOpen() {}, onMessage() {}, onClose() {} }) as unknown as Transport, { get: () => null, set() {} });
+  g.latest = { time: 0, rtBase: -95, rtOpen: true, cars: new Map(), shots: new Map(), mines: [] };
+  const countdown = g.drawTick();
+  g.latest.rtBase = 37;
+  const racing = g.drawTick();
+  check("move review note: a spectator's drawTick is 0 in the countdown (rtBase < 0) and the snapshot's race tick while racing", countdown === 0 && racing === 37, `countdown ${countdown}, racing ${racing}`);
+}
+
+for (const t of [moveBarrels, moveSolids, moveLandings, moveRivets, moveRespawn, moveSweep, moveBuckets, moveParity, moveBots, moveShipped, moveDraw, moveReview1, moveCpu, moveDevFlag]) {
+  console.log(`\n# ${t.name}`);
+  try {
+    t();
+  } catch (e) {
+    check(`${t.name} threw`, false, String(e));
+  }
+}
+
 const failed = checks.filter((c) => !c.ok);
 console.log(`\n${checks.length - failed.length}/${checks.length} checks passed`);
 process.exit(failed.length ? 1 : 0);

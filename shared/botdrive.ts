@@ -21,6 +21,21 @@
 // mounds lock the side the bot is passing them on (MOUNDS, the M4-SURF-1 review's F1), and the lane
 // search looks round the lap past the finish line (F2).
 //
+// What moves and the parked trucks (M4-MOVE, PLAN-M4 2.3-2.4): a row of rolling barrels is a blocker in
+// the lane search where each barrel will be when the bot gets to the row (barrelLat at the race tick it
+// arrives, padded by how long it takes to pass and how sure the arrival is: MOVE), so it takes a gap
+// between them; a crusher press is a blocker across its width when it will be down while the bot
+// passes under it (pressDown over the same window), so it takes the open side, and where no lane is
+// open it brakes and waits short of the press until it will be up. A parked truck: from MOVE.truckLook
+// before its rear the bot decides once (BotMem.truckS) whether it jumps it: when its seat's racing line
+// lies in the band (advisor change 2: by seat; with the server's six lines 12 apart, one or two seats) and
+// no other car is on the band ahead of it or level (bandTaken: the band takes one car at a time, the one
+// behind gives the jump up while the rear is MOVE.truckYield away) and it will arrive in the
+// band at TRUCK_MIN_SPEED + MOVE.truckMargin or faster (a ramp approach: full throttle up the middle of
+// the band, its usual aim point: the band is narrow, a far aim would not bring it in), or else goes round
+// it (a blocker); a jump given up after a bump goes round.
+// The lane round any of them is the lane search's, nearest the seat's racing line (advisor change 2).
+//
 // Levels: Normal is the M3 driver. Easy caps the throttle at EASY_THROTTLE except on a ramp
 // approach (PLAN-M4 advisor change 3: 0.85 alone tops out near 365 u/s, below what the
 // Overpass Knot crossing needs), takes bends at EASY_CORNER of Normal's speed and never shoots.
@@ -48,7 +63,30 @@
 
 import { CARS, DEFAULT_CAR, type CarType } from "./cars";
 import { angleDiff, CAR_LENGTH, CAR_RADIUS, CAR_WIDTH, clamp, DT, speedOf, type CarState, type CarStats } from "./physics";
-import { halfOf, halfOn, islandAt, ISLAND_NOSE, LIP_ZONE, pointAt, queryTrackNear, SURF_DIRT, SURF_WATER, wallOf, type PlacedIsland, type Ramp, type Surface, type Track } from "./track";
+import {
+  BARREL_R,
+  barrelLat,
+  halfOf,
+  halfOn,
+  islandAt,
+  ISLAND_NOSE,
+  LIP_ZONE,
+  pointAt,
+  PRESS_DEPTH,
+  pressDown,
+  queryTrackNear,
+  SURF_DIRT,
+  SURF_WATER,
+  TRUCK_BAND,
+  TRUCK_HALF,
+  TRUCK_MIN_SPEED,
+  wallOf,
+  type PlacedIsland,
+  type PlacedTruck,
+  type Ramp,
+  type Surface,
+  type Track,
+} from "./track";
 import { airTicksFor, MIN_TAKEOFF_SPEED, MINE_ARM_TICKS, RIVET_RADIUS, RIVET_RANGE, RIVET_SPEED, WEAPONS_ARM_MS } from "./weapons";
 
 export type BotLevel = "easy" | "normal" | "hard";
@@ -226,6 +264,9 @@ export interface BotMem {
   islandSide: number;
   /** ... and steps left with the nose's back-off off (SPLIT.cool). */
   islandCool: number;
+  /** M4-MOVE: the truck (its s) it has decided about on this approach (-1: none), and whether it jumps it. */
+  truckS: number;
+  truckJump: boolean;
 }
 
 /**
@@ -233,7 +274,10 @@ export interface BotMem {
  * lane); server seats pass one by seat so two bots on mirrored lanes do not drop together.
  */
 export function newBotMem(lateral: number, level: BotLevel = "normal", mineOffset = Math.round(Math.abs(lateral) * 7) % 480): BotMem {
-  return { level, lateral, weapons: level !== "easy", mineOffset, slow: 0, reversing: 0, backup: null, backedUpFor: -1, useWake: level !== "easy", wake: null, wakeRest: 0, lastMine: -Infinity, islandBack: 0, islandKind: 0, islandSide: 0, islandCool: 0 };
+  return {
+    level, lateral, weapons: level !== "easy", mineOffset, slow: 0, reversing: 0, backup: null, backedUpFor: -1, useWake: level !== "easy", wake: null, wakeRest: 0, lastMine: -Infinity,
+    islandBack: 0, islandKind: 0, islandSide: 0, islandCool: 0, truckS: -1, truckJump: false,
+  };
 }
 
 /** Forget the race (between races): the settings stay. */
@@ -249,6 +293,8 @@ export function resetBotMem(mem: BotMem): void {
   mem.islandKind = 0;
   mem.islandSide = 0;
   mem.islandCool = 0;
+  mem.truckS = -1;
+  mem.truckJump = false;
 }
 
 /** Distance from `from` forward to `to` along the track, in [0, length). */
@@ -374,8 +420,8 @@ export function laneCost(kind: number, stats: CarStats): number {
   return 0;
 }
 
-/** A blocked spot ahead: a hole or a tyre mound (lateral offset, radius), d = how far until it is behind the car. */
-interface Blocker {
+/** A blocked spot ahead: a hole or a tyre mound (lateral offset, radius), d = how far until it is behind the car (M4-MOVE: a barrel, a press, a truck: moverBlockers). */
+export interface Blocker {
   lat: number;
   r: number;
   d: number;
@@ -394,6 +440,7 @@ interface Blocker {
  */
 export function laneFor(
   track: Track, s: number, seg: number, look: number, pref: number, racing: number, stats: CarStats, span: SplitSpan | null = null, lat = pref,
+  extra: readonly Blocker[] | null = null, nExtra = extra ? extra.length : 0,
 ): { lane: number; holes: number; dodge: boolean } {
   const tyres = track.tyres, surfaces = track.surfaces;
   const L = track.length;
@@ -442,11 +489,12 @@ export function laneFor(
       if (len > 0 && cost > 0) (spans ??= []).push({ lat0: f.lat0 - SURFACE_MARGIN, lat1: f.lat1 + SURFACE_MARGIN, len, cost });
     }
   }
-  if (!mounds && !spans && !span && !held) return { ...holeLane(track, s, look, pref), dodge: false };
+  if (!mounds && !spans && !span && !held && nExtra === 0) return { ...holeLane(track, s, look, pref), dodge: false };
   const near: Blocker[] = track.holes
     .map((h) => ({ lat: h.lat, r: h.r, d: ahead(track, s - h.r - 30, h.s) - h.r - 30 }))
     .filter((x) => x.d < look);
   if (mounds) near.push(...mounds);
+  for (let i = 0; i < nExtra; i++) near.push(extra![i]); // M4-MOVE: barrels, presses and a truck to go round (moverBlockers)
   near.sort((a, b) => a.d - b.d);
   // On the asphalt; with a blocker ahead the verge too (costed as the dirt it is), so a car on the
   // outside of a mound goes round it there rather than back across it. In a split (span): inside
@@ -633,6 +681,167 @@ export function splitFor(track: Track, s: number, seg: number, lat: number, look
     return { lo, hi, racing, side, isle };
   }
   return null;
+}
+
+// ---- what moves and the parked trucks (M4-MOVE, see the top of this file) -------------------
+
+/** M4-MOVE's bot settings. An object so a tuner can sweep it; the game never changes it. */
+export const MOVE = {
+  /** From this far before a truck's rear the bot decides whether it jumps it ... */
+  truckLook: 520,
+  /** ... when it will reach the lip at TRUCK_MIN_SPEED + this or faster (full throttle from its speed now); it gives the jump up below half this margin. */
+  truckMargin: 50,
+  /** Going round a truck, from this far before its rear on it keeps the side it is on. */
+  truckSide: 40,
+  /** A jump is given up for the lane round the truck when its band is taken (bandTaken) and the rear is still this far ahead. */
+  truckYield: 80,
+  /** A barrel's or a press's crossing window is padded by this many ticks either side ... */
+  padTicks: 3,
+  /** ... plus this share of the ticks until the bot gets there (its arrival is less sure further out). */
+  padShare: 0.1,
+  /** Waiting for a press that leaves no open lane: stop with the car's nose this far short of it. */
+  pressStop: 14,
+  /** false: the bots do not see the barrels and the presses (the tuner's baseline, tools/debug/move-tune.ts --blind). */
+  see: true,
+};
+
+/** The slowest along-track speed the bots time a barrel or a press by (a car standing still gets going). */
+const MOVE_V_MIN = 100;
+
+/** truckAhead's answer (one object, refilled: no allocation a step). */
+const TRUCK_AHEAD: { t: PlacedTruck; toRear: number } = { t: null as unknown as PlacedTruck, toRear: 0 };
+
+/** The next truck at most `look` ahead of s that the car is not yet past (from trucksFrom), with how far ahead its rear is (< 0 alongside); valid until the next call. */
+function truckAhead(track: Track, s: number, seg: number, look: number): { t: PlacedTruck; toRear: number } | null {
+  const list = track.trucks, n = list.length;
+  if (n === 0) return null;
+  const L = track.length;
+  const k0 = track.trucksFrom[seg] ?? n;
+  for (let j = 0; j < n; j++) {
+    const t = list[(k0 + j) % n];
+    let d = t.s - s;
+    if (d < -L / 2) d += L;
+    else if (d >= L / 2) d -= L;
+    if (d + t.len + CAR_LENGTH / 2 < 0) continue; // past it
+    if (d > look) break; // in order round the lap: the rest are further
+    TRUCK_AHEAD.t = t;
+    TRUCK_AHEAD.toRear = d;
+    return TRUCK_AHEAD;
+  }
+  return null;
+}
+
+/**
+ * Is truck t's ramp band taken for a bot at c: another solid car within the band's width (plus half a
+ * car) in the truck's own frame, along it from level with the bot to the end of the take-off zone, and
+ * no further ahead of the bot than the band is long (it will still be on it when the bot gets there)?
+ * The one behind yields (level: both). Others without an id are not cars (BotOther: every car has one).
+ */
+function bandTaken(t: PlacedTruck, c: CarState, others: readonly BotOther[]): boolean {
+  const ex = t.x1 - t.x0, ey = t.y1 - t.y0;
+  const l = Math.sqrt(ex * ex + ey * ey) || 1;
+  const ux = ex / l, uy = ey / l;
+  const rx = t.x0 - ux * TRUCK_HALF, ry = t.y0 - uy * TRUCK_HALF; // the rear's middle
+  const self = (c.x - rx) * ux + (c.y - ry) * uy;
+  for (let i = 0; i < others.length; i++) {
+    const o = others[i];
+    if (!o.solid) continue;
+    const along = (o.x - rx) * ux + (o.y - ry) * uy, across = -(o.x - rx) * uy + (o.y - ry) * ux;
+    if (across < -TRUCK_BAND - CAR_WIDTH / 2 || across > TRUCK_BAND + CAR_WIDTH / 2) continue;
+    if (along >= self && along <= t.len + LIP_ZONE && along - self <= t.len + TRUCK_YIELD_REACH) return true;
+  }
+  return false;
+}
+
+/** bandTaken: how much further than the band is long a car ahead still counts (the lead before the rear, a tick's travel). */
+const TRUCK_YIELD_REACH = 40;
+
+/** The ticks from now (lo .. hi) in which a car `d` ahead of something at along-track speed vf is within `reach` of it, padded (MOVE); into WIN (one object, refilled). */
+const WIN = { lo: 0, hi: 0 };
+function crossWindow(d: number, vf: number, reach: number): void {
+  const v = Math.max(vf, MOVE_V_MIN);
+  const eta = (d / v) * 60;
+  const half = (reach / v) * 60 + MOVE.padTicks + MOVE.padShare * Math.max(0, eta);
+  WIN.lo = Math.floor(eta - half);
+  WIN.hi = Math.ceil(eta + half);
+}
+
+/** The nearest press ahead that will be down while the bot passes it (moverBlockers): how far ahead its centre is (-1 none), its width. */
+const HOLD = { d: -1, lat0: 0, lat1: 0 };
+/** moverBlockers' blockers, kept from step to step (count: MOVER_N). */
+export const MOVERS: Blocker[] = [];
+let MOVER_N = 0;
+function mover(lat: number, r: number, d: number): void {
+  const b = MOVERS[MOVER_N] ?? (MOVERS[MOVER_N] = { lat: 0, r: 0, d: 0 });
+  b.lat = lat;
+  b.r = r;
+  b.d = d;
+  MOVER_N++;
+}
+
+/**
+ * The blockers what moves puts in the bot's lane search (see the top of this file), into MOVERS (kept
+ * from step to step, its first MOVER_N count; no allocation a step), at race tick rt
+ * for a car at s on segment seg moving vf along the track, within `look`: per barrel each run of ticks
+ * it is on the road in the window the bot passes its row, as the lateral range it rolls over then (plus
+ * BARREL_R); per press that will be down at any tick of the window the bot passes under it, its width
+ * (and the nearest such press in HOLD); `round`: a truck the bot goes round (its body's width). Returns
+ * how many (0 = none: laneFor as before).
+ */
+export function moverBlockers(track: Track, s: number, seg: number, vf: number, look: number, rt: number, round: { t: PlacedTruck; toRear: number } | null): number {
+  MOVER_N = 0;
+  HOLD.d = -1;
+  const L = track.length;
+  const rows = track.barrels, nB = MOVE.see ? rows.length : 0;
+  if (nB > 0) {
+    const k0 = track.barrelsFrom[seg] ?? nB;
+    for (let j = 0; j < nB; j++) {
+      const b = rows[(k0 + j) % nB];
+      let d = b.s - s;
+      if (d < -L / 2) d += L;
+      else if (d >= L / 2) d -= L;
+      if (d < -(BARREL_R + CAR_LENGTH / 2 + 2)) continue; // behind the car
+      if (d > look) break;
+      crossWindow(d, vf, BARREL_R + CAR_LENGTH / 2 + 4);
+      for (let k = 0; k < b.n; k++) {
+        let first = NaN, last = NaN;
+        for (let w = WIN.lo; w <= WIN.hi + 1; w++) {
+          const lat = w <= WIN.hi ? barrelLat(b, k, rt + w) : NaN;
+          if (lat === lat) {
+            if (first !== first) first = lat;
+            last = lat;
+          } else if (first === first) {
+            mover((first + last) / 2, Math.abs(last - first) / 2 + BARREL_R, d); // a run on the road
+            first = NaN;
+          }
+        }
+      }
+    }
+  }
+  const gates = track.presses, nP = MOVE.see ? gates.length : 0;
+  if (nP > 0) {
+    const k0 = track.pressesFrom[seg] ?? nP;
+    for (let j = 0; j < nP; j++) {
+      const g = gates[(k0 + j) % nP];
+      let d = g.s - s;
+      if (d < -L / 2) d += L;
+      else if (d >= L / 2) d -= L;
+      if (d < -(PRESS_DEPTH / 2 + CAR_LENGTH / 2 + 2)) continue;
+      if (d > look) break;
+      crossWindow(d, vf, PRESS_DEPTH / 2 + CAR_LENGTH / 2 + 4);
+      let down = false;
+      for (let w = WIN.lo; w <= WIN.hi && !down; w++) down = pressDown(g, rt + w);
+      if (!down) continue;
+      mover((g.lat0 + g.lat1) / 2, (g.lat1 - g.lat0) / 2, d);
+      if (HOLD.d < 0 || d < HOLD.d) {
+        HOLD.d = d;
+        HOLD.lat0 = g.lat0;
+        HOLD.lat1 = g.lat1;
+      }
+    }
+  }
+  if (round) mover(round.t.lat, TRUCK_HALF, round.toRear);
+  return MOVER_N;
 }
 
 /** The next ramp whose lip is at most `range` ahead of s (or that s is on), with its distance. */
@@ -918,12 +1127,36 @@ export function botControls(view: BotView, mem: BotMem): BotControls {
   // Split lanes (M4-SURF part 2): an island ahead or beside it: the lane it takes round it (null on a plain track).
   const split = splitFor(track, q.s, q.seg, lat, SPLIT.look + v * SPLIT.lookPerSpeed, mem.lateral, view.stats);
   const pref = split ? clamp(lat, split.racing - 24, split.racing + 24) : clamp(lat, mem.lateral - 24, mem.lateral + 24);
-  const hole = laneFor(track, q.s, q.seg, 140 + v * 0.6, pref, mem.lateral, view.stats, split, lat);
+  // M4-MOVE: the next truck: jump it (decided once per approach) or go round it; the barrels and the
+  // presses ahead as blockers at the race tick the bot gets to them (none on a track without them).
+  const tk = truckAhead(track, q.s, q.seg, MOVE.truckLook);
+  let jump: PlacedTruck | null = null;
+  if (tk) {
+    const toLip = tk.toRear + (tk.t.lip - tk.t.s);
+    const arrive = toLip > 0 ? speedAfter(Math.max(0, vf), toLip, view.stats) : vf;
+    if (mem.truckS !== tk.t.s) {
+      // Its seat's line in the band (advisor change 2: by seat; two seats can qualify, bandTaken below keeps them apart), fast enough.
+      mem.truckS = tk.t.s;
+      mem.truckJump = Math.abs(mem.lateral - tk.t.lat) <= TRUCK_BAND && arrive >= TRUCK_MIN_SPEED + MOVE.truckMargin;
+    } else if (mem.truckJump && tk.toRear > CAR_LENGTH && arrive < TRUCK_MIN_SPEED + MOVE.truckMargin / 2) mem.truckJump = false; // slowed: round it
+    // The band takes one car: another car on it (or lined up for it) ahead or level gives the jump up while there is room to go round.
+    if (mem.truckJump && tk.toRear > MOVE.truckYield && bandTaken(tk.t, c, view.others)) mem.truckJump = false;
+    if (mem.truckJump) jump = tk.t;
+  } else mem.truckS = -1;
+  const laneLook = 140 + v * 0.6;
+  const movers = (MOVE.see ? track.barrels.length + track.presses.length : 0) + track.trucks.length > 0 ? moverBlockers(track, q.s, q.seg, vf, laneLook, view.rt ?? 0, tk && !jump ? tk : null) : 0;
+  const hole = laneFor(track, q.s, q.seg, laneLook, pref, mem.lateral, view.stats, split, lat, movers > 0 ? MOVERS : null, movers);
   let lane = hole.holes || hole.dodge ? hole.lane : mem.lateral;
+  if (jump) lane = jump.lat; // up the middle of its band
+  else if (tk && tk.toRear < MOVE.truckSide) {
+    // Going round it, at it or beside it: keep the side the car is on (as the mounds' side locks), never across it.
+    const clear = TRUCK_HALF + HOLE_CLEARANCE;
+    lane = lat >= tk.t.lat ? Math.max(lane, tk.t.lat + clear) : Math.min(lane, tk.t.lat - clear);
+  }
   let look = hole.holes ? 40 + v * 0.25 : 55 + v * 0.3;
   if (hard) look *= HARD.aimLook;
 
-  // A ramp coming up: full throttle, straight at it.
+  // A ramp coming up: full throttle, straight at it (a truck jumped: as a ramp, below).
   const ramp = rampAhead(track, q.s, RAMP_APPROACH);
   if (!ramp) mem.backedUpFor = -1;
   const near = pointAt(track, q.s + 20).h;
@@ -934,7 +1167,7 @@ export function botControls(view: BotView, mem: BotMem): BotControls {
   // The slipstream: follow a car ahead on a straight, then pass it (Normal only).
   let coast = false;
   if (mem.wakeRest > 0) mem.wakeRest--;
-  if (mem.useWake && !easy && view.raceOn && !hole.holes && !hole.dodge && !ramp && !mem.backup && mem.reversing === 0) {
+  if (mem.useWake && !easy && view.raceOn && !hole.holes && !hole.dodge && !ramp && !jump && !mem.backup && mem.reversing === 0) {
     const w = wakeLane(view, mem, c, p.x, p.y, dir, bend, track.def.halfWidth - CAR_WIDTH / 2 - 2);
     if (w) {
       lane = w.lane;
@@ -943,7 +1176,7 @@ export function botControls(view: BotView, mem: BotMem): BotControls {
   } else mem.wake = null;
   // A cell close to its lane (Normal): steer to it; it beats the slipstream.
   let cell = false;
-  if (!easy && view.raceOn && view.cells && !hole.holes) {
+  if (!easy && view.raceOn && view.cells && !hole.holes && !jump) {
     const cl = cellLane(view, q.s, lane, ramp ? ramp.toLip : -1, track.def.halfWidth - CAR_WIDTH / 2 - 2, hard ? HARD.cellLane : CELL_LANE);
     if (cl !== null) {
       lane = cl;
@@ -954,7 +1187,7 @@ export function botControls(view: BotView, mem: BotMem): BotControls {
   }
   // Hard's apex bias: only on its own racing line (a hole lane, a ramp, the slipstream and a cell
   // come first), towards the inside of the bend ahead, never onto a mine. mem.lateral stays.
-  if (hard && HARD.apex > 0 && !hole.holes && !hole.dodge && !ramp && !mem.wake && !cell && view.raceOn && bend > HARD.apexFrom) {
+  if (hard && HARD.apex > 0 && !hole.holes && !hole.dodge && !ramp && !jump && !mem.wake && !cell && view.raceOn && bend > HARD.apexFrom) {
     const apex = apexLane(mem.lateral, turn, track.def.halfWidth);
     if (apexMineFree(view, c, q.s, mem.lateral, apex)) lane = apex;
   }
@@ -975,12 +1208,24 @@ export function botControls(view: BotView, mem: BotMem): BotControls {
   if (scale !== 1) target *= scale;
   if (easy) target *= EASY_CORNER;
   if (hard) target *= HARD.corner;
-  if (hole.holes) target = Math.min(target, HOLE_SPEED);
+  // Among holes and mounds: slow enough to weave. What moves and the trucks only steer the lane (M4-MOVE).
+  if (hole.holes > movers) target = Math.min(target, HOLE_SPEED);
   let throttle = v > target + (hard ? HARD.brakeBand : 25) ? -1 : v > target ? 0 : 1;
   // No ramming; never on a ramp approach (the jump needs the speed: a bump costs less than a fall).
-  if (!ramp && (coast || (mem.useWake && !easy && closingOnCar(view, c, dir))) && throttle > 0) throttle = 0;
-  if (ramp) throttle = 1; // Easy too: the cap would leave it short of some jumps
+  if (!ramp && !jump && (coast || (mem.useWake && !easy && closingOnCar(view, c, dir))) && throttle > 0) throttle = 0;
+  if (ramp || jump) throttle = 1; // Easy too: the cap would leave it short of some jumps (a truck's: the band would be solid)
   else if (easy && throttle > EASY_THROTTLE) throttle = EASY_THROTTLE;
+  // A press that will be down as the bot gets there, across its lane (no open one in reach): brake and
+  // wait short of it until it will be up (M4-MOVE).
+  let waiting = false;
+  if (movers > 0 && HOLD.d >= 0 && lane > HOLD.lat0 - HOLE_CLEARANCE && lane < HOLD.lat1 + HOLE_CLEARANCE) {
+    const toFace = HOLD.d - PRESS_DEPTH / 2 - CAR_LENGTH / 2 - MOVE.pressStop;
+    const stop = (Math.max(0, vf) ** 2) / (2 * 900); // stepCar's BRAKE
+    if (toFace < stop + 6) {
+      throttle = vf > 0 ? -1 : 0;
+      waiting = true;
+    } else if (toFace < stop + 90 && throttle > 0) throttle = 0;
+  }
   // About to roll into a hole on the current heading (spun, bumped)? Brake while turning away.
   if (hole.holes && v > 150 && headingIntoHole(track, c.x, c.y, c.vx, c.vy, q.s)) throttle = -1;
 
@@ -1047,8 +1292,8 @@ export function botControls(view: BotView, mem: BotMem): BotControls {
     mem.islandCool = 0;
   }
 
-  // Spun into a wall after a mine: back out for a moment.
-  if (view.raceOn && v < 20) mem.slow++;
+  // Spun into a wall after a mine: back out for a moment (not while waiting for a press).
+  if (view.raceOn && v < 20 && !waiting) mem.slow++;
   else mem.slow = 0;
   if (mem.slow > 90) {
     mem.reversing = 50;

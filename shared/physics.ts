@@ -4,17 +4,27 @@
 
 import { BOOST_ACCEL, BOOST_TOP, DRAFT_DRAG_CUT } from "./catchup";
 import {
+  BARREL_R,
+  barrelLat,
   halfOf,
   ISLAND_NOSE,
   ISLAND_NOSE_ROUND,
+  LIP_ZONE,
+  PRESS_DEPTH,
+  pressDown,
   queryTrackNear,
   segDir,
   SURF_BELT,
   SURF_DIRT,
   SURF_WATER,
   surfaceAt,
+  TRUCK_HALF,
+  TRUCK_MIN_SPEED,
   wallOf,
+  type PlacedBarrels,
   type PlacedIsland,
+  type PlacedPress,
+  type PlacedTruck,
   type PlacedTyres,
   type Track,
   type TrackQuery,
@@ -106,6 +116,48 @@ export const TYRES_RESTITUTION = 0.8;
 export const TYRES_MIN_OUT = 90;
 export const TYRES_TANGENT = 0.9;
 
+// What moves and the parked trucks (M4-MOVE, PLAN-M4.md 2.3, 2.4 and advisor changes 5 and 6). Only a
+// driving step collides (an airborne car passes over everything; a landing on one is resolved by
+// the next driving step, below), no damage, and each from the shared pure functions of the race tick
+// the step runs at (shared/track.ts barrelLat, pressState), so the server, the client's prediction
+// and the renderer agree. In the order of the step: tyre mounds, barrels, presses, trucks, then the
+// walls and islands (collideWalls), then the squeeze (below).
+// - A rolling barrel: a kinematic circle of radius BARREL_R at barrelLat(rt) (none while it is in the
+//   gutter), moving across the road at its speed. Against the car's capsule: pushed fully out (as a
+//   tyre mound), and the car's speed into it relative to the barrel comes back out x
+//   BARREL_RESTITUTION, so the barrel's own velocity is added to a car it rolls into. A barrel is
+//   never pushed. No yaw kick (advisor change 6: a level-triggered one spins up a pinned car, and the
+//   plan's 0.4 rad would need stored per-contact state in CarState): the heading is never changed.
+// - Squeezed between a barrel and a wall (the barrel rolls into a car against it): after the walls,
+//   a car still overlapping a barrel is pushed along the road at the row (the row's heading), out to
+//   the side of the row its centre is on, by exactly the overlap (a bisection, as carContact's), and
+//   its speed along the road into the row comes back out x BARREL_RESTITUTION. The barrel's lateral
+//   speed is never added along the road, so the speed never grows; the car never passes through.
+//   Validation keeps other solids MOVER_CLEAR along the track from a row (shared/track.ts), so the
+//   wall is the only thing a car is squeezed against.
+// - A crusher press while it is down (pressDown(rt)): a solid box PRESS_DEPTH along the road at its s
+//   by lat0..lat1 across it, in the frame of its centreline point. Against the capsule: pushed out
+//   along the line between their closest points, with the wall's bounce (WALL_BOUNCE, WALL_SCRAPE).
+//   Coming down on a car (the capsule's axis inside the box, or its centre): pushed along the road to
+//   the nearer of the press's two open sides (in front or behind: the one needing the shorter move,
+//   behind on a tie), all the way out, with the same bounce. Never trapped inside. Up: nothing.
+// - A parked truck: its body is a solid capsule (axis x0, y0 .. x1, y1, radius TRUCK_HALF), against the
+//   car's capsule with the wall's bounce; a side hit is pushed out sideways (the closest points' line);
+//   a car whose axis crosses the truck's is pushed across the truck's axis to the side its centre is on.
+//   Its ramp band: a car whose centre at the start of the tick is in the band (truckRamp: lat in
+//   band0..band1, s from TRUCK_RAMP_LEAD before the rear to the end of the take-off zone) moving
+//   forward at TRUCK_MIN_SPEED or more rides up it, and the body does not touch it; stepRaceCar takes
+//   it off in the take-off zone (truckLipAt). Slower, the band is as solid as the rest of the body.
+export const BARREL_RESTITUTION = 0.5;
+/**
+ * From this far before a truck's rear (start-of-tick centre) a car in its band is on the ramp: a car
+ * capsule's reach ahead of its centre (CAPSULE_HALF + CAPSULE_R = 15.5) plus a tick's travel (~9 at
+ * 537 u/s), so the body never touches a car arriving in the band fast enough.
+ */
+export const TRUCK_RAMP_LEAD = 25;
+/** A squeeze is an overlap deeper than this left after the walls (an exact touch, to rounding, is not one). */
+const SQUEEZE_EPS = 1e-6;
+
 export function cloneCar(c: CarState): CarState {
   return { x: c.x, y: c.y, h: c.h, vx: c.vx, vy: c.vy, seg: c.seg, wreck: c.wreck, air: c.air, fall: c.fall, boost: c.boost };
 }
@@ -120,7 +172,7 @@ export function speedOf(c: { vx: number; vy: number }): number {
  * faster behind another; 0 = alone (exactly the step without it). Boosted (c.boost > 0): the
  * acceleration times BOOST_ACCEL and the top speed times BOOST_TOP, and no slipstream on top.
  */
-export function stepCar(c: CarState, input: Input, stats: CarStats, track: Track, draft = 0): void {
+export function stepCar(c: CarState, input: Input, stats: CarStats, track: Track, draft = 0, rt = 0): void {
   const throttle = clamp(input.throttle, -1, 1);
   const steer = clamp(input.steer, -1, 1);
   const cos = Math.cos(c.h), sin = Math.sin(c.h);
@@ -131,6 +183,10 @@ export function stepCar(c: CarState, input: Input, stats: CarStats, track: Track
 
   const q = queryTrackNear(track, c.x, c.y, c.seg);
   c.seg = q.seg;
+  // M4-MOVE: what moves and the trucks near the car (empty lists on a track without any), and the
+  // truck whose ramp it rides this tick (by the start-of-tick pose, as stepRaceCar's take-off).
+  const rows = track.barrelsAt[q.seg], gates = track.pressesAt[q.seg], trucks = track.trucksAt[q.seg];
+  const riding = trucks !== undefined && trucks.length > 0 ? truckRamp(track, trucks, q, c.vx, c.vy) : null;
   // The surface under the car's centre (M4-SURF; null on a track without any: exactly as before).
   const surf = surfaceAt(track, q.seg, q.s, q.lat);
   const wet = surf !== null && surf.kind === SURF_WATER;
@@ -170,8 +226,309 @@ export function stepCar(c: CarState, input: Input, stats: CarStats, track: Track
   }
   const tyres = track.tyresAt[q.seg];
   if (tyres !== undefined && tyres.length > 0) collideTyres(c, tyres);
+  if (rows !== undefined && rows.length > 0) collideBarrels(c, rows, rt);
+  if (gates !== undefined && gates.length > 0) collidePresses(c, gates, rt);
+  if (trucks !== undefined && trucks.length > 0) collideTrucks(c, trucks, riding);
 
   collideWalls(c, track);
+  if (rows !== undefined && rows.length > 0) squeezeBarrels(c, rows, rt);
+}
+
+/**
+ * The truck among `trucks` whose ramp a car rides this tick (see above): its centre at the query
+ * (start of the tick) in the band (lat band0..band1, s from TRUCK_RAMP_LEAD before the rear to the
+ * end of the take-off zone, lip + LIP_ZONE) and its velocity (vx, vy) along the road at the query's
+ * segment TRUCK_MIN_SPEED or more. null if none.
+ */
+export function truckRamp(track: Track, trucks: readonly PlacedTruck[], q: TrackQuery, vx: number, vy: number): PlacedTruck | null {
+  const lat = q.lat;
+  for (let i = 0; i < trucks.length; i++) {
+    const t = trucks[i];
+    if (lat < t.band0 || lat > t.band1 || q.s < t.s - TRUCK_RAMP_LEAD || q.s >= t.lip + LIP_ZONE) continue;
+    const a = track.pts[q.seg], b = track.pts[q.seg + 1 < track.pts.length ? q.seg + 1 : 0];
+    const ex = b.x - a.x, ey = b.y - a.y;
+    const l = Math.sqrt(ex * ex + ey * ey) || 1;
+    if ((vx * ex + vy * ey) / l >= TRUCK_MIN_SPEED) return t;
+  }
+  return null;
+}
+
+/**
+ * Scratch numbers the contact helpers hand back (no allocation a call: a module-level `let` holding a
+ * fraction is a fresh heap number at every store, a typed array's element is not).
+ * BXY: where barrelAt put the barrel (x, y); BOX: segToBox's closest points (PA, PL on the car's axis,
+ * KA, KL on the box, in the box's frame); AXS: axisToSegment's (CX, CY on the car's axis, QX, QY on the segment).
+ */
+const BXY = new Float64Array(2), BOX = new Float64Array(4), AXS = new Float64Array(4);
+
+/** Where barrel k of row b is at race tick rt (world), into BXY; false while it is in the gutter. */
+function barrelAt(b: PlacedBarrels, k: number, rt: number): boolean {
+  const lat = barrelLat(b, k, rt);
+  if (lat !== lat) return false; // NaN: in the gutter
+  BXY[0] = b.x + b.nx * lat;
+  BXY[1] = b.y + b.ny * lat;
+  return true;
+}
+
+/**
+ * Bounce a driving car's capsule off the barrels it overlaps at race tick rt (see above): pushed
+ * straight out (the closest point of its axis to the barrel's centre, the normal from the centre to
+ * it), the speed into it relative to the barrel (rolling at b.speed along the row's right normal)
+ * reflected x BARREL_RESTITUTION. Returns the fastest speed into a barrel (0 = no contact).
+ */
+export function collideBarrels(c: CarState, rows: readonly PlacedBarrels[], rt: number): number {
+  let hit = 0;
+  const reach = BARREL_R + CAPSULE_R;
+  for (let i = 0; i < rows.length; i++) {
+    const b = rows[i];
+    for (let k = 0; k < b.n; k++) {
+      if (!barrelAt(b, k, rt)) continue;
+      const BX = BXY[0], BY = BXY[1];
+      const ux = Math.cos(c.h), uy = Math.sin(c.h);
+      const dx = BX - c.x, dy = BY - c.y;
+      if (dx * dx + dy * dy >= (reach + CAPSULE_HALF) * (reach + CAPSULE_HALF)) continue;
+      const t = clamp(dx * ux + dy * uy, -CAPSULE_HALF, CAPSULE_HALF);
+      let nx = c.x + ux * t - BX, ny = c.y + uy * t - BY; // from the barrel to the car's axis
+      const d = Math.sqrt(nx * nx + ny * ny); // not Math.hypot, which makes garbage a call (M4-MOVE: none here)
+      if (d >= reach) continue;
+      if (d > 1e-6) {
+        nx /= d;
+        ny /= d;
+      } else {
+        // The barrel's centre on the car's axis (a landing): out from the centre, or sideways (left) on it.
+        const dc = Math.sqrt(dx * dx + dy * dy);
+        nx = dc > 1e-6 ? -dx / dc : uy;
+        ny = dc > 1e-6 ? -dy / dc : -ux;
+      }
+      c.x += nx * (reach - d);
+      c.y += ny * (reach - d);
+      const vn = (c.vx - b.nx * b.speed) * nx + (c.vy - b.ny * b.speed) * ny; // relative to the barrel
+      if (vn < 0) {
+        c.vx -= (1 + BARREL_RESTITUTION) * vn * nx;
+        c.vy -= (1 + BARREL_RESTITUTION) * vn * ny;
+        if (-vn > hit) hit = -vn;
+      }
+    }
+  }
+  return hit;
+}
+
+/**
+ * axisToSegment for a truck's body axis (into AXS: the closest points on the car's axis and on the
+ * truck's), its distance by Math.sqrt: the same closest points, with no garbage a call (Math.hypot makes
+ * some; axisToSegment keeps it for collideNose, unchanged).
+ */
+function axisToTruck(x: number, y: number, ux: number, uy: number, t: PlacedTruck): number {
+  const ax = t.x0, ay = t.y0, ex = t.x1 - ax, ey = t.y1 - ay;
+  const len2 = ex * ex + ey * ey;
+  const rx = x - ax, ry = y - ay;
+  const b = ux * ex + uy * ey, cc = ux * rx + uy * ry, f = ex * rx + ey * ry;
+  const denom = len2 - b * b;
+  let k = denom > 1e-9 ? clamp((f - b * cc) / denom, 0, 1) : len2 > 0 ? clamp(f / len2, 0, 1) : 0;
+  let s = clamp(b * k - cc, -CAPSULE_HALF, CAPSULE_HALF);
+  k = len2 > 0 ? clamp((f + b * s) / len2, 0, 1) : 0;
+  s = clamp(b * k - cc, -CAPSULE_HALF, CAPSULE_HALF);
+  const cx = x + ux * s, cy = y + uy * s, qx = ax + ex * k, qy = ay + ey * k;
+  AXS[0] = cx;
+  AXS[1] = cy;
+  AXS[2] = qx;
+  AXS[3] = qy;
+  return Math.sqrt((cx - qx) * (cx - qx) + (cy - qy) * (cy - qy));
+}
+
+/** Distance from the barrel at (bx, by) to the car's axis (centre x, y, heading (ux, uy)). */
+function axisDist(x: number, y: number, ux: number, uy: number, bx: number, by: number): number {
+  const t = clamp((bx - x) * ux + (by - y) * uy, -CAPSULE_HALF, CAPSULE_HALF);
+  const ex = x + ux * t - bx, ey = y + uy * t - by;
+  return Math.sqrt(ex * ex + ey * ey);
+}
+
+/**
+ * The squeeze (see above), after the walls: a car still overlapping a barrel (a barrel rolled it
+ * into the wall, which pushed it back) is pushed along the road at the row, to the side of the row
+ * its centre is on (behind on the row's line), by the smallest move that parts them, and its speed
+ * along the road into the row is reflected x BARREL_RESTITUTION. Returns how far it was pushed (0 = none).
+ */
+export function squeezeBarrels(c: CarState, rows: readonly PlacedBarrels[], rt: number): number {
+  let moved = 0;
+  const reach = BARREL_R + CAPSULE_R;
+  for (let i = 0; i < rows.length; i++) {
+    const b = rows[i];
+    const rx = Math.cos(b.h), ry = Math.sin(b.h); // along the road at the row
+    for (let k = 0; k < b.n; k++) {
+      if (!barrelAt(b, k, rt)) continue;
+      const BX = BXY[0], BY = BXY[1];
+      const ux = Math.cos(c.h), uy = Math.sin(c.h);
+      if (axisDist(c.x, c.y, ux, uy, BX, BY) >= reach - SQUEEZE_EPS) continue;
+      const side = (c.x - BX) * rx + (c.y - BY) * ry > 0 ? 1 : -1;
+      const sx = rx * side, sy = ry * side;
+      // Bisection for the smallest move along (sx, sy) that parts them; hi certainly does.
+      let lo = 0, hi = reach + CAPSULE_HALF + Math.abs((BX - c.x) * sx + (BY - c.y) * sy) + 1;
+      for (let it = 0; it < 24; it++) {
+        const mid = (lo + hi) / 2;
+        if (axisDist(c.x + sx * mid, c.y + sy * mid, ux, uy, BX, BY) >= reach) hi = mid;
+        else lo = mid;
+      }
+      c.x += sx * hi;
+      c.y += sy * hi;
+      moved += hi;
+      const vn = c.vx * sx + c.vy * sy;
+      if (vn < 0) {
+        c.vx -= (1 + BARREL_RESTITUTION) * vn * sx;
+        c.vy -= (1 + BARREL_RESTITUTION) * vn * sy;
+      }
+    }
+  }
+  return moved;
+}
+
+/** The closest points of the segment (a0, l0)..(a1, l1) and the box [-ha, ha] x [lo, hi] (disjoint), into BOX (PA, PL / KA, KL); their distance. */
+function segToBox(a0: number, l0: number, a1: number, l1: number, ha: number, lo: number, hi: number): number {
+  let best = Infinity;
+  // A segment end against the box ...
+  for (let e = 0; e < 2; e++) {
+    const a = e === 0 ? a0 : a1, l = e === 0 ? l0 : l1;
+    const ka = clamp(a, -ha, ha), kl = clamp(l, lo, hi);
+    const d = Math.sqrt((a - ka) * (a - ka) + (l - kl) * (l - kl));
+    if (d < best) {
+      best = d;
+      BOX[0] = a;
+      BOX[1] = l;
+      BOX[2] = ka;
+      BOX[3] = kl;
+    }
+  }
+  // ... and a box corner against the segment (for disjoint convex shapes one of the two is a closest pair).
+  const da = a1 - a0, dl = l1 - l0, len2 = da * da + dl * dl;
+  for (let k = 0; k < 4; k++) {
+    const ka = k & 1 ? ha : -ha, kl = k & 2 ? hi : lo;
+    const t = len2 > 0 ? clamp(((ka - a0) * da + (kl - l0) * dl) / len2, 0, 1) : 0;
+    const pa = a0 + da * t, pl = l0 + dl * t;
+    const d = Math.sqrt((pa - ka) * (pa - ka) + (pl - kl) * (pl - kl));
+    if (d < best) {
+      best = d;
+      BOX[0] = pa;
+      BOX[1] = pl;
+      BOX[2] = ka;
+      BOX[3] = kl;
+    }
+  }
+  return best;
+}
+
+/** Does the segment (a0, l0)..(a1, l1) meet the box [-ha, ha] x [lo, hi] (Liang-Barsky clip; no closure, no allocation)? */
+export function segMeetsBox(a0: number, l0: number, a1: number, l1: number, ha: number, lo: number, hi: number): boolean {
+  let t0 = 0, t1 = 1;
+  const da = a1 - a0, dl = l1 - l0;
+  for (let e = 0; e < 4; e++) {
+    const p = e === 0 ? -da : e === 1 ? da : e === 2 ? -dl : dl;
+    const q = e === 0 ? a0 + ha : e === 1 ? ha - a0 : e === 2 ? l0 - lo : hi - l0;
+    if (p === 0) {
+      if (q < 0) return false;
+      continue;
+    }
+    const r = q / p;
+    if (p < 0) {
+      if (r > t1) return false;
+      if (r > t0) t0 = r;
+    } else {
+      if (r < t0) return false;
+      if (r < t1) t1 = r;
+    }
+  }
+  return t0 <= t1;
+}
+
+/** The wall's bounce for a car pushed out along the unit normal (nx, ny): the speed into it back x WALL_BOUNCE, the rest x WALL_SCRAPE. */
+function wallBounce(c: CarState, nx: number, ny: number): number {
+  const vn = c.vx * nx + c.vy * ny;
+  if (vn < 0) {
+    c.vx -= (1 + WALL_BOUNCE) * vn * nx;
+    c.vy -= (1 + WALL_BOUNCE) * vn * ny;
+  }
+  c.vx *= WALL_SCRAPE;
+  c.vy *= WALL_SCRAPE;
+  return vn < 0 ? -vn : 0;
+}
+
+/**
+ * The presses that are down at race tick rt against a driving car's capsule (see above): pushed out
+ * along the closest points' line, or, the axis under it (it came down on the car, or the car landed
+ * on it), along the road to the nearer open side. The wall's bounce either way. Returns the fastest
+ * speed into one (0 = no contact).
+ */
+export function collidePresses(c: CarState, gates: readonly PlacedPress[], rt: number): number {
+  let hit = 0;
+  const ha = PRESS_DEPTH / 2;
+  for (let i = 0; i < gates.length; i++) {
+    const g = gates[i];
+    if (!pressDown(g, rt)) continue;
+    const gx = Math.cos(g.h), gy = Math.sin(g.h); // along the road at the press; (g.nx, g.ny) across it
+    const ux = Math.cos(c.h), uy = Math.sin(c.h);
+    const ca = (c.x - g.x) * gx + (c.y - g.y) * gy, cl = (c.x - g.x) * g.nx + (c.y - g.y) * g.ny;
+    const da = (ux * gx + uy * gy) * CAPSULE_HALF, dl = (ux * g.nx + uy * g.ny) * CAPSULE_HALF;
+    // Cheap reject: the centre further from the box than the capsule's reach.
+    if (ca > ha + CAPSULE_HALF + CAPSULE_R || ca < -ha - CAPSULE_HALF - CAPSULE_R || cl < g.lat0 - CAPSULE_HALF - CAPSULE_R || cl > g.lat1 + CAPSULE_HALF + CAPSULE_R) continue;
+    const a0 = ca - da, l0 = cl - dl, a1 = ca + da, l1 = cl + dl;
+    let nx: number, ny: number, depth: number;
+    // The axis meets the box, or touches it (a distance this small has no direction to push along).
+    const d = segMeetsBox(a0, l0, a1, l1, ha, g.lat0, g.lat1) ? 0 : segToBox(a0, l0, a1, l1, ha, g.lat0, g.lat1);
+    if (d < 1e-6) {
+      // Under it: along the road to the nearer side, the whole capsule out.
+      const back = Math.max(a0, a1) + CAPSULE_R + ha, ahead = ha - Math.min(a0, a1) + CAPSULE_R;
+      const sgn = ahead < back ? 1 : -1;
+      nx = gx * sgn;
+      ny = gy * sgn;
+      depth = sgn > 0 ? ahead : back;
+    } else {
+      if (d >= CAPSULE_R) continue;
+      // Box frame -> world: (a, l) is along gx, gy and across g.nx, g.ny.
+      const na = (BOX[0] - BOX[2]) / d, nl = (BOX[1] - BOX[3]) / d; // d >= 1e-6: the axis is clear of the box
+      nx = gx * na + g.nx * nl;
+      ny = gy * na + g.ny * nl;
+      depth = CAPSULE_R - d;
+    }
+    c.x += nx * depth;
+    c.y += ny * depth;
+    hit = Math.max(hit, wallBounce(c, nx, ny));
+  }
+  return hit;
+}
+
+/**
+ * The trucks' bodies against a driving car's capsule (see above), all but the one whose ramp it rides
+ * (`riding`): pushed out along the closest points' line (up to three passes, for an axis that crosses
+ * the truck's), with the wall's bounce. Returns the fastest speed into one (0 = no contact).
+ */
+export function collideTrucks(c: CarState, trucks: readonly PlacedTruck[], riding: PlacedTruck | null): number {
+  let hit = 0;
+  const reach = TRUCK_HALF + CAPSULE_R;
+  for (let i = 0; i < trucks.length; i++) {
+    const t = trucks[i];
+    if (t === riding) continue;
+    for (let pass = 0; pass < 3; pass++) { // the bounce on the first, the rest only push
+      const ux = Math.cos(c.h), uy = Math.sin(c.h);
+      const d = axisToTruck(c.x, c.y, ux, uy, t);
+      if (d >= reach) break;
+      let nx: number, ny: number;
+      if (d > 1e-6) {
+        nx = (AXS[0] - AXS[2]) / d;
+        ny = (AXS[1] - AXS[3]) / d;
+      } else {
+        // The car's axis crosses the truck's: across the truck to the side the car's centre is on
+        // (right of the truck's heading on its axis).
+        const ex = t.x1 - t.x0, ey = t.y1 - t.y0, l = Math.sqrt(ex * ex + ey * ey) || 1;
+        const side = ex * (c.y - t.y0) - ey * (c.x - t.x0) < 0 ? -1 : 1;
+        nx = (-ey / l) * side;
+        ny = (ex / l) * side;
+      }
+      const depth = d > 1e-6 ? reach - d : reach;
+      c.x += nx * depth;
+      c.y += ny * depth;
+      if (pass === 0) hit = Math.max(hit, wallBounce(c, nx, ny));
+    }
+  }
+  return hit;
 }
 
 /**
@@ -307,12 +664,12 @@ function collideIslands(c: CarState, q: TrackQuery, isles: readonly PlacedIsland
   }
 }
 
-// collideNose's closest points (no allocation per call): on the car's axis (CX, CY), on the core (QX, QY).
-let CX = 0, CY = 0, QX = 0, QY = 0;
+// collideNose's (and collideTrucks') closest points: on the car's axis (CX, CY), on the segment (QX, QY), in AXS
+// (M4-MOVE: a typed array, not module-level lets, which made a heap number at every store).
 
 /**
  * The closest points of the car's axis (centre (x, y), direction (ux, uy), half-length CAPSULE_HALF)
- * and the segment a..b, into CX, CY and QX, QY; returns their distance.
+ * and the segment a..b, into AXS (CX, CY, QX, QY); returns their distance.
  */
 function axisToSegment(x: number, y: number, ux: number, uy: number, ax: number, ay: number, bx: number, by: number): number {
   const ex = bx - ax, ey = by - ay;
@@ -325,11 +682,12 @@ function axisToSegment(x: number, y: number, ux: number, uy: number, ax: number,
   let s = clamp(b * t - cc, -CAPSULE_HALF, CAPSULE_HALF);
   t = len2 > 0 ? clamp((f + b * s) / len2, 0, 1) : 0;
   s = clamp(b * t - cc, -CAPSULE_HALF, CAPSULE_HALF);
-  CX = x + ux * s;
-  CY = y + uy * s;
-  QX = ax + ex * t;
-  QY = ay + ey * t;
-  return Math.hypot(CX - QX, CY - QY);
+  const cx = x + ux * s, cy = y + uy * s, qx = ax + ex * t, qy = ay + ey * t;
+  AXS[0] = cx;
+  AXS[1] = cy;
+  AXS[2] = qx;
+  AXS[3] = qy;
+  return Math.hypot(cx - qx, cy - qy);
 }
 
 /**
@@ -351,10 +709,10 @@ export function collideNose(c: CarState, core: readonly Vec[]): number {
     const d = axisToSegment(c.x, c.y, ux, uy, p.x, p.y, q.x, q.y);
     if (d < best) {
       best = d;
-      cx = CX;
-      cy = CY;
-      qx = QX;
-      qy = QY;
+      cx = AXS[0];
+      cy = AXS[1];
+      qx = AXS[2];
+      qy = AXS[3];
     }
   }
   // The car's centre inside the core (deep; a landing is the sides' rule): out the way it came.

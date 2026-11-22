@@ -975,7 +975,9 @@ export class Game {
       if (this.car) this.prevCar = cloneCar(this.car);
       return;
     }
-    this.moveLocalShots();
+    // The cosmetic rivets at the race tick the server moves them: it moves a rivet first in the tick
+    // its car fired in, we in the step after the one that fired it (M4-MOVE: barrels and presses).
+    this.moveLocalShots(this.latest ? rtAt(this.latest, this.pending.length) - 1 : 0);
     if (!this.car || !this.connected) return;
 
     const on = this.raceOn();
@@ -1069,6 +1071,20 @@ export class Game {
     return this.latest ? rtAt(this.latest, this.pending.length) : 0;
   }
 
+  /**
+   * The race tick a frame shows what moves at (M4-MOVE; client/render.ts WorldFx.rt, PLAN-M4 section 3
+   * "Where moving things are drawn"): with an own car, the one its drawn pose was stepped at (its last
+   * predicted step, rtAt(latest, pending.length - 1); the latest snapshot's own with nothing pending),
+   * so the barrels and presses are drawn where its own step met them; without one (a spectator) the
+   * latest snapshot's (rtAt(latest, -1): clamped at 0 in the countdown, as the own car's). undefined
+   * before the first snapshot (a still picture).
+   */
+  drawTick(): number | undefined {
+    const s = this.latest;
+    if (!s) return undefined;
+    return rtAt(s, this.car ? this.pending.length - 1 : -1); // a spectator: the snapshot's, clamped at 0 in the countdown (advisor change 9)
+  }
+
   /** Boost ticks a cell would give the own car by a snapshot's race distances (0 without a car in it). */
   private boostOfferIn(snap: Snapshot): number {
     const own = snap.cars.get(this.you);
@@ -1137,7 +1153,7 @@ export class Game {
    * Cosmetic own rivets: fly until range, a wall, or another car they visibly touch (one the
    * server can hit: not ghosted, wrecked, airborne or falling).
    */
-  private moveLocalShots(): void {
+  private moveLocalShots(rt: number): void {
     if (!this.localShots.length) return;
     const targets = this.otherPoses().filter((p) => {
       const s = this.latest?.cars.get(p.id);
@@ -1145,7 +1161,7 @@ export class Game {
     });
     const r = CAR_RADIUS + 2;
     this.localShots = this.localShots.filter((s) => {
-      if (!moveShot(s, this.track)) return false;
+      if (!moveShot(s, this.track, rt)) return false;
       return !targets.some((t) => (t.x - s.x) ** 2 + (t.y - s.y) ** 2 <= r * r);
     });
   }
