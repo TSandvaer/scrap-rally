@@ -551,6 +551,9 @@ TOUCH-5 done: 12c11c0 (6 commits; report tmp/touch-5/touch5-report.md): point de
 "aimFull":35,"brakeAngle":110}; closed loops <= 120 ticks dry / 300 water, 0° overshoot; Rust Bowl lap <= 3 wall hits; wall escape
 <= 174 ticks; 830/830 + 123/123 twice; touch-drive 52/52 + 62/62. Merges clean; sim-test run-list line conflicts with SURF-2 (keep both).
 Opus reviewer ctx_09e09c787a72 (tmp/review-touch-5.md). On APPROVE: merge, gate, ask the user to push (phone taste = live only).
+SURF-2 fix round 1 done: 860795c (f02ecde walls interpolate like the bake, gap 0.0000 on all 5 widens; 860795c bots back off islands,
+weapons-on contacts <= 1-2, bound 8; N2 hoisted; 840/840 + 128/128 twice; report tmp/m4-surf-2/m4-surf-2-fix1-report.md). Re-review
+sent to ctx_758bdaf628ba. TASTE COPY :3009 refreshed to 860795c (node pid 62281, npm pid 62260; same worktree split-taste).
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
