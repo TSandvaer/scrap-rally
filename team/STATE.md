@@ -547,6 +547,10 @@ SURF-2 review 1 REQUEST_CHANGES: F1 physics walls use the exact taper but the ba
 1022, 1072, 1276) -> up to 4.7 units off the drawn barrier; fix = interpolate like the bake; the trial fix pushes the weapons-on
 island bound (Normal Racer 33 > 20) -> bots get island margin / lane recovery first. Fix round sent to the author as ctx_43c279b87152
 (tmp/m4-surf-2/review-1-fix.md); reviewer ctx_758bdaf628ba kept for the re-review. Taste copy :3009 (512dc98) gets refreshed after.
+TOUCH-5 done: 12c11c0 (6 commits; report tmp/touch-5/touch5-report.md): point default, defaults {"mode":"point",...,"pointDead":0.3,
+"aimFull":35,"brakeAngle":110}; closed loops <= 120 ticks dry / 300 water, 0° overshoot; Rust Bowl lap <= 3 wall hits; wall escape
+<= 174 ticks; 830/830 + 123/123 twice; touch-drive 52/52 + 62/62. Merges clean; sim-test run-list line conflicts with SURF-2 (keep both).
+Opus reviewer ctx_09e09c787a72 (tmp/review-touch-5.md). On APPROVE: merge, gate, ask the user to push (phone taste = live only).
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
