@@ -613,6 +613,11 @@ PLAN-THEMES is approved or BR-SCHEMA merges). Next: push popup (MOVE + TOUCH-6) 
 PLAN-THEMES drafted (PLAN-THEMES.md: TH-LOOK-1 Fable desert look first; THEME-SCHEMA before BR-PHYS; census HUD allowance already
 fails on main 1,942,744 > 1,900,000, folded into TH-LOOK-1). HARD-2 addendum (PLAN-M4.md end). Both under Fable review in parallel.
 The free 3rd slot goes to whichever is approved first (HARD-2 likely: small, user-facing).
+HARD-2 approved (Fable "sound with changes", 10 binding; user popup). HARD-2 123jpnbfghz (Opus) in flight: ctx_779075f2c605
+(~/orca/workspaces/scrap-rally/hard-2, :3006; spec tmp/spec-hard-2.md). Authors now 3/3: M4-TRACKS, BR-SCHEMA, HARD-2.
+M4-TRACKS asked: (A) extend airCellReach in shared/weapons.ts to fly truck lips -> yes (weapons.ts joins it for that); edits to
+pre-existing 'every registered track' checks -> yes, loop over the 3 originals; surfShipped rule (3 originals SAME, others SAME or new)
+sent to BR-SCHEMA too. PLAN-THEMES review still running; TH-LOOK-1 waits for approval AND a free slot.
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
