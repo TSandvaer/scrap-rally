@@ -6,29 +6,38 @@
 // puts several fingers down at once (one pointer id each), so this tool drives with two thumbs.
 //
 // Passes (all by default, or --only a,b):
-//   drive-portrait   390x844, ?debug=1: in the countdown the stick by itself (the centre where the
-//                    thumb lands, the knob following within R with its gas/brake/neutral colour, a
-//                    sweep through gas, the diagonals, steer and brake/reverse, a second finger in the
-//                    zone ignored, a landing at the edge shifted in, lifting hides it); then laps
-//                    driven by the stick only (one thumb: gas and a fractional steer at once, brakes,
-//                    reverses when stuck), every settled step's Controls checked against the stick's
-//                    own function of the thumb's offset; gas + FIRE with two thumbs; MINE taps; the
-//                    menu and the chat hide and clear the stick, a driving key hides it, the finished
-//                    car and the results hide it.
+//   drive-portrait   390x844, ?debug=1, the default mode (point, TOUCH-5): in the countdown the stick
+//                    by itself (the centre where the thumb lands, the knob following within R with its
+//                    gas/brake/neutral colour, the thumb pointed round the car: gas with the steer in
+//                    proportion to the error, reverse past brakeAngle and its hysteresis, the dead
+//                    zone coasting, a second finger in the zone ignored, a landing at the edge shifted
+//                    in, lifting hides it); then laps driven by the stick only (one thumb pointed at
+//                    the track ahead: gas and a fractional steer at once, a brake test pointed behind
+//                    at speed, a coast test), every step's Controls (logged in the g.step wrapper with
+//                    the car's heading and forward speed and the pad's memo) checked against point
+//                    mode's own functions; gas + FIRE with two thumbs; MINE taps; the menu and the chat
+//                    hide and clear the stick, a driving key hides it, the finished car and the results hide it.
 //   drive-landscape  844x390, ?debug=1: the same countdown checks and a lap, then Retire to garage hides it.
+//   rate-portrait    390x844, ?debug=1 with mode "rate" stored (the A/B switch): the TOUCH-4 rate
+//                    checks in the countdown and a lap by the rate driver, every settled step's
+//                    Controls the rate stick's function of the thumb's offset.
 //   tune-portrait / tune-landscape  390x844 / 844x390, ?debug=1: the TUNE button opens the tuning
-//                    panel (it keeps the stick's zone free), a slider dragged by a second finger while
-//                    the thumb holds the stick changes the step's Controls at once (screenshots of the
-//                    panel open); portrait also: the values are stored and back after a reload, bad
-//                    stored values are ignored, values saved with other defaults (the old R 60) are
-//                    kept, Defaults resets them; without ?debug=1 no panel and the stored values are
-//                    not used.
+//                    panel (it keeps the stick's zone free) in point mode (its sliders only), a slider
+//                    dragged by a second finger while the thumb holds the stick changes the step's
+//                    Controls at once; the Mode switch to rate shows rate's sliders and the thumb
+//                    drives by rate's function, a rate slider dragged changes it live (screenshots of
+//                    the panel open); portrait also: the values and the mode are stored and back after
+//                    a reload, bad stored values (a bad mode too) are ignored, values saved before
+//                    TOUCH-5 (no mode, the old R 60) are kept with the new keys at their defaults,
+//                    Defaults resets them.
+//   tune-plain       390x844, no debug, rate stored: no panel and the stored values are not used.
 //   look-portrait / look-landscape / look-small (360x740): no debug (production layout): the
 //                    lobby (no controls), the countdown's DRIVE hint (its real box, 2R or capped,
 //                    inside the zone and clear of the HUD, the weapons and the Chat button), the race
-//                    with the stick held at gas+right (green), brake (red) and steer only (grey) with
-//                    FIRE held (screenshots), the gate and the knob at the shipped R, full lock both
-//                    ways, gas and brake reached from a landing at each corner of the zone,
+//                    with the stick (point mode) pointed behind the car from rest (reverse, red),
+//                    ahead (gas, green) and inside the dead zone (grey) with FIRE held (screenshots),
+//                    the gate and the knob at the shipped R, from a landing at each corner of the zone
+//                    every way past the dead zone (rate mode: full lock both ways, gas and brake),
 //                    the stick's zone (right of the split, under the speaker and ☰ to the bottom, over
 //                    the view, drawing nothing), the weapons and the Chat button against the HUD,
 //                    minimap, banner/ping, speaker and ☰; the Chat button tappable (no zone over it);
@@ -46,10 +55,10 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { promisify } from "node:util";
 import WebSocket from "ws";
-import { STICK_DEFAULTS, stickCentre, stickControls, type StickParams } from "../../client/input";
-import { angleDiff } from "../../shared/physics";
-import { pointAt, queryTrackNear, type Track } from "../../shared/track";
-import { findTrack } from "../../shared/tracks";
+import { POINT_IDLE, POINT_RULES, pointAim, pointControls, pointSteer, STICK_DEFAULTS, stickCentre, stickControls, type PointMemo, type StickParams } from "../../client/input";
+import { angleDiff, wrapAngle } from "../../shared/physics";
+import { gridSlot, pointAt, queryTrackNear, type Track } from "../../shared/track";
+import { DEFAULT_TRACK_ID, findTrack } from "../../shared/tracks";
 
 const run = promisify(execFile);
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -60,7 +69,7 @@ const arg = (name: string, def: string) => {
 const URL = arg("url", "http://127.0.0.1:3006");
 const SESSION = arg("session", "stick-drive");
 const OUT = path.resolve(arg("out", "tmp/touch-drive"));
-const ONLY = arg("only", "drive-portrait,drive-landscape,tune-portrait,tune-landscape,look-portrait,look-landscape,look-small,desktop").split(",");
+const ONLY = arg("only", "drive-portrait,drive-landscape,rate-portrait,tune-portrait,tune-landscape,tune-plain,look-portrait,look-landscape,look-small,desktop").split(",");
 const LAPS = Number(arg("laps", "3")); // drive-portrait: laps by touch (3 = the whole race, then the finish and the results)
 const MID = !process.argv.includes("--no-mid"); // drive-portrait: the menu, chat and key checks mid-race
 // The page must stay visible: Chrome holds touch input for a hidden page (an occluded window on macOS)
@@ -350,32 +359,90 @@ class PageDriver {
     this.stick = null;
   }
 
-  /** What the stick should give for where the right thumb is now (the page's own function). */
+  /** Rate mode: what the stick should give for where the right thumb is now (the page's own function). */
   expected(): [number, number] {
     const [fx, fy] = this.fingers.where(RIGHT)!;
     return stickControls(fx - this.stick!.cx, fy - this.stick!.cy, this.params);
   }
+
+  /** The right thumb's offset from the stick's centre now (whole px). */
+  offset(): [number, number] {
+    const [fx, fy] = this.fingers.where(RIGHT)!;
+    return [fx - this.stick!.cx, fy - this.stick!.cy];
+  }
+
+  /** The right thumb slides to point `deg` (screen axes: 0 right, 90 down), `share` of R out. */
+  async thumbToward(deg: number, share: number): Promise<void> {
+    const r = share * this.params.radius;
+    await this.thumbAt(Math.round(r * Math.cos(deg * DEG)), Math.round(r * Math.sin(deg * DEG)));
+  }
+}
+
+const DEG = Math.PI / 180;
+
+/**
+ * Point mode (TOUCH-5): what the stick gives for the thumb's offset and the car the pad was handed
+ * that step (heading, forward speed; null: no car), with the memo it ended on (rev, brake): the steer
+ * is pointSteer of the error; the throttle -1 when reversing (rev 1 or 2) or braking a turn (brake
+ * 1), else 1; nothing inside the dead zone. The memo is checked against the error and speed too: a
+ * brake only pointed behind above brakeSpeed, and pointed behind (not reversing) always a turn's
+ * brake state (1 or 2); else the throttle comes back NaN (a mismatch).
+ */
+function pointExpect(dx: number, dy: number, h: number | null, vf: number, rev: number, brake: number, p: StickParams): [number, number] {
+  const aim = pointAim(dx, dy, p);
+  if (aim === null || h === null) return [0, 0];
+  const err = wrapAngle(aim - h);
+  const behind = Math.abs(err) / DEG > p.brakeAngle;
+  const reversing = rev === 1 || rev === 2;
+  const memoOk = brake === 1 ? behind && !reversing && vf > POINT_RULES.brakeSpeed : brake === 2 ? behind && !reversing : !behind || reversing;
+  return [memoOk ? (reversing || brake === 1 ? -1 : 1) : NaN, pointSteer(err, vf, p)];
 }
 
 // ---- driving by touch ----------------------------------------------------------------
 
-/** Wraps Game.step (debug page) to see every step's Controls as main.ts hands them over. */
+/**
+ * Wraps Game.step (debug page) to see every step's Controls as main.ts hands them over. Point mode's
+ * per-step check (TOUCH-5): each step also logs the own car's heading and forward speed as the pad
+ * was handed them (main.ts reads game.car right before; nothing moves it in between), the pad's
+ * memo after the read, the step's index in its frame (a rAF counter: every step one frame() runs
+ * sees the same count; 1 and up are catch-up steps, where a car read once a frame would be stale)
+ * the knob's colour as the step's read left it (1 gas, -1 brake, 0 neither) and the thumb's offset
+ * the pad read (null: no thumb): [throttle, steer, h | null, vf, rev, fire, brake, index, knob, dx,
+ * dy] (DRAIN takes the log).
+ */
 const PATCH_STEP = `(() => {
-  const g = window.scrapDebug.game;
+  const g = window.scrapDebug.game, pad = window.scrapDebug.touchPad, knob = document.getElementById('touch-knob');
   if (g.__touchStep) return true;
   g.__touchStep = true;
   const step = g.step.bind(g);
-  window.__td = { last: null, steps: 0, mines: 0, fire: 0, both: 0 };
+  window.__td = { last: null, steps: 0, mines: 0, fire: 0, both: 0, log: [], frame: 0, stepFrame: -1, inFrame: 0 };
+  const tick = () => { window.__td.frame++; requestAnimationFrame(tick); };
+  requestAnimationFrame(tick);
   g.step = (ctl, ms) => {
     const t = window.__td;
     t.last = ctl; t.steps++;
     if (ctl.mine) t.mines++;
     if (ctl.fire) t.fire++;
     if (ctl.fire && ctl.throttle !== 0) t.both++;
+    t.inFrame = t.frame === t.stepFrame ? t.inFrame + 1 : 0;
+    t.stepFrame = t.frame;
+    const c = g.car, m = pad.pointMemo(), st = pad.stickNow();
+    if (t.log.length < 3000) t.log.push([ctl.throttle, ctl.steer, c ? c.h : null, c ? c.vx * Math.cos(c.h) + c.vy * Math.sin(c.h) : 0, m.rev, ctl.fire, m.brake, t.inFrame, knob.classList.contains('gas') ? 1 : knob.classList.contains('brake') ? -1 : 0, st ? st.x - st.cx : null, st ? st.y - st.cy : null]);
     return step(ctl, ms);
   };
   return true;
 })()`;
+type StepLog = [throttle: number, steer: number, h: number | null, vf: number, rev: number, fire: boolean, brake: number, inFrame: number, knob: number, dx: number | null, dy: number | null];
+/**
+ * Catch-up frames on demand (TOUCH-5 review F1): headless Chrome runs about one step a frame, so a
+ * car read once a frame instead of once a step would pass. While on, the page's main thread is
+ * blocked BLOCK_MS every BLOCK_EVERY_MS: the next frame catches up several steps (main.ts runs up to
+ * MAX_CATCH_UP 5), and those steps are checked like the others.
+ */
+const BLOCK_MS = 50, BLOCK_EVERY_MS = 300;
+const BLOCK_ON = `(() => { clearInterval(window.__block); window.__block = setInterval(() => { const t = performance.now(); while (performance.now() - t < ${BLOCK_MS}); }, ${BLOCK_EVERY_MS}); return true; })()`;
+const BLOCK_OFF = "(clearInterval(window.__block), true)";
+const DRAIN = "window.__td.log.splice(0)";
 
 interface Pose {
   x: number; y: number; h: number; vx: number; vy: number; seg: number; wreck: number;
@@ -630,6 +697,325 @@ function reportDrive(tag: string, log: DriveLog, laps: number): void {
   check(`${tag}: a MINE tap reaches exactly one step's mine and drops one mine`, log.mineTaps > 0 && log.minesStepped === log.mineTaps && log.minesUsed === log.mineTaps, `${log.mineTaps} taps, ${log.minesStepped} steps with mine, ${log.minesUsed} mines dropped`);
 }
 
+// ---- point mode (TOUCH-5) ------------------------------------------------------------
+
+interface PointLog {
+  laps: number; seconds: number; steps: number; matched: number; mismatched: string[]; gasSteer: number; fractional: number; brake: number; reverse: number; coast: number; aims: number;
+  brakeTests: number; coastTests: number; fireBursts: number; fireWithStick: number; rivetsUsed: number; mineTaps: number; minesStepped: number; minesUsed: number;
+  /**
+   * Every step against the thumb offset the pad itself read it with (no step skipped): all, how many
+   * off; those 2nd or later in their frame (catch-up); the knob's colour against the step's throttle,
+   * and throttle changes from one step to the next under the same offset that the knob followed.
+   */
+  all: number; allBad: number; allMismatched: string[]; catchUp: number; catchUpBad: number; maxInFrame: number;
+  knobSamples: number; knobMatched: number; knobStillChanges: number;
+  /** The last step checkAll saw (a change at a batch's start compares with it); null after a discard. */
+  prev: StepLog | null;
+}
+
+/** Each logged step against point mode's functions for the thumb's offset now (the thumb did not move while they were made). */
+function checkSteps(d: PageDriver, batch: StepLog[], log: PointLog): void {
+  const [dx, dy] = d.offset();
+  const fire = d.fingers.has(LEFT);
+  for (const [t, s, h, vf, rev, f, brake, inFrame] of batch) {
+    log.steps++;
+    const [et, es] = pointExpect(dx, dy, h, vf, rev, brake, d.params);
+    if (t === et && s === es && f === fire) {
+      log.matched++;
+      if (t === 1 && s !== 0) log.gasSteer++;
+      if (s !== 0 && Math.abs(s) < 1) log.fractional++;
+      if (t === -1 && rev === 0) log.brake++;
+      if (t === -1 && (rev === 1 || rev === 2)) log.reverse++;
+      if (t === 0 && s === 0) log.coast++;
+      if (f && t !== 0) log.fireWithStick++;
+    } else if (log.mismatched.length < 8) log.mismatched.push(`thumb ${dx},${dy} h ${h?.toFixed(3)} vf ${vf.toFixed(1)} rev ${rev} brake ${brake} step ${inFrame} in its frame: want ${et}/${es} fire ${fire} -> ${t}/${s} fire ${f}`);
+  }
+}
+
+/**
+ * Every logged step against the thumb offset the pad read it with (logged with the step, so no step
+ * is skipped around a finger's move): point mode's functions of that offset and that step's car and
+ * memo; the catch-up steps among them; the knob's colour (this step's throttle, as read() sets it
+ * every step), and throttle changes under an unchanged offset that it followed.
+ */
+function checkAll(batch: StepLog[], p: StickParams, log: PointLog): void {
+  let prev = log.prev;
+  for (const e of batch) {
+    const [t, s, h, vf, rev, , brake, inFrame, knob, dx, dy] = e;
+    const [et, es] = dx === null || dy === null ? [0, 0] : pointExpect(dx, dy, h, vf, rev, brake, p);
+    const ok = t === et && s === es;
+    log.all++;
+    if (!ok) {
+      log.allBad++;
+      if (log.allMismatched.length < 6) log.allMismatched.push(`thumb ${dx},${dy} h ${h?.toFixed(3)} vf ${vf.toFixed(1)} rev ${rev} brake ${brake} step ${inFrame} in its frame: want ${et}/${es} -> ${t}/${s}`);
+    }
+    if (inFrame > 0) {
+      log.catchUp++;
+      if (!ok) log.catchUpBad++;
+    }
+    log.maxInFrame = Math.max(log.maxInFrame, inFrame);
+    log.knobSamples++;
+    if (knob === Math.sign(t)) {
+      log.knobMatched++;
+      if (prev && prev[9] === dx && prev[10] === dy && dx !== null && prev[0] !== t) log.knobStillChanges++;
+    }
+    prev = e;
+  }
+  log.prev = prev;
+}
+
+/**
+ * Drive by touch in point mode until `laps` are done (or the car finished). The right thumb lands
+ * once and points where the car should go: at the centre line ahead (120 + 0.3 x speed on), moved
+ * when that direction is more than 6° from where it points (a human's coarse updates). Once a lap
+ * above 320 u/s it points behind the car for half a second (a brake test: braking to 150 lasts past
+ * the skipped batches, so the knob is seen turning from brake to gas under the still thumb), once it
+ * rests in the dead zone (a coast test); FIRE and MINE as the rate driver. Every logged step made
+ * while no finger moved is checked against point mode's own functions (the two batches after a
+ * change are skipped); every step also against the offset the pad read it with (checkAll, none
+ * skipped but the mid-race menu/chat/key checks, where the step drives with NO_CONTROLS or keys).
+ * The main thread is blocked now and then (BLOCK_ON) for catch-up frames.
+ */
+async function drivePoint(d: PageDriver, laps: number, midRace?: (lap: number) => Promise<void>): Promise<PointLog> {
+  const log: PointLog = { laps: 0, seconds: 0, steps: 0, matched: 0, mismatched: [], gasSteer: 0, fractional: 0, brake: 0, reverse: 0, coast: 0, aims: 0, brakeTests: 0, coastTests: 0, fireBursts: 0, fireWithStick: 0, rivetsUsed: 0, mineTaps: 0, minesStepped: 0, minesUsed: 0, all: 0, allBad: 0, allMismatched: [], catchUp: 0, catchUpBad: 0, maxInFrame: 0, knobSamples: 0, knobMatched: 0, knobStillChanges: 0, prev: null };
+  let p = await d.cdp.eval<Pose>(POSE);
+  const track = findTrack(p.track);
+  if (!track) throw new Error(`unknown track ${p.track}`);
+  const t0 = Date.now();
+  const P = d.params;
+  let aimDeg = NaN, share = 0, dirty = 2, test: "" | "brake" | "coast" = "", testUntil = 0, testAim = 0;
+  let brakeLap = -1, coastLap = -1, lapStart = Date.now(), lapSeen = p.lap, nextFire = Date.now() + 3000, fireUntil = 0, mineLap = -1, midLap = -1;
+  let fireAmmo0 = 0, mineAmmo0 = 0, mineSteps0 = 0;
+  await d.cdp.eval(DRAIN);
+  await d.cdp.eval(BLOCK_ON);
+  try {
+    while (Date.now() - t0 < 360_000) {
+      // The log first, then the pose: a step that finished the race (the controls hide and let go)
+      // is in a batch only if the pose after it shows the finish, and then it is not checked.
+      const batch = await d.cdp.eval<StepLog[]>(DRAIN);
+      p = await d.cdp.eval<Pose>(POSE);
+      const over = !!p.fin || p.lap >= laps || (p.phase !== "racing" && p.phase !== "countdown");
+      checkAll(batch, P, log);
+      if (dirty > 0) dirty--;
+      else if (!over && d.stick && p.phase === "racing") checkSteps(d, batch, log);
+      if (over) break;
+      const now = Date.now();
+      if (p.lap !== lapSeen) {
+        lapSeen = p.lap;
+        lapStart = now;
+      }
+      const speed = Math.hypot(p.vx, p.vy);
+      const q = queryTrackNear(track, p.x, p.y, p.seg);
+      const ahead = pointAt(track, q.s + 120 + 0.3 * speed);
+      let want = Math.atan2(ahead.y - p.y, ahead.x - p.x) / DEG;
+      let wantShare = 0.7;
+      if (!test && p.phase === "racing" && p.lap > brakeLap && now - lapStart > 4000 && speed > 320) {
+        [test, testUntil, testAim, brakeLap] = ["brake", now + 500, p.h / DEG + 180, p.lap];
+        log.brakeTests++;
+      } else if (!test && p.phase === "racing" && p.lap > coastLap && now - lapStart > 9000) {
+        [test, testUntil, coastLap] = ["coast", now + 700, p.lap];
+        log.coastTests++;
+      }
+      if (test && now > testUntil) test = "";
+      if (test === "brake") want = testAim;
+      if (test === "coast") wantShare = P.pointDead * 0.5;
+      if (!d.stick) {
+        await d.thumbDown(...(await d.rest()));
+        aimDeg = NaN;
+        dirty = 2;
+      }
+      if (!(Math.abs(angleDiff(aimDeg * DEG, want * DEG)) <= 6 * DEG) || share !== wantShare) {
+        await d.thumbToward(want, wantShare);
+        [aimDeg, share, dirty] = [want, wantShare, 2];
+        log.aims++;
+      }
+      // The left thumb: FIRE for 1.2 s every 4 s, once armed.
+      if (p.armed && !d.fingers.has(LEFT) && now > nextFire) {
+        fireAmmo0 = p.ammo[0];
+        await d.fingers.at(LEFT, ...centre((await d.box("#touch-fire"))!));
+        fireUntil = now + 1200;
+        log.fireBursts++;
+        dirty = 2;
+      } else if (d.fingers.has(LEFT) && now > fireUntil) {
+        await d.fingers.lift(LEFT);
+        log.rivetsUsed += Math.max(0, fireAmmo0 - p.ammo[0]);
+        nextFire = now + 2800;
+        dirty = 2;
+      }
+      // A third finger taps MINE once a lap (armed, with mines left).
+      if (p.armed && p.lap > mineLap && p.ammo[1] > 0 && !d.fingers.has(LEFT)) {
+        mineLap = p.lap;
+        mineAmmo0 = p.ammo[1];
+        mineSteps0 = p.mines;
+        await d.tap("#touch-mine");
+        log.mineTaps++;
+        const after = await d.cdp.eval<Pose>(POSE);
+        log.minesStepped += after.mines - mineSteps0;
+        log.minesUsed += Math.max(0, mineAmmo0 - after.ammo[1]);
+        dirty = 2;
+      }
+      if (midRace && p.lap >= 1 && midLap < 0 && p.phase === "racing" && !d.fingers.has(LEFT) && !test) {
+        midLap = p.lap;
+        await d.cdp.eval(BLOCK_OFF);
+        checkAll(await d.cdp.eval<StepLog[]>(DRAIN), P, log);
+        await midRace(p.lap);
+        await d.cdp.eval(DRAIN); // the menu's NO_CONTROLS, the chat, a driving key: not the stick's
+        log.prev = null;
+        await d.cdp.eval(BLOCK_ON);
+        aimDeg = NaN;
+        dirty = 2;
+      }
+      await sleep(25);
+    }
+  } finally {
+    await d.cdp.eval(BLOCK_OFF).catch(() => undefined);
+  }
+  log.laps = p.lap;
+  log.seconds = Math.round((Date.now() - t0) / 1000);
+  await d.fingers.liftAll();
+  d.stick = null;
+  return log;
+}
+
+function reportPoint(tag: string, log: PointLog, laps: number): void {
+  check(`${tag}: ${laps} lap(s) driven by the stick in point mode only (one right thumb pointed where the car should go)`, log.laps >= laps, `${log.laps} laps in ${log.seconds} s, ${log.aims} thumb moves`);
+  check(
+    `${tag}: every logged step made while no finger moved: the step's Controls are point mode's for the thumb's direction and the car's heading and forward speed that step (and the pad's memo), + FIRE while the left thumb holds it`,
+    log.steps > 300 && log.mismatched.length === 0,
+    `${log.matched}/${log.steps}${log.mismatched.length ? `; ${log.mismatched.join(" | ")}` : ""}`,
+  );
+  check(
+    `${tag}: gas and a fractional steer at once from one thumb; pointed behind at speed it brakes; in the dead zone it coasts`,
+    log.gasSteer > 50 && log.fractional > 50 && log.brake > 0 && log.brakeTests > 0 && log.coast > 0 && log.coastTests > 0,
+    `${log.gasSteer} steps gas+steer, ${log.fractional} with a fractional steer, ${log.brake} braking (${log.brakeTests} brake tests), ${log.reverse} reversing, ${log.coast} coasting (${log.coastTests} coast tests)`,
+  );
+  check(`${tag}: two thumbs at once: FIRE held while the stick drives (steps with throttle and fire both), rivets fired`, log.fireWithStick > 10 && log.rivetsUsed > 0, `${log.fireBursts} bursts, ${log.fireWithStick} steps gas+fire, ${log.rivetsUsed} rivets`);
+  check(`${tag}: a MINE tap reaches exactly one step's mine and drops one mine`, log.mineTaps > 0 && log.minesStepped === log.mineTaps && log.minesUsed === log.mineTaps, `${log.mineTaps} taps, ${log.minesStepped} steps with mine, ${log.minesUsed} mines dropped`);
+  check(
+    `${tag}: every step of the drive (none skipped) is point mode's for the thumb offset the pad read it with and that step's own car and memo`,
+    log.all > 1000 && log.allBad === 0,
+    `${log.all - log.allBad}/${log.all}${log.allMismatched.length ? `; ${log.allMismatched.join(" | ")}` : ""}`,
+  );
+  check(
+    `${tag}: catch-up frames (the main thread blocked ${BLOCK_MS} ms every ${BLOCK_EVERY_MS} ms): steps that were the 2nd or later in their frame are point mode's for that step's own car (read fresh every step, advisor change 1), none off`,
+    log.catchUp >= 50 && log.catchUpBad === 0,
+    `${log.catchUp - log.catchUpBad}/${log.catchUp} catch-up steps match, up to step ${log.maxInFrame + 1} of a frame`,
+  );
+  check(
+    `${tag}: at every step the knob's colour is that step's throttle (gas / brake / neutral), also where the throttle changed with the car under an unchanged thumb (refreshed every step, not only on a move)`,
+    log.knobSamples > 1000 && log.knobMatched === log.knobSamples && log.knobStillChanges > 0,
+    `${log.knobMatched}/${log.knobSamples} steps match, ${log.knobStillChanges} throttle changes under an unchanged thumb followed`,
+  );
+}
+
+/**
+ * In the countdown (Game.step ignores the Controls until GO, so the car stays put, heading h0, vf 0,
+ * not driving): point mode by itself. The thumb lands: nothing; it is pointed round the car: ahead
+ * (gas, no steer), 20° right and left (gas, steer ±20/35 in hundredths), 60° and 100° off (gas, full
+ * lock), 150° off (behind: reverse, the knob red), back to 100° (still reverse: under 80° only), 60°
+ * (gas), 150° left (reverse), into the dead zone (nothing, the memo afresh). Each stop: every logged
+ * step and the knob's colour against point mode's functions (the tool runs its own memo, the same
+ * reads in the same order), the knob within R. Then the second finger, the lift and the edge.
+ */
+async function pointStickChecks(d: PageDriver, tag: string): Promise<void> {
+  const R = d.params.radius;
+  const [rx, ry] = await d.rest();
+  await d.thumbDown(rx, ry);
+  await sleep(90);
+  const v0 = await d.view();
+  const p0 = await d.cdp.eval<Pose>(POSE);
+  const l0 = p0.last;
+  check(
+    `${tag}: a thumb landing in the stick's zone shows the gate centred where it landed, the knob on it (neutral colour), nothing held`,
+    v0.on && v0.held && Math.abs(v0.cx - rx) < 0.6 && Math.abs(v0.cy - ry) < 0.6 && v0.kx === 0 && v0.ky === 0 && v0.colour === "neutral" && !!l0 && l0.throttle === 0 && l0.steer === 0,
+    `landed ${rx},${ry}; gate centre ${v0.cx.toFixed(1)},${v0.cy.toFixed(1)}, knob ${v0.kx},${v0.ky} ${v0.colour}; ${JSON.stringify(l0)}`,
+  );
+  const h0 = p0.h;
+  const h0deg = h0 / DEG;
+  const car = { h: h0, vf: 0, live: false };
+  let memo: PointMemo = POINT_IDLE;
+  const stops: [string, number, number, number, number][] = [
+    // name, degrees off the heading (+ = clockwise on screen), share of R, want throttle, want steer:
+    // 0 about none (whole-px thumbs: within 0.03), 1 full lock, -1 a fraction (each the side it points)
+    ["ahead", 0, 0.6, 1, 0], ["20° right", 20, 0.6, 1, -1], ["20° left", -20, 0.6, 1, -1], ["60° right", 60, 0.6, 1, 1], ["100° right", 100, 0.6, 1, 1],
+    ["150° right (behind)", 150, 0.6, -1, 1], ["100° right again (hysteresis)", 100, 0.6, -1, 1], ["60° right (out of reverse)", 60, 0.6, 1, 1], ["150° left", -150, 0.6, -1, 1],
+    ["far past R ahead", 0, 1.4, 1, 0], ["dead zone", 45, 0.2, 0, 0],
+  ];
+  const got: string[] = [];
+  let ok = true, fractional = false, steps = 0;
+  for (const [name, off, sh, wantT, wantS] of stops) {
+    await d.thumbToward(h0deg + off, sh);
+    await sleep(40);
+    await d.cdp.eval(DRAIN); // steps made around the move
+    await sleep(90);
+    const batch = await d.cdp.eval<StepLog[]>(DRAIN);
+    const v = await d.view();
+    const [dx, dy] = d.offset();
+    const [t, s, m] = pointControls(dx, dy, car, memo, d.params);
+    memo = m;
+    const colour = t > 0 ? "gas" : t < 0 ? "brake" : "neutral";
+    const stepsOk = batch.length > 0 && batch.every(([bt, bs, bh, bvf, brev, , bbrake]) => bt === t && bs === s && bh === h0 && bvf === 0 && brev === m.rev && bbrake === m.brake);
+    const sOk = wantT === 0 ? s === 0 : wantS < 0 ? Math.abs(s) > 0.03 && Math.abs(s) < 1 && Math.sign(s) === Math.sign(off) : wantS === 0 ? Math.abs(s) <= 0.03 : Math.abs(s) === 1 && Math.sign(s) === Math.sign(off);
+    const knobR = Math.hypot(v.kx, v.ky);
+    const stopOk = stepsOk && t === wantT && sOk && v.colour === colour && knobR <= R + 0.11 && Math.abs(v.cx - d.stick!.cx) < 0.6;
+    ok &&= stopOk;
+    steps += batch.length;
+    if (t === 1 && s !== 0 && Math.abs(s) < 1) fractional = true;
+    got.push(`${name}: ${batch.length ? `${batch[batch.length - 1][0]}/${batch[batch.length - 1][1]}` : "-"} rev ${m.rev} knob ${knobR.toFixed(0)} ${v.colour}${stopOk ? "" : ` (want ${t}/${s} ${colour}; steps ${stepsOk})`}`);
+  }
+  check(
+    `${tag}: point mode in the countdown (heading ${h0deg.toFixed(1)}°): pointed round the car every logged step's Controls are point mode's for the thumb's direction and that heading (gas within ${d.params.brakeAngle}°, the steer in proportion up to ${d.params.aimFull}° off, reverse past it from rest, held until under ${d.params.brakeAngle - POINT_RULES.revHyst}°, nothing in the dead zone); the knob's colour follows, within R; the gate stays put`,
+    ok && fractional && steps > 30,
+    got.join(" | "),
+  );
+  await secondFingerAndLift(d, tag, h0deg + 20);
+  // A landing 6 px from the screen's right edge: the centre shifts in by the dead zone + 8 px, so
+  // the thumb at the screen's last pixel still points (past the dead zone).
+  const stage = (await d.box("#stage"))!;
+  await d.thumbDown(stage.left + stage.width - 6, ry);
+  await sleep(90);
+  const vEdge = await d.view();
+  const shiftWant = stage.left + stage.width - (R * d.params.pointDead + 8);
+  await d.fingers.at(RIGHT, stage.left + stage.width - 1, ry);
+  await sleep(90);
+  const lEdge = (await d.cdp.eval<Pose>(POSE)).last;
+  const vAt = await d.view();
+  check(
+    `${tag}: a thumb landing at the right edge sets the centre inward (point mode: the dead zone + 8 px from the edge), so the thumb at the edge still points (pointed right: not the dead zone, the knob coloured)`,
+    Math.abs(vEdge.cx - shiftWant) < 0.6 && Math.abs(vEdge.cy - ry) < 0.6 && !!lEdge && lEdge.throttle !== 0 && vAt.colour !== "neutral",
+    `centre ${vEdge.cx.toFixed(1)} (want ${shiftWant.toFixed(1)}); at the edge ${JSON.stringify(lEdge)} ${vAt.colour}`,
+  );
+  await d.thumbUp();
+  await sleep(60);
+}
+
+/** A second finger in the zone while the thumb holds the stick (pointed at `deg`) changes nothing; lifting the thumb hides the stick. */
+async function secondFingerAndLift(d: PageDriver, tag: string, deg: number): Promise<void> {
+  await d.thumbToward(deg, 0.6);
+  await sleep(90);
+  const before = (await d.cdp.eval<Pose>(POSE)).last;
+  const z = (await d.box("#touch-stick"))!;
+  await d.fingers.at(EXTRA, z.left + z.width * 0.25, z.top + z.height * 0.4);
+  await sleep(60);
+  await d.fingers.at(EXTRA, z.left + z.width * 0.25 + 40, z.top + z.height * 0.4 + 40);
+  await sleep(90);
+  const during = (await d.cdp.eval<Pose>(POSE)).last;
+  const vDuring = await d.view();
+  await d.fingers.lift(EXTRA);
+  await sleep(90);
+  const afterExtra = (await d.cdp.eval<Pose>(POSE)).last;
+  check(
+    `${tag}: a second finger landing and moving in the zone while the thumb holds the stick changes nothing (the gate stays, the Controls stay)`,
+    JSON.stringify(before) === JSON.stringify(during) && JSON.stringify(during) === JSON.stringify(afterExtra) && Math.abs(vDuring.cx - d.stick!.cx) < 0.6 && Math.abs(vDuring.cy - d.stick!.cy) < 0.6,
+    `${JSON.stringify(before)} / ${JSON.stringify(during)} / ${JSON.stringify(afterExtra)}`,
+  );
+  await d.thumbUp();
+  await sleep(90);
+  const vUp = await d.view();
+  const lUp = (await d.cdp.eval<Pose>(POSE)).last;
+  check(`${tag}: lifting the thumb hides the stick (the gate off) and lets go (no gas, no steer)`, !vUp.on && !vUp.held && !!lUp && lUp.throttle === 0 && lUp.steer === 0, `gate on ${vUp.on}; ${JSON.stringify(lUp)}`);
+}
+
 // ---- the passes ------------------------------------------------------------------------
 
 async function drivePortrait(d: PageDriver): Promise<void> {
@@ -640,7 +1026,7 @@ async function drivePortrait(d: PageDriver): Promise<void> {
   );
   check("drive portrait: matchMedia('(pointer: coarse)') under touch emulation; touch in use from the start; the key help shows the touch words", env.coarse && env.touch && env.help === "block/none", JSON.stringify(env));
   d.params = await d.cdp.eval<StickParams>("scrapDebug.touchPad.stickParams()");
-  check("drive portrait: the page's stick parameters are the defaults (nothing stored)", JSON.stringify(d.params) === JSON.stringify(STICK_DEFAULTS), JSON.stringify(d.params));
+  check(`drive portrait: the page's stick parameters are the defaults (nothing stored): mode ${STICK_DEFAULTS.mode}`, JSON.stringify(d.params) === JSON.stringify(STICK_DEFAULTS), JSON.stringify(d.params));
   check("drive portrait: no controls on the main menu", !(await d.shown()));
   await d.tap("#create");
   await d.until("the lobby", "!document.getElementById('lobby').classList.contains('hidden')");
@@ -654,16 +1040,19 @@ async function drivePortrait(d: PageDriver): Promise<void> {
   await d.cdp.eval(PATCH_STEP);
   await sleep(200);
   check("drive portrait: the controls show in the countdown, the stick's DRIVE hint with them", (await d.shown()) && (await d.cdp.eval<boolean>(`document.getElementById('touch-stick').classList.contains('hint')`)));
-  await stickChecks(d, "drive portrait");
+  const point = d.params.mode === "point";
+  await (point ? pointStickChecks : stickChecks)(d, "drive portrait");
   await d.until("the race", "window.scrapDebug.game.phase === 'racing'", 10_000);
   await sleep(100);
   check("drive portrait: at GO the hint goes", !(await d.cdp.eval<boolean>(`document.getElementById('touch-stick').classList.contains('hint')`)));
 
   const mid = async () => {
     const key = (k: string) => d.cdp.eval(`window.dispatchEvent(new KeyboardEvent('keydown', { key: '${k}', code: '${k}' })), true`);
+    // Gas: in point mode the thumb pointed where the car heads; in rate mode pushed up.
     const gas = async () => {
       await d.thumbDown(...(await d.rest()));
-      await d.thumbAt(0, -Math.round(d.params.radius * 0.6));
+      if (point) await d.thumbToward((await d.cdp.eval<Pose>(POSE)).h / DEG, 0.6);
+      else await d.thumbAt(0, -Math.round(d.params.radius * 0.6));
     };
     // The menu opens (Esc) with the gas thumb down: the controls hide, the stick goes; closed again,
     // the thumb still down drives nothing until it is put down again (clear on open and on every hide).
@@ -726,8 +1115,8 @@ async function drivePortrait(d: PageDriver): Promise<void> {
     const touchedAgain = await d.shown();
     check("drive portrait: a driving keydown hides the controls (and drives: throttle 1); a touch on the view shows them again", !keyed.shown && keyed.last?.throttle === 1 && touchedAgain, `after key: shown ${keyed.shown} throttle ${keyed.last?.throttle}; after a touch: ${touchedAgain}`);
   };
-  const log = await drive(d, LAPS, MID ? mid : undefined);
-  reportDrive("drive portrait", log, LAPS);
+  if (point) reportPoint("drive portrait", await drivePoint(d, LAPS, MID ? mid : undefined), LAPS);
+  else reportDrive("drive portrait", await drive(d, LAPS, MID ? mid : undefined), LAPS);
   if (LAPS < 3) return;
   await d.until("our finish", "(window.scrapDebug.game.ownSnap()?.fin ?? 0) > 0", 20_000).catch(() => undefined);
   await sleep(150);
@@ -743,12 +1132,13 @@ async function driveLandscape(d: PageDriver): Promise<void> {
   await d.load("?debug=1");
   check("drive landscape: matchMedia('(pointer: coarse)') under touch emulation", await d.cdp.eval<boolean>(`matchMedia('(pointer: coarse)').matches`));
   d.params = await d.cdp.eval<StickParams>("scrapDebug.touchPad.stickParams()");
+  const point = d.params.mode === "point";
   await d.race();
   await d.cdp.eval(PATCH_STEP);
-  await stickChecks(d, "drive landscape");
+  await (point ? pointStickChecks : stickChecks)(d, "drive landscape");
   await d.until("the race", "window.scrapDebug.game.phase === 'racing'", 10_000);
-  const log = await drive(d, 1);
-  reportDrive("drive landscape", log, 1);
+  if (point) reportPoint("drive landscape", await drivePoint(d, 1), 1);
+  else reportDrive("drive landscape", await drive(d, 1), 1);
   // Retire to garage (the menu): the garage opens while the race runs on; no controls.
   await d.tap("#menu-btn");
   await sleep(150);
@@ -763,117 +1153,219 @@ async function driveLandscape(d: PageDriver): Promise<void> {
   check("drive landscape: retired to the garage mid-race: no controls", g.retired && g.lobby && g.phase === "racing" && !g.shown, JSON.stringify(g));
 }
 
-/** The tuning panel (?debug=1): opens from TUNE, changes the feel live; portrait also: persists, resets, not without debug. */
-async function tune(d: PageDriver, w: number, h: number): Promise<void> {
-  {
-    const tag = `tune ${w}x${h}`;
-    await d.device(w, h, true);
-    await d.load("?debug=1");
-    await d.cdp.eval(`localStorage.removeItem('scrap-rally:stick'), true`);
-    await d.load("?debug=1");
-    d.params = await d.cdp.eval<StickParams>("scrapDebug.touchPad.stickParams()");
-    check(`${tag}: no TUNE button outside a race`, !(await d.box(".tune-btn")));
+/**
+ * Rate mode (TOUCH-2 to TOUCH-4) by the A/B switch's stored value (?debug=1, mode "rate" stored): the
+ * rate stick by itself in the countdown and a lap by the rate driver, every settled step checked
+ * against the rate stick's function of the thumb's offset.
+ */
+async function ratePortrait(d: PageDriver): Promise<void> {
+  await d.device(390, 844, true);
+  await d.load("?debug=1");
+  await d.cdp.eval(`localStorage.setItem('scrap-rally:stick', JSON.stringify({ mode: 'rate' })), true`);
+  await d.load("?debug=1");
+  d.params = await d.cdp.eval<StickParams>("scrapDebug.touchPad.stickParams()");
+  check("rate portrait: with mode rate stored (?debug=1) the page drives in rate mode, every other value the default", JSON.stringify(d.params) === JSON.stringify({ ...STICK_DEFAULTS, mode: "rate" }), JSON.stringify(d.params));
+  try {
     await d.race();
     await d.cdp.eval(PATCH_STEP);
-    await d.until("the controls", "!document.getElementById('touch').classList.contains('hidden')", 5000);
-    await d.tap(".tune-btn");
-    await sleep(150);
-    const L = await d.cdp.eval<{ panel: Box | null; zone: Box; split: string; text: string; tuning: boolean; ranges: number }>(`(() => {
-      const b = (e) => { if (!e) return null; const r = e.getBoundingClientRect(); return r.width ? { left: r.left, top: r.top, width: r.width, height: r.height } : null; };
-      return { panel: b(document.getElementById('tune-panel')), zone: b(document.getElementById('touch-stick')), split: getComputedStyle(document.getElementById('touch-stick')).boxShadow,
-        text: document.querySelector('.tune-text').value, tuning: document.getElementById('stage').classList.contains('tuning'), ranges: document.querySelectorAll('.tune-range').length };
-    })()`);
-    const smallest = await d.cdp.eval<number>(`Math.min(...[...document.querySelectorAll('.tune-range')].map((e) => e.getBoundingClientRect().height))`);
-    check(
-      `${tag}: TUNE opens the panel: six big sliders (R, steer dead zone, full lock, curve, throttle dead zone, split), the values as text; it stays left of the stick's zone, whose split line shows`,
-      !!L.panel && L.ranges === 6 && smallest >= 36 && L.panel.left + L.panel.width <= L.zone.left + 1 && L.tuning && L.text.includes(`radius: ${STICK_DEFAULTS.radius}`) && L.text.includes(`split: ${STICK_DEFAULTS.split}`),
-      `panel ${L.panel ? boxText(L.panel) : "none"}, zone ${boxText(L.zone)}, sliders ${L.ranges} (smallest ${smallest} px), text ${L.text}`,
-    );
-    // Live while driving: the thumb holds gas + a little right; a second finger drags "Full lock at"
-    // all the way left (0.2 R): the same thumb now gives full lock.
+    await stickChecks(d, "rate portrait");
     await d.until("the race", "window.scrapDebug.game.phase === 'racing'", 10_000);
-    await d.thumbDown(...(await d.rest()));
-    await d.thumbAt(Math.round(d.params.radius * 0.5), -Math.round(d.params.radius * 0.6)); // 0.5 R: on curve 3 about 0.12 steer
-    await sleep(120);
-    const before = (await d.cdp.eval<Pose>(POSE)).last;
-    const sl = (await d.box('.tune-range[data-key="steerLock"]'))!;
+    reportDrive("rate portrait", await drive(d, 1), 1);
+  } finally {
+    await d.cdp.eval(`localStorage.removeItem('scrap-rally:stick'), true`).catch(() => undefined);
+  }
+}
+
+/** The tuning panel (?debug=1): opens from TUNE, changes the feel live; portrait also: persists, resets, not without debug. */
+async function tune(d: PageDriver, w: number, h: number): Promise<void> {
+  const tag = `tune ${w}x${h}`;
+  const STORE = "scrap-rally:stick";
+  await d.device(w, h, true);
+  await d.load("?debug=1");
+  await d.cdp.eval(`localStorage.removeItem('${STORE}'), true`);
+  await d.load("?debug=1");
+  d.params = await d.cdp.eval<StickParams>("scrapDebug.touchPad.stickParams()");
+  check(`${tag}: no TUNE button outside a race`, !(await d.box(".tune-btn")));
+  await d.race();
+  await d.cdp.eval(PATCH_STEP);
+  await d.until("the controls", "!document.getElementById('touch').classList.contains('hidden')", 5000);
+  await d.tap(".tune-btn");
+  await sleep(150);
+  /** The panel as laid out: its box, the zone's, the text, the sliders shown (their keys and the smallest height), the Mode switch's pressed button. */
+  const PANEL = `(() => {
+    const b = (e) => { if (!e) return null; const r = e.getBoundingClientRect(); return r.width ? { left: r.left, top: r.top, width: r.width, height: r.height } : null; };
+    const shown = [...document.querySelectorAll('.tune-range')].filter((e) => e.getBoundingClientRect().width > 0);
+    return { panel: b(document.getElementById('tune-panel')), zone: b(document.getElementById('touch-stick')), text: document.querySelector('.tune-text').value,
+      tuning: document.getElementById('stage').classList.contains('tuning'), keys: shown.map((e) => e.dataset.key), smallest: Math.min(...shown.map((e) => e.getBoundingClientRect().height)),
+      pressed: [...document.querySelectorAll('[data-mode]')].filter((e) => e.getAttribute('aria-checked') === 'true').map((e) => e.dataset.mode),
+      lamps: [...document.querySelectorAll('[data-mode]')].map((e) => e.dataset.mode + ' ' + getComputedStyle(e, '::before').backgroundColor),
+      modeBoxes: [...document.querySelectorAll('[data-mode]')].map((e) => b(e)) };
+  })()`;
+  type Panel = { panel: Box | null; zone: Box; text: string; tuning: boolean; keys: string[]; smallest: number; pressed: string[]; lamps: string[]; modeBoxes: (Box | null)[] };
+  /** One mode checked, its lamp lit (a colour the other's is not). */
+  const lit = (p: Panel, mode: string) => p.pressed.join(",") === mode && p.lamps.length === 2 && p.lamps[0].split(" ").slice(1).join(" ") !== p.lamps[1].split(" ").slice(1).join(" ");
+  const L = await d.cdp.eval<Panel>(PANEL);
+  const pointKeys = "radius,pointDead,aimFull,brakeAngle,split";
+  const rateKeys = "radius,steerDead,steerLock,steerCurve,throttleDead,split";
+  check(
+    `${tag}: TUNE opens the panel in point mode: the Mode switch (Point checked, its lamp lit) and point mode's big sliders (R, aim dead zone, full lock at, brake past, split), the values as text with the mode; it stays left of the stick's zone, whose split line shows`,
+    !!L.panel && L.keys.join(",") === pointKeys && L.smallest >= 36 && lit(L, "point") && L.modeBoxes.every((m) => !!m && m.height >= 30) &&
+      L.panel.left + L.panel.width <= L.zone.left + 1 && L.tuning && L.text.includes('mode: "point"') && L.text.includes(`aimFull: ${STICK_DEFAULTS.aimFull}`) && L.text.includes(`split: ${STICK_DEFAULTS.split}`),
+    `panel ${L.panel ? boxText(L.panel) : "none"}, zone ${boxText(L.zone)}, sliders ${L.keys.join(",")} (smallest ${L.smallest} px), checked ${L.pressed.join(",")} (lamps ${L.lamps.join(" / ")}), text ${L.text}`,
+  );
+  /** A second finger drags slider `key` from its value to `to` (a 12 px a step slide, from where its grip is). */
+  const drag = async (key: string, from: number, to: number, min: number, max: number) => {
+    await d.cdp.eval(`document.querySelector('.tune-range[data-key="${key}"]').scrollIntoView({ block: "center" }), true`);
+    await sleep(60);
+    const sl = (await d.box(`.tune-range[data-key="${key}"]`))!;
     const y = Math.round(sl.top + sl.height / 2);
-    const [x0] = [Math.round(sl.left + sl.width * ((d.params.steerLock - 0.2) / 0.8))];
+    const x0 = Math.round(sl.left + sl.width * ((from - min) / (max - min)));
+    const x1 = to <= min ? sl.left - 10 : to >= max ? sl.left + sl.width + 10 : sl.left + sl.width * ((to - min) / (max - min));
     await d.fingers.at(EXTRA, x0, y);
-    for (let x = x0; x >= sl.left - 10; x -= 12) {
+    for (let x = x0; to < from ? x >= x1 : x <= x1; x += to < from ? -12 : 12) {
       await d.fingers.at(EXTRA, x, y);
       await sleep(16);
     }
     await d.fingers.lift(EXTRA);
     await sleep(150);
-    const after = (await d.cdp.eval<Pose>(POSE)).last;
-    const live = await d.cdp.eval<{ lock: number; stored: string | null; shown: string; live: string }>(
-      `({ lock: scrapDebug.touchPad.stickParams().steerLock, stored: localStorage.getItem('scrap-rally:stick'), shown: document.querySelector('.tune-range[data-key="steerLock"]').value, live: document.querySelector('.tune-live').textContent })`,
-    );
-    await d.shot(`tune-panel-${w}x${h}`);
-    check(
-      `${tag}: a second finger drags "Full lock at" down to 0.2 while the thumb holds the stick: the thumb's steer goes to full lock at once (live), the value is stored and shown`,
-      !!before && before.throttle === 1 && before.steer > 0 && before.steer < 1 && !!after && after.throttle === 1 && after.steer === 1 && live.lock === 0.2 && !!live.stored && JSON.parse(live.stored).steerLock === 0.2 && live.shown === "0.2",
-      `before ${JSON.stringify(before)}, after ${JSON.stringify(after)}; ${JSON.stringify(live)}`,
-    );
-    await d.thumbUp();
-    if (w > h) return;
-    // Stored: back after a reload (?debug=1), and applied; the split moves the zone.
-    await d.cdp.eval(`localStorage.setItem('scrap-rally:stick', JSON.stringify({ ...JSON.parse(localStorage.getItem('scrap-rally:stick')), radius: 80, split: 0.4 })), true`);
-    await d.load("?debug=1");
-    await sleep(300);
-    const reloaded = await d.cdp.eval<StickParams>("scrapDebug.touchPad.stickParams()");
-    check("tune: after a reload with ?debug=1 the stored values are applied (R 80, lock 0.2, split 0.4)", reloaded.radius === 80 && reloaded.steerLock === 0.2 && reloaded.split === 0.4, JSON.stringify(reloaded));
-    // A player who saved under the old defaults (TOUCH-2: R 60, lock 0.7, curve 1.4; the panel stores
-    // the whole set) keeps them under ?debug=1: the new defaults (R 95, TOUCH-3; lock 0.9 and curve
-    // 3, TOUCH-4) do not replace saved values (the gate drawn at 2 x 60).
-    const old: StickParams = { radius: 60, steerDead: 0.12, steerLock: 0.7, steerCurve: 1.4, throttleDead: 0.3, split: 0.5 };
-    await d.cdp.eval(`localStorage.setItem('scrap-rally:stick', ${JSON.stringify(JSON.stringify(old))}), true`);
-    await d.load("?debug=1");
-    await d.race();
-    await d.until("the controls", "!document.getElementById('touch').classList.contains('hidden')", 5000);
-    await d.thumbDown(...(await d.rest()));
-    await sleep(120);
-    const kept = await d.cdp.eval<{ p: StickParams; gate: number }>(`({ p: scrapDebug.touchPad.stickParams(), gate: document.getElementById('touch-base').getBoundingClientRect().width })`);
-    await d.thumbUp();
-    check(
-      `tune: values saved under ?debug=1 with the old defaults (R 60, lock 0.7, curve 1.4) are kept after the reload, not replaced by the new defaults R ${STICK_DEFAULTS.radius}, lock ${STICK_DEFAULTS.steerLock}, curve ${STICK_DEFAULTS.steerCurve} (gate 2 x 60)`,
-      JSON.stringify(kept.p) === JSON.stringify(old) && Math.abs(kept.gate - 120) < 0.5 && STICK_DEFAULTS.radius !== 60 && STICK_DEFAULTS.steerLock !== 0.7 && STICK_DEFAULTS.steerCurve !== 1.4,
-      JSON.stringify(kept),
-    );
-    // Bad stored data (out of range, not a number) is ignored value by value.
-    await d.cdp.eval(`localStorage.setItem('scrap-rally:stick', JSON.stringify({ radius: 999, steerDead: 'x', steerLock: 0.5 })), true`);
-    await d.load("?debug=1");
-    await sleep(300);
-    const bad = await d.cdp.eval<StickParams>("scrapDebug.touchPad.stickParams()");
-    check("tune: stored values out of range or not numbers are ignored one by one (R and the dead zone default, the lock 0.5 kept)", bad.radius === STICK_DEFAULTS.radius && bad.steerDead === STICK_DEFAULTS.steerDead && bad.steerLock === 0.5, JSON.stringify(bad));
-    // Without ?debug=1: no panel, no stored values (the gate's size is the default R) even with values stored.
-    await d.cdp.eval(`localStorage.setItem('scrap-rally:stick', JSON.stringify({ radius: 100, split: 0.35 })), true`);
+  };
+  // Live while driving, point mode: the thumb points where the car heads at 0.4 R (past the 0.3 R
+  // dead zone: gas); a second finger drags "Aim dead" to its top (0.6 R): the same thumb is now
+  // inside the dead zone, so the step coasts (no gas, no steer) at once; stored.
+  await d.until("the race", "window.scrapDebug.game.phase === 'racing'", 10_000);
+  await d.thumbDown(...(await d.rest()));
+  await d.thumbToward((await d.cdp.eval<Pose>(POSE)).h / DEG, 0.4);
+  await sleep(150);
+  const pBefore = (await d.cdp.eval<Pose>(POSE)).last;
+  await drag("pointDead", d.params.pointDead, 0.6, 0.1, 0.6);
+  const pAfter = (await d.cdp.eval<Pose>(POSE)).last;
+  const pLive = await d.cdp.eval<{ dead: number; stored: string | null; shown: string }>(`({ dead: scrapDebug.touchPad.stickParams().pointDead, stored: localStorage.getItem('${STORE}'), shown: document.querySelector('.tune-range[data-key="pointDead"]').value })`);
+  check(
+    `${tag}: point mode live: a second finger drags "Aim dead" up to 0.6 R while the thumb points at 0.4 R (gas): the thumb is now inside the dead zone and the step coasts at once; the value is stored and shown`,
+    !!pBefore && pBefore.throttle !== 0 && !!pAfter && pAfter.throttle === 0 && pAfter.steer === 0 && pLive.dead === 0.6 && !!pLive.stored && JSON.parse(pLive.stored).pointDead === 0.6 && pLive.shown === "0.6",
+    `before ${JSON.stringify(pBefore)}, after ${JSON.stringify(pAfter)}; ${JSON.stringify(pLive)}`,
+  );
+  // The Mode switch (a tap makes no click while another finger is down, so the thumb lifts first):
+  // Rate: rate's sliders show, point's hide, stored; the thumb put back drives by rate's function.
+  await d.thumbUp();
+  await sleep(100);
+  await d.tap('[data-mode="rate"]');
+  const R1 = await d.cdp.eval<Panel>(PANEL);
+  const rMode = await d.cdp.eval<{ mode: string; stored: string | null }>(`({ mode: scrapDebug.touchPad.stickParams().mode, stored: localStorage.getItem('${STORE}') })`);
+  d.params = await d.cdp.eval<StickParams>("scrapDebug.touchPad.stickParams()");
+  await d.thumbDown(...(await d.rest()));
+  await d.thumbAt(Math.round(d.params.radius * 0.5), -Math.round(d.params.radius * 0.6)); // 0.5 R: on curve 3 about 0.12 steer
+  await sleep(150);
+  const before = (await d.cdp.eval<Pose>(POSE)).last;
+  const [wt, ws] = d.expected();
+  check(
+    `${tag}: the Mode switch to Rate: rate's sliders show (R, steer dead zone, full lock, curve, gas dead zone, split), Rate checked (its lamp lit), stored; the thumb drives by rate's function at once (up = gas, sideways = steer)`,
+    rMode.mode === "rate" && !!rMode.stored && JSON.parse(rMode.stored).mode === "rate" && R1.keys.join(",") === rateKeys && lit(R1, "rate") && R1.text.includes('mode: "rate"') &&
+      !!before && before.throttle === wt && before.steer === ws && wt === 1 && ws > 0 && ws < 1,
+    `mode ${rMode.mode}, sliders ${R1.keys.join(",")}, checked ${R1.pressed.join(",")} (lamps ${R1.lamps.join(" / ")}); thumb ${JSON.stringify(before)} (rate's ${wt}/${ws})`,
+  );
+  // Rate live: a second finger drags "Full lock at" down to 0.2 while the thumb holds gas + a little
+  // right: the same thumb now gives full lock at once.
+  await drag("steerLock", d.params.steerLock, 0.2, 0.2, 1);
+  const after = (await d.cdp.eval<Pose>(POSE)).last;
+  const live = await d.cdp.eval<{ lock: number; stored: string | null; shown: string; live: string }>(
+    `({ lock: scrapDebug.touchPad.stickParams().steerLock, stored: localStorage.getItem('${STORE}'), shown: document.querySelector('.tune-range[data-key="steerLock"]').value, live: document.querySelector('.tune-live').textContent })`,
+  );
+  await d.shot(`tune-panel-${w}x${h}`);
+  check(
+    `${tag}: rate mode live: a second finger drags "Full lock at" down to 0.2 while the thumb holds the stick: the thumb's steer goes to full lock at once, the value is stored and shown`,
+    !!after && after.throttle === 1 && after.steer === 1 && live.lock === 0.2 && !!live.stored && JSON.parse(live.stored).steerLock === 0.2 && live.shown === "0.2",
+    `after ${JSON.stringify(after)}; ${JSON.stringify(live)}`,
+  );
+  await d.thumbUp();
+  if (w > h) return;
+  // Stored: back after a reload (?debug=1) and applied, the mode too; the split moves the zone.
+  await d.cdp.eval(`localStorage.setItem('${STORE}', JSON.stringify({ ...JSON.parse(localStorage.getItem('${STORE}')), radius: 80, split: 0.4 })), true`);
+  await d.load("?debug=1");
+  await sleep(300);
+  const reloaded = await d.cdp.eval<StickParams>("scrapDebug.touchPad.stickParams()");
+  check(
+    "tune: after a reload with ?debug=1 the stored values are applied (mode rate, R 80, lock 0.2, aim dead 0.6, split 0.4)",
+    reloaded.mode === "rate" && reloaded.radius === 80 && reloaded.steerLock === 0.2 && reloaded.pointDead === 0.6 && reloaded.split === 0.4,
+    JSON.stringify(reloaded),
+  );
+  // A player who saved before TOUCH-5 (no mode, no point keys; TOUCH-2's R 60, lock 0.7, curve 1.4)
+  // keeps those values under ?debug=1, and gets the new keys at their defaults: point mode (the
+  // gate drawn at 2 x 60).
+  const old = { radius: 60, steerDead: 0.12, steerLock: 0.7, steerCurve: 1.4, throttleDead: 0.3, split: 0.5 };
+  await d.cdp.eval(`localStorage.setItem('${STORE}', ${JSON.stringify(JSON.stringify(old))}), true`);
+  await d.load("?debug=1");
+  await d.race();
+  await d.until("the controls", "!document.getElementById('touch').classList.contains('hidden')", 5000);
+  await d.thumbDown(...(await d.rest()));
+  await sleep(120);
+  const kept = await d.cdp.eval<{ p: StickParams; gate: number }>(`({ p: scrapDebug.touchPad.stickParams(), gate: document.getElementById('touch-base').getBoundingClientRect().width })`);
+  await d.thumbUp();
+  check(
+    `tune: values saved before TOUCH-5 (six keys, no mode; R 60, lock 0.7, curve 1.4) are kept after the reload, and the new keys take their defaults (mode ${STICK_DEFAULTS.mode}, aim dead ${STICK_DEFAULTS.pointDead}, full lock at ${STICK_DEFAULTS.aimFull}°, brake past ${STICK_DEFAULTS.brakeAngle}°; gate 2 x 60)`,
+    JSON.stringify(kept.p) === JSON.stringify({ ...STICK_DEFAULTS, ...old }) && Math.abs(kept.gate - 120) < 0.5,
+    JSON.stringify(kept),
+  );
+  // Bad stored data (out of range, not a number, an unknown mode) is ignored value by value.
+  await d.cdp.eval(`localStorage.setItem('${STORE}', JSON.stringify({ radius: 999, steerDead: 'x', steerLock: 0.5, mode: 'sideways', aimFull: 5, brakeAngle: 200, pointDead: 0.45 })), true`);
+  await d.load("?debug=1");
+  await sleep(300);
+  const bad = await d.cdp.eval<StickParams>("scrapDebug.touchPad.stickParams()");
+  check(
+    "tune: stored values out of range, not numbers or an unknown mode are ignored one by one (R, the dead zone, the mode, full lock at 5° and brake past 200° default; the lock 0.5 and aim dead 0.45 kept)",
+    bad.radius === STICK_DEFAULTS.radius && bad.steerDead === STICK_DEFAULTS.steerDead && bad.steerLock === 0.5 && bad.mode === STICK_DEFAULTS.mode && bad.aimFull === STICK_DEFAULTS.aimFull && bad.brakeAngle === STICK_DEFAULTS.brakeAngle && bad.pointDead === 0.45,
+    JSON.stringify(bad),
+  );
+  // Defaults (debug again, rate stored): back to STICK_DEFAULTS (point mode too), stored as such.
+  await d.cdp.eval(`localStorage.setItem('${STORE}', JSON.stringify({ mode: 'rate', radius: 100, split: 0.35 })), true`);
+  await d.load("?debug=1");
+  await d.race();
+  await d.until("the controls", "!document.getElementById('touch').classList.contains('hidden')", 5000);
+  await d.tap(".tune-btn");
+  await sleep(100);
+  await d.tap(".tune-panel .tune-buttons:last-child .btn:nth-child(2)");
+  await sleep(100);
+  const reset = await d.cdp.eval<{ p: StickParams; stored: string | null; pressed: string[] }>(
+    `({ p: scrapDebug.touchPad.stickParams(), stored: localStorage.getItem('${STORE}'), pressed: [...document.querySelectorAll('[data-mode]')].filter((e) => e.getAttribute('aria-checked') === 'true').map((e) => e.dataset.mode) })`,
+  );
+  check(
+    "tune: Defaults puts every value back to the shipped defaults, the mode too (and stores them)",
+    JSON.stringify(reset.p) === JSON.stringify(STICK_DEFAULTS) && !!reset.stored && JSON.stringify(JSON.parse(reset.stored)) === JSON.stringify(STICK_DEFAULTS) && reset.pressed.join(",") === STICK_DEFAULTS.mode,
+    JSON.stringify(reset),
+  );
+  await d.cdp.eval(`localStorage.removeItem('${STORE}'), true`);
+}
+
+/**
+ * Without ?debug=1 (a browser of its own: late in the long tune pass Chrome's emulation stopped
+ * delivering touches to one page load, seen in TOUCH-5 runs): no panel and no stored values, even
+ * with rate stored: the gate's size is the default R, the zone at the default split, and the mode the
+ * default (point: a thumb pushed straight sideways drives, the knob coloured; rate would only steer, grey).
+ */
+async function tunePlain(d: PageDriver): Promise<void> {
+  const STORE = "scrap-rally:stick";
+  await d.device(390, 844, true);
+  await d.load("");
+  await d.cdp.eval(`localStorage.setItem('${STORE}', JSON.stringify({ mode: 'rate', radius: 100, split: 0.35 })), true`);
+  try {
     await d.load("");
     await d.race();
     await d.until("the controls", "!document.getElementById('touch').classList.contains('hidden')", 5000);
     await d.thumbDown(...(await d.rest()));
-    await sleep(120);
+    await d.thumbAt(Math.round(STICK_DEFAULTS.radius * 0.6), 0);
+    await sleep(150);
     const plain = await d.cdp.eval<{ tune: boolean; gate: number; zoneLeft: number; w: number }>(
       `({ tune: !!document.querySelector('.tune-btn'), gate: document.getElementById('touch-base').getBoundingClientRect().width, zoneLeft: document.getElementById('touch-stick').getBoundingClientRect().left, w: innerWidth })`,
     );
+    const sideways = await d.view();
     await d.thumbUp();
     check(
-      "tune: without ?debug=1 there is no TUNE button and the stored values are not used (gate 2 x the default R, the zone at the default split)",
-      !plain.tune && Math.abs(plain.gate - 2 * STICK_DEFAULTS.radius) < 0.5 && Math.abs(plain.zoneLeft - plain.w * STICK_DEFAULTS.split) < 0.5,
-      JSON.stringify(plain),
+      `tune plain: without ?debug=1 there is no TUNE button and the stored values are not used (gate 2 x the default R, the zone at the default split, mode ${STICK_DEFAULTS.mode}: a thumb held straight sideways ${STICK_DEFAULTS.mode === "point" ? "drives (the knob coloured)" : "only steers (grey)"})`,
+      !plain.tune && sideways.on && Math.abs(plain.gate - 2 * STICK_DEFAULTS.radius) < 0.5 && Math.abs(plain.zoneLeft - plain.w * STICK_DEFAULTS.split) < 0.5 && (STICK_DEFAULTS.mode === "point" ? sideways.colour !== "neutral" : sideways.colour === "neutral"),
+      `${JSON.stringify(plain)}; sideways: stick ${sideways.on ? "held" : "NOT held"}, knob ${sideways.colour}`,
     );
-    // Defaults (debug again): back to STICK_DEFAULTS, stored as such.
-    await d.load("?debug=1");
-    await d.race();
-    await d.until("the controls", "!document.getElementById('touch').classList.contains('hidden')", 5000);
-    await d.tap(".tune-btn");
-    await sleep(100);
-    await d.tap(".tune-buttons .btn:nth-child(2)");
-    await sleep(100);
-    const reset = await d.cdp.eval<{ p: StickParams; stored: string | null }>(`({ p: scrapDebug.touchPad.stickParams(), stored: localStorage.getItem('scrap-rally:stick') })`);
-    check("tune: Defaults puts every value back to the shipped defaults (and stores them)", JSON.stringify(reset.p) === JSON.stringify(STICK_DEFAULTS) && !!reset.stored && JSON.stringify(JSON.parse(reset.stored)) === JSON.stringify(STICK_DEFAULTS), JSON.stringify(reset));
-    await d.cdp.eval(`localStorage.removeItem('scrap-rally:stick'), true`);
+  } finally {
+    await d.cdp.eval(`localStorage.removeItem('${STORE}'), true`).catch(() => undefined);
   }
 }
 
@@ -954,37 +1446,64 @@ async function look(d: PageDriver, tag: string, w: number, h: number): Promise<v
   await sleep(3400); // the countdown is over
   const L0 = await d.cdp.eval<Layout>(LAYOUT);
   const [rx, ry] = await d.rest();
-  // Gas + right with FIRE held: the green knob.
-  await d.thumbDown(rx, ry);
-  await d.thumbAt(Math.round(R * 0.4), -Math.round(R * 0.6));
-  await d.fingers.at(LEFT, ...centre(L0.fire));
-  await sleep(500);
-  const gasView = await d.view();
-  const lit = await d.cdp.eval<string[]>(`[...document.querySelectorAll('#touch .on')].map((e) => e.id || e.className)`);
-  await d.shot(`race-${orient}-${size}-gas`);
-  // Brake with the wheel left: the red knob.
-  await d.thumbAt(-Math.round(R * 0.3), Math.round(R * 0.6));
-  await sleep(300);
-  const brakeView = await d.view();
-  await d.shot(`race-${orient}-${size}-brake`);
-  // Steer only (no gas): the grey knob.
-  await d.thumbAt(Math.round(R * 0.5), 0);
-  await sleep(300);
-  const neutralView = await d.view();
-  await d.shot(`race-${orient}-${size}-neutral`);
+  const P = STICK_DEFAULTS;
+  let gasView: StickView, brakeView: StickView, neutralView: StickView, lit: string[];
+  const litNow = () => d.cdp.eval<string[]>(`[...document.querySelectorAll('#touch .on')].map((e) => e.id || e.className)`);
+  if (P.mode === "point") {
+    // Point mode (no debug: the car's heading is not readable, so it is the grid's, slot 0 of the
+    // default track; the car has not moved yet). Pointed behind the car from rest: reverse, the red
+    // knob (FIRE held); ahead: gas, green; inside the dead zone: nothing, grey.
+    const h0 = gridSlot(findTrack(DEFAULT_TRACK_ID)!, 0).h / DEG;
+    await d.thumbDown(rx, ry);
+    await d.thumbToward(h0 + 180, 0.6);
+    await d.fingers.at(LEFT, ...centre(L0.fire));
+    await sleep(300);
+    brakeView = await d.view();
+    lit = await litNow();
+    await d.shot(`race-${orient}-${size}-brake`);
+    await d.thumbToward(h0, 0.6);
+    await sleep(300);
+    gasView = await d.view();
+    await d.shot(`race-${orient}-${size}-gas`);
+    await d.thumbToward(h0, P.pointDead * 0.5);
+    await sleep(300);
+    neutralView = await d.view();
+    await d.shot(`race-${orient}-${size}-neutral`);
+  } else {
+    // Rate mode: gas + right with FIRE held: the green knob; brake with the wheel left: red; steer only (no gas): grey.
+    await d.thumbDown(rx, ry);
+    await d.thumbAt(Math.round(R * 0.4), -Math.round(R * 0.6));
+    await d.fingers.at(LEFT, ...centre(L0.fire));
+    await sleep(500);
+    gasView = await d.view();
+    lit = await litNow();
+    await d.shot(`race-${orient}-${size}-gas`);
+    await d.thumbAt(-Math.round(R * 0.3), Math.round(R * 0.6));
+    await sleep(300);
+    brakeView = await d.view();
+    await d.shot(`race-${orient}-${size}-brake`);
+    await d.thumbAt(Math.round(R * 0.5), 0);
+    await sleep(300);
+    neutralView = await d.view();
+    await d.shot(`race-${orient}-${size}-neutral`);
+  }
   check(
-    `${tag}: the knob's colour: gas+right green (gas), brake+left red (brake), steer only grey (neutral); FIRE lit while held`,
-    gasView.on && gasView.colour === "gas" && brakeView.colour === "brake" && neutralView.colour === "neutral" && lit.includes("touch-fire") && lit.includes("touch-base"),
-    `${gasView.colour}, ${brakeView.colour}, ${neutralView.colour}; lit ${lit.join(", ")}`,
+    P.mode === "point"
+      ? `${tag}: the knob's colour (point mode): pointed behind the car from rest red (reverse), ahead green (gas), inside the dead zone grey (nothing); FIRE lit while held`
+      : `${tag}: the knob's colour: gas+right green (gas), brake+left red (brake), steer only grey (neutral); FIRE lit while held`,
+    brakeView.on && gasView.on && gasView.colour === "gas" && brakeView.colour === "brake" && neutralView.colour === "neutral" && lit.includes("touch-fire") && lit.includes("touch-base"),
+    `gas ${gasView.colour}, brake ${brakeView.colour}, neutral ${neutralView.colour}; lit ${lit.join(", ")}`,
   );
   const L = await d.cdp.eval<Layout>(LAYOUT);
   await d.fingers.liftAll();
   d.stick = null;
   // The stick at the shipped R: the gate 2R, the knob 0.8R; from a landing at each corner of the
-  // zone (2 px in) the thumb slid R away, or to the screen's last pixel, reaches full lock both ways
-  // (the knob at least steerLock R sideways: 0.9 R), gas and brake (the knob's colour); the gate's
-  // centre is where stickCentre puts it (shifted in at the right and bottom edges).
+  // zone (2 px in) the thumb slid R away, or to the screen's last pixel: rate mode reaches full lock
+  // both ways (the knob at least steerLock R sideways: 0.9 R), gas and brake (the knob's colour);
+  // point mode reaches past the dead zone every way (the knob more than pointDead R out, coloured).
+  // The gate's centre is where stickCentre puts it (shifted in at the edges).
   const lockPx = R * STICK_DEFAULTS.steerLock;
+  const deadPx = R * STICK_DEFAULTS.pointDead;
   const clampTo = (v: number, hi: number) => Math.max(0, Math.min(hi, Math.round(v)));
   const Z = L.zone;
   const corners: [string, number, number][] = [["top-left", Z.left + 2, Z.top + 2], ["top-right", Z.left + Z.width - 2, Z.top + 2], ["bottom-left", Z.left + 2, Z.top + Z.height - 2], ["bottom-right", Z.left + Z.width - 2, Z.top + Z.height - 2]];
@@ -1009,12 +1528,18 @@ async function look(d: PageDriver, tag: string, w: number, h: number): Promise<v
     const b = await slide(cx, cy + R);
     await d.thumbUp();
     await sleep(60);
-    const ok = Math.abs(v0.cx - cx) < 0.6 && Math.abs(v0.cy - cy) < 0.6 && l.kx <= -lockPx + 0.05 && r.kx >= lockPx - 0.05 && g.colour === "gas" && b.colour === "brake";
+    const placed = Math.abs(v0.cx - cx) < 0.6 && Math.abs(v0.cy - cy) < 0.6;
+    const ok =
+      P.mode === "point"
+        ? placed && [l, r, g, b].every((k) => Math.hypot(k.kx, k.ky) > deadPx && k.colour !== "neutral")
+        : placed && l.kx <= -lockPx + 0.05 && r.kx >= lockPx - 0.05 && g.colour === "gas" && b.colour === "brake";
     reachOk &&= ok;
-    reach.push(`${name} ${Math.round(x)},${Math.round(y)} -> centre ${v0.cx.toFixed(1)},${v0.cy.toFixed(1)}: knob left ${l.kx}, right ${r.kx}, up ${g.colour}, down ${b.colour}${ok ? "" : " (FAIL)"}`);
+    reach.push(`${name} ${Math.round(x)},${Math.round(y)} -> centre ${v0.cx.toFixed(1)},${v0.cy.toFixed(1)}: knob left ${l.kx} ${l.colour}, right ${r.kx} ${r.colour}, up ${g.ky} ${g.colour}, down ${b.ky} ${b.colour}${ok ? "" : " (FAIL)"}`);
   }
   check(
-    `${tag}: the gate is drawn at 2R (${2 * R} px) and the knob at 0.8R (${0.8 * R} px); from a landing at each corner of the stick's zone full lock both ways (knob >= ${lockPx} px sideways), gas and brake are reached on screen`,
+    P.mode === "point"
+      ? `${tag}: the gate is drawn at 2R (${2 * R} px) and the knob at 0.8R (${0.8 * R} px); from a landing at each corner of the stick's zone the thumb points past the dead zone (knob > ${deadPx} px out, coloured) every way on screen`
+      : `${tag}: the gate is drawn at 2R (${2 * R} px) and the knob at 0.8R (${0.8 * R} px); from a landing at each corner of the stick's zone full lock both ways (knob >= ${lockPx} px sideways), gas and brake are reached on screen`,
     Math.abs(drawn.gate - 2 * R) < 0.5 && Math.abs(drawn.knob - 0.8 * R) < 0.5 && reachOk,
     `gate ${drawn.gate}, knob ${drawn.knob}; ${reach.join(" | ")}`,
   );
@@ -1129,8 +1654,10 @@ async function main(): Promise<void> {
   const passes: [string, (d: PageDriver) => Promise<void>][] = [
     ["drive-portrait", drivePortrait],
     ["drive-landscape", driveLandscape],
+    ["rate-portrait", ratePortrait],
     ["tune-portrait", (d) => tune(d, 390, 844)],
     ["tune-landscape", (d) => tune(d, 844, 390)],
+    ["tune-plain", tunePlain],
     ["look-portrait", (d) => look(d, "look portrait", 390, 844)],
     ["look-landscape", (d) => look(d, "look landscape", 844, 390)],
     ["look-small", (d) => look(d, "look small", 360, 740)],

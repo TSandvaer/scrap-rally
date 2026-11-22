@@ -554,6 +554,20 @@ Opus reviewer ctx_09e09c787a72 (tmp/review-touch-5.md). On APPROVE: merge, gate,
 SURF-2 fix round 1 done: 860795c (f02ecde walls interpolate like the bake, gap 0.0000 on all 5 widens; 860795c bots back off islands,
 weapons-on contacts <= 1-2, bound 8; N2 hoisted; 840/840 + 128/128 twice; report tmp/m4-surf-2/m4-surf-2-fix1-report.md). Re-review
 sent to ctx_758bdaf628ba. TASTE COPY :3009 refreshed to 860795c (node pid 62281, npm pid 62260; same worktree split-taste).
+SURF-2 re-review APPROVE (ctx_857a55d25a38, released). User popup: "Merge now, drive later". MERGED ae4db2c; gate 840/840 + 128/128,
+build ok; ClickUp 123jpnbffz4 ready for qa test; author released, workspace m4-surf-2 removed. Taste copy :3009 STAYS UP (split-taste,
+860795c) until the user has driven it. TOUCH-5 review 1 REQUEST_CHANGES (F1 no test catches a per-frame car read; F2 brake blips at
+~150 u/s): fix round sent to ctx_ef45d3475cfa (tmp/touch-5/review-1-fix.md; merge main first; reviewer ctx_09e09c787a72 kept).
+M4-MOVE 123jpnbffz5 (Opus) in flight: ctx_2677067f1bc7 (~/orca/workspaces/scrap-rally/m4-move, :3008; spec tmp/spec-m4-move.md; base
+ae4db2c). Its criterion 9 (WorldFx.rt fill in client/main.ts) waits until TOUCH-5 merges: then tell it "go for 9, git merge main".
+MOVE asked: server/combat.ts Combat.step rt param + :126, server/room.ts:1062 pass raceTick (rivets die on barrels/press) -> yes, those lines only.
+TOUCH-5 fix round 1 done: 89ed7be (main ae4db2c merged; F2 brake hysteresis start >180 release 150; F1 touch-drive forces catch-up
+frames, stale-read mutation fails 3 checks; 861/861 + 128/128 twice; report tmp/touch-5/touch5-fix1-report.md). Re-review sent to
+ctx_09e09c787a72.
+M4-MOVE part 1 done: dc42d82 (8 commits on ae4db2c; report tmp/m4-move/m4-move-report.md): barrels/press/truck solid at rt, yaw kick
+dropped, no x1.3, Move Yard (SCRAP_DEV_TRACK=move-yard), bots 0 contacts weapons off; shipped SAME; 866/866 + 133/133 twice. Merges
+clean with main and touch-5. Only criterion 9 left (main.ts fx.rt = game.drawTick(); after TOUCH-5 merges). Opus reviewer ctx_b64bf57fdff3
+(tmp/review-m4-move.md) on part 1 now; criterion 9 = a delta review later; taste copy after criterion 9 (art static until then).
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).

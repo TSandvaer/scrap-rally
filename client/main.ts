@@ -14,7 +14,7 @@ import { ChatPanel, fitViewport } from "./chat";
 import { Game, lostMessage, NO_CONTROLS, type Controls, type TokenStore } from "./game";
 import { driving, Effects } from "./gfx/actors";
 import { clearMarks } from "./gfx/world";
-import { Keyboard, mergeControls, TouchPad } from "./input";
+import { Keyboard, mergeControls, TouchPad, type PadCar } from "./input";
 import { JerkMeter } from "./jerk";
 import { GameMenu } from "./menu";
 import { MusicPlayer, songById } from "./music";
@@ -872,6 +872,21 @@ let acc = 0;
 let attract = 0;
 let hadTarget = false;
 
+/**
+ * The own predicted car as the touch stick's point mode needs it (TOUCH-5): read fresh at every
+ * step, as a reconcile replaces game.car; null when there is none. Live: this step's controls drive
+ * it (the race on, not wrecked, in the air or falling). One object, refilled (TouchPad copies it).
+ */
+const padCarNow: PadCar = { h: 0, vf: 0, live: false };
+function padCar(): PadCar | null {
+  const c = game.car;
+  if (!c) return null;
+  padCarNow.h = c.h;
+  padCarNow.vf = c.vx * Math.cos(c.h) + c.vy * Math.sin(c.h);
+  padCarNow.live = c.wreck === 0 && c.air === 0 && c.fall === 0 && game.raceOn();
+  return padCarNow;
+}
+
 function frame(now: number): void {
   const elapsed = now - last;
   last = now;
@@ -880,7 +895,7 @@ function frame(now: number): void {
   while (acc >= STEP_MS && steps < MAX_CATCH_UP) {
     // Read every step (a mine tap is latched until read), but drive with nothing while the
     // menu is open: the race keeps running and the car coasts. Keys and touch drive together.
-    const ctl = pilot ? pilot.controls() : mergeControls(keyboard.read(), touchPad.read());
+    const ctl = pilot ? pilot.controls() : mergeControls(keyboard.read(), touchPad.read(padCar()));
     lastControls = menu.isOpen ? NO_CONTROLS : ctl;
     game.step(lastControls, STEP_MS);
     acc -= STEP_MS;

@@ -10075,7 +10075,8 @@ const TOUCH_GEO: PadGeometry = {
   fire: { left: 16, top: 748, width: 72, height: 72 },
   mine: { left: 16, top: 680, width: 60, height: 60 },
 };
-const SP: StickParams = { ...STICK_DEFAULTS };
+// Rate mode (TOUCH-2 to TOUCH-4): these tests are its, unchanged; point mode (TOUCH-5, the default) has its own section below.
+const SP: StickParams = { ...STICK_DEFAULTS, mode: "rate" };
 function touchRun(events: PadEvent[], s: PadState = PAD_IDLE, p: StickParams = SP): PadState {
   for (const e of events) s = reducePad(s, e, TOUCH_GEO, p);
   return s;
@@ -10116,8 +10117,8 @@ function touchStickCentre(): void {
     `right ${right.cx},${right.cy}; bottom ${bottom.cx},${bottom.cy}; corner ${corner.cx},${corner.cy}; inside ${inside.cx},${inside.cy}`,
   );
   // From the shifted centre the screen's last pixels still give full lock and brake.
-  const lock = padControls(touchRun([stickDown(2, 385, 560), stickMove(2, 389, 560)]));
-  const brake = padControls(touchRun([stickDown(3, 290, 842), stickMove(3, 290, 843)]));
+  const lock = padControls(touchRun([stickDown(2, 385, 560), stickMove(2, 389, 560)]), SP);
+  const brake = padControls(touchRun([stickDown(3, 290, 842), stickMove(3, 290, 843)]), SP);
   const shifted = stickCentre(385, 560, TOUCH_GEO.screen, SP);
   check(
     "touch stick: from an edge-shifted centre full lock toward that edge and brake at the bottom stay reachable on screen (stickCentre is what the reducer uses)",
@@ -10339,19 +10340,19 @@ function touchStickOwner(): void {
 function touchMulti(): void {
   // Right thumb on the stick (gas + right), left thumb on FIRE: both at once (the keyboard's up + right + Space).
   let s = touchRun([stickDown(1, 290, 560), stickMove(1, 315, 520), fireDown(2)]);
-  const both = padControls(s);
+  const both = padControls(s, SP);
   // The stick thumb slides on while FIRE stays held.
   s = reducePad(s, stickMove(1, 250, 600), TOUCH_GEO, SP);
-  const slid = padControls(s);
+  const slid = padControls(s, SP);
   // The FIRE finger slides onto MINE: it keeps FIRE (a weapon finger is bound to its button) and drops nothing.
   s = reducePad(s, { t: "move", id: 2, x: TOUCH_GEO.mine.left + 30, y: TOUCH_GEO.mine.top + 30 }, TOUCH_GEO, SP);
-  const stuck = padControls(s);
+  const stuck = padControls(s, SP);
   // A third finger taps MINE: the latch, FIRE and the stick still held.
   s = touchRun([mineDown(3), { t: "up", id: 3 }], s);
-  const tapped = padControls(s);
+  const tapped = padControls(s, SP);
   // The stick thumb lifts: FIRE stays; then FIRE lifts.
   s = reducePad(s, { t: "up", id: 1 }, TOUCH_GEO, SP);
-  const stickUp = padControls(s);
+  const stickUp = padControls(s, SP);
   s = reducePad(s, { t: "up", id: 2 }, TOUCH_GEO, SP);
   check(
     "touch multi: the stick (gas + right) and FIRE held at once by two thumbs; the stick slides on (brake + left) while FIRE holds; a FIRE finger moved onto MINE keeps FIRE",
@@ -10477,14 +10478,505 @@ function touchMerge(): void {
       delete g.HTMLTextAreaElement;
     }
   }
-  // The defaults are the user's (TOUCH-4), keep full lock inside R, and the stick's direct function agrees with the reducer.
+  // The defaults: point mode (TOUCH-5) with its values, and rate mode's the user's (TOUCH-4), full lock
+  // inside R; in rate mode the stick's direct function agrees with the reducer.
   const direct = stickControls(40, -30, SP);
   const viaPad = at(40, -30);
   check(
-    "touch merge: the defaults are the user's TOUCH-4 values and put full lock inside R (0.9 R) past a small dead zone; stickControls is what the reducer reads",
-    JSON.stringify(STICK_DEFAULTS) === '{"radius":95,"steerDead":0.12,"steerLock":0.9,"steerCurve":3,"throttleDead":0.3,"split":0.5}' &&
+    "touch merge: the defaults are point mode (TOUCH-5: dead zone 0.3 R, full lock 35° off, brake past 110°) and the user's TOUCH-4 rate values (full lock inside R, 0.9 R, past a small dead zone); stickControls is what the reducer reads in rate mode",
+    JSON.stringify(STICK_DEFAULTS) === '{"mode":"point","radius":95,"steerDead":0.12,"steerLock":0.9,"steerCurve":3,"throttleDead":0.3,"split":0.5,"pointDead":0.3,"aimFull":35,"brakeAngle":110}' &&
       STICK_DEFAULTS.steerLock < 1 && STICK_DEFAULTS.steerDead < STICK_DEFAULTS.steerLock && direct[0] === viaPad.throttle && direct[1] === viaPad.steer && direct[1] > 0,
     JSON.stringify(STICK_DEFAULTS),
+  );
+}
+
+// ---- touch point to steer (TOUCH-5, PLAN-TOUCH addendum 2026-11-22 + advisor changes: client/input.ts point mode) ----
+// Point mode: the stick's direction is where the car should face. Pure functions first (the aim, the
+// steer, the throttle's rules, the dead zone, rate mode untouched), then closed loops through the
+// real physics: turns per car type (dry and on water), a lap of Rust Bowl by a look-ahead pointer
+// with a human's lag, and a head-on wall escape.
+
+// This section's imports (hoisted like the ones at the top; distinct names).
+import {
+  POINT_IDLE,
+  POINT_RULES,
+  pointAim,
+  pointControls,
+  pointSteer,
+  pointThrottle,
+  stickOutput,
+  type PadCar,
+  type PointMemo,
+  type Stick,
+} from "../client/input";
+import { wrapAngle as touchWrap } from "../shared/physics";
+import { SURF_WATER as TOUCH_WATER, surfaceAt as touchSurfaceAt } from "../shared/track";
+
+const PT: StickParams = { ...STICK_DEFAULTS, mode: "point" };
+const TDEG = Math.PI / 180;
+/** A car for point mode: heading (degrees), forward speed, live. */
+const pcar = (hDeg: number, vf = 0, live = true): PadCar => ({ h: hDeg * TDEG, vf, live });
+/** The thumb's offset pointing at `deg` (screen axes: 0 right, 90 down), `share` of R out. */
+const thumb = (deg: number, share = 0.8, p: StickParams = PT): [number, number] => [share * p.radius * Math.cos(deg * TDEG), share * p.radius * Math.sin(deg * TDEG)];
+/** Game.step's rounding (client/game.ts round(v, 2)). */
+const r100 = (v: number) => Math.round(v * 100) / 100;
+
+function touchPointAim(): void {
+  // Screen axes are world axes (the camera only translates, client/render.ts): right 0, down +90°
+  // (y grows downward, as the heading grows clockwise on screen), left 180°, up -90°.
+  const dirs: [string, number, number, number][] = [["right", 50, 0, 0], ["down", 0, 50, 90], ["left", -50, 0, 180], ["up", 0, -50, -90], ["down-right", 40, 40, 45], ["up-left", -40, -40, -135]];
+  const bad = dirs.filter(([, dx, dy, deg]) => Math.abs(pointAim(dx, dy, PT)! - deg * TDEG) > 1e-12).map(([n]) => n);
+  // A car heading where the stick points moves that way on screen: its velocity (Math.cos/sin(h),
+  // shared/physics.ts) has the thumb's signs, from rest under gas.
+  const moved: string[] = [];
+  for (const [name, dx, dy] of dirs) {
+    const h = pointAim(dx, dy, PT)!;
+    const c: CarState = { x: 0, y: 0, h, vx: 0, vy: 0, seg: 0, wreck: 0, air: 0, fall: 0, boost: 0 };
+    const vx = Math.cos(c.h) * 100, vy = Math.sin(c.h) * 100;
+    if (Math.abs(Math.atan2(vy, vx) - Math.atan2(dy, dx)) > 1e-9) moved.push(name);
+  }
+  check(
+    "touch point: the aim is atan2(dy, dx) of the thumb's offset (screen axes = world axes: right 0, down +90°, left 180°, up -90°); a car heading there moves the thumb's way (cos/sin of the heading)",
+    bad.length === 0 && moved.length === 0,
+    [...bad, ...moved].join(", ") || dirs.map(([n, , , d]) => `${n} ${d}°`).join(", "),
+  );
+  // The dead zone: up to pointDead x R (0.3 x 95 = 28.5 px) no aim; just past it, an aim.
+  const dz = PT.pointDead * PT.radius;
+  const inside = [[dz, 0], [0, -dz], [-dz * 0.7, dz * 0.7], [0, 0]].every(([dx, dy]) => pointAim(dx, dy, PT) === null);
+  const past = pointAim(dz + 0.5, 0, PT) === 0 && pointAim(0, -(dz + 0.5), PT) === -Math.PI / 2;
+  check(`touch point: no aim inside the dead zone (up to ${dz} px, every way); just past it the thumb's direction`, inside && past);
+}
+
+function touchPointSteer(): void {
+  const A = PT.aimFull; // 35°
+  const at = (errDeg: number, vf = 0) => pointSteer(errDeg * TDEG, vf, PT);
+  const rows = [0, 3.5, A / 2, A, 2 * A, 90, 180].map((e) => [e, at(e)] as const);
+  check(
+    `touch point steer: aligned gives 0; in proportion to the error (half of aimFull ${A}°: 0.5); full lock (1) at aimFull and past it`,
+    at(0) === 0 && at(3.5) === 0.1 && at(A / 2) === 0.5 && at(A) === 1 && at(2 * A) === 1 && at(90) === 1 && at(180) === 1,
+    rows.map(([e, s]) => `${e}°: ${s}`).join(", "),
+  );
+  // Symmetric: -err gives -steer, for a sweep of errors (and speeds both ways of flipSpeed).
+  let sym = true;
+  for (let e = -180; e <= 180; e += 0.5) for (const vf of [0, 140, -40]) sym &&= at(-e, vf) === -at(e, vf) || (at(e, vf) === 0 && at(-e, vf) === 0);
+  check("touch point steer: symmetric (an error to the left steers left exactly as much), every 0.5° from -180° to 180°", sym);
+  // Wraps at ±π: a car heading 175° (left, a little down) and a thumb pointing -175° (left, a little
+  // up) is 10° off the short way (clockwise past 180°), not 350°.
+  const [tx, ty] = thumb(-175);
+  const [, wrapSteer] = pointControls(tx, ty, pcar(175, 140), POINT_IDLE, PT);
+  const [, wrapBack] = pointControls(...thumb(175), pcar(-175, 140), POINT_IDLE, PT);
+  check(
+    "touch point steer: the error wraps at ±180° (heading 175°, aim -175°: 10° off, the short way round: +0.29; mirrored -0.29)",
+    wrapSteer === r100(10 / A) && wrapBack === -r100(10 / A),
+    `${wrapSteer} / ${wrapBack}`,
+  );
+  // Rolling backward faster than flipSpeed (20 u/s) the steer flips, so the nose still swings toward the aim.
+  const F = POINT_RULES.flipSpeed;
+  check(
+    `touch point steer: flipped while rolling backward faster than ${F} u/s (vf ${-F - 1}: -0.5 for a 17.5° error), not at ${-F} or forward`,
+    at(A / 2, -F - 1) === -0.5 && at(A / 2, -F) === 0.5 && at(A / 2, 300) === 0.5 && at(-A, -200) === 1,
+    `${at(A / 2, -F - 1)}, ${at(A / 2, -F)}, ${at(A / 2, 300)}, ${at(-A, -200)}`,
+  );
+  // In hundredths (Game.step's rounding leaves it as it is), never -0, within -1..1; and the JSON round trip.
+  let exact = true;
+  for (let e = -180; e <= 180; e += 0.37) {
+    for (const vf of [-100, 0, 100]) {
+      const s = at(e, vf);
+      exact &&= r100(s) === s && JSON.parse(JSON.stringify(s)) === s && !Object.is(s, -0) && s >= -1 && s <= 1;
+    }
+  }
+  check("touch point steer: every steer is in hundredths, survives round(v, 2) and a JSON round trip, never -0, within -1..1", exact);
+}
+
+function touchPointDead(): void {
+  // Inside the dead zone: no gas, no steer (the car coasts), and the memo afresh, whatever was latched.
+  const latched: PointMemo = { rev: 1, stuck: 12, brake: 2 };
+  const [t0, s0, m0] = pointControls(10, -10, pcar(0, 200), latched, PT);
+  // No car (between races): nothing.
+  const [t1, s1, m1] = pointControls(...thumb(90), null, latched, PT);
+  // Through the reducer and padControls: a thumb landing and held inside the dead zone gives nothing; pushed out it drives.
+  const s = touchRun([stickDown(1, 290, 560), stickMove(1, 300, 570)], PAD_IDLE, PT);
+  const held = padControls(s, PT, pcar(0, 100));
+  const out = padControls(touchRun([stickMove(1, 290 + 60, 560)], s, PT), PT, pcar(0, 100));
+  const none = padControls(PAD_IDLE, PT, pcar(0, 100));
+  check(
+    "touch point: inside the dead zone throttle 0 and steer 0 (coast) and the memo starts afresh; with no car nothing; no thumb nothing; past the dead zone along the car: gas, no steer",
+    t0 === 0 && s0 === 0 && m0 === POINT_IDLE && t1 === 0 && s1 === 0 && m1 === POINT_IDLE && held.throttle === 0 && held.steer === 0 && out.throttle === 1 && out.steer === 0 && none.throttle === 0 && none.steer === 0,
+    `dead ${t0}/${s0} ${JSON.stringify(m0)}; no car ${t1}/${s1}; held ${JSON.stringify(held)}; out ${JSON.stringify(out)}`,
+  );
+  // Rate mode is TOUCH-4 exactly: stickOutput in rate mode is stickControls for every offset, whatever the car and memo.
+  let same = true;
+  for (let dx = -110; dx <= 110; dx += 7) {
+    for (let dy = -110; dy <= 110; dy += 7) {
+      const st: Stick = { id: 1, cx: 200, cy: 500, x: 200 + dx, y: 500 + dy };
+      const [rt, rs, rm] = stickOutput(st, SP, pcar(37, -50), { rev: 2, stuck: 30, brake: 1 });
+      const [et, es] = stickControls(dx, dy, SP);
+      same &&= rt === et && rs === es && rm === POINT_IDLE;
+    }
+  }
+  const viaRead = readPad(touchRun([stickDown(1, 290, 560), stickMove(1, 330, 520)]), SP, pcar(90, 0));
+  check(
+    "touch point: rate mode is unchanged (TOUCH-4): its output is stickControls of the offset for every offset, whatever the car (and it keeps no memo); readPad in rate mode too",
+    same && viaRead[0].throttle === 1 && viaRead[0].steer === stickControls(40, -40, SP)[1] && viaRead[2] === POINT_IDLE,
+    JSON.stringify(viaRead[0]),
+  );
+  // The centre near an edge in point mode keeps pointDead x R + 8 px from every edge, so every
+  // direction can be pointed past the dead zone on screen, from any landing in the zone.
+  const keep = PT.pointDead * PT.radius + 8; // 36.5 px
+  const corner = stickCentre(389, 843, TOUCH_GEO.screen, PT);
+  const topLeft = stickCentre(1, 1, TOUCH_GEO.screen, PT);
+  const unreached: string[] = [];
+  for (const [w, h] of [[390, 844], [844, 390], [360, 740]]) {
+    const geo: PadGeometry = { ...TOUCH_GEO, screen: { left: 0, top: 0, width: w, height: h } };
+    for (const x of [w * PT.split, w - 1]) {
+      for (const y of [92, h - 1]) {
+        const st = reducePad(PAD_IDLE, stickDown(1, x, y), geo, PT).stick!;
+        for (let deg = -180; deg < 180; deg += 45) {
+          const tx = Math.max(0, Math.min(w - 1, st.cx + PT.radius * Math.cos(deg * TDEG)));
+          const ty = Math.max(0, Math.min(h - 1, st.cy + PT.radius * Math.sin(deg * TDEG)));
+          if (pointAim(tx - st.cx, ty - st.cy, PT) === null) unreached.push(`${w}x${h} ${x},${y} ${deg}°`);
+        }
+      }
+    }
+  }
+  check(
+    `touch point: a thumb landing at an edge puts the centre ${keep} px in (the dead zone + 8 px) on every side; from the zone's corners at 390x844, 844x390 and 360x740 all 8 directions reach past the dead zone on screen`,
+    corner.join(",") === `${390 - keep},${844 - keep}` && topLeft.join(",") === `${keep},${keep}` && unreached.length === 0,
+    `corner ${corner.join(",")}, top-left ${topLeft.join(",")}${unreached.length ? `; unreached ${unreached.join(" | ")}` : ""}`,
+  );
+}
+
+function touchPointThrottle(): void {
+  const R = POINT_RULES;
+  const thr = (off: number, vf: number, memo: PointMemo = POINT_IDLE, live = true) => pointThrottle(off * TDEG, { h: 0, vf, live }, memo, PT);
+  // Pointed within brakeAngle (110°): gas at every speed, forward or backward (gas while rolling backward brakes).
+  const gas = [0, 45, 90, 110].every((off) => [-300, -21, 0, 29, 151, 430].every((vf) => thr(off, vf)[0] === 1 && thr(off, vf)[1].rev === 0));
+  // Pointed past it (a new turn): brake above brakeSpeed + brakeHyst (180), gas from there down to
+  // just above revSpeed (30), reverse to turn round (latch 1) at 30 and under, any backward speed too.
+  const rows = [430, 181, 180, 151, 100, 31, 30, 10, 0, -50, -300].map((vf) => [vf, ...thr(170, vf)] as const);
+  const want = [-1, -1, 1, 1, 1, 1, -1, -1, -1, -1, -1];
+  const behindOk = rows.every(([vf, t, m], i) => t === want[i] && m.rev === (vf <= R.revSpeed ? 1 : 0)) && thr(111, 0)[0] === -1 && thr(-111, 0)[0] === -1 && thr(-170, 200)[0] === -1;
+  check(
+    `touch point throttle: within ${PT.brakeAngle}° gas at any speed; past it (a new turn) brake above ${R.brakeSpeed + R.brakeHyst} u/s, gas down to ${R.revSpeed + 1}, reverse at ${R.revSpeed} and under (also rolling backward); both sides`,
+    gas && behindOk,
+    rows.map(([vf, t, m]) => `${vf}: ${t}${m.rev ? " rev" : ""}`).join(", "),
+  );
+  // The reverse to turn round lasts until under brakeAngle - revHyst (80°): no chatter between
+  // reverse and gas as the nose comes round (gas at vf < 0 brakes); it is not entered again until
+  // past brakeAngle again. A sweep of the error 170° -> 0 at a backward speed, and back up.
+  let m: PointMemo = POINT_IDLE;
+  const trace: string[] = [];
+  let changes = 0, last = 0;
+  const sweep = [...Array.from({ length: 171 }, (_, i) => 170 - i), ...Array.from({ length: 100 }, (_, i) => i + 1)];
+  for (const off of sweep) {
+    const [t, next] = thr(off, -60, m);
+    if (t !== last) {
+      changes++;
+      trace.push(`${off}°: ${t}`);
+    }
+    last = t;
+    m = next;
+  }
+  check(
+    `touch point throttle: a reverse to turn round ends only under ${PT.brakeAngle - R.revHyst}° (hysteresis ${R.revHyst}°): the error swept 170° -> 0° -> 100° while rolling back gives reverse then gas once, no flicker; not entered again under ${PT.brakeAngle}°`,
+    changes === 2 && trace.join(", ") === "170°: -1, 79°: 1",
+    trace.join(", "),
+  );
+  // Stuck (nose in a wall, thumb along the track, ~90° off: under brakeAngle, so plain gas forever):
+  // the throttle on with |vf| under stuckSpeed (15) for stuckTicks (30) driving steps, more than
+  // aimFull (35°) off -> reverse out (latch 2), until under aimFull / 2 off.
+  const steps = (n: number, off: number, vf: number, memo: PointMemo = POINT_IDLE, live = true) => {
+    const out: number[] = [];
+    for (let i = 0; i < n; i++) {
+      const [t, next] = thr(off, vf, memo, live);
+      out.push(t);
+      memo = next;
+    }
+    return { out, memo };
+  };
+  const stuck = steps(32, 90, 3);
+  const firstRev = stuck.out.indexOf(-1);
+  const near = steps(60, 30, 3); // 30° off: under aimFull, the rule does not reverse
+  const dead = steps(60, 90, 3, POINT_IDLE, false); // not driving (the countdown, a wreck): never counts
+  const moving = steps(60, 90, R.stuckSpeed); // |vf| at the threshold: moving, never stuck
+  const backward = steps(32, 90, -3); // |vf| counts both ways
+  const out1 = thr(18, -40, { rev: 2, stuck: 0, brake: 0 }); // 18° off: still reversing (aimFull / 2 = 17.5)
+  const out2 = thr(17, -40, { rev: 2, stuck: 0, brake: 0 });
+  check(
+    `touch point throttle: stuck (gas, |vf| < ${R.stuckSpeed} for ${R.stuckTicks} driving steps, > ${PT.aimFull}° off) reverses out from the next step; not under ${PT.aimFull}° off, not while the car does not drive, not at |vf| ${R.stuckSpeed}; rolling back slowly counts too; the reverse out lasts until under ${PT.aimFull / 2}° off`,
+    firstRev === R.stuckTicks && stuck.out.slice(firstRev).every((t) => t === -1) && stuck.memo.rev === 2 && near.out.every((t) => t === 1) && near.memo.stuck === R.stuckTicks &&
+      dead.out.every((t) => t === 1) && dead.memo.stuck === 0 && moving.out.every((t) => t === 1) && moving.memo.stuck === 0 && backward.out.indexOf(-1) === R.stuckTicks &&
+      out1[0] === -1 && out1[1].rev === 2 && out2[0] === 1 && out2[1].rev === 0,
+    `first reverse at step ${firstRev}; near ${near.memo.stuck}; not driving ${dead.memo.stuck}; at ${R.stuckSpeed} ${moving.memo.stuck}; 18° ${out1[0]}, 17° ${out2[0]}`,
+  );
+  // Stuck reversing (backed into something): gas (latch 3), and no reverse to turn round, even
+  // pointed behind, until it rolls forward faster than revSpeed; stuck again under gas: reverse again.
+  const backedIn = steps(32, 90, 2, { rev: 2, stuck: 0, brake: 0 });
+  const after = steps(5, 170, 10, backedIn.memo);
+  const freed = thr(170, R.revSpeed + 1, after.memo);
+  const wiggle = steps(32, 90, 2, { rev: 3, stuck: 0, brake: 0 });
+  check(
+    `touch point throttle: stuck while reversing out drives forward (gas) and stays forward pointed behind until faster than ${R.revSpeed} u/s; stuck again under gas reverses again`,
+    backedIn.out.indexOf(1) === R.stuckTicks && backedIn.memo.rev === 3 && after.out.every((t) => t === 1) && after.memo.rev === 3 && freed[1].rev === 0 && wiggle.memo.rev === 2 && wiggle.out.indexOf(-1) === R.stuckTicks,
+    `backed in: gas from step ${backedIn.out.indexOf(1)} (latch ${backedIn.memo.rev}); pointed behind ${after.out.join("")}; freed latch ${freed[1].rev}; wiggle latch ${wiggle.memo.rev}`,
+  );
+  // One total function: every error (1° steps), speed (-400..450 u/s), memo and live gives gas or
+  // brake/reverse, a steer in -1..1 in hundredths and a valid memo, the same every time.
+  let total = true, n = 0;
+  for (let off = -180; off <= 180; off += 2) {
+    for (let vf = -400; vf <= 450; vf += 10) {
+      for (const rev of [0, 1, 2, 3] as const) {
+        for (const st of [0, 15, R.stuckTicks]) {
+          for (const [live, brake] of [[true, 0], [true, 1], [true, 2], [false, 0], [false, 1], [false, 2]] as const) {
+            const memo: PointMemo = { rev, stuck: st, brake };
+            const car = { h: 0.3, vf, live };
+            const [tx, ty] = thumb(off + 0.3 / TDEG);
+            const a = pointControls(tx, ty, car, memo, PT);
+            const b = pointControls(tx, ty, car, memo, PT);
+            n++;
+            total &&= (a[0] === 1 || a[0] === -1) && a[1] >= -1 && a[1] <= 1 && r100(a[1]) === a[1] && [0, 1, 2, 3].includes(a[2].rev) && [0, 1, 2].includes(a[2].brake) && a[2].stuck >= 0 && a[2].stuck <= R.stuckTicks && JSON.stringify(a) === JSON.stringify(b);
+          }
+        }
+      }
+    }
+  }
+  check(`touch point throttle: one total function: ${n} cases (every error in 2° steps, speed, memo incl. the brake latch, live) give gas or brake/reverse, a steer in hundredths and a valid memo, the same twice`, total);
+}
+
+function touchPointBrake(): void {
+  // The brake for a turn pointed behind, once a turn with a speed hysteresis (review F2: around
+  // brakeSpeed 150 the throttle blipped brake for single steps). A turn starting above brakeSpeed +
+  // brakeHyst (180) brakes down to brakeSpeed (150), then gas until it no longer points behind; one
+  // starting slower is gas throughout.
+  const R = POINT_RULES;
+  const thr = (off: number, vf: number, memo: PointMemo = POINT_IDLE) => pointThrottle(off * TDEG, { h: 0, vf, live: true }, memo, PT);
+  const braking: PointMemo = { rev: 0, stuck: 0, brake: 1 };
+  const spent: PointMemo = { rev: 0, stuck: 0, brake: 2 };
+  const unit = [
+    ["new turn at 181: brake", thr(170, 181), -1, 1],
+    ["new turn at 180: gas, no brake this turn", thr(170, 180), 1, 2],
+    ["braking at 151: still", thr(170, 151, braking), -1, 1],
+    ["braking at 150: gas", thr(170, 150, braking), 1, 2],
+    ["braked, at 400 still behind: gas", thr(170, 400, spent), 1, 2],
+    ["braked, no longer behind: the turn is over", thr(100, 400, spent), 1, 0],
+    ["braking, then reversing (at 30): no brake latch", thr(170, 30, braking), -1, 0],
+  ] as const;
+  const bad = unit.filter(([, [t, m], wt, wb]) => t !== wt || m.brake !== wb).map(([n, [t, m]]) => `${n}: got ${t} brake ${m.brake}`);
+  check(`touch point brake: a turn pointed behind brakes from above ${R.brakeSpeed + R.brakeHyst} u/s down to ${R.brakeSpeed}, once a turn; a turn starting slower is gas`, bad.length === 0, bad.join(" | ") || unit.map(([n]) => n).join("; "));
+  // Closed loops: the throttle's sign changes over a whole turn (open field), each car type (and the
+  // Racer with tyres 3), from 140 to 430 u/s, 115° to 180° off both ways, dry and wet: at most once.
+  const seqOf = (f: ReturnType<typeof pointField>, stats: ReturnType<typeof statsFor>, v0: number, off: number, n: number) => {
+    const c: CarState = { x: f.x, y: f.y, h: 0, vx: v0, vy: 0, seg: f.seg, wreck: 0, air: 0, fall: 0, boost: 0 };
+    const [dx, dy] = thumb(off);
+    let memo: PointMemo = POINT_IDLE, seq = "";
+    for (let t = 0; t < n; t++) {
+      const vf = c.vx * Math.cos(c.h) + c.vy * Math.sin(c.h);
+      const [throttle, steer, next] = pointControls(dx, dy, { h: c.h, vf, live: true }, memo, PT);
+      memo = next;
+      seq += throttle > 0 ? "+" : "-";
+      stepCar(c, { throttle: r100(throttle), steer: r100(steer) }, stats, f.track);
+    }
+    return seq;
+  };
+  const changes = (seq: string) => [...seq].filter((ch, i) => i > 0 && ch !== seq[i - 1]).length;
+  const dry = pointField(false);
+  const racer = POINT_CARS[1][1];
+  const r160 = seqOf(dry, racer, 160, 170, 24), r300 = seqOf(dry, racer, 300, 170, 24);
+  const hist = new Map<number, number>();
+  let worst = "", most = 0;
+  for (const water of [false, true]) {
+    const f = water ? pointField(true) : dry;
+    for (const [name, stats] of POINT_CARS) {
+      for (let v0 = 140; v0 <= 430; v0 += 30) {
+        for (const off of [115, 125, 135, 145, 155, 165, 175, 180]) {
+          for (const side of [1, -1]) {
+            const seq = seqOf(f, stats, v0, side * off, 150);
+            const k = changes(seq);
+            hist.set(k, (hist.get(k) ?? 0) + 1);
+            if (k > most) [most, worst] = [k, `${water ? "wet " : ""}${name} ${v0} u/s ${side * off}°: ${seq.slice(0, 40)}`];
+          }
+        }
+      }
+    }
+  }
+  check(
+    "touch point brake: over a whole turn the throttle changes sign at most once (brake, then gas): the Racer from 160 u/s 170° off (was -++-++++-+++++++-) and from 300; every car type, 140-430 u/s, 115-180° off both ways, dry and wet",
+    changes(r160) <= 1 && changes(r300) === 1 && r300.startsWith("-") && most <= 1,
+    `Racer 160: ${r160}, Racer 300: ${r300}; changes per turn ${[...hist].sort((a, b) => a[0] - b[0]).map(([k, n]) => `${k}: ${n} turns`).join(", ")}${most > 1 ? `; worst ${worst}` : ""}`,
+  );
+}
+
+/** A wide open field (a 3000 half-width loop) for turns with no wall near, optionally all water there. */
+function pointField(water: boolean): { track: Track; x: number; y: number; seg: number } {
+  const def: TrackDef = { id: "point-field", name: "Point Field", control: [[0, 0], [40000, 0], [40000, 16000], [0, 16000]], halfWidth: 3000, verge: 44 };
+  const dry = buildTrack(def);
+  const q = queryTrack(dry, 20000, 0);
+  const track = water ? buildTrack({ ...def, features: [{ k: "water", s0: q.s - 12000, s1: q.s + 12000, lat0: -3000, lat1: 3000 }] }) : dry;
+  return { track, x: 20000, y: 0, seg: q.seg };
+}
+
+/** A closed loop: the car at speed v0 heading 0, the thumb held toward `off` degrees; ticks until the heading stays within 3°, the overshoot past it (degrees), latch changes, brake steps. */
+function pointTurn(f: ReturnType<typeof pointField>, stats: ReturnType<typeof statsFor>, v0: number, off: number): { settle: number; over: number; latches: number; brakes: number; revs: number; wet: boolean | null } {
+  const c: CarState = { x: f.x, y: f.y, h: 0, vx: v0, vy: 0, seg: f.seg, wreck: 0, air: 0, fall: 0, boost: 0 };
+  const [dx, dy] = thumb(off);
+  let memo: PointMemo = POINT_IDLE;
+  let last = -1, over = 0, latches = 0, brakes = 0, revs = 0;
+  const wetAt: boolean[] = [];
+  for (let t = 0; t < 400; t++) {
+    // 400 ticks (6.7 s): every turn has settled long before, and the field's walls are still far.
+    const q = queryTrackNear(f.track, c.x, c.y, c.seg);
+    wetAt.push(touchSurfaceAt(f.track, q.seg, q.s, q.lat)?.kind === TOUCH_WATER);
+    const vf = c.vx * Math.cos(c.h) + c.vy * Math.sin(c.h);
+    const [throttle, steer, next] = pointControls(dx, dy, { h: c.h, vf, live: true }, memo, PT);
+    if (next.rev !== memo.rev) latches++;
+    if (next.rev === 1 || next.rev === 2) revs++;
+    else if (throttle < 0) brakes++;
+    memo = next;
+    stepCar(c, { throttle: r100(throttle), steer: r100(steer) }, stats, f.track);
+    const err = touchWrap(off * TDEG - c.h) / TDEG;
+    if (Math.abs(err) > 3) last = t;
+    over = Math.max(over, -Math.sign(off) * err);
+  }
+  const turning = wetAt.slice(0, last + 2);
+  const wet = turning.every((w) => w) ? true : turning.every((w) => !w) ? false : null;
+  return { settle: last + 1, over, latches, brakes, revs, wet };
+}
+
+const POINT_CARS: [string, ReturnType<typeof statsFor>][] = [
+  ["sport", statsFor("sport", { engine: 0, tyres: 0, welder: 0 })],
+  ["racer", statsFor("racer", { engine: 0, tyres: 0, welder: 0 })],
+  ["truck", statsFor("truck", { engine: 0, tyres: 0, welder: 0 })],
+  ["racer tyres 3", statsFor("racer", { engine: 0, tyres: 3, welder: 0 })], // the quickest heading loop (advisor: gain ~0.105 a step)
+];
+
+function pointTurns(water: boolean, bound: number): void {
+  const f = pointField(water);
+  const rows: string[] = [];
+  let ok = true, worst = 0, worstOver = 0, wetAll = true;
+  for (const [name, stats] of POINT_CARS) {
+    const cells: string[] = [];
+    for (const v0 of [0, 140, stats.topSpeed]) {
+      for (const off of [90, 170, -90, -170]) {
+        const r = pointTurn(f, stats, v0, off);
+        ok &&= r.settle <= bound && r.over < 5 && r.latches <= 2;
+        wetAll &&= r.wet === water;
+        worst = Math.max(worst, r.settle);
+        worstOver = Math.max(worstOver, r.over);
+        if (off > 0) cells.push(`${v0}/${off}°: ${r.settle}t${r.revs ? ` rev ${r.revs}` : ""}${r.brakes ? ` brake ${r.brakes}` : ""}${r.over > 0 ? ` over ${r.over.toFixed(2)}°` : ""}`);
+      }
+    }
+    rows.push(`${name} ${cells.join(", ")}`);
+  }
+  check(
+    `touch point loop${water ? " on water" : ""}: per car type (and the Racer with tyres 3), from rest, 140 u/s and top speed, the thumb held 90° and 170° off (both sides): the heading settles within 3° in at most ${bound} ticks (${(bound / 60).toFixed(1)} s; worst ${worst}), overshoot under 5° (worst ${worstOver.toFixed(2)}°), at most one reverse in and out`,
+    ok && wetAll,
+    `${rows.join(" | ")}${wetAll ? "" : " (NOT all on the intended surface)"}`,
+  );
+}
+
+function touchPointTurns(): void {
+  pointTurns(false, 120);
+}
+
+function touchPointWater(): void {
+  // Water halves the steering (WATER_TURN) and cuts every force along the car (WATER_FORCE): slower, still no overshoot.
+  pointTurns(true, 300);
+}
+
+function touchPointLap(): void {
+  // A scripted thumb drives a lap of Rust Bowl: it points at the centre line ahead of the car (a
+  // look-ahead aim; a tangent aim runs wide), updated 10 times a second from where the car was
+  // 150 ms before (a human's lag). Wall hits: steps that end at the wall moving into it at
+  // WALL_HIT_MIN (50 u/s, the game's wall-hit cue) or more.
+  const t = buildTrack(RUST_BOWL);
+  const env = raceEnv(t);
+  const BOUND = 4;
+  const rows: string[] = [];
+  let ok = true;
+  for (const [look0, lookK] of [[120, 0.3], [90, 0.25]]) {
+    for (const [name, stats] of POINT_CARS.slice(0, 3)) {
+      const p0 = pointAt(t, 0);
+      const c: CarState = { x: p0.x, y: p0.y, h: p0.h, vx: 0, vy: 0, seg: p0.seg, wreck: 0, air: 0, fall: 0, boost: 0 };
+      const hist: CarState[] = [];
+      let memo: PointMemo = POINT_IDLE;
+      let dx = 0, dy = 0, prog = 0, lastS = queryTrackNear(t, c.x, c.y, c.seg).s, hits = 0, maxInto = 0, revs = 0, tick = 0;
+      for (; tick < 60 * 90 && prog < t.length; tick++) {
+        hist.push(cloneCar(c));
+        if (tick % 6 === 0) {
+          const seen = hist[Math.max(0, hist.length - 1 - 9)];
+          const q = queryTrackNear(t, seen.x, seen.y, seen.seg);
+          const aim = pointAt(t, q.s + look0 + lookK * speedOf(seen));
+          [dx, dy] = thumb(Math.atan2(aim.y - seen.y, aim.x - seen.x) / TDEG);
+        }
+        const vf = c.vx * Math.cos(c.h) + c.vy * Math.sin(c.h);
+        const [throttle, steer, next] = pointControls(dx, dy, { h: c.h, vf, live: c.wreck === 0 && c.air === 0 && c.fall === 0 }, memo, PT);
+        if (next.rev && !memo.rev) revs++;
+        memo = next;
+        const before = { vx: c.vx, vy: c.vy };
+        stepRaceCar(c, { throttle: r100(throttle), steer: r100(steer) }, stats, env);
+        const into = c.wreck === 0 && c.air === 0 && c.fall === 0 ? wallHitSpeed(before, c, t) : 0;
+        if (into >= WALL_HIT_MIN) hits++;
+        maxInto = Math.max(maxInto, into);
+        const s = queryTrackNear(t, c.x, c.y, c.seg).s;
+        let ds = s - lastS;
+        if (ds > t.length / 2) ds -= t.length;
+        if (ds < -t.length / 2) ds += t.length;
+        prog += ds;
+        lastS = s;
+      }
+      const done = prog >= t.length;
+      ok &&= done && hits <= BOUND && tick <= 60 * 45;
+      rows.push(`${name} look ${look0}+${lookK}v: ${done ? `${(tick / 60).toFixed(1)} s` : `NOT round (${Math.round(prog)}/${Math.round(t.length)})`}, ${hits} hits (max ${maxInto.toFixed(0)} u/s), ${revs} reverses`);
+    }
+  }
+  check(
+    `touch point lap: a look-ahead thumb (10 Hz, 150 ms lag; two look-aheads) drives a lap of Rust Bowl in point mode for every car type within 45 s, at most ${BOUND} wall hits (>= ${WALL_HIT_MIN} u/s) a lap`,
+    ok,
+    rows.join(" | "),
+  );
+}
+
+function touchPointWall(): void {
+  // Nose against a straight wall, exactly square to it, the thumb along the track (90° off: under
+  // brakeAngle, so gas): the stuck rule backs the car out (latch 2) and it drives on along the track.
+  // A test track with straight walls (collinear control points: a straight centre line, no slide off a curve).
+  const def: TrackDef = { id: "point-wall", name: "Point Wall", control: [[0, 0], [800, 0], [1600, 0], [2400, 0], [3200, 0], [3200, 1600], [0, 1600]], halfWidth: 64, verge: 44 };
+  const t = buildTrack(def);
+  const env = raceEnv(t);
+  const lim = def.halfWidth + def.verge;
+  const rows: string[] = [];
+  let ok = true, worst = 0;
+  for (const [name, stats] of POINT_CARS.slice(0, 3)) {
+    for (const side of [1, -1]) {
+      for (const v0 of [0, 200]) {
+        const y = side * (lim - 16); // the nose (15 ahead of the centre) at the wall
+        const h = side * Math.PI / 2; // square to the wall (+y is right of travel)
+        const q0 = queryTrack(t, 1500, y);
+        const c: CarState = { x: 1500, y, h, vx: Math.cos(h) * v0, vy: Math.sin(h) * v0, seg: q0.seg, wreck: 0, air: 0, fall: 0, boost: 0 };
+        const [dx, dy] = thumb(0); // along the track (+x)
+        let memo: PointMemo = POINT_IDLE;
+        let escaped = -1, backed = false;
+        for (let tick = 0; tick < 300; tick++) {
+          const vf = c.vx * Math.cos(c.h) + c.vy * Math.sin(c.h);
+          const [throttle, steer, next] = pointControls(dx, dy, { h: c.h, vf, live: true }, memo, PT);
+          backed ||= next.rev === 2;
+          memo = next;
+          stepRaceCar(c, { throttle: r100(throttle), steer: r100(steer) }, stats, env);
+          if (escaped < 0 && Math.abs(touchWrap(c.h)) < 15 * TDEG && c.x - 1500 > 150) escaped = tick;
+        }
+        const clear = lim - Math.abs(c.y);
+        // Parked (the stuck case) it backs out and ends clear of the wall; hitting it at speed the
+        // bounce may roll it free without the stuck rule (the flipped steer swings the nose round).
+        ok &&= escaped >= 0 && escaped <= 200 && Math.abs(touchWrap(c.h)) < 5 * TDEG && (v0 > 0 || (backed && clear >= 20));
+        worst = Math.max(worst, escaped < 0 ? 999 : escaped);
+        rows.push(`${name} ${side > 0 ? "right" : "left"} wall from ${v0}: ${escaped}t${backed ? " (backed out)" : ""}, ${clear.toFixed(0)} u clear at 5 s`);
+      }
+    }
+  }
+  check(
+    "touch point wall: nose square against a straight wall (parked, and hitting it at 200 u/s), thumb along the track: every car type gets out and on (heading within 15° of the track, 150 u on) within 200 ticks (worst " + worst + ") and at 5 s heads along the track; parked, it backs out (the stuck rule) and is at least 20 u off the wall",
+    ok,
+    rows.join(" | "),
   );
 }
 
@@ -11919,7 +12411,7 @@ function splitDevFlag(): void {
   );
 }
 
-for (const t of [rivets, gating, mines, wrecks, finishing, garage, armDelay, engine, readyCheck, collisions, trackFeatures, roomTrack, jumpsWired, shippedTracks, botDriver, botLaps, mineCap, chatRoom, chatClient, sound, raceSounds, surfaceSounds, audioUnlock, menuHostOnly, menuStop, menuRestart, menuKick, menuLock, menuHandover, menuClient, menuRestartClient, retireRules, retireField, retireRaceEnd, retireGarage, retireRefund, retireOthers, retireNotices, retireClient, pauseRefused, pauseFreeze, pauseResume, pauseHold, pauseAuto, pauseCooldown, pauseGrace, pauseCountdown, pauseControls, pauseClient, musicSwitch, soundMigration, soundLayers, soundServer, soundRandom, soundRoomDrag, soundSliderGrip, soundClient, songs, songPlayer, ghostRivets, minesSetting, minesStay, minesCap, minesFade, minesAtStart, minesCleared, minesPaused, minesClient, botsPointAt, botsAdd, botsKickHost, botsHandover, botsFullRoom, botsSoloStart, botsRace, botsShop, botsTick, botsCpu, botsClient, carsTypes, carsStats, carsPick, carsRejoin, carsBots, carsRunUps, carsBalance, carsCut, carsClient, envRt, envStep, envClient, draftRule, draftStraight, draftClient, draftJumps, draftBots, cellsRule, boostPhysics, cellsServer, cellsClient, cellsValidate, cellsBots, cellsOffCentre, schemaTypes, schemaArrays, schemaLateral, schemaRt, schemaValidate, schemaPreview, schemaDataOnly, hardGolden, hardLevels, hardShop, hardWeapons, hardApex, hardPace, hardTraffic, hardVs, hardClient, hardCpu, touchStickCentre, touchStickClamp, touchStickDead, touchStickCurve, touchStickOutput, touchStickRounding, touchStickOwner, touchMulti, touchRelease, touchMine, touchMerge, surfTraction, surfBuckets, surfWater, surfDirt, surfBelt, surfMounds, surfRivets, surfRespawn, surfValidate, surfLanes, surfBots, surfShipped, surfParity, surfCpu, surfDevFlag, splitWalls, splitIslands, splitProgress, splitValidate, splitBots, splitParity, splitCpu, splitMounds, splitDevFlag]) {
+for (const t of [rivets, gating, mines, wrecks, finishing, garage, armDelay, engine, readyCheck, collisions, trackFeatures, roomTrack, jumpsWired, shippedTracks, botDriver, botLaps, mineCap, chatRoom, chatClient, sound, raceSounds, surfaceSounds, audioUnlock, menuHostOnly, menuStop, menuRestart, menuKick, menuLock, menuHandover, menuClient, menuRestartClient, retireRules, retireField, retireRaceEnd, retireGarage, retireRefund, retireOthers, retireNotices, retireClient, pauseRefused, pauseFreeze, pauseResume, pauseHold, pauseAuto, pauseCooldown, pauseGrace, pauseCountdown, pauseControls, pauseClient, musicSwitch, soundMigration, soundLayers, soundServer, soundRandom, soundRoomDrag, soundSliderGrip, soundClient, songs, songPlayer, ghostRivets, minesSetting, minesStay, minesCap, minesFade, minesAtStart, minesCleared, minesPaused, minesClient, botsPointAt, botsAdd, botsKickHost, botsHandover, botsFullRoom, botsSoloStart, botsRace, botsShop, botsTick, botsCpu, botsClient, carsTypes, carsStats, carsPick, carsRejoin, carsBots, carsRunUps, carsBalance, carsCut, carsClient, envRt, envStep, envClient, draftRule, draftStraight, draftClient, draftJumps, draftBots, cellsRule, boostPhysics, cellsServer, cellsClient, cellsValidate, cellsBots, cellsOffCentre, schemaTypes, schemaArrays, schemaLateral, schemaRt, schemaValidate, schemaPreview, schemaDataOnly, hardGolden, hardLevels, hardShop, hardWeapons, hardApex, hardPace, hardTraffic, hardVs, hardClient, hardCpu, touchStickCentre, touchStickClamp, touchStickDead, touchStickCurve, touchStickOutput, touchStickRounding, touchStickOwner, touchMulti, touchRelease, touchMine, touchMerge, touchPointAim, touchPointSteer, touchPointDead, touchPointThrottle, touchPointBrake, touchPointTurns, touchPointWater, touchPointLap, touchPointWall, surfTraction, surfBuckets, surfWater, surfDirt, surfBelt, surfMounds, surfRivets, surfRespawn, surfValidate, surfLanes, surfBots, surfShipped, surfParity, surfCpu, surfDevFlag, splitWalls, splitIslands, splitProgress, splitValidate, splitBots, splitParity, splitCpu, splitMounds, splitDevFlag]) {
   console.log(`\n# ${t.name}`);
   try {
     t();
