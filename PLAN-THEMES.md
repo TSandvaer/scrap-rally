@@ -1,4 +1,4 @@
-# PLAN-THEMES: track surroundings (desert, city, jungle, scrapyard) — DRAFT (pending Fable review and the user's approval)
+# PLAN-THEMES: track surroundings (desert, city, jungle, scrapyard) — APPROVED by the user 2026-11-22 (with the advisor changes and the recommended answers)
 
 **Why.** The user decided on 2026-11-22 (team/DECISIONS.md:137): three new themes (desert, city, jungle) beside today's scrapyard; a
 theme changes the looks and adds theme surfaces with their own feel; each track's theme is fixed in its definition; the new tracks
@@ -207,3 +207,9 @@ a moving ford current.
    theme-less and unaffected.
 Adopted suggestions: count contiguous sand plus dirt against the 350 rule; `&theme=` in the art key only in the preview.
 Added open question 9: jungle and the ford ship on a yard only until a third new track exists - acceptable? **Recommended: yes.**
+
+## User decisions (2026-11-22, popup: "Approve, recommended answers")
+1. One test yard per theme (Dune Yard, Block Yard, Canopy Yard). 2. Breaker's Mile desert, Slag Harbour city, jungle on the next new
+track. 3. Each theme surface only on its own theme's tracks. 4. THEME-SCHEMA before BR-PHYS. 5. The minimap does not change with the
+theme. 6. Surface sounds later (THEME-SND). 7. Each car type's feel on the new surfaces derived from its dirt multipliers. 8. The census
+fix as in advisor change 5 (in M4-TRACKS). 9. Jungle and the ford ship on Canopy Yard only until a third new track exists.
