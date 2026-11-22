@@ -714,6 +714,7 @@ ctx_27271d92a5da.
 Flake fix re-review APPROVE; MERGED 45383dd; gate running; M4-TRACKS workers released, workspace removed; BR-PHYS told 'go for bots.ts:92'.
 QA14 live PASS (ctx_71fbdd000662, released): Breaker's Mile desert (9 bots, 0 falls), other 4 tracks scrapyard, frame work 5.9 vs 5.2 ms,
 no console errors. ClickUp complete: TH-LOOK-1.
+Flake-fix gate on 45383dd FULLY GREEN (1022/1022 + 145/145, build index-QaMhT72h.js = the live bundle; test-only change, nothing to push).
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
