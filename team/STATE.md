@@ -644,6 +644,10 @@ index.html, style.css, maybe input.ts). Active authors: HARD-2, TH-LOOK-1, NOSEL
 BR-SCHEMA review 1 REQUEST_CHANGES (ctx_d7ef3257a313 kept for re-review): branch roads get no self-crossing / close-sections check
 (reproduced). Fix round sent to ctx_d7d9decab927 (tmp/br-schema-review-1-fix.md; + 2 nits). Review notes for BR-PHYS added to its ticket.
 M4-TRACKS taste APPROVED by the user (both tracks; popup-confirmed). Merge on review APPROVE.
+User: merge M4-TRACKS when the review approves (popup; keep the gate). HARD-2 done: 7688eea (mistakes + SCRAP_DEV_BOTS Bot tune panel;
+rate 0 = goldens; falls 0; loss +0.08..+1.25 %, pace 0 lone lap 30.29 s vs Hard 29.22 vs Normal 30.71; 921/921 + 135/135 x2; report
+tmp/hard-2/HARD-2-report.md). Conflicts with m4-tracks + br-schema (appends). Opus reviewer ctx_8f7a8c933e4d (tmp/review-hard-2.md).
+TUNING COPY :3009 = HARD-2 7688eea (worktree split-taste, SCRAP_DEV_BOTS=1; node pid 63109, npm pid 63083); the tracks copy is stopped.
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
