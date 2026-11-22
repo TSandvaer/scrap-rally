@@ -89,7 +89,7 @@ class JumpFallScript {
     if (this.stage === "slow" && c.fall > 0) this.stage = "fall";
     if (this.stage === "fall" && c.fall === 0) this.stage = "done";
     if (this.stage === "fall" || this.stage === "done") return NO_CONTROLS;
-    const q = queryTrackNear(this.track, c.x, c.y, c.seg);
+    const q = queryMain(this.track, c.x, c.y, c.seg); // BR-PHYS: the main road's query (c.seg is global; queryTrackNear without branches)
     const v = speedOf(c);
     const t = pointAt(this.track, q.s + 40 + v * 0.25);
     const steer = clamp(angleDiff(c.h, Math.atan2(t.y - c.y, t.x - c.x)) * 2.2, -1, 1);
@@ -2564,7 +2564,7 @@ async function runHard2(ctx: Ctx, bots: Bot[]): Promise<void> {
 // ---- branch roads over sockets (BR-PHYS, PLAN-BRANCH.md 2.2, ClickUp 123jpnbfgha, 2026-11-22) ----------
 // This section's imports (hoisted like the ones at the top).
 import { RouteDriver as BrRoute } from "../tools/debug/branch-walls";
-import { roadOfSeg as brRoadOfSeg } from "../shared/track";
+import { queryMain, roadOfSeg as brRoadOfSeg } from "../shared/track";
 
 /**
  * The client's prediction through the shortcuts over a lagged link (PLAN-BRANCH 2.2: the replay starts
