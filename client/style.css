@@ -46,6 +46,34 @@ body {
   overflow: hidden;
 }
 
+/* NOSELECT-1: a game, not a document. No text selection (drag, double-click, long press, Cmd+A),
+   no iOS long-press callout (Copy, Look Up, Translate) and no tap flash anywhere in it. The
+   browser's context menu is stopped by the guard in index.html, with the same exception. */
+html {
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Except where text is typed: the name, the room code, the chat, the tuning panel's values
+   (and any contenteditable). Selection, the caret, paste and the on-screen keyboard work there.
+   The same set as index.html's isTextField. */
+input:not([type]),
+input[type="text"],
+input[type="search"],
+input[type="email"],
+input[type="url"],
+input[type="tel"],
+input[type="password"],
+input[type="number"],
+textarea,
+[contenteditable]:not([contenteditable="false"]) {
+  user-select: text;
+  -webkit-user-select: text;
+  -webkit-touch-callout: default;
+}
+
 /* The stage follows the visual viewport (client/chat.ts fitViewport), so a phone's on-screen
    keyboard shrinks it instead of covering the chat input. */
 #stage {
