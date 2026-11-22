@@ -2156,7 +2156,7 @@ function mouths(): number {
     const xa = m.x0 - bx > 0 ? m.x0 - bx : 0, xb = m.x1 - bx < S ? m.x1 - bx : S;
     const ya = m.y0 - by > 0 ? m.y0 - by : 0, yb = m.y1 - by < S ? m.y1 - by : S;
     if (xa < xb && ya < yb) {
-      cost += 4 + (((xb - xa) * (yb - ya)) >> 5);
+      cost += 4 + (((xb - xa) * (yb - ya)) >> 6); // as a painted box is costed elsewhere: about 0.02 a pixel
       const f = m.frame;
       for (let y = ya; y < yb; y++) {
         for (let x = xa; x < xb; x++) {

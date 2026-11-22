@@ -50,7 +50,7 @@
 // other lap: the dust's lookup on a shortcut), V8's sampling heap profiler with the objects
 // collected since counted, bytes a frame charged to functions of client/, a control beside it.
 
-import { execFile, execFileSync } from "node:child_process";
+import { execFile, execFileSync, spawnSync } from "node:child_process";
 import { createReadStream, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import http from "node:http";
 import os from "node:os";
@@ -58,9 +58,9 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { FONT_LETTERS, SMALL } from "../../client/gfx/font";
-import { rgbOf } from "../../client/gfx/palette";
+import { rgbOf, SCRAPYARD } from "../../client/gfx/palette";
 import { sceneryOf, themedTrack, themeOf, type Scenery, type Theme } from "../../client/gfx/theme";
-import { artLayout, bakePeaks, bakeTileIndices, bakeTileKinds, KIND, TILE, VIEW_H, VIEW_W, ZOOM } from "../../client/gfx/world";
+import { artLayout, bakePeaks, bakeTileIndices, bakeTileKinds, bakeTileMarked, KIND, TILE, VIEW_H, VIEW_W, ZOOM } from "../../client/gfx/world";
 import { BRANCH_YARD, testTrack } from "../../shared/testtracks";
 import { BRANCH_GUIDE, buildTrack, halfOn, pointAt, queryRoads, queryTrack, roadOf, validateTrack, type Feature, type PlacedBranch, type Track } from "../../shared/track";
 import { blank, decodePng, paste, savePng, type Picture } from "./png";
@@ -314,16 +314,29 @@ function tilesOf(t: Track): [number, number][] {
   return out.sort((a, b) => a[1] - b[1] || a[0] - b[0]);
 }
 
-/** `near` and `cand` while every tile is baked; no prop pixel on a road; a shortcut's void no wider than the shortcut. */
+/**
+ * Every tile of the track, a theme at a time: `near` and `cand` while they are baked; a theme's
+ * tables on a shortcut's tiles as on any (every pixel a colour of the theme's table, and one of
+ * the 32 where it takes marks: PLAN-THEMES.md advisor changes 1 and 2); no prop pixel on a road;
+ * a shortcut's void no wider than the shortcut.
+ */
 function lists(t: Track): void {
   for (const theme of THEMES) {
-    const track = themedTrack(t, theme);
+    const track = themedTrack(t, theme), sc = sceneryOf(theme);
     const all = tilesOf(t);
     bakePeaks(true);
-    let props = 0, onRoad = 0, voids = 0, wideVoid = 0;
+    let props = 0, onRoad = 0, voids = 0, wideVoid = 0, pixels = 0, outside = 0, wideMarkable = 0;
+    const used = new Set<number>();
     for (const [tx, ty] of all) {
       const kinds = bakeTileKinds(track, tx, ty); // baked here and now: the lists' peaks are these tiles'
       tiles.set(`${track.def.id}/${themeOf(track)}/${tx},${ty}/k`, kinds);
+      const idx = bakeTileIndices(track, tx, ty), keep = bakeTileMarked(track, tx, ty, true);
+      for (let p = 0; p < idx.length; p++) {
+        pixels++;
+        used.add(idx[p]);
+        if (idx[p] >= sc.count) outside++;
+        if (keep[p] !== 255 && idx[p] >= SCRAPYARD) wideMarkable++;
+      }
       for (let p = 0; p < kinds.length; p++) {
         if (kinds[p] !== KIND.prop && kinds[p] !== KIND.void) continue;
         const x = (tx * TILE + (p % TILE) + 0.5) / ZOOM, y = (ty * TILE + Math.floor(p / TILE) + 0.5) / ZOOM;
@@ -339,6 +352,7 @@ function lists(t: Track): void {
     }
     const peak = bakePeaks();
     say(peak.near < peak.nearRoom && peak.cand < peak.candRoom, `${theme}: ${all.length} tiles baked; the most pieces near a block ${peak.near} of ${peak.nearRoom}, near a tile ${peak.cand} of ${peak.candRoom} (a full list leaves pieces out)`);
+    say(outside === 0 && wideMarkable === 0, `${theme}: every one of their ${pixels} pixels holds a colour of the theme's table (${outside} do not; ${used.size} of its ${sc.count} colours are used), and one of the 32 where it takes marks (${wideMarkable} hold water or an extra)`);
     if (theme === "scrapyard") say(voids > 0 && wideVoid === 0, `the gaps: ${voids} pixels of void, ${wideVoid} further out than the barrier of the road whose gap it is`);
     else say(props > 0 && onRoad === 0, `${theme}: ${props} pixels of props, ${onRoad} of them between a road's walls or on its barrier`);
   }
@@ -663,6 +677,10 @@ async function shots(t: Track, port: number): Promise<void> {
 // ---- the fly-through's frame times (headless Chrome) ------------------------------------------------
 
 const LOCK_FILE = path.join(os.tmpdir(), "scrap-rally-bench.lock");
+// The other runners (scripts/bench.ts, tools/debug/world-bench.ts) take a lock for stale unless
+// its holder's command names a `bench.ts`. This tool's does not, so --bench measures in a copy
+// of itself started with this word on its command line: its lock is then honoured.
+const LOCK_WORD = "--as=branch-bench.ts";
 
 function lockHolder(file = LOCK_FILE): { pid: number; where: string } | null {
   try {
@@ -673,7 +691,7 @@ function lockHolder(file = LOCK_FILE): { pid: number; where: string } | null {
   }
 }
 
-/** Does that pid still run a benchmark (as scripts/bench.ts and tools/debug/world-bench.ts ask it: by `bench.ts` in its command; this tool is started as one for --bench)? */
+/** Does that pid still run a benchmark (as scripts/bench.ts and tools/debug/world-bench.ts ask it: by `bench.ts` in its command)? */
 async function runnerAlive(pid: number): Promise<boolean> {
   try {
     process.kill(pid, 0);
@@ -681,7 +699,7 @@ async function runnerAlive(pid: number): Promise<boolean> {
     if ((e as NodeJS.ErrnoException).code !== "EPERM") return false;
   }
   try {
-    return /bench\.ts|branch-sheet\.ts/.test((await run("ps", ["-o", "command=", "-p", String(pid)])).stdout);
+    return /bench\.ts/.test((await run("ps", ["-o", "command=", "-p", String(pid)])).stdout);
   } catch (e) {
     return (e as { code?: number }).code !== 1;
   }
@@ -1027,7 +1045,10 @@ try {
   else if (args.includes("--alloc")) alloc();
   else if (args.includes("--units")) units(track);
   else if (args.includes("--shots")) await shots(track, PORT);
-  else if (args.includes("--bench")) code = await bench(PORT);
+  else if (args.includes("--bench")) {
+    if (args.includes(LOCK_WORD)) code = await bench(PORT);
+    else code = spawnSync(process.execPath, [...process.execArgv, fileURLToPath(import.meta.url), ...args, LOCK_WORD], { stdio: "inherit" }).status ?? 1;
+  }
   else {
     if (args.includes("--tiles")) tileSheet(track);
     probe(track);
