@@ -765,11 +765,14 @@ async function drivePoint(d: PageDriver, laps: number, midRace?: (lap: number) =
   await d.cdp.eval(BLOCK_ON);
   try {
     while (Date.now() - t0 < 360_000) {
-      p = await d.cdp.eval<Pose>(POSE);
+      // The log first, then the pose: a step that finished the race (the controls hide and let go)
+      // is in a batch only if the pose after it shows the finish, and then it is not checked.
       const batch = await d.cdp.eval<StepLog[]>(DRAIN);
+      p = await d.cdp.eval<Pose>(POSE);
+      const over = !!p.fin || p.lap >= laps || (p.phase !== "racing" && p.phase !== "countdown");
       if (dirty > 0) dirty--;
-      else if (d.stick && p.phase === "racing") checkSteps(d, batch, log);
-      if (p.fin || p.lap >= laps || (p.phase !== "racing" && p.phase !== "countdown")) break;
+      else if (!over && d.stick && p.phase === "racing") checkSteps(d, batch, log);
+      if (over) break;
       const now = Date.now();
       if (p.lap !== lapSeen) {
         lapSeen = p.lap;
