@@ -142,8 +142,56 @@ export const MOVE_YARD: TrackDef = {
   recovery: [0],
 };
 
+// The BR-SCHEMA test track (shortcut roads, PLAN-BRANCH.md 2.10; ClickUp 123jpnbfgh9): a roomy loop
+// (a rounded rectangle, the start on the top side just out of the top-left bend) with three shortcuts
+// that cut three of its corners, each leaving the main road at a fork and rejoining it at a merge, and
+// plain road between them; nothing else on it. In order round the lap:
+// - top-right: a dirt cut, a stretch of dirt across the whole shortcut (under ~350 units: the mud rule);
+// - bottom-right: a jump cut, a ramp and a chasm (a recovery point before it), out of sight of the main road;
+// - bottom-left: a narrow cut (80 wide: half-width 40) with pits to steer between.
+// Nothing drives or draws a branch yet (BR-PHYS, BR-BAKE): today it races as its main road.
+// Picked with the dev flag SCRAP_DEV_TRACK=branch-yard (server/room.ts).
+export const BRANCH_YARD: TrackDef = {
+  id: "branch-yard",
+  name: "Branch Yard",
+  control: [
+    [800, 600], [1400, 600], [2000, 600], [2600, 600], [3200, 600], [3800, 600], [4400, 600], [5000, 600], [5600, 600], [6100, 600],
+    [6450, 700], [6600, 1050],
+    [6600, 1600], [6600, 2200], [6600, 2800], [6600, 3400], [6600, 4000], [6600, 4600], [6600, 5200],
+    [6500, 5650], [6150, 6000],
+    [5600, 6000], [5000, 6000], [4400, 6000], [3800, 6000], [3200, 6000], [2600, 6000], [2000, 6000], [1400, 6000], [900, 6000],
+    [450, 5900], [250, 5550],
+    [200, 5000], [200, 4400], [200, 3800], [200, 3200], [200, 2600], [200, 2000],
+    [250, 1100], [450, 750],
+  ],
+  halfWidth: 64,
+  verge: 44,
+  features: [
+    {
+      k: "branch", s0: 4000.7, s1: 7409.6, side: 1, halfWidth: 56,
+      control: [[5000, 680], [5250, 820], [5600, 1030], [6170, 1600], [6380, 1950], [6520, 2200]],
+      features: [{ k: "dirt", s0: 1200, s1: 1540, lat0: -56, lat1: 56 }],
+    },
+    {
+      k: "branch", s0: 9209.6, s1: 12532.5, side: 1, halfWidth: 56,
+      control: [[6520, 4400], [6380, 4650], [6170, 5000], [5600, 5570], [5250, 5780], [5000, 5920]],
+      features: [{ k: "ramp", s: 1150, len: 80 }, { k: "gap", s0: 1230, s1: 1370 }],
+      recovery: [850],
+    },
+    {
+      k: "branch", s0: 15332.5, s1: 18663.6, side: 1, halfWidth: 40,
+      control: [[1800, 5920], [1550, 5780], [1200, 5570], [630, 5000], [420, 4650], [280, 4400]],
+      features: [{ k: "hole", s: 1100, lat: -18, r: 20 }, { k: "hole", s: 1350, lat: 18, r: 20 }, { k: "hole", s: 1600, lat: -18, r: 20 }],
+      recovery: [850],
+    },
+  ],
+  // The start line, and before each fork (a fall on a branch before its first recovery point comes back
+  // to the main road's before the fork: PLAN-BRANCH user decision 6).
+  recovery: [0, 3600, 8800, 14900],
+};
+
 /** Every preview test track, in the order a preview lists them. */
-export const TEST_TRACKS: readonly TrackDef[] = [PREVIEW_YARD, SURF_YARD, SPLIT_YARD, MOVE_YARD];
+export const TEST_TRACKS: readonly TrackDef[] = [PREVIEW_YARD, SURF_YARD, SPLIT_YARD, MOVE_YARD, BRANCH_YARD];
 
 const built = new Map<string, Track>(); // built once per id; a Track is never mutated
 
