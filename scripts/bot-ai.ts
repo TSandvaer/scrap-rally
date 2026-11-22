@@ -66,6 +66,12 @@ export class BotDriver {
       this.mem.inBend = false;
       this.mem.flew = false;
       this.mem.hp = -1;
+      // BR-BOTS: its shortcuts are chosen again for the next race (routePlan: by its seat from its lane,
+      // its car type and stats then), and its route starts from the plan.
+      this.mem.plan = -1;
+      this.mem.planTrack = null;
+      this.mem.route = 0;
+      this.mem.forkDone = 0;
     } else if (raceOn) this.raceSteps++;
     const grounded = !!car && car.air === 0 && car.fall === 0 && car.wreck === 0;
     const out = botControls(

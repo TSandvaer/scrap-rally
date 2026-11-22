@@ -2,9 +2,12 @@
 // the room asks botStep for its Command (no jitter buffer: a zero-latency driver), and from
 // there weapons, the armed delay, pause, results, scrap and the wreck bonus are the code every
 // player goes through. Everything a bot does differently by seat (name, racing line, mine
-// timing) is keyed by its slot, never by the random player id, so a rerun is identical.
+// timing, BR-BOTS: the shortcuts it takes) is keyed by its slot, never by the random player id, so a
+// rerun is identical.
 
-import { botControls, newBotMem, resetBotMem, type BotControls, type BotLevel, type BotMem, type BotMine, type BotOther } from "../shared/botdrive";
+import {
+  BOT_LANES, botControls, newBotMem, resetBotMem, routePlan, type BotControls, type BotLevel, type BotMem, type BotMine, type BotOther,
+} from "../shared/botdrive";
 import { botShopping } from "../shared/botshop";
 import { CAR_TYPES, type CarType } from "../shared/cars";
 import type { CarStats } from "../shared/physics";
@@ -24,7 +27,7 @@ export function maxBotsFromEnv(): number {
 // By slot (the lowest one free in the room when the bot is added). Names are original and,
 // with " (bot)", no longer than a player's name (12). A room has at most 5 bots (one human).
 const NAMES = ["Gasket", "Lugnut", "Piston", "Clutch", "Axle", "Sprock"];
-const LANES = [-24, 24, 0, -12, 12, -36]; // the racing lines botplay's bots use, in order
+const LANES = BOT_LANES; // the racing lines botplay's bots use, in order
 const MINE_OFFSETS = [0, 96, 192, 288, 384, 48]; // steps into the 8 s mine cycle: never two at once
 
 export const BOT_SLOTS = NAMES.length;
@@ -48,7 +51,7 @@ export function botCar(slot: number): CarType {
 }
 
 export function newBotSeat(level: BotLevel, slot: number, order: number): BotSeat {
-  return { level, slot, order, mem: newBotMem(LANES[slot], level, MINE_OFFSETS[slot], slot), steps: 0 }; // HARD-2: the mistakes' seed is the slot
+  return { level, slot, order, mem: newBotMem(LANES[slot], level, MINE_OFFSETS[slot], slot, slot), steps: 0 }; // HARD-2: the mistakes' seed is the slot; BR-BOTS: its seat too
 }
 
 /** A new race: the step count and the driver's memory start over (the settings stay). */
@@ -93,11 +96,24 @@ export function botStep(
   if (car && (seat.mem.weapons || seat.mem.useWake) && car.air === 0 && car.fall === 0 && car.wreck === 0) {
     for (const q of racers) if (q !== p && q.car) others.push({ x: q.car.x, y: q.car.y, solid: solid(q), id: q.id, vx: q.car.vx, vy: q.car.vy });
   }
+  const planned = seat.mem.plan;
   const ctl = botControls({ car, track, stats: p.stats, raceOn: racing, raceSteps: seat.steps, others, carType: p.carType, mines, cells, rt, lap, hp: p.hp }, seat.mem);
+  if (planned < 0 && seat.mem.plan >= 0 && process.env.SCRAP_DEV_BOTS === "1") console.log(routeLine(botName(seat.slot), seat, p.carType, p.stats, track));
   if (botTrace.fn) botTrace.fn(p, ctl);
   const out = { cmd: { throttle: ctl.throttle, steer: ctl.steer, buttons: ctl.fire ? BTN_RIVET : 0 }, minePress: ctl.mine };
   if (botTiming.samples) botTiming.samples.push(performance.now() - t0);
   return out;
+}
+
+/**
+ * BR-BOTS: a bot's shortcuts as one line (the dev flag's server log, as HARD-2's mistakes; tools/debug/branch-tune.ts
+ * prints the same per seat): per branch its kind, the shortcut's cost against the main road's and the verdict.
+ */
+export function routeLine(name: string, seat: BotSeat, carType: CarType, stats: CarStats, track: Track): string {
+  const rows = routePlan(track, seat.level, seat.slot, carType, stats).rows;
+  const f = (v: number) => (Number.isFinite(v) ? v.toFixed(0) : "never");
+  return `[bots] ${name} seat ${seat.slot} ${seat.level} ${carType} on ${track.def.id}: ` +
+    rows.map((r) => `branch ${r.branch} (${r.kind}) ${r.take ? "TAKE" : "main"}: ${f(r.cost)} vs ${f(r.main)} (${r.why})`).join("; ");
 }
 
 /** The bot shops (shared/botshop.ts) with the shop's own rule; returns what it bought. */
