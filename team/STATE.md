@@ -686,6 +686,9 @@ Breaker's Mile desert, Slag Harbour city; 993/993 + 143/143; report tmp/theme-sc
 th-look-1 only in sim-test/README appends. Opus reviewer ctx_70f3da126e82 (tmp/review-theme-schema.md). GATE BEFORE THE NEXT PUSH:
 once THEME-SCHEMA + TH-LOOK-1 are both on main, the LIVE Breaker's Mile draws the provisional desert -> the user must approve the desert
 (or the theme field is held back) before pushing. Active authors: TH-LOOK-1 only; BR-PHYS waits for THEME-SCHEMA's merge.
+QA13 live PASS (ctx_51bfb3ee9585, released; tmp/qa13-live-report.md): 5 tracks listed, races on both new tracks 0 falls (Normal 51.9-58.9 s),
+no-select works, Bot tune absent live, stick ok. ClickUp complete: M4-TRACKS, NOSELECT-1, HARD-2. HARD-3 ticket created ('to do',
+waits for the user's pasted values).
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
