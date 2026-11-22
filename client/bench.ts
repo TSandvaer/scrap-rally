@@ -13,7 +13,7 @@
 //   C  JS heap growth over the frames of S3 (informational; Chrome only).
 // &scene=S1..S5 &track=<id>: one cell. Without them every cell runs in this page, one after
 // the other (a quick look: later cells then run on warm caches; the runner loads one cell
-// per page). &scene=S6 is a cell of its own, on the Preview Yard test track whatever &track
+// per page), on the tracks the scenes have their spots on (SPOTS: a track without them is left out). &scene=S6 is a cell of its own, on the Preview Yard test track whatever &track
 // says (M4-WORLD: the road's furniture; it is not among the cells a page runs without &scene,
 // and the gate does not judge it: tools/debug/world-bench.ts holds it against S2). &track may
 // also name a test track (shared/testtracks.ts) for S4 under metric A: the lap needs no spots.
@@ -784,7 +784,9 @@ export async function runBench(view: HTMLCanvasElement, params: URLSearchParams)
     const asked = params.get("theme") ?? (one === THEME_SCENE ? "desert" : null);
     if (asked !== null && !isTheme(asked)) throw new Error(`unknown theme ${asked}`);
     const themed = (t: Track): Track => (isTheme(asked) ? themedTrack(t, asked) : t);
-    const tracks = (yard ? [testTrack(YARD_TRACK)!] : named ? [testTrack(named) ?? trackById(named)] : trackList().map((e) => trackById(e.id))).map(themed);
+    // Without &track: every track the scenes have their spots on (SPOTS). A track without them
+    // (the long ones, M4-TRACKS) is left out of the quick look, not an error; asked for by name it still is one.
+    const tracks = (yard ? [testTrack(YARD_TRACK)!] : named ? [testTrack(named) ?? trackById(named)] : trackList().filter((e) => SPOTS[e.id]).map((e) => trackById(e.id))).map(themed);
     const hold = num("hold");
     if (hold !== null) {
       const frames = framesFor(scenes[0], tracks[0], opts);
