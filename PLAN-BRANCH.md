@@ -1,4 +1,4 @@
-# PLAN-BRANCH: shortcut roads off the main road — DRAFT (pending Fable review and the user's approval)
+# PLAN-BRANCH: shortcut roads off the main road — APPROVED by the user 2026-11-22 (with the advisor changes and the user decisions below)
 
 **Why.** On 2026-11-22 the user chose shortcut roads: shorter than the main road but risky (dirt, a jump, a hole or a narrow gap). They are built after M4-TRACKS and then added to Slag Harbour and Breaker's Mile (team/DECISIONS.md:134). This is option A of PLAN-M4 2.6 (PLAN-M4.md:127).
 
@@ -141,3 +141,11 @@ Adopted suggestions: check `near` (64 entries, world.ts:812) does not overflow i
 scripts/bots.ts:92 (BR-PHYS), tools/debug/world-sheet.ts:254 (BR-BAKE), surf-tune.ts (BR-PHYS). Open question 6 added below.
 6. (open question) A fall before the first branch recovery point: back onto the main road? **Recommended: yes, the main recovery point
    before the fork** (validation still puts a branch recovery point before the branch's first hazard).
+
+## User decisions (2026-11-22, popup: "Approve, recommended answers")
+1. One shortcut per new track: a hole or narrow one on Slag Harbour, a jump on Breaker's Mile.
+2. A clean shortcut gains about 1.5-2.5 s a lap (a fall costs more).
+3. Easy bots never take risky shortcuts; Normal on half the seats; Hard whenever it pays.
+4. Painted arrows mark the fork, no text.
+5. Shortcuts look the same as the main road on the minimap.
+6. A fall before the first branch recovery point goes back to the main recovery point before the fork.
