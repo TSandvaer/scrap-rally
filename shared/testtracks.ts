@@ -185,6 +185,9 @@ export const BRANCH_YARD: TrackDef = {
       recovery: [850],
     },
   ],
+  // The start line, and before each fork (a fall on a branch before its first recovery point comes back
+  // to the main road's before the fork: PLAN-BRANCH user decision 6).
+  recovery: [0, 3600, 8800, 14900],
 };
 
 /** Every preview test track, in the order a preview lists them. */

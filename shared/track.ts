@@ -2365,7 +2365,7 @@ function validateBranches(main: Track, errors: string[]): void {
  * - at least the walls' difference |wA - wB| past every gore (else the nearer road's wall, which physics
  *   and the bake use, cuts into the other's corridor: advisor change 1), and never an overlap;
  * - and at least BRANCH_SEP outside the gores' noses (from a gore to the first sample past it whose gap
- *   is BRANCH_SEP).
+ *   is BRANCH_SEP, which lies within MOUTH_CLEAR of the gore).
  * Where either point is over a gap (one road jumps the other) nothing is required.
  */
 function branchSeparation(main: Track, errors: string[]): void {
@@ -2384,25 +2384,37 @@ function branchSeparation(main: Track, errors: string[]): void {
     const wB = halfOn(rb, q.seg, q.s, q.side) + rb.def.verge;
     return { q, gap: q.dist - wA - wB, dw: Math.abs(wA - wB) };
   };
-  // The gores' noses: from each gore to the first branch sample past it BRANCH_SEP clear of the main road.
-  const open = main.branches.map((b) => {
+  // The gores' noses: from each gore to the first branch sample past it BRANCH_SEP clear of the main
+  // road, which lies within MOUTH_CLEAR of the gore (else the nose ends there, and it is reported).
+  const L = main.length;
+  const open = main.branches.map((b, k) => {
     const r = b.road, fg = b.forkGore, mg = b.mergeGore;
-    let fork = Infinity, merge = -Infinity;
+    let fork = -Infinity, merge = Infinity;
     if (fg && mg) {
-      for (let i = 0; i < r.pts.length; i++) if (r.cum[i] > fg.u && gapAt_(r, i, main).gap >= BRANCH_SEP) { fork = r.cum[i]; break; }
-      for (let i = r.pts.length - 1; i >= 0; i--) if (r.cum[i] < mg.u && gapAt_(r, i, main).gap >= BRANCH_SEP) { merge = r.cum[i]; break; }
+      fork = fg.u + MOUTH_CLEAR;
+      merge = mg.u - MOUTH_CLEAR;
+      let i = 0;
+      while (i < r.pts.length && !(r.cum[i] > fg.u && gapAt_(r, i, main).gap >= BRANCH_SEP)) i++;
+      if (i < r.pts.length && r.cum[i] <= fork) fork = r.cum[i];
+      else errors.push(`branch ${k + 1} (main ${f1(b.s0)}..${f1(b.s1)}): its corridor is not ${BRANCH_SEP} clear of the main road's within ${MOUTH_CLEAR} past its fork gore (u ${f1(fg.u)})`);
+      i = r.pts.length - 1;
+      while (i >= 0 && !(r.cum[i] < mg.u && gapAt_(r, i, main).gap >= BRANCH_SEP)) i--;
+      if (i >= 0 && r.cum[i] >= merge) merge = r.cum[i];
+      else errors.push(`branch ${k + 1} (main ${f1(b.s0)}..${f1(b.s1)}): its corridor is not ${BRANCH_SEP} clear of the main road's within ${MOUTH_CLEAR} before its merge gore (u ${f1(mg.u)})`);
     }
     return { fork, merge };
   });
+  /** s in lo..hi, the nearer way round the lap. */
+  const within = (s: number, lo: number, hi: number) => (s >= lo && s <= hi) || (s - L >= lo && s - L <= hi) || (s + L >= lo && s + L <= hi);
   /** 1: inside a mouth (free); 2: in a gore's nose (the walls' difference only); 0: elsewhere. */
   const zoneOf = (k: number, u: number, s: number): number => {
     const b = main.branches[k - 1], fg = b.forkGore, mg = b.mergeGore, o = open[k - 1];
     if (fg === null || mg === null) return 1; // reported already: its corridor never parts
-    if (s >= b.s0 - same && s <= fg.s + same) {
+    if (within(s, b.s0 - same, fg.s + same)) {
       if (u <= fg.u) return 1;
       if (u <= o.fork) return 2;
     }
-    if (s >= mg.s - same && s <= b.s1 + same) {
+    if (within(s, mg.s - same, b.s1 + same)) {
       if (u >= mg.u) return 1;
       if (u >= o.merge) return 2;
     }
@@ -2430,12 +2442,6 @@ function branchSeparation(main: Track, errors: string[]): void {
         else if (kind === "walls") errors.push(`${where}: past a gore their corridors are ${f1(gap)} apart, less than the walls' difference ${f1(dw)} (the nearer road's wall would cut into the other's corridor)`);
         else errors.push(`${where}: their corridors are ${f1(gap)} apart, less than ${BRANCH_SEP} (outside the mouths and the gores' noses)`);
       }
-    }
-  }
-  for (const [k, o] of open.entries()) {
-    const b = main.branches[k];
-    if (b.forkGore && b.mergeGore && !(o.fork < Infinity && o.merge > -Infinity)) {
-      errors.push(`branch ${k + 1} (main ${f1(b.s0)}..${f1(b.s1)}): its corridor never gets ${BRANCH_SEP} clear of the main road's`);
     }
   }
 }

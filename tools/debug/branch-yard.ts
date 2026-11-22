@@ -3,12 +3,12 @@
 // as seconds at a nominal speed: an estimate, not a bot's lap: BR-BOTS measures those), its half-width,
 // each gore (u, s, the centrelines' angle), each mouth's length, where each gore's nose zone ends (the
 // first sample BRANCH_SEP clear of the main road), the closest the corridors come past the noses, its
-// dirt (each patch's length), ramps, gaps and holes, and whether each sample's distance to the main road
-// is "out of sight" (more than --sight units from every main centreline point); a probe of the union
-// round every mouth (is a point inside the nearer road's wall exactly when it is inside either road's
-// corridor, advisor change 1); then validateTrack.
-// --png file.png draws the roads (asphalt edges grey, walls black, centrelines, noses red, dirt brown,
-// holes and gaps dark, ramps orange; 1 px = --scale units).
+// dirt (each patch's length), ramps, gaps and holes, and how much of it is "out of sight" (more than
+// --sight units from every main centreline point); a probe of the union round every mouth (is a point
+// inside the nearer road's wall exactly when it is inside either road's corridor, advisor change 1);
+// then validateTrack. --png file.png draws the roads (asphalt edges grey, walls black, centrelines,
+// noses red, dirt brown, holes and gaps dark, ramps orange; 1 px = --scale units).
+// unionProbe is used by scripts/sim-test.ts.
 //
 //   npx tsx tools/debug/branch-yard.ts                       Branch Yard (shared/testtracks.ts)
 //   npx tsx tools/debug/branch-yard.ts --png tmp/branch-yard.png --scale 6
@@ -18,101 +18,99 @@ import { BRANCH_GUIDE, BRANCH_SEP, buildTrack, halfOn, LOCAL_WINDOW, pointAt, qu
 import { BRANCH_YARD, TEST_TRACKS } from "../../shared/testtracks";
 import { blank, savePng, type Picture } from "./png";
 
-const arg = (k: string, d: string) => {
-  const i = process.argv.indexOf(k);
-  return i >= 0 && i + 1 < process.argv.length ? process.argv[i + 1] : d;
-};
-const NOMINAL = Number(arg("--speed", "380")); // units/s for the seconds estimate
-const SIGHT = Number(arg("--sight", "450")); // half the view's diagonal at the game's zoom, roughly
-const id = arg("--track", BRANCH_YARD.id);
-const def = TEST_TRACKS.find((d) => d.id === id);
-if (!def) throw new Error(`no test track ${id}`);
-const t = buildTrack(def);
 const f1 = (v: number) => v.toFixed(1);
 
-console.log(`${def.id}: main ${f1(t.length)} long, wall ${t.wall}, ${t.pts.length} samples, ${t.branches.length} branch(es)`);
-for (const [k, b] of t.branches.entries()) {
-  const r = b.road, fg = b.forkGore, mg = b.mergeGore;
-  const mainLen = b.s1 - b.s0, gain = mainLen - r.length;
-  console.log(`\nbranch ${k + 1}: main ${f1(b.s0)}..${f1(b.s1)} (${f1(mainLen)}), side ${b.side}, half-width ${r.def.halfWidth}, ${r.pts.length} samples, base ${b.base}`);
-  console.log(`  length ${f1(r.length)}: gain ${f1(gain)} units = ${(gain / NOMINAL).toFixed(2)} s at ${NOMINAL} u/s (estimate)`);
-  for (const [g, name] of [[fg, "fork"], [mg, "merge"]] as const) {
-    if (!g) {
-      console.log(`  ${name} gore: none (the corridors never part)`);
-      continue;
-    }
-    const mouth = name === "fork" ? Math.max(g.u, g.s - b.s0) : Math.max(r.length - g.u, b.s1 - g.s);
-    console.log(`  ${name} gore: u ${f1(g.u)}, s ${f1(g.s)}, angle ${((g.angle * 180) / Math.PI).toFixed(1)} deg, mouth ${f1(mouth)}, nose (${f1(g.x)}, ${f1(g.y)}) lat ${f1(g.noseMain.lat)}`);
-  }
-  // The gap to the main road along the branch, and the out-of-sight stretch.
-  let open0 = NaN, open1 = NaN, minGap = Infinity, minAt = 0, far = 0, farMax = 0;
-  const gaps: number[] = [];
-  for (let i = 0; i < r.pts.length; i++) {
-    const p = r.pts[i];
-    const q = queryTrack(t, p.x, p.y);
-    const d = segDir(r, i);
-    const qx = p.x - q.nx * q.dist, qy = p.y - q.ny * q.dist;
-    const wA = d.x * (qy - p.y) - d.y * (qx - p.x) < 0 ? r.wallL[i] : r.wallR[i];
-    const gap = q.dist - wA - t.wall;
-    const u = r.cum[i];
-    if (fg && u > fg.u && Number.isNaN(open0) && gap >= BRANCH_SEP) open0 = u;
-    if (mg && u < mg.u && gap >= BRANCH_SEP) open1 = u;
-    gaps.push(gap);
-    if (q.dist > SIGHT) far += i > 0 ? r.cum[i] - r.cum[i - 1] : 0;
-    farMax = Math.max(farMax, q.dist);
-  }
-  for (let i = 0; i < r.pts.length; i++) if (r.cum[i] >= open0 && r.cum[i] <= open1 && gaps[i] < minGap) { minGap = gaps[i]; minAt = r.cum[i]; }
-  console.log(`  noses end at u ${f1(open0)} and ${f1(open1)} (first/last sample ${BRANCH_SEP} clear); closest past them: gap ${f1(minGap)} at u ${f1(minAt)}`);
-  console.log(`  farthest from the main centreline ${f1(farMax)}; ${f1(far)} units more than ${SIGHT} from it (out of sight)`);
-  for (const d of r.dirt) console.log(`  dirt u ${f1(d.s0)}..${f1(d.s1)}: ${f1(d.s1 - d.s0)} long, lat ${d.lat0}..${d.lat1}`);
-  for (const x of r.ramps) console.log(`  ramp u ${f1(x.s)} len ${x.len}`);
-  for (const x of r.gaps) console.log(`  gap u ${f1(x.s0)}..${f1(x.s1)}: ${f1(x.s1 - x.s0)}`);
-  for (const x of r.holes) console.log(`  hole u ${f1(x.s)} lat ${x.lat} r ${x.r}`);
-  console.log(`  recovery u ${r.recovery.map(f1).join(", ") || "none"}`);
-}
-// The union (PLAN-BRANCH 2.3, advisor change 1): round each mouth, from BRANCH_GUIDE before the fork to
-// 2 * LOCAL_WINDOW segments past the gore (and the same at the merge), points across both corridors and
-// beyond every 3 units: is a point inside the nearer road's wall (queryRoads, the physics and bake rule)
-// exactly when it is inside either road's corridor (each road's own nearest point and wall)?
-const inside = (r: Track, x: number, y: number) => {
+/** Inside road r's corridor: its own nearest centreline point (the whole road) within its wall there. */
+function inside(r: Track, x: number, y: number): boolean {
   const q = queryTrack(r, x, y);
   return q.dist <= halfOn(r, q.seg, q.s, q.side) + r.def.verge;
-};
-let probes = 0, wrong = 0;
-const firstWrong: string[] = [];
-for (const [k, b] of t.branches.entries()) {
-  const r = b.road;
-  for (const [g, sign] of [[b.forkGore, 1], [b.mergeGore, -1]] as const) {
-    if (!g) continue;
-    const reach = 2 * LOCAL_WINDOW * (r.length / (r.pts.length - 1));
-    const u0 = sign > 0 ? -BRANCH_GUIDE : g.u - reach, u1 = sign > 0 ? g.u + reach : r.length + BRANCH_GUIDE;
-    for (let u = u0; u <= u1; u += 3) {
-      // Across both: from the main road's far wall + 40 to the branch's far wall + 40, through the branch's point at u.
-      const p = pointAt(r, u);
-      const nx = -Math.sin(p.h), ny = Math.cos(p.h);
-      for (let lat = -3 * t.wall; lat <= 3 * t.wall; lat += 3) {
-        const x = p.x + nx * lat, y = p.y + ny * lat;
-        const q = queryRoads(t, x, y);
-        const rq = roadOf(t, q.road);
-        const near = q.dist <= halfOn(rq, q.seg, q.s, q.side) + rq.def.verge;
-        const union = inside(t, x, y) || inside(r, x, y);
-        probes++;
-        if (near !== union) {
-          wrong++;
-          if (firstWrong.length < 5) firstWrong.push(`branch ${k + 1} u ${f1(u)} lat ${f1(lat)}: nearer road ${q.road} says ${near ? "in" : "out"}, union ${union ? "in" : "out"}`);
+}
+
+/**
+ * The union (PLAN-BRANCH 2.3, advisor change 1): round each mouth, from BRANCH_GUIDE before the fork to
+ * 2 * LOCAL_WINDOW segments past the gore (and the same at the merge), points every `step` units across
+ * both corridors and beyond (3 walls either side of the branch's centreline): is a point inside the
+ * nearer road's wall (queryRoads, the rule physics and the bake share) exactly when it is inside either
+ * road's corridor? Returns the points probed and those where the two disagree (the first few described).
+ */
+export function unionProbe(t: Track, step = 3): { probes: number; wrong: number; first: string[] } {
+  let probes = 0, wrong = 0;
+  const first: string[] = [];
+  for (const [k, b] of t.branches.entries()) {
+    const r = b.road;
+    for (const [g, sign] of [[b.forkGore, 1], [b.mergeGore, -1]] as const) {
+      if (!g) continue;
+      const reach = 2 * LOCAL_WINDOW * (r.length / (r.pts.length - 1));
+      const u0 = sign > 0 ? -BRANCH_GUIDE : g.u - reach, u1 = sign > 0 ? g.u + reach : r.length + BRANCH_GUIDE;
+      for (let u = u0; u <= u1; u += step) {
+        const p = u < 0 ? pointAt(t, b.s0 + u) : u > r.length ? pointAt(t, b.s1 + u - r.length) : pointAt(r, u);
+        const nx = -Math.sin(p.h), ny = Math.cos(p.h);
+        for (let lat = -3 * t.wall; lat <= 3 * t.wall; lat += step) {
+          const x = p.x + nx * lat, y = p.y + ny * lat;
+          const q = queryRoads(t, x, y);
+          const rq = roadOf(t, q.road);
+          const near = q.dist <= halfOn(rq, q.seg, q.s, q.side) + rq.def.verge;
+          const union = inside(t, x, y) || inside(r, x, y);
+          probes++;
+          if (near !== union) {
+            wrong++;
+            if (first.length < 5) first.push(`branch ${k + 1} u ${f1(u)} lat ${f1(lat)}: the nearer road (${q.road}) says ${near ? "in" : "out"}, the union ${union ? "in" : "out"}`);
+          }
         }
       }
     }
   }
+  return { probes, wrong, first };
 }
-console.log(`\nunion probe: ${probes} points round the mouths, ${wrong} where the nearer road's wall and the union of the corridors disagree${firstWrong.length ? `: ${firstWrong.join("; ")}` : ""}`);
 
-const errs = validateTrack(t);
-console.log(`\nvalidateTrack: ${errs.length ? errs.join("\n  ") : "valid"}`);
+function report(t: Track, nominal: number, sight: number): void {
+  console.log(`${t.def.id}: main ${f1(t.length)} long, wall ${t.wall}, ${t.pts.length} samples, ${t.branches.length} branch(es)`);
+  for (const [k, b] of t.branches.entries()) {
+    const r = b.road, fg = b.forkGore, mg = b.mergeGore;
+    const mainLen = b.s1 - b.s0, gain = mainLen - r.length;
+    console.log(`\nbranch ${k + 1}: main ${f1(b.s0)}..${f1(b.s1)} (${f1(mainLen)}), side ${b.side}, half-width ${r.def.halfWidth}, ${r.pts.length} samples, base ${b.base}`);
+    console.log(`  length ${f1(r.length)}: gain ${f1(gain)} units = ${(gain / nominal).toFixed(2)} s at ${nominal} u/s (estimate)`);
+    for (const [g, name] of [[fg, "fork"], [mg, "merge"]] as const) {
+      if (!g) {
+        console.log(`  ${name} gore: none (the corridors never part)`);
+        continue;
+      }
+      const mouth = name === "fork" ? Math.max(g.u, g.s - b.s0) : Math.max(r.length - g.u, b.s1 - g.s);
+      console.log(`  ${name} gore: u ${f1(g.u)}, s ${f1(g.s)}, angle ${((g.angle * 180) / Math.PI).toFixed(1)} deg, mouth ${f1(mouth)}, nose (${f1(g.x)}, ${f1(g.y)}) lat ${f1(g.noseMain.lat)}`);
+    }
+    // The gap to the main road along the branch, and the out-of-sight stretch.
+    let open0 = NaN, open1 = NaN, minGap = Infinity, minAt = 0, far = 0, farMax = 0;
+    const gaps: number[] = [];
+    for (let i = 0; i < r.pts.length; i++) {
+      const p = r.pts[i];
+      const q = queryTrack(t, p.x, p.y);
+      const d = segDir(r, i);
+      const qx = p.x - q.nx * q.dist, qy = p.y - q.ny * q.dist;
+      const wA = d.x * (qy - p.y) - d.y * (qx - p.x) < 0 ? r.wallL[i] : r.wallR[i];
+      const gap = q.dist - wA - t.wall;
+      const u = r.cum[i];
+      if (fg && u > fg.u && Number.isNaN(open0) && gap >= BRANCH_SEP) open0 = u;
+      if (mg && u < mg.u && gap >= BRANCH_SEP) open1 = u;
+      gaps.push(gap);
+      if (q.dist > sight) far += i > 0 ? r.cum[i] - r.cum[i - 1] : 0;
+      farMax = Math.max(farMax, q.dist);
+    }
+    for (let i = 0; i < r.pts.length; i++) if (r.cum[i] >= open0 && r.cum[i] <= open1 && gaps[i] < minGap) { minGap = gaps[i]; minAt = r.cum[i]; }
+    console.log(`  noses end at u ${f1(open0)} and ${f1(open1)} (first/last sample ${BRANCH_SEP} clear); closest between them: gap ${f1(minGap)} at u ${f1(minAt)}`);
+    console.log(`  farthest from the main centreline ${f1(farMax)}; ${f1(far)} units more than ${sight} from it (out of sight)`);
+    for (const d of r.dirt) console.log(`  dirt u ${f1(d.s0)}..${f1(d.s1)}: ${f1(d.s1 - d.s0)} long, lat ${d.lat0}..${d.lat1}`);
+    for (const x of r.ramps) console.log(`  ramp u ${f1(x.s)} len ${x.len}`);
+    for (const x of r.gaps) console.log(`  gap u ${f1(x.s0)}..${f1(x.s1)}: ${f1(x.s1 - x.s0)}`);
+    for (const x of r.holes) console.log(`  hole u ${f1(x.s)} lat ${x.lat} r ${x.r}`);
+    console.log(`  recovery u ${r.recovery.map(f1).join(", ") || "none"}`);
+  }
+  const u = unionProbe(t);
+  console.log(`\nunion probe: ${u.probes} points round the mouths, ${u.wrong} where the nearer road's wall and the union of the corridors disagree${u.first.length ? `: ${u.first.join("; ")}` : ""}`);
+  const errs = validateTrack(t);
+  console.log(`\nvalidateTrack: ${errs.length ? errs.join("\n  ") : "valid"}`);
+}
 
-const png = arg("--png", "");
-if (png) {
-  const scale = Number(arg("--scale", "6"));
+function draw(t: Track, png: string, scale: number): void {
   const roads = [t, ...t.branches.map((b) => b.road)];
   let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
   for (const r of roads) for (const p of r.pts) { x0 = Math.min(x0, p.x); y0 = Math.min(y0, p.y); x1 = Math.max(x1, p.x); y1 = Math.max(y1, p.y); }
@@ -138,9 +136,8 @@ if (png) {
     return { x: r.pts[i].x - dy * lat, y: r.pts[i].y + dx * lat };
   };
   const at = (r: Track, s: number, lat: number): Vec => {
-    let i = 0;
-    while (i + 1 < r.pts.length && r.cum[i + 1] <= s) i++;
-    return offset(r, i, lat);
+    const p = pointAt(r, s);
+    return { x: p.x - Math.sin(p.h) * lat, y: p.y + Math.cos(p.h) * lat };
   };
   for (const r of roads) {
     const segs = r.roadNo > 0 ? r.pts.length - 1 : r.pts.length;
@@ -165,4 +162,19 @@ if (png) {
   }
   savePng(png, pic as Picture);
   console.log(`written ${png} (${pic.w}x${pic.h}, 1 px = ${scale} units)`);
+}
+
+if (process.argv[1]?.endsWith("branch-yard.ts")) {
+  const arg = (k: string, d: string) => {
+    const i = process.argv.indexOf(k);
+    return i >= 0 && i + 1 < process.argv.length ? process.argv[i + 1] : d;
+  };
+  const id = arg("--track", BRANCH_YARD.id);
+  const def = TEST_TRACKS.find((d) => d.id === id);
+  if (!def) throw new Error(`no test track ${id}`);
+  const t = buildTrack(def);
+  // --speed: units/s for the seconds estimate; --sight: about half the view's diagonal at the game's zoom.
+  report(t, Number(arg("--speed", "380")), Number(arg("--sight", "450")));
+  const png = arg("--png", "");
+  if (png) draw(t, png, Number(arg("--scale", "6")));
 }
