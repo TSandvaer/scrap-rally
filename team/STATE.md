@@ -731,6 +731,7 @@ BR-BAKE head moved to 2771b39 (docs/tool only, S8 rule) - its reviewer told to i
 BR-BOTS review 1 REQUEST_CHANGES (ctx_dfe9940aaeb7 kept): routeStep tests pastGores with the segment-start s (botdrive.ts:1874/1878), so past a
 fork gore the route keeps the other road for up to one segment (14 vs 4 wall contacts in fork-mouth drives). Fix round + merge main sent to
 ctx_0bc7149aa317 (tmp/br-bots/BR-BOTS-review-1.md).
+BR-MAP gate GREEN on c73653d (1046/1046 + 150/150, build index-Smw27BZH.js).
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
