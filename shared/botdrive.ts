@@ -438,7 +438,7 @@ export interface Blocker {
  */
 export function laneFor(
   track: Track, s: number, seg: number, look: number, pref: number, racing: number, stats: CarStats, span: SplitSpan | null = null, lat = pref,
-  extra: readonly Blocker[] | null = null,
+  extra: readonly Blocker[] | null = null, nExtra = extra ? extra.length : 0,
 ): { lane: number; holes: number; dodge: boolean } {
   const tyres = track.tyres, surfaces = track.surfaces;
   const L = track.length;
@@ -487,12 +487,12 @@ export function laneFor(
       if (len > 0 && cost > 0) (spans ??= []).push({ lat0: f.lat0 - SURFACE_MARGIN, lat1: f.lat1 + SURFACE_MARGIN, len, cost });
     }
   }
-  if (!mounds && !spans && !span && !held && !extra) return { ...holeLane(track, s, look, pref), dodge: false };
+  if (!mounds && !spans && !span && !held && nExtra === 0) return { ...holeLane(track, s, look, pref), dodge: false };
   const near: Blocker[] = track.holes
     .map((h) => ({ lat: h.lat, r: h.r, d: ahead(track, s - h.r - 30, h.s) - h.r - 30 }))
     .filter((x) => x.d < look);
   if (mounds) near.push(...mounds);
-  if (extra) near.push(...extra); // M4-MOVE: barrels, presses and a truck to go round (moverBlockers)
+  for (let i = 0; i < nExtra; i++) near.push(extra![i]); // M4-MOVE: barrels, presses and a truck to go round (moverBlockers)
   near.sort((a, b) => a.d - b.d);
   // On the asphalt; with a blocker ahead the verge too (costed as the dirt it is), so a car on the
   // outside of a mound goes round it there rather than back across it. In a split (span): inside
@@ -704,7 +704,10 @@ export const MOVE = {
 /** The slowest along-track speed the bots time a barrel or a press by (a car standing still gets going). */
 const MOVE_V_MIN = 100;
 
-/** The next truck at most `look` ahead of s that the car is not yet past (from trucksFrom), with how far ahead its rear is (< 0 alongside). */
+/** truckAhead's answer (one object, refilled: no allocation a step). */
+const TRUCK_AHEAD: { t: PlacedTruck; toRear: number } = { t: null as unknown as PlacedTruck, toRear: 0 };
+
+/** The next truck at most `look` ahead of s that the car is not yet past (from trucksFrom), with how far ahead its rear is (< 0 alongside); valid until the next call. */
 function truckAhead(track: Track, s: number, seg: number, look: number): { t: PlacedTruck; toRear: number } | null {
   const list = track.trucks, n = list.length;
   if (n === 0) return null;
@@ -717,25 +720,27 @@ function truckAhead(track: Track, s: number, seg: number, look: number): { t: Pl
     else if (d >= L / 2) d -= L;
     if (d + t.len + CAR_LENGTH / 2 < 0) continue; // past it
     if (d > look) break; // in order round the lap: the rest are further
-    return { t, toRear: d };
+    TRUCK_AHEAD.t = t;
+    TRUCK_AHEAD.toRear = d;
+    return TRUCK_AHEAD;
   }
   return null;
 }
 
-/** The ticks from now (lo .. hi) in which a car `d` ahead of something at along-track speed vf is within `reach` of it, padded (MOVE). */
-let WIN_LO = 0, WIN_HI = 0;
+/** The ticks from now (lo .. hi) in which a car `d` ahead of something at along-track speed vf is within `reach` of it, padded (MOVE); into WIN (one object, refilled). */
+const WIN = { lo: 0, hi: 0 };
 function crossWindow(d: number, vf: number, reach: number): void {
   const v = Math.max(vf, MOVE_V_MIN);
   const eta = (d / v) * 60;
   const half = (reach / v) * 60 + MOVE.padTicks + MOVE.padShare * Math.max(0, eta);
-  WIN_LO = Math.floor(eta - half);
-  WIN_HI = Math.ceil(eta + half);
+  WIN.lo = Math.floor(eta - half);
+  WIN.hi = Math.ceil(eta + half);
 }
 
 /** The nearest press ahead that will be down while the bot passes it (moverBlockers): how far ahead its centre is (-1 none), its width. */
 const HOLD = { d: -1, lat0: 0, lat1: 0 };
 /** moverBlockers' blockers, kept from step to step (count: MOVER_N). */
-const MOVERS: Blocker[] = [];
+export const MOVERS: Blocker[] = [];
 let MOVER_N = 0;
 function mover(lat: number, r: number, d: number): void {
   const b = MOVERS[MOVER_N] ?? (MOVERS[MOVER_N] = { lat: 0, r: 0, d: 0 });
@@ -746,14 +751,15 @@ function mover(lat: number, r: number, d: number): void {
 }
 
 /**
- * The blockers what moves puts in the bot's lane search (see the top of this file), at race tick rt
+ * The blockers what moves puts in the bot's lane search (see the top of this file), into MOVERS (kept
+ * from step to step, its first MOVER_N count; no allocation a step), at race tick rt
  * for a car at s on segment seg moving vf along the track, within `look`: per barrel each run of ticks
  * it is on the road in the window the bot passes its row, as the lateral range it rolls over then (plus
  * BARREL_R); per press that will be down at any tick of the window the bot passes under it, its width
- * (and the nearest such press in HOLD); `round`: a truck the bot goes round (its body's width). null
- * when there is none (a track without barrels, presses and trucks: laneFor as before).
+ * (and the nearest such press in HOLD); `round`: a truck the bot goes round (its body's width). Returns
+ * how many (0 = none: laneFor as before).
  */
-export function moverBlockers(track: Track, s: number, seg: number, vf: number, look: number, rt: number, round: { t: PlacedTruck; toRear: number } | null): Blocker[] | null {
+export function moverBlockers(track: Track, s: number, seg: number, vf: number, look: number, rt: number, round: { t: PlacedTruck; toRear: number } | null): number {
   MOVER_N = 0;
   HOLD.d = -1;
   const L = track.length;
@@ -770,8 +776,8 @@ export function moverBlockers(track: Track, s: number, seg: number, vf: number, 
       crossWindow(d, vf, BARREL_R + CAR_LENGTH / 2 + 4);
       for (let k = 0; k < b.n; k++) {
         let first = NaN, last = NaN;
-        for (let w = WIN_LO; w <= WIN_HI + 1; w++) {
-          const lat = w <= WIN_HI ? barrelLat(b, k, rt + w) : NaN;
+        for (let w = WIN.lo; w <= WIN.hi + 1; w++) {
+          const lat = w <= WIN.hi ? barrelLat(b, k, rt + w) : NaN;
           if (lat === lat) {
             if (first !== first) first = lat;
             last = lat;
@@ -795,7 +801,7 @@ export function moverBlockers(track: Track, s: number, seg: number, vf: number, 
       if (d > look) break;
       crossWindow(d, vf, PRESS_DEPTH / 2 + CAR_LENGTH / 2 + 4);
       let down = false;
-      for (let w = WIN_LO; w <= WIN_HI && !down; w++) down = pressDown(g, rt + w);
+      for (let w = WIN.lo; w <= WIN.hi && !down; w++) down = pressDown(g, rt + w);
       if (!down) continue;
       mover((g.lat0 + g.lat1) / 2, (g.lat1 - g.lat0) / 2, d);
       if (HOLD.d < 0 || d < HOLD.d) {
@@ -806,7 +812,7 @@ export function moverBlockers(track: Track, s: number, seg: number, vf: number, 
     }
   }
   if (round) mover(round.t.lat, TRUCK_HALF, round.toRear);
-  return MOVER_N === 0 ? null : MOVERS.slice(0, MOVER_N);
+  return MOVER_N;
 }
 
 /** The next ramp whose lip is at most `range` ahead of s (or that s is on), with its distance. */
@@ -1107,8 +1113,8 @@ export function botControls(view: BotView, mem: BotMem): BotControls {
     if (mem.truckJump) jump = tk.t;
   } else mem.truckS = -1;
   const laneLook = 140 + v * 0.6;
-  const movers = (MOVE.see ? track.barrels.length + track.presses.length : 0) + track.trucks.length > 0 ? moverBlockers(track, q.s, q.seg, vf, laneLook, view.rt ?? 0, tk && !jump ? tk : null) : null;
-  const hole = laneFor(track, q.s, q.seg, laneLook, pref, mem.lateral, view.stats, split, lat, movers);
+  const movers = (MOVE.see ? track.barrels.length + track.presses.length : 0) + track.trucks.length > 0 ? moverBlockers(track, q.s, q.seg, vf, laneLook, view.rt ?? 0, tk && !jump ? tk : null) : 0;
+  const hole = laneFor(track, q.s, q.seg, laneLook, pref, mem.lateral, view.stats, split, lat, movers > 0 ? MOVERS : null, movers);
   let lane = hole.holes || hole.dodge ? hole.lane : mem.lateral;
   if (jump) lane = jump.lat; // up the middle of its band
   else if (tk && tk.toRear < MOVE.truckSide) {
@@ -1172,7 +1178,7 @@ export function botControls(view: BotView, mem: BotMem): BotControls {
   if (easy) target *= EASY_CORNER;
   if (hard) target *= HARD.corner;
   // Among holes and mounds: slow enough to weave. What moves and the trucks only steer the lane (M4-MOVE).
-  if (hole.holes > (movers ? movers.length : 0)) target = Math.min(target, HOLE_SPEED);
+  if (hole.holes > movers) target = Math.min(target, HOLE_SPEED);
   let throttle = v > target + (hard ? HARD.brakeBand : 25) ? -1 : v > target ? 0 : 1;
   // No ramming; never on a ramp approach (the jump needs the speed: a bump costs less than a fall).
   if (!ramp && !jump && (coast || (mem.useWake && !easy && closingOnCar(view, c, dir))) && throttle > 0) throttle = 0;
@@ -1181,7 +1187,7 @@ export function botControls(view: BotView, mem: BotMem): BotControls {
   // A press that will be down as the bot gets there, across its lane (no open one in reach): brake and
   // wait short of it until it will be up (M4-MOVE).
   let waiting = false;
-  if (movers && HOLD.d >= 0 && lane > HOLD.lat0 - HOLE_CLEARANCE && lane < HOLD.lat1 + HOLE_CLEARANCE) {
+  if (movers > 0 && HOLD.d >= 0 && lane > HOLD.lat0 - HOLE_CLEARANCE && lane < HOLD.lat1 + HOLE_CLEARANCE) {
     const toFace = HOLD.d - PRESS_DEPTH / 2 - CAR_LENGTH / 2 - MOVE.pressStop;
     const stop = (Math.max(0, vf) ** 2) / (2 * 900); // stepCar's BRAKE
     if (toFace < stop + 6) {

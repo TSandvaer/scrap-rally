@@ -421,10 +421,12 @@ function segSegDist(x0: number, y0: number, x1: number, y1: number, t: PlacedTru
     const u = (gx * fy - gy * fx) / den, v = (gx * ey - gy * ex) / den;
     if (u >= 0 && u <= 1 && v >= 0 && v <= 1) return 0;
   }
-  return Math.sqrt(Math.min(
-    pointSegDist2(x0, y0, t.x0, t.y0, t.x1, t.y1), pointSegDist2(x1, y1, t.x0, t.y0, t.x1, t.y1),
-    pointSegDist2(t.x0, t.y0, x0, y0, x1, y1), pointSegDist2(t.x1, t.y1, x0, y0, x1, y1),
-  ));
+  let m = pointSegDist2(x0, y0, t.x0, t.y0, t.x1, t.y1);
+  const m1 = pointSegDist2(x1, y1, t.x0, t.y0, t.x1, t.y1), m2 = pointSegDist2(t.x0, t.y0, x0, y0, x1, y1), m3 = pointSegDist2(t.x1, t.y1, x0, y0, x1, y1);
+  if (m1 < m) m = m1;
+  if (m2 < m) m = m2;
+  if (m3 < m) m = m3;
+  return Math.sqrt(m);
 }
 
 /**
