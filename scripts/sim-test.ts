@@ -15511,14 +15511,23 @@ function bpRunUps(): void {
     !!reach && reach.min >= bpW.CELL_MIN_TAKEOFF && ce.length === 0 && cell.seg >= cellT.pts.length && fe.length === 1 && fe[0].startsWith("air cell at u=1950.0 on branch 2"),
     `reach ${JSON.stringify(reach)}; ${ce.join(" | ") || "valid"}; far: ${fe.join(" | ")}`,
   );
-  // The bots keep the main road: a branch's cell does not move a bot (cellLane skips it), a main-road one there does.
-  const botRun = (tt: Track) => {
+  // A branch's cell moves only a bot whose route takes that branch (BR-BOTS: cellLane reads the cells on
+  // its route's ring; BR-PHYS's bots kept the main road and skipped every branch cell): with every route
+  // forced to the main road (route 0) the streams are the same with and without it; with their own plans
+  // (the Sport and the Truck take the dirt cut, branch 1) it moves them; a main-road cell (the control)
+  // moves them either way.
+  const botRun = (tt: Track, force?: number) => {
     const h = bpHash("sha256");
     const bots = [0, 1, 2].map((k) => {
       const g = gridSlot(tt, k), carType = bpBotCar(k);
+      const bot = bpNewSeat("hard", k, k);
+      if (force !== undefined) {
+        bot.mem.plan = bot.mem.route = force;
+        bot.mem.planTrack = tt;
+      }
       return {
         id: `bot${k}`, car: { x: g.x, y: g.y, h: g.h, vx: 0, vy: 0, seg: g.seg, wreck: 0, air: 0, fall: 0, boost: 0 }, finished: false, hp: bpW.CAR_HP, maxHp: bpW.CAR_HP, ghost: 0,
-        cooldown: 0, ammo: { rivets: 0, mines: 0 }, levels: { engine: 0, tyres: 0, welder: 0 }, stats: bpStatsFor(carType, { engine: 0, tyres: 0, welder: 0 }), bot: bpNewSeat("hard", k, k), carType,
+        cooldown: 0, ammo: { rivets: 0, mines: 0 }, levels: { engine: 0, tyres: 0, welder: 0 }, stats: bpStatsFor(carType, { engine: 0, tyres: 0, welder: 0 }), bot, carType,
       };
     });
     const cells = tt.cells.map(() => 0);
@@ -15533,13 +15542,14 @@ function bpRunUps(): void {
     return h.digest("hex");
   };
   const ground = (s: number, lat: number): bpT.Branch[] => [{ ...bpDefs()[0], features: [...(bpDefs()[0].features ?? []), { k: "cell", s, lat }] }];
-  const noCell = botRun(bpYard());
-  const withBranchCell = botRun(buildTrack({ ...BP_YARD, id: "bp-bcell", features: [...ground(1700, 30), ...bpDefs().slice(1)] }));
-  const withMainCell = botRun(buildTrack({ ...BP_YARD, id: "bp-mcell", features: [{ k: "cell", s: 1700, lat: 30 }, ...bpDefs()] }));
+  const bCellT = buildTrack({ ...BP_YARD, id: "bp-bcell", features: [...ground(1700, 30), ...bpDefs().slice(1)] });
+  const mCellT = buildTrack({ ...BP_YARD, id: "bp-mcell", features: [{ k: "cell", s: 1700, lat: 30 }, ...bpDefs()] });
+  const noCell = botRun(bpYard(), 0), withBranchCell = botRun(bCellT, 0), withMainCell = botRun(mCellT, 0);
+  const planned = botRun(bpYard()), plannedBranchCell = botRun(bCellT);
   check(
-    "branch cells (bots): three Hard bots' control streams on Branch Yard are the same with a ground cell on a branch at u 1700, lat 30 (cellLane skips a branch's cell: its s is u on its road) as without it; a cell on the main road at s 1700, lat 30 changes them (the control)",
-    withBranchCell === noCell && withMainCell !== noCell,
-    `${noCell.slice(0, 12)} / with the branch cell ${withBranchCell.slice(0, 12)} / with a main cell ${withMainCell.slice(0, 12)}`,
+    "branch cells (bots): three Hard bots' control streams on Branch Yard with their routes on the main road are the same with a ground cell on a branch at u 1700, lat 30 (not on their route: cellLane reads the route's cells) as without it, and a cell on the main road at s 1700, lat 30 changes them (the control); on their own routes (BR-BOTS: the Sport and the Truck take branch 1) the branch cell changes them",
+    withBranchCell === noCell && withMainCell !== noCell && plannedBranchCell !== planned,
+    `main road: ${noCell.slice(0, 12)} / with the branch cell ${withBranchCell.slice(0, 12)} / with a main cell ${withMainCell.slice(0, 12)}; own routes: ${planned.slice(0, 12)} / with the branch cell ${plannedBranchCell.slice(0, 12)}`,
   );
 }
 
@@ -15721,6 +15731,491 @@ function bpShipped(): void {
 }
 
 for (const t of [bpQuery, bpWallsCheck, bpProgress, bpRecovery, bpFeatures, bpRivets, bpRunUps, bpParity, bpWire, bpCpu, bpShipped]) {
+  console.log(`\n# ${t.name}`);
+  try {
+    t();
+  } catch (e) {
+    check(`${t.name} threw`, false, String((e as Error).stack ?? e));
+  }
+}
+
+// ---- bots choose and drive shortcuts (BR-BOTS, PLAN-BRANCH.md 2.6, advisor changes 4 and 6, user decision 3; ClickUp 123jpnbfghc, 2026-11-22) ----
+// Each bot drives a route (shared/botdrive.ts): the main road with the shortcuts its plan takes (routePlan, once
+// per race by seat, car type and level) spliced in as one closed road (Route.ring), so every look-ahead walks
+// the route; past a gore it takes the car's own road. tools/debug/branch-tune.ts races them.
+
+// This section's imports (hoisted like the ones at the top).
+import * as bbD from "../shared/botdrive";
+import * as bbT from "../shared/track";
+import { ACCEPT_RACES as BB_RACES, branchRace as bbRace, gainTable as bbGains, goreProbe as bbGoreProbe, raceLines as bbRaceLines } from "../tools/debug/branch-tune";
+import { BRANCH_YARD as BB_YARD, TEST_TRACKS as BB_TEST_TRACKS, testTrack as bbTestTrack } from "../shared/testtracks";
+import { CAR_TYPES as BB_TYPES } from "../shared/cars";
+import { statsFor as bbStats } from "../shared/shop";
+import { raceEnv as bbEnv, stepRaceCar as bbStepRace, CAR_HP as BB_HP } from "../shared/weapons";
+import { botStep as bbBotStep, botTiming as bbTiming, newBotSeat as bbSeat } from "../server/bots";
+import { tuneOf as bbTuneOf } from "../tools/debug/hard-tune";
+import { wallLimit as bbWallLimit } from "../shared/physics";
+import { trackById as bbTrackById } from "../shared/tracks";
+import { createHash as bbHash } from "node:crypto";
+
+const bbClock = { t0: 0 };
+const bbYard = () => bbTestTrack(BB_YARD.id)!;
+const bbDefs = () => BB_YARD.features!.filter((f): f is bbT.Branch => f.k === "branch");
+/** Branch Yard with branch k (0-based) given these features (and recovery points), and these main-road features too. */
+const bbWith = (id: string, k: number, features: bbT.RoadFeature[] | null, recovery?: number[], main: bbT.RoadFeature[] = []) =>
+  buildTrack({ ...BB_YARD, id, features: [...main, ...bbDefs().map((b, i) => (i === k && features ? { ...b, features, ...(recovery ? { recovery } : {}) } : b))] });
+const bbSport = bbStats("sport", { engine: 0, tyres: 0, welder: 0 });
+
+/** A car on road `road` of t at s (u on a branch), lat, heading along it at speed v, its seg global. */
+function bbCar(t: Track, road: number, s: number, lat = 0, v = 0): CarState {
+  const r = bbT.roadOf(t, road), p = pointAt(r, s);
+  return { x: p.x - Math.sin(p.h) * lat, y: p.y + Math.cos(p.h) * lat, h: p.h, vx: Math.cos(p.h) * v, vy: Math.sin(p.h) * v, seg: road === 0 ? p.seg : t.branches[road - 1].base + p.seg, wreck: 0, air: 0, fall: 0, boost: 0 };
+}
+/** A Hard Sport bot's memory with this plan and route, committed at the forks in `done`. */
+function bbMem(t: Track, plan: number, route = plan, done = 0, level: bbD.BotLevel = "hard", seat = 0): bbD.BotMem {
+  const m = bbD.newBotMem(bbD.BOT_LANES[seat], level, 0, seat, seat);
+  m.weapons = false;
+  m.plan = plan;
+  m.planTrack = t;
+  m.route = route;
+  m.forkDone = done;
+  return m;
+}
+const bbView = (t: Track, car: CarState, rt = 600): bbD.BotView => ({ car, track: t, stats: bbSport, raceOn: true, raceSteps: rt, others: [], carType: "sport" });
+
+/**
+ * Drive one bot alone (botControls on its memory, stepRaceCar on the track) for `ticks`: falls, wall contacts,
+ * the roads it was on outside the mouths' windows (in order, each once: in a mouth the physics' road can be
+ * either), its route each time it changed, and its car at the end.
+ */
+function bbDrive(t: Track, car: CarState, mem: bbD.BotMem, ticks: number): { falls: number; walls: number; roads: number[]; routes: number[]; car: CarState } {
+  let falls = 0, walls = 0, wasFall = 0, wasWall = false;
+  const roads: number[] = [], routes: number[] = [mem.route];
+  for (let rt = 1; rt <= ticks; rt++) {
+    const ctl = bbD.botControls(bbView(t, car, 600 + rt), mem);
+    bbStepRace(car, { throttle: ctl.throttle, steer: ctl.steer }, bbSport, bbEnv(t, rt));
+    if (mem.route !== routes[routes.length - 1]) routes.push(mem.route);
+    if (car.fall > 0 && wasFall === 0) falls++;
+    wasFall = car.fall;
+    const road = bbT.roadOfSeg(t, car.seg);
+    if (t.mouthAt[car.seg] < 0 && roads[roads.length - 1] !== road) roads.push(road);
+    if (car.air === 0 && car.fall === 0) {
+      const q = queryTrackNear(t, car.x, car.y, car.seg);
+      const at = q.dist >= bbWallLimit(t, q) - 0.01;
+      if (at && !wasWall) walls++;
+      wasWall = at;
+    }
+  }
+  return { falls, walls, roads, routes, car };
+}
+
+function bbPlan(): void {
+  bbClock.t0 = performance.now();
+  // Criterion 1: the plan per seat, level and car type on Branch Yard (branch 1 dirt, 2 jump, 3 holes), at L0 and L3.
+  const t = bbYard();
+  const bad: string[] = [];
+  let n = 0;
+  for (const lv of [0, 3]) {
+    for (const level of bbD.BOT_LEVELS) {
+      for (let seat = 0; seat < bbD.BOT_LANES.length; seat++) {
+        for (const car of BB_TYPES) {
+          const p = bbD.routePlan(t, level, seat, car, bbStats(car, { engine: lv, tyres: lv, welder: lv }));
+          n++;
+          const off = level === "normal" && seat % 2 !== 0;
+          // Dirt: costs less than the main road for the Sport and the Truck, more for the Racer (its dirtDrag);
+          // Easy only in the Truck. The jump and the holes cut: never on Easy, else costing less.
+          const want = (level === "easy" ? (car === "truck" ? 1 : 0) : !off && car !== "racer" ? 1 : 0) | (level === "easy" || off ? 0 : 6);
+          if (p.mask !== want || p.rows.some((r) => r.take !== r.cost < r.main) || p.rows.length !== 3) bad.push(`L${lv} ${level} seat ${seat} ${car}: ${p.mask} (want ${want})`);
+        }
+      }
+    }
+  }
+  const sample = bbD.routePlan(t, "hard", 0, "sport", bbSport).rows.map((r) => `b${r.branch} ${r.kind} ${r.take ? "take" : "main"} ${r.cost.toFixed(0)}/${r.main.toFixed(0)}`).join(", ");
+  check(
+    "branch bots plan: per seat 0..5, level and car type at L0 and L3 on Branch Yard: Easy never takes the jump or the holes cut and the dirt cut only in the Truck; Normal on its even seats only (alternate seats), there as Hard; Hard takes every cut that costs less (length + laneCost x the dirt it cannot drive round + its margin: the Racer's dirt costs more); every verdict is cost < main",
+    bad.length === 0 && n === 108,
+    bad.slice(0, 6).join(" | ") || `${n} plans as specified; Hard seat 0 Sport: ${sample}`,
+  );
+  // The cost decides: a dirt cut with 800 of dirt costs the Sport more than the main road (Hard keeps the main road), not the Truck.
+  const long = bbWith("bb-long-dirt", 0, [{ k: "dirt", s0: 1000, s1: 1800, lat0: -56, lat1: 56 }]);
+  const ps = bbD.routePlan(long, "hard", 0, "sport", bbSport), pt = bbD.routePlan(long, "hard", 2, "truck", bbStats("truck", { engine: 0, tyres: 0, welder: 0 }));
+  // A dirt patch with a dry lane beside it costs nothing (the bot drives round it).
+  const side = bbWith("bb-side-dirt", 0, [{ k: "dirt", s0: 1000, s1: 1800, lat0: 0, lat1: 56 }]);
+  const pd = bbD.routePlan(side, "easy", 0, "sport", bbSport);
+  check(
+    "branch bots plan (cost): 800 units of dirt across the dirt cut cost the Hard Sport more than the main road (it keeps it), the Hard Truck less (it takes it); the same dirt on half the cut leaves a dry lane (no cost, the cut's length alone) but Easy still keeps a Sport off a cut with dirt",
+    (ps.mask & 1) === 0 && ps.rows[0].why === "costs more" && (pt.mask & 1) === 1 && Math.abs(bbD.routePlan(side, "hard", 0, "sport", bbSport).rows[0].cost - side.branches[0].road.length) < 1e-9 && (pd.mask & 1) === 0,
+    `Sport ${ps.rows[0].cost.toFixed(0)} vs ${ps.rows[0].main.toFixed(0)} (${ps.rows[0].why}), Truck ${pt.rows[0].cost.toFixed(0)}; half-dirt Sport ${bbD.routePlan(side, "hard", 0, "sport", bbSport).rows[0].cost.toFixed(0)} (length ${side.branches[0].road.length.toFixed(0)}), Easy: ${pd.rows[0].why}`,
+  );
+  // Once per race: made on the first step, kept while the race runs (a change of stats does nothing), made again after resetBotMem.
+  const m = bbD.newBotMem(-24, "hard", 0, 1, 1), g = gridSlot(t, 1);
+  const car = (): CarState => ({ x: g.x, y: g.y, h: g.h, vx: 0, vy: 0, seg: g.seg, wreck: 0, air: 0, fall: 0, boost: 0 });
+  const racer = bbStats("racer", { engine: 0, tyres: 0, welder: 0 });
+  bbD.botControls(bbView(t, car()), m);
+  const first = m.plan;
+  for (let i = 0; i < 30; i++) bbD.botControls({ ...bbView(t, car()), stats: racer, carType: "racer" }, m);
+  const kept = m.plan;
+  bbD.resetBotMem(m);
+  const reset = m.plan;
+  bbD.botControls({ ...bbView(t, car()), stats: racer, carType: "racer" }, m);
+  // The dev flag's server log: one line per bot per race with its choices (server/bots.ts routeLine).
+  const lines: string[] = [];
+  const log = console.log, oldDev = process.env.SCRAP_DEV_BOTS;
+  process.env.SCRAP_DEV_BOTS = "1";
+  console.log = (...a: unknown[]) => void lines.push(a.join(" "));
+  try {
+    const seat = bbSeat("hard", 0, 1), p = { id: "x", car: car(), finished: false, hp: BB_HP, maxHp: BB_HP, ghost: 0, cooldown: 0, ammo: { rivets: 0, mines: 0 }, levels: { engine: 0, tyres: 0, welder: 0 }, stats: bbSport, bot: seat, carType: "sport" as const };
+    for (let i = 0; i < 5; i++) bbBotStep(p as never, [p] as never, t, true);
+  } finally {
+    console.log = log;
+    if (oldDev === undefined) delete process.env.SCRAP_DEV_BOTS;
+    else process.env.SCRAP_DEV_BOTS = oldDev;
+  }
+  check(
+    "branch bots plan (once per race): made at the bot's first step (Hard seat 1 Sport: all three cuts), kept through the race though its stats change (a Racer's), made again after resetBotMem (the Racer's: not the dirt cut); with the dev flag the server logs it once per race, by seat",
+    first === 7 && kept === 7 && reset === -1 && m.plan === 6 && lines.length === 1 && lines[0].startsWith("[bots] Gasket (bot) seat 0 hard sport on branch-yard: branch 1 (dirt) TAKE"),
+    `first ${first}, kept ${kept}, after reset ${reset}, then ${m.plan}; log: ${lines.join(" / ")}`,
+  );
+  console.log(`  plan line: ${lines[0]}`);
+}
+
+function bbRing(): void {
+  // Criterion 2: the route's ring is the roads it takes, end to end, with their features at route distance.
+  const t = bbYard(), nb = t.branches.length;
+  let pts = 0, worst = 0, hints = 0, hintBad = 0;
+  const feats: string[] = [];
+  for (let mask = 0; mask < 1 << nb; mask++) {
+    const r = bbD.routeOf(t, mask), ring = r.ring;
+    let total = 0;
+    for (const g of r.legs) {
+      total += g.len;
+      const road = bbT.roadOf(t, g.road);
+      for (let x = g.s0; x <= g.s0 + g.len; x += 37) {
+        const a = pointAt(ring, g.at + (x - g.s0)), b = pointAt(road, x);
+        worst = Math.max(worst, Math.hypot(a.x - b.x, a.y - b.y));
+        pts++;
+      }
+    }
+    worst = Math.max(worst, Math.abs(total - ring.length));
+    // The hints: from every global segment's first sample (on its road) that is on the ring, the ring's hinted
+    // window finds it; from one off the ring in a mouth's window (a car there may be on either road), the ring's
+    // nearest point. (Off the ring past a gore the bot takes the car's road: another route, routeStep.)
+    for (let gseg = 0; gseg < t.mouthAt.length; gseg++) {
+      const road = bbT.roadOf(t, bbT.roadOfSeg(t, gseg)), p = road.pts[bbT.localSeg(t, gseg)];
+      const b = queryTrack(ring, p.x, p.y);
+      if (b.dist > 1e-6 && t.mouthAt[gseg] < 0) continue;
+      const a = bbT.queryMain(ring, p.x, p.y, r.hint[gseg]);
+      hints++;
+      if (a.dist > b.dist + 1e-6) hintBad++;
+    }
+    feats.push(`${mask}: ${ring.ramps.length} ramps ${ring.gaps.length} gaps ${ring.holes.length} holes ${ring.surfaces.length} surfaces ${ring.widens.length} mouth zones`);
+    const want = [(mask & 2) ? 1 : 0, (mask & 2) ? 1 : 0, (mask & 4) ? 3 : 0, (mask & 1) ? 1 : 0, 2 * nb];
+    if (![ring.ramps.length, ring.gaps.length, ring.holes.length, ring.surfaces.length, ring.widens.length].every((v, i) => v === want[i])) feats.push(`BAD ${mask}`);
+  }
+  const r2 = bbD.routeOf(t, 2), leg2 = r2.legs.find((g) => g.road === 2)!;
+  check(
+    "branch bots ring: for every route of Branch Yard (8) the ring's centreline is each leg's road end to end (main road to the fork, the branch, main road from the merge; within 0.01 at every probe, its length the legs' sum) with that route's features only (the jump cut's ramp and gap, the narrow cut's 3 holes, the dirt cut's dirt; at route distance: the ramp at the leg's start + 1150) and every branch's 2 mouth zones; from every global segment's sample on the ring or in a mouth's window, the ring's hinted window finds the ring's nearest point",
+    worst < 0.01 && pts > 4000 && !feats.some((f) => f.startsWith("BAD")) && Math.abs(r2.ring.ramps[0].s - (leg2.at + 1150)) < 1e-6 && hintBad === 0 && hints > 1000,
+    `${pts} probes, worst ${worst.toExponential(2)}; hints ${hints}, ${hintBad} wrong; ${feats.join("; ")}`,
+  );
+  // A main-road hole between branch 1's gores: on the main road's route, not on one that takes branch 1.
+  const mh = bbWith("bb-main-hole", 0, null, undefined, [{ k: "hole", s: 5700, lat: 0, r: 20 }]);
+  check(
+    "branch bots ring: a main-road hole between the dirt cut's gores is on the route that keeps the main road and not on the one that takes the cut",
+    bbD.routeOf(mh, 0).ring.holes.length === 1 && bbD.routeOf(mh, 1).ring.holes.length === 0,
+    `${bbD.routeOf(mh, 0).ring.holes.length} / ${bbD.routeOf(mh, 1).ring.holes.length}`,
+  );
+  // The ring of a track without branches is a replica: its arrays the track's, and a bot driving on it drives as on the track.
+  const rows: string[] = [];
+  let allSame = true;
+  const ids = [...brShippedIds, ...BB_TEST_TRACKS.map((d) => d.id).filter((id) => bbTestTrack(id)!.branches.length === 0)];
+  for (const id of ids) {
+    const tr = brShippedIds.includes(id) ? bbTrackById(id) : bbTestTrack(id)!;
+    const ring = bbD.routeOf(tr, 0).ring;
+    const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
+    const arrays = same(ring.pts, tr.pts) && same(ring.cum, tr.cum) && same(ring.halfL, tr.halfL) && same(ring.halfR, tr.halfR) && same(ring.wallL, tr.wallL) && same(ring.wallR, tr.wallR) &&
+      same(ring.surfFrom, tr.surfFrom) && same(ring.tyresFrom, tr.tyresFrom) && same(ring.islandsFrom, tr.islandsFrom) && same(ring.trucksFrom, tr.trucksFrom) &&
+      same(ring.barrelsFrom, tr.barrelsFrom) && same(ring.pressesFrom, tr.pressesFrom) && same(ring.islandsAt.map((l) => l.map((x) => x.s0)), tr.islandsAt.map((l) => l.map((x) => x.s0))) &&
+      same(ring.surfaces, tr.surfaces) && same(ring.tyres, tr.tyres) && same(ring.islands, tr.islands) && same(ring.trucks, tr.trucks) && same(ring.barrels, tr.barrels) && same(ring.presses, tr.presses) && same(ring.holes, tr.holes) && same(ring.ramps, tr.ramps) && same(ring.gaps, tr.gaps);
+    // A Hard bot (mistakes on: they read the widens) on the track and on its replica: the same controls, tick by tick.
+    const drive = (view: Track) => {
+      const h = bbHash("sha256");
+      const g = gridSlot(tr, 2);
+      const c: CarState = { x: g.x, y: g.y, h: g.h, vx: 0, vy: 0, seg: g.seg, wreck: 0, air: 0, fall: 0, boost: 0 };
+      const m = bbD.newBotMem(0, "hard", 0, 2, 2);
+      m.hard = bbD.hardParams({ ...bbD.botTuneDefaults(), rate: 3, size: 1 });
+      const cells = tr.cells.map(() => 0);
+      for (let rt = 1; rt <= 3600; rt++) {
+        const ctl = bbD.botControls({ car: c, track: view, stats: bbSport, raceOn: true, raceSteps: rt, others: [], carType: "sport", cells, rt, lap: 0 }, m);
+        h.update(`${ctl.throttle},${ctl.steer},${ctl.fire},${ctl.mine};`);
+        bbStepRace(c, { throttle: ctl.throttle, steer: ctl.steer }, bbSport, bbEnv(tr, rt));
+      }
+      return h.digest("hex");
+    };
+    const drv = drive(tr) === drive(ring);
+    allSame &&= arrays && drv;
+    rows.push(`${id} ${arrays ? "arrays same" : "ARRAYS DIFFER"}, ${drv ? "drives the same" : "DRIVES DIFFERENTLY"}`);
+  }
+  check(
+    "branch bots ring: on every shipped track and every test track without branches the ring of route 0 is a replica (centreline, walls, every feature list and the look-ahead start indices the bots read, by track.ts' rules) and a Hard bot with mistakes on drives on it tick for tick as on the track (60 s)",
+    allSame && rows.length >= 9,
+    rows.join("; "),
+  );
+}
+
+function bbCursor(): void {
+  // Criterion 2: the route cursor: past a gore the car's own road, in a mouth the route's.
+  const t = bbYard(), b1 = t.branches[0], b2 = t.branches[1];
+  // (a) A Hard Sport whose route takes the dirt cut, bumped onto the main road past the cut's fork gore.
+  const sA = (b1.forkGore!.s + b1.mergeGore!.s) / 2;
+  const mA = bbMem(t, 7, 7, 1), ctlA = bbD.botControls(bbView(t, bbCar(t, 0, sA, 0, 300)), mA);
+  const ctlA0 = bbD.botControls(bbView(t, bbCar(t, 0, sA, 0, 300)), bbMem(t, 7, 6, 1));
+  const dA = bbDrive(t, bbCar(t, 0, sA, 0, 300), bbMem(t, 7, 7, 1), 400);
+  // (b) One whose route keeps the main road, bumped onto the jump cut past its gap.
+  const mB = bbMem(t, 0, 0, 2), ctlB = bbD.botControls(bbView(t, bbCar(t, 2, 1800, 0, 300)), mB);
+  const dB = bbDrive(t, bbCar(t, 2, 1800, 0, 300), bbMem(t, 0, 0, 2), 900);
+  check(
+    "branch bots cursor: past a gore the bot takes the car's own road: route 7 bumped onto the main road between the dirt cut's gores drops the cut at once (its controls those of route 6 there), drives on along the main road (no wall, no fall) and takes the plan again past the merge; route 0 bumped onto the jump cut past its gap takes the cut (route 2), drives it to the merge (no wall, no fall) and keeps the main road again after it",
+    (mA.route & 1) === 0 && ctlA.steer === ctlA0.steer && ctlA.throttle === ctlA0.throttle && dA.falls === 0 && dA.walls === 0 && dA.roads.join() === "0" && dA.routes.join() === "7,6,7" &&
+      mB.route === 2 && dB.falls === 0 && dB.walls === 0 && dB.roads.join() === "2,0" && dB.routes.join() === "0,2,0",
+    `(a) route ${mA.route}, steer ${ctlA.steer.toFixed(3)} (route 6: ${ctlA0.steer.toFixed(3)}); drove roads ${dA.roads.join(">")}, routes ${dA.routes.join(">")}, falls ${dA.falls}, walls ${dA.walls}; ` +
+      `(b) route ${mB.route}, steer ${ctlB.steer.toFixed(3)}; drove roads ${dB.roads.join(">")}, routes ${dB.routes.join(">")}, falls ${dB.falls}, walls ${dB.walls}`,
+  );
+  // (c) In a mouth the route's road: physically on the main road (its seg the main road's) in the dirt cut's fork mouth,
+  // a route taking the cut holds it and steers onto the cut; one keeping the main road, physically on the cut in the
+  // mouth, holds the main road.
+  const inMouth = b1.s0 + 250;
+  const mC = bbMem(t, 1, 1, 1), cC = bbD.botControls(bbView(t, bbCar(t, 0, inMouth, 20, 300)), mC);
+  const mC0 = bbMem(t, 0, 0, 1), cC0 = bbD.botControls(bbView(t, bbCar(t, 0, inMouth, 20, 300)), mC0);
+  const mD = bbMem(t, 0, 0, 1), cD = bbD.botControls(bbView(t, bbCar(t, 1, 250, 0, 300)), mD);
+  const dC = bbDrive(t, bbCar(t, 0, inMouth, 20, 300), bbMem(t, 1, 1, 1), 200), dD = bbDrive(t, bbCar(t, 1, 250, -20, 300), bbMem(t, 0, 0, 1), 200);
+  check(
+    "branch bots cursor: in a mouth the route's road holds whatever road the physics finds: a route taking the dirt cut, the car on the main road's segments in its fork mouth, keeps the cut and steers more to the right (onto it) than one keeping the main road there; a route keeping the main road, the car on the cut's segments in the mouth, keeps the main road; driven on, each ends on its route's road with no wall and no fall",
+    mC.route === 1 && mD.route === 0 && cC.steer > cC0.steer && dC.roads[dC.roads.length - 1] === 1 && dD.roads[dD.roads.length - 1] === 0 && dC.walls + dD.walls + dC.falls + dD.falls === 0,
+    `route ${mC.route} steer ${cC.steer.toFixed(3)} vs route 0 ${cC0.steer.toFixed(3)}; route ${mD.route} steer ${cD.steer.toFixed(3)}; roads ${dC.roads.join(">")} / ${dD.roads.join(">")}; walls ${dC.walls}/${dD.walls}, falls ${dC.falls}/${dD.falls}`,
+  );
+  // (d) The look-ahead walks the route past a merge: a hole in the middle of the main road 100 past the narrow cut's
+  // merge lies on the route right after the cut (in view from the cut); a Hard bot on lane 0 (seat 2) taking the cut
+  // from 600 before its fork drives through the cut and round the hole with no fall.
+  const b3 = t.branches[2], nm = b3.s1 + 100;
+  const mh = bbWith("bb-merge-hole", 2, null, undefined, [{ k: "hole", s: nm, lat: 0, r: 20 }]);
+  const r4 = bbD.routeOf(mh, 4), leg3 = r4.legs.find((g) => g.road === 3)!;
+  const dH = bbDrive(mh, bbCar(mh, 0, b3.s0 - 600, 0, 380), bbMem(mh, 4, 4, 0, "hard", 2), 750);
+  const endS = queryTrackNear(mh, dH.car.x, dH.car.y, dH.car.seg);
+  check(
+    "branch bots cursor: a main-road hole 100 past the narrow cut's merge lies on its route 100 after the cut's end (the lane search sees it from the cut); a Hard bot on lane 0 taking the cut drives through it and past the hole with no fall and no wall",
+    Math.abs(r4.ring.holes[r4.ring.holes.length - 1].s - (leg3.at + leg3.len + 100)) < 1e-6 && dH.falls === 0 && dH.walls === 0 && dH.roads.join() === "0,3,0" && endS.road === 0 && endS.s > nm + 100,
+    `hole at route ${r4.ring.holes[r4.ring.holes.length - 1].s.toFixed(1)}, cut ends at ${(leg3.at + leg3.len).toFixed(1)}; drove roads ${dH.roads.join(">")}, falls ${dH.falls}, walls ${dH.walls}, ends at main s ${endS.s.toFixed(0)} (hole ${nm.toFixed(0)})`,
+  );
+  // (e) The ramp approach on a shortcut: full throttle from RAMP_APPROACH (650) before the jump cut's lip in every
+  // race of the bots that take it (the ramp is in view on the route), and every jump lands.
+  let approach = 0, lifted = 0;
+  const lip = b2.road.ramps[0].s + b2.road.ramps[0].len;
+  bbRace({
+    levels: ["hard", "normal", "hard"], weapons: false,
+    observe: (_k, c, ctl) => {
+      if (c.air > 0 || c.fall > 0 || bbT.roadOfSeg(t, c.seg) !== 2) return;
+      const u = queryTrackNear(t, c.x, c.y, c.seg).s;
+      if (u > lip - 600 && u < lip) {
+        approach++;
+        if (ctl.throttle !== 1) lifted++;
+      }
+    },
+  });
+  check("branch bots cursor: on the jump cut the bots taking it are on full throttle on the ramp approach (600 before the lip to the lip), every step", approach > 200 && lifted === 0, `${approach} steps, ${lifted} off full throttle`);
+}
+
+function bbGores(): void {
+  // Criterion 2 (BR-BOTS review 1): past a gore the car's road at once, where the car is along its segment (a
+  // segment's start can lie before the gore: Branch Yard's fork gores lie 13.9-36.1 before the end of theirs).
+  // A route-7 car on the main road 1..30 past each fork gore drops that cut on its first step.
+  const t = bbYard(), bad: string[] = [];
+  let n = 0;
+  t.branches.forEach((b, k) => {
+    for (let d = 1; d <= 30; d++) {
+      for (const lane of [-24, 0, 24]) {
+        const m = bbMem(t, 7, 7, 7), c = bbCar(t, 0, b.forkGore!.s + d, lane, 300);
+        c.seg = bbT.globalSeg(t, queryTrackNear(t, c.x, c.y, c.seg)); // the physics' road there
+        bbD.botControls(bbView(t, c), m);
+        n++;
+        if (bbT.roadOfSeg(t, c.seg) !== 0 || (m.route & (1 << k)) !== 0) bad.push(`branch ${k + 1} gore + ${d} lane ${lane}: route ${m.route}`);
+      }
+    }
+  });
+  check(
+    "branch bots gores: a route-7 car on the main road 1..30 past each fork gore (3 lanes) drops that cut on its first step (the car's s along its segment, not the segment's start)",
+    bad.length === 0 && n === 270,
+    bad.slice(0, 4).join(" | ") || `${n} cars, every one drops the cut`,
+  );
+  // The review's probe (tools/debug/branch-tune.ts --gores): no (point, route) past a gore keeps the other road
+  // after a step; drives from just past a fork gore never hold the cut nor touch a wall; fork-mouth drives' wall
+  // contacts printed (from 80 % of the way to the gore the car cannot make the cut).
+  const g = bbGoreProbe(t);
+  console.log(`  gores probe: (1) ${g.pairs} (point, route) pairs, ${g.past} past a gore, ${g.wrong} on the other road; (2) ${g.drives} drives from fork gore + 1..28: ${g.held} steps holding the cut (most ${g.heldMax}), closest to the wall ${g.closest.toFixed(1)}, walls ${g.walls2}; (3) ${g.mouthDrives} fork-mouth drives: walls ${g.walls3}`);
+  check(
+    "branch bots gores (probe): past a gore no (point, route) pair keeps a ring road that is not the car's after one step (every road every 10, lanes 12 apart, 8 routes); 120 drives from 1..28 past a fork gore with route 7 hold the cut on no step and touch no wall",
+    g.wrong === 0 && g.past > 100000 && g.held === 0 && g.walls2 === 0 && g.drives === 120,
+    `${g.wrong} of ${g.past} pairs past a gore wrong; ${g.held} steps held (most ${g.heldMax}), walls ${g.walls2}; mouth drives' walls ${g.walls3}`,
+  );
+}
+
+function bbJumpSkip(): void {
+  // Criterion 1: a jump shortcut skipped at the fork below takeoffSpeedFor. A jump cut with its ramp at u 800 and a
+  // gap long enough that full throttle from rest 100 before the fork does not reach its take-off speed at the lip,
+  // from 380 u/s it does: the slow bot gives the cut up for this pass, the fast one takes it.
+  let tt: Track | null = null, need = 0;
+  for (let s1 = 1150; s1 <= 1250 && !tt; s1++) {
+    const c = bbWith(`bb-jump-${s1}`, 1, [{ k: "ramp", s: 800, len: 80 }, { k: "gap", s0: 880, s1 }], [700]);
+    const r = c.branches[1].road;
+    need = bbD.takeoffSpeedFor(r, r.ramps[0]);
+    if (bbD.speedAfter(0, 980, bbSport) < need && bbD.speedAfter(380, 980, bbSport) >= need) tt = c;
+  }
+  if (!tt) {
+    check("branch bots jump skip: a test jump cut found", false, "no gap length gave the band");
+    return;
+  }
+  const s0 = tt.branches[1].s0;
+  const slow = bbMem(tt, 2, 2, 0), fast = bbMem(tt, 2, 2, 0);
+  bbD.botControls(bbView(tt, bbCar(tt, 0, s0 - 100, 0, 0)), slow);
+  bbD.botControls(bbView(tt, bbCar(tt, 0, s0 - 100, 0, 380)), fast);
+  const d = bbDrive(tt, bbCar(tt, 0, s0 - 100, 0, 0), bbMem(tt, 2, 2, 0), 900);
+  check(
+    "branch bots jump skip: at a jump cut's fork a bot whose full throttle would not reach the take-off speed at the lip gives the cut up for this pass (and keeps the main road past the merge, then takes its plan again: route 2); one that will reach it takes it",
+    slow.route === 0 && fast.route === 2 && d.falls === 0 && d.roads.join() === "0" && d.routes.join() === "2,0,2",
+    `need ${need.toFixed(0)} u/s at the lip; from rest: ${bbD.speedAfter(0, 980, bbSport).toFixed(1)} -> route ${slow.route}; from 380: ${bbD.speedAfter(380, 980, bbSport).toFixed(1)} -> route ${fast.route}; driven: roads ${d.roads.join(">")}, routes ${d.routes.join(">")}, falls ${d.falls}`,
+  );
+}
+
+function bbRaces(): void {
+  // Criterion 4: 3 bots per level and the mixed 5 on Branch Yard, 3 laps, weapons on, each twice.
+  const t = bbYard();
+  const rows: string[] = [];
+  let ok = true;
+  for (const a of BB_RACES) {
+    const r1 = bbRace({ levels: a.levels, grace: false }), r2 = bbRace({ levels: a.levels, grace: false });
+    const same = r1.hash === r2.hash;
+    for (const x of r1.rows) {
+      const want = bbD.routePlan(t, x.level, x.seat, x.car, bbStats(x.car, { engine: 0, tyres: 0, welder: 0 })).mask;
+      const onOk = x.onBranch.every((n, b) => ((x.plan >> b) & 1 ? n > 900 : n < 300));
+      const good = x.finish > 0 && x.lapTicks.length === 3 && x.falls <= 1 && x.plan === want && onOk && (x.level !== "easy" || (x.plan & 6) === 0) && (x.level !== "easy" || (x.plan & 1) === (x.car === "truck" ? 1 : 0));
+      ok &&= good;
+      if (!good) rows.push(`BAD ${a.label} seat ${x.seat}: plan ${x.plan} want ${want}, finish ${x.finish}, falls ${x.falls}, on ${x.onBranch.join("/")}`);
+    }
+    ok &&= same;
+    rows.push(...bbRaceLines(a.label, r1), `  rerun ${same ? "identical" : "DIFFERS"}`);
+  }
+  console.log(`  ${rows.join("\n  ")}`);
+  check(
+    "branch bots races: on Branch Yard 3 Easy, 3 Normal, 3 Hard and the mixed 5 (Hard, Normal, Easy, Hard, Normal by seat: M4-TRACKS' long-track field) finish 3 laps with weapons on (the race kept open until all have: whether each made the game's 30 s grace is printed), identically on a rerun, <= 1 fall per bot per race; each bot's route its seat's plan (Easy never the jump or holes cut, the dirt cut only in the Truck; Normal on even seats only), driven: > 900 ticks on each cut it takes, < 300 (mouths) on the others",
+    ok,
+    rows.filter((r) => r.startsWith("BAD")).join(" | ") || "8 races as specified",
+  );
+}
+
+function bbGain(): void {
+  // Criterion 4: a bot taking a shortcut gains time on the main road: one bot alone per level and car type, 3 laps on
+  // each route forced (weapons off); every cut a plan takes gains for that level and car type.
+  const g = bbGains();
+  console.log(`  ${g.lines.join("\n  ")}`);
+  const t = bbYard();
+  const bad = g.gains.filter((x) => {
+    const single = [1, 2, 4].includes(x.route);
+    const planned = [0, 2].some((seat) => (bbD.routePlan(t, x.level, seat, x.car, bbStats(x.car, { engine: 0, tyres: 0, welder: 0 })).mask & x.route) !== 0);
+    return x.falls > 0 || (single && planned && !(x.gain > 0));
+  });
+  const all = g.gains.filter((x) => x.route === 7 && x.level !== "easy");
+  check(
+    "branch bots gain: one bot alone (3 laps, weapons off) gains time on the main road on every shortcut its plan takes, for every level and car type (Easy's Truck the dirt cut; Normal and Hard all three, the Racer not the dirt cut), with no fall on any route",
+    bad.length === 0 && g.gains.length === 36,
+    bad.map((x) => `${x.level} ${x.car} route ${x.route}: ${x.gain.toFixed(2)} s, falls ${x.falls}`).join(" | ") || `all three cuts a lap: ${all.map((x) => `${x.level} ${x.car} +${x.gain.toFixed(2)} s`).join(", ")}`,
+  );
+}
+
+function bbMistakes(): void {
+  // HARD-2 with shortcuts: no mistake inside a mouth or near a shortcut's hazard (the ring's widens hold the mouths).
+  let begun = 0, steps = 0, mouth = 0, hazard = 0, falls = 0, maxFalls = 0, fin = true;
+  for (const weapons of [false, true]) {
+    for (const cars of [undefined, ...BB_TYPES.map((c) => [c, c, c])]) {
+      const r = bbRace({ levels: ["hard", "hard", "hard"], cars, weapons, tune: bbTuneOf({ rate: 3, size: 1 }) });
+      for (const x of r.rows) {
+        begun += Object.values(x.mistakes).reduce((a, b) => a + b, 0);
+        steps += x.mistakeSteps;
+        mouth += x.badMouth;
+        hazard += x.badHazard;
+        falls += x.falls;
+        maxFalls = Math.max(maxFalls, x.falls);
+        fin &&= x.finish > 0;
+      }
+    }
+  }
+  check(
+    "branch bots mistakes: 3 Hard bots with mistakes on (rate 3, size 1) race Branch Yard (every car set, weapons off and on: 8 races): they make mistakes, none of whose steps is inside a mouth (fork or merge to MOUTH_CLEAR past its gore, either road) or within a shortcut hazard's zone (650 before a ramp, gap, hole or dirt to 15 past it); all finish, <= 1 fall per bot per race",
+    begun > 20 && mouth === 0 && hazard === 0 && maxFalls <= 1 && fin,
+    `${begun} mistakes, ${steps} steps: ${mouth} in a mouth, ${hazard} in a hazard zone; falls ${falls}`,
+  );
+}
+
+function bbCpu(): void {
+  // Criterion 6: 5 Hard server bots on their routes through the shortcuts, 3 laps of Branch Yard: bot step and room tick.
+  const r = withDevTrack(BB_YARD.id, () => {
+    const sim = new Sim(3);
+    const host = sim.add("Host");
+    sim.room.setTrack(host, BB_YARD.id);
+    for (let k = 0; k < 5; k++) sim.room.addBot(host, "hard", sim.now);
+    sim.room.start(host, sim.now);
+    while (sim.room.phase !== "racing") sim.tick();
+    sim.room.retire(host);
+    const tickMs: number[] = [], steps: number[] = [];
+    bbTiming.samples = steps;
+    let ticks = 0, onBranch = 0;
+    try {
+      while (sim.room.phase === "racing" && ticks < 60 * 300) {
+        sim.tickNo++;
+        sim.now += 1000 / 60;
+        const t0 = performance.now();
+        sim.room.tick(sim.tickNo, sim.now);
+        tickMs.push(performance.now() - t0);
+        ticks++;
+        for (const p of sim.room.players.values()) if (p.car && p.car.seg >= sim.room.track.pts.length) onBranch++;
+      }
+    } finally {
+      bbTiming.samples = null;
+    }
+    const fins = [...sim.room.players.values()].filter((p) => p.bot).map((p) => p.progress?.fin ?? 0);
+    return { tickMs, steps, fins, onBranch };
+  });
+  const pct = (a: number[], p: number) => [...a].sort((x, y) => x - y)[Math.min(a.length - 1, Math.floor(a.length * p))];
+  const med = pct(r.steps, 0.5), tickMed = pct(r.tickMs, 0.5);
+  console.log(`  CPU (Branch Yard, BR-BOTS: 5 Hard bots on their routes): bot step median ${(med * 1000).toFixed(2)} us, p99 ${(pct(r.steps, 0.99) * 1000).toFixed(2)} us, max ${(Math.max(...r.steps) * 1000).toFixed(1)} us over ${r.steps.length} steps; room tick median ${(tickMed * 1000).toFixed(2)} us, p99 ${(pct(r.tickMs, 0.99) * 1000).toFixed(2)} us; bot ticks on a branch ${r.onBranch} (BR-PHYS, the bots on the main road: step 2.33 us, room tick 20.0 us)`);
+  check(
+    "branch bots CPU: 5 Hard server bots race 3 laps of Branch Yard on their routes (through the shortcuts), all finishing: the median bot step stays <= 0.05 ms (the gate fails above 0.2 ms); room tick printed beside BR-PHYS's",
+    med <= 0.05 && r.fins.every((f) => f > 0) && r.onBranch > 10000,
+    `median bot step ${med.toFixed(5)} ms; room tick median ${tickMed.toFixed(4)} ms; finishes ${r.fins.map((f) => (f / 1000).toFixed(1)).join(", ")} s; bot ticks on a branch ${r.onBranch}`,
+  );
+}
+
+function bbShipped(): void {
+  // Criterion 3: on the shipped tracks (no branches) no route is ever made: the bots' plan stays unset through a race
+  // (botControls takes today's path; byte-identity: hard golden, surf shipped, hard2 identity and branch shipped above).
+  const plans: string[] = [];
+  for (const id of brShippedIds) {
+    const sim = new Sim(1);
+    const host = sim.add("Host");
+    if (id !== sim.room.trackId && sim.room.setTrack(host, id)) throw new Error(id);
+    const bots = [0, 1, 2].map(() => sim.room.addBot(host, "hard", sim.now) as Player);
+    sim.room.start(host, sim.now);
+    for (let i = 0; i < 60 * 20; i++) sim.tick();
+    plans.push(`${id}: ${bots.map((b) => b.bot!.mem.plan).join("/")}`);
+  }
+  check(
+    "branch bots shipped: on the five shipped tracks the bots never make a route (plan unset after 20 s of racing): botControls drives them on the track itself, today's path",
+    plans.every((p) => p.endsWith(": -1/-1/-1")) && plans.length === 5,
+    plans.join("; "),
+  );
+  console.log(`  BR-BOTS sim-test sections' runtime (bbPlan .. bbShipped): ${((performance.now() - bbClock.t0) / 1000).toFixed(1)} s`);
+}
+
+for (const t of [bbPlan, bbRing, bbCursor, bbGores, bbJumpSkip, bbRaces, bbGain, bbMistakes, bbCpu, bbShipped]) {
   console.log(`\n# ${t.name}`);
   try {
     t();

@@ -72,6 +72,15 @@
 // ended at once when anything of advisor change 4 comes up, so a mistake never carries into a jump or
 // a hole. BotMem.hard holds the constants for the race (HARD itself by default; a room's dev tune is
 // its own object, hardParams); mistakeRate 0, the default, runs none of it.
+//
+// Shortcut roads (BR-BOTS, PLAN-BRANCH.md 2.6, its advisor changes 4 and 6, user decision 3): on a track
+// with branches each bot drives a route, the main road with the shortcuts it takes spliced in, as one
+// closed road of its own (Route.ring, routeOf). Every look-ahead above (the aim point, the bend, ramps,
+// holes, mounds, surfaces, islands, trucks, what moves, cells, a mistake's clear road) runs on that ring,
+// so it walks the route and never the queried road: before a fork the bot sees the shortcut's features
+// ahead, on a shortcut the main road's past the merge, and in a mouth (where the physics' road can flip
+// under the car) it holds the route's road. Which shortcuts (routePlan, once per race, by seat, car type
+// and level, never the random id): see ROUTE. Without branches none of it runs (the ring is the track).
 
 import { CARS, DEFAULT_CAR, type CarType } from "./cars";
 import { angleDiff, CAR_LENGTH, CAR_RADIUS, CAR_WIDTH, clamp, DT, speedOf, type CarState, type CarStats } from "./physics";
@@ -83,21 +92,34 @@ import {
   islandAt,
   ISLAND_NOSE,
   LIP_ZONE,
+  MOUTH_CLEAR,
   pointAt,
   PRESS_DEPTH,
   pressDown,
-  queryMain,
+  queryTrackNear,
+  roadOfSeg,
+  segCount,
   SURF_DIRT,
   SURF_WATER,
   TRUCK_BAND,
   TRUCK_HALF,
   TRUCK_MIN_SPEED,
   wallOf,
+  type Gap,
+  type PlacedBarrels,
+  type PlacedBranch,
+  type PlacedCell,
+  type PlacedHole,
   type PlacedIsland,
+  type PlacedPress,
   type PlacedTruck,
+  type PlacedTyres,
   type Ramp,
   type Surface,
   type Track,
+  type TrackQuery,
+  type Vec,
+  type Widen,
 } from "./track";
 import { airTicksFor, MIN_TAKEOFF_SPEED, MINE_ARM_TICKS, RIVET_RADIUS, RIVET_RANGE, RIVET_SPEED, WEAPONS_ARM_MS } from "./weapons";
 
@@ -383,20 +405,41 @@ export interface BotMem {
   hp: number;
   /** HARD-2: told of each mistake as it begins (the dev flag's server log; the tests), or null. */
   onMistake: ((kind: MistakeKind, size: number, s: number, lap: number) => void) | null;
+  /** BR-BOTS: its seat (server: the slot; a socket bot: seatOfLane), a setting: which shortcuts it takes (routePlan). */
+  seat: number;
+  /** BR-BOTS: the shortcuts it takes this race (bit b: branch b; routePlan), -1 until its first step on a track with branches ... */
+  plan: number;
+  /** ... on this track. */
+  planTrack: Track | null;
+  /** BR-BOTS: the route it drives now (bit b: branch b): the plan, but a jump given up at its fork, or the car's road past a gore. */
+  route: number;
+  /** BR-BOTS: the forks it has committed at on this pass (bit b), released once it is out of the fork's zone (routeStep). */
+  forkDone: number;
+}
+
+/** The server's racing lines by seat (server/bots.ts; botplay's bots use them in order). */
+export const BOT_LANES: readonly number[] = [-24, 24, 0, -12, 12, -36];
+
+/** A socket bot's seat (BR-BOTS: its shortcuts, routePlan) from its lane: the seat that races on it, else the lane's twelfths round six seats. */
+export function seatOfLane(lateral: number): number {
+  const i = BOT_LANES.indexOf(lateral);
+  return i >= 0 ? i : ((Math.round(lateral / 12) % BOT_LANES.length) + BOT_LANES.length) % BOT_LANES.length;
 }
 
 /**
  * A bot's memory. The mine offset defaults to the one the socket bots always used (from the
  * lane); server seats pass one by seat so two bots on mirrored lanes do not drop together. The
  * mistakes' seed likewise (HARD-2): from the lane, signed (mirrored lanes differ); a seat's slot.
+ * The seat (BR-BOTS) likewise: a socket bot's from its lane (seatOfLane), a server seat's slot.
  */
 export function newBotMem(
-  lateral: number, level: BotLevel = "normal", mineOffset = Math.round(Math.abs(lateral) * 7) % 480, seed = Math.round(lateral * 7),
+  lateral: number, level: BotLevel = "normal", mineOffset = Math.round(Math.abs(lateral) * 7) % 480, seed = Math.round(lateral * 7), seat = seatOfLane(lateral),
 ): BotMem {
   return {
     level, lateral, weapons: level !== "easy", mineOffset, slow: 0, reversing: 0, backup: null, backedUpFor: -1, useWake: level !== "easy", wake: null, wakeRest: 0, lastMine: -Infinity,
     islandBack: 0, islandKind: 0, islandSide: 0, islandCool: 0, truckS: -1, truckJump: false,
     seed, hard: HARD, mistake: null, inBend: false, flew: false, hp: -1, onMistake: null,
+    seat, plan: -1, planTrack: null, route: 0, forkDone: 0,
   };
 }
 
@@ -419,6 +462,11 @@ export function resetBotMem(mem: BotMem): void {
   mem.inBend = false;
   mem.flew = false;
   mem.hp = -1;
+  // BR-BOTS: the route is chosen again (once per race: the stats may have changed in the garage).
+  mem.plan = -1;
+  mem.planTrack = null;
+  mem.route = 0;
+  mem.forkDone = 0;
 }
 
 /** Distance from `from` forward to `to` along the track, in [0, length). */
@@ -483,16 +531,17 @@ export function takeoffSpeedFor(track: Track, ramp: Ramp): number {
 /**
  * The lane (lateral offset, + = right of travel) nearest `pref` that keeps the car's centre
  * clear of the holes ahead of s. The nearest hole comes first: when no lane clears them all,
- * the lane clears as many of the nearest ones as it can (the rest come next).
+ * the lane clears as many of the nearest ones as it can (the rest come next). `half`: the road's
+ * asphalt half-width (BR-BOTS: a route's leg's; the track's by default).
  */
-export function holeLane(track: Track, s: number, look: number, pref: number): { lane: number; holes: number } {
+export function holeLane(track: Track, s: number, look: number, pref: number, half = track.def.halfWidth): { lane: number; holes: number } {
   const near = track.holes
     .map((h) => ({ h, d: ahead(track, s - h.r - 30, h.s) - h.r - 30 })) // until it is behind the car
     .filter((x) => x.d < look)
     .sort((a, b) => a.d - b.d)
     .map((x) => x.h);
   if (!near.length) return { lane: pref, holes: 0 };
-  const max = track.def.halfWidth - CAR_WIDTH / 2;
+  const max = half - CAR_WIDTH / 2;
   const clears = (lat: number) => {
     let n = 0;
     while (n < near.length && Math.abs(lat - near[n].lat) > near[n].r + HOLE_CLEARANCE) n++;
@@ -560,11 +609,12 @@ export interface Blocker {
  * it is over the whole look), so a car pushed to the outside of a mound goes round it there. With no
  * blocker ahead the search starts from `racing` (the racing line), stays on the asphalt and moves
  * only when the racing line costs something (`dodge`). With neither a mound nor a surface ahead it
- * is holeLane exactly. `holes`: how many blockers are ahead (0 = none).
+ * is holeLane exactly. `holes`: how many blockers are ahead (0 = none). `half`, `wall`: the road's asphalt
+ * half-width and wall (BR-BOTS: a route's leg's; the track's by default).
  */
 export function laneFor(
   track: Track, s: number, seg: number, look: number, pref: number, racing: number, stats: CarStats, span: SplitSpan | null = null, lat = pref,
-  extra: readonly Blocker[] | null = null, nExtra = extra ? extra.length : 0,
+  extra: readonly Blocker[] | null = null, nExtra = extra ? extra.length : 0, half = track.def.halfWidth, wall = track.wall,
 ): { lane: number; holes: number; dodge: boolean } {
   const tyres = track.tyres, surfaces = track.surfaces;
   const L = track.length;
@@ -613,7 +663,7 @@ export function laneFor(
       if (len > 0 && cost > 0) (spans ??= []).push({ lat0: f.lat0 - SURFACE_MARGIN, lat1: f.lat1 + SURFACE_MARGIN, len, cost });
     }
   }
-  if (!mounds && !spans && !span && !held && nExtra === 0) return { ...holeLane(track, s, look, pref), dodge: false };
+  if (!mounds && !spans && !span && !held && nExtra === 0) return { ...holeLane(track, s, look, pref, half), dodge: false };
   const near: Blocker[] = track.holes
     .map((h) => ({ lat: h.lat, r: h.r, d: ahead(track, s - h.r - 30, h.s) - h.r - 30 }))
     .filter((x) => x.d < look);
@@ -623,8 +673,8 @@ export function laneFor(
   // On the asphalt; with a blocker ahead the verge too (costed as the dirt it is), so a car on the
   // outside of a mound goes round it there rather than back across it. In a split (span): inside
   // the lane it takes round the island (all asphalt).
-  const road = span ? Infinity : track.def.halfWidth - CAR_WIDTH / 2;
-  const max = near.length ? track.wall - CAR_WIDTH / 2 - VERGE_LANE_MARGIN : track.def.halfWidth - CAR_WIDTH / 2;
+  const road = span ? Infinity : half - CAR_WIDTH / 2;
+  const max = near.length ? wall - CAR_WIDTH / 2 - VERGE_LANE_MARGIN : half - CAR_WIDTH / 2;
   let lo = span ? span.lo : -max, hi = span ? span.hi : max;
   if (held && Math.max(lo, holdLo) <= Math.min(hi, holdHi)) {
     lo = Math.max(lo, holdLo);
@@ -779,9 +829,12 @@ export function splitSide(isle: PlacedIsland, stats: CarStats, lateral: number):
 /**
  * The split lane a bot at (s, lat) on segment seg is in or heading for: the first island round the
  * lap from the segment's start index whose head is at most `look` ahead and that the car is not yet
- * SPLIT.past beyond; null if none (a plain track: no island, nothing to do).
+ * SPLIT.past beyond; null if none (a plain track: no island, nothing to do). `half`: the road's
+ * asphalt half-width (BR-BOTS: a route's leg's; the track's by default).
  */
-export function splitFor(track: Track, s: number, seg: number, lat: number, look: number, lateral: number, stats: CarStats): SplitSpan | null {
+export function splitFor(
+  track: Track, s: number, seg: number, lat: number, look: number, lateral: number, stats: CarStats, half = track.def.halfWidth,
+): SplitSpan | null {
   const isles = track.islands, n = isles.length;
   if (n === 0) return null;
   const L = track.length;
@@ -801,7 +854,7 @@ export function splitFor(track: Track, s: number, seg: number, lat: number, look
     const lo = side < 0 ? -isle.outL + SPLIT.edge : isle.lat1 + SPLIT.clear;
     const hi = side < 0 ? isle.lat0 - SPLIT.clear : isle.outR - SPLIT.edge;
     // The seat's racing line, scaled from the road into the lane.
-    const racing = clamp((lo + hi) / 2 + (lateral * (hi - lo)) / 2 / (track.def.halfWidth - CAR_WIDTH / 2), lo, hi);
+    const racing = clamp((lo + hi) / 2 + (lateral * (hi - lo)) / 2 / (half - CAR_WIDTH / 2), lo, hi);
     return { lo, hi, racing, side, isle };
   }
   return null;
@@ -999,10 +1052,11 @@ const PASS = { done: false };
  * The slipstream lane for this step, or null for the racing line (see the top of this file).
  * (px, py, dir): the centerline point at the bot's s and its heading; the other cars and mines
  * are placed along and across the track in that frame (the bot only uses the wake on straights).
- * max: the furthest a lane may lie from the centerline.
+ * max: the furthest a lane may lie from the centerline. lateral: its racing line (BR-BOTS: scaled to a
+ * shortcut's width; mem.lateral elsewhere).
  */
 function wakeLane(
-  view: BotView, mem: BotMem, c: CarState, px: number, py: number, dir: number, bend: number, max: number,
+  view: BotView, mem: BotMem, c: CarState, px: number, py: number, dir: number, bend: number, max: number, lateral = mem.lateral,
 ): { lane: number; coast: boolean } | null {
   const ux = Math.cos(dir), uy = Math.sin(dir);
   const along = (x: number, y: number) => (x - c.x) * ux + (y - c.y) * uy; // + = ahead of the bot
@@ -1076,7 +1130,7 @@ function wakeLane(
   const olat = across(best.x, best.y);
   // Pass towards its own racing line (so going back to it never crosses the car passed); on the
   // same line, by seat (the side of the line it races on, right for the centre).
-  const side = mem.lateral > olat + 1 ? 1 : mem.lateral < olat - 1 ? -1 : mem.lateral >= 0 ? 1 : -1;
+  const side = lateral > olat + 1 ? 1 : lateral < olat - 1 ? -1 : lateral >= 0 ? 1 : -1;
   const lane = olat + side * WAKE_TUCK;
   if (!mineFree(lane)) return null;
   mem.wake = { id: best.id!, pass: false, side, steps: 0 };
@@ -1088,17 +1142,20 @@ function wakeLane(
  * at the race tick and within CELL_LANE of `lane`. On a ramp approach (toLip >= 0) only an air cell
  * past that lip (the jump it is lining up for); otherwise only a ground cell. max: the furthest a
  * lane may lie from the centerline (the car's centre gets within reach of a kerb cell from there).
+ * BR-BOTS: `ring` is the road it drives (the track, or its route's ring: the cells on its route, at
+ * their route distance; idx: each one's index in track.cells, the race's cell timers).
  */
-function cellLane(view: BotView, s: number, lane: number, toLip: number, max: number, reach = CELL_LANE): number | null {
-  const cells = view.track.cells, back = view.cells!;
+function cellLane(view: BotView, ring: Track, idx: readonly number[] | null, s: number, lane: number, toLip: number, max: number, reach = CELL_LANE): number | null {
+  const cells = ring.cells, back = view.cells!;
   const rt = view.rt ?? 0;
   let best: number | null = null, bestD = Infinity;
   for (let i = 0; i < cells.length; i++) {
     const c = cells[i];
-    if (c.road !== undefined) continue; // BR-PHYS: a branch's cell (its s is u on its road): the bots keep the main road
-    if (!(back[i] === 0 || rt >= (back[i] ?? 0))) continue;
+    if (c.road !== undefined) continue; // a branch's cell on a track's own list (its s is u on its road): a route's ring has its own
+    const k = idx === null ? i : idx[i];
+    if (!(back[k] === 0 || rt >= (back[k] ?? 0))) continue;
     if (Math.abs(c.lat - lane) > reach) continue;
-    const d = ahead(view.track, s, c.s);
+    const d = ahead(ring, s, c.s);
     if (d > CELL_LOOK + (c.air ? 400 : 0) || d < 10) continue;
     if (toLip >= 0 ? !c.air || d < toLip : c.air) continue;
     if (d < bestD) {
@@ -1138,14 +1195,14 @@ export function wideLane(lateral: number, turn: number, halfWidth: number, h: Ha
 
 /** Track coordinates of a point near the track `de` (about) ahead of s: its s and lateral offset (+ = right of travel). */
 function trackCoords(track: Track, s: number, de: number, x: number, y: number): { s: number; lat: number; h: number; dist: number } {
-  const q = queryMain(track, x, y, pointAt(track, s + de).seg); // BR-PHYS: the main road (BR-BOTS routes bots onto branches)
+  const q = queryTrackNear(track, x, y, pointAt(track, s + de).seg); // the road the bot drives (BR-BOTS: its route's ring on a track with branches)
   const p = pointAt(track, q.s);
   return { s: q.s, lat: (x - p.x) * -Math.sin(p.h) + (y - p.y) * Math.cos(p.h), h: p.h, dist: q.dist };
 }
 
 /** Hard's apex check: no mine from 10 behind to APEX_MINE_LOOK ahead within reach of the lanes between `a` and `b`. */
 const APEX_MINE_LOOK = 320;
-function apexMineFree(view: BotView, c: CarState, s: number, a: number, b: number, clear: number): boolean {
+function apexMineFree(view: BotView, ring: Track, c: CarState, s: number, a: number, b: number, clear: number): boolean {
   const mines = view.mines;
   if (!mines || !mines.length) return true;
   const lo = Math.min(a, b) - clear, hi = Math.max(a, b) + clear;
@@ -1158,13 +1215,13 @@ function apexMineFree(view: BotView, c: CarState, s: number, a: number, b: numbe
     // behind, the nearer of the two kept (searched only ahead, a mine some 280+ behind could be
     // put on the road ahead; ahead in a hairpin, a mine can lie behind the heading).
     const d = Math.sqrt(d2);
-    let t = trackCoords(view.track, s, d, m.x, m.y);
+    let t = trackCoords(ring, s, d, m.x, m.y);
     if ((m.x - c.x) * cos + (m.y - c.y) * sin < 0) {
-      const back = trackCoords(view.track, s, -d, m.x, m.y);
+      const back = trackCoords(ring, s, -d, m.x, m.y);
       if (back.dist < t.dist) t = back;
     }
-    const along = ahead(view.track, s, t.s);
-    if ((along < APEX_MINE_LOOK || along > view.track.length - 10) && t.lat > lo && t.lat < hi) return false;
+    const along = ahead(ring, s, t.s);
+    if ((along < APEX_MINE_LOOK || along > ring.length - 10) && t.lat > lo && t.lat < hi) return false;
   }
   return true;
 }
@@ -1194,7 +1251,7 @@ function rivetWouldHit(track: Track, s: number, c: CarState, slack: number): (o:
     // Over the road the whole way: halfway and where it meets the car.
     for (const f of [0.5, 1]) {
       const px = sx + wx * t * f, py = sy + wy * t * f;
-      const q = queryMain(track, px, py, pointAt(track, s + Math.hypot(px - c.x, py - c.y)).seg); // BR-PHYS: the main road
+      const q = queryTrackNear(track, px, py, pointAt(track, s + Math.hypot(px - c.x, py - c.y)).seg); // the road it drives (BR-BOTS: its route's ring)
       if (q.dist > wallOf(track, q) - RIVET_RADIUS) return false;
       if (islandAt(track, q.seg, q.s, q.lat, RIVET_RADIUS)) return false; // an island in the way (M4-SURF part 2)
     }
@@ -1210,7 +1267,7 @@ const ARM_STEPS = Math.ceil((WEAPONS_ARM_MS * 60) / 1000) + 1;
  * it reaches the mine (dropped CAR_LENGTH / 2 + 12 behind) about as it arms (MINE_ARM_TICKS), at
  * most HARD.mineFar behind; the weapons armed and HARD.mineGap steps since the last one.
  */
-function mineWouldCatch(view: BotView, mem: BotMem, c: CarState, s: number, lat: number): boolean {
+function mineWouldCatch(view: BotView, ring: Track, mem: BotMem, c: CarState, s: number, lat: number): boolean {
   const h = mem.hard;
   if (view.raceSteps <= ARM_STEPS || view.raceSteps - mem.lastMine < h.mineGap) return false;
   const far = h.mineFar + 30;
@@ -1219,8 +1276,8 @@ function mineWouldCatch(view: BotView, mem: BotMem, c: CarState, s: number, lat:
     if (!o.solid) continue;
     const dx = o.x - c.x, dy = o.y - c.y;
     if (dx * cos + dy * sin >= 0 || dx * dx + dy * dy > far * far) continue; // behind, near: pre-filter
-    const t = trackCoords(view.track, s, -Math.hypot(dx, dy), o.x, o.y);
-    const d = ahead(view.track, t.s, s); // the follower's distance behind, along the track
+    const t = trackCoords(ring, s, -Math.hypot(dx, dy), o.x, o.y);
+    const d = ahead(ring, t.s, s); // the follower's distance behind, along the track
     const vf = (o.vx ?? 0) * Math.cos(t.h) + (o.vy ?? 0) * Math.sin(t.h);
     if (vf < 100 || Math.abs(t.lat - lat) > h.mineAcross) continue;
     if (d >= (vf * MINE_ARM_TICKS) / 60 + h.mineNear && d <= h.mineFar) return true;
@@ -1362,9 +1419,9 @@ export function mistakeSpots(track: Track, bendLook: number): number {
  * the rate's chance, then mistakeClear): {kind, size, end} latched in mem.mistake (t 0 on the step it begins).
  */
 function mistakeStep(
-  view: BotView, mem: BotMem, s: number, seg: number, v: number, bend: number, free: boolean, landed: boolean, passed: boolean, hit: boolean,
+  view: BotView, track: Track, mem: BotMem, s: number, seg: number, v: number, bend: number, free: boolean, landed: boolean, passed: boolean, hit: boolean,
 ): Mistake | null {
-  const track = view.track, hp = mem.hard;
+  const hp = mem.hard; // track: the road it drives (BR-BOTS: its route's ring, whose widens hold the mouths)
   let m = mem.mistake;
   if (m !== null) {
     m.t++;
@@ -1391,6 +1448,461 @@ function mistakeStep(
   return m; // botControls reports it (onMistake) once it is driven: a wide line may find no free lane
 }
 
+// ---- shortcut roads (BR-BOTS, PLAN-BRANCH.md 2.6, its advisor changes 4 and 6, user decision 3) ---------
+
+/**
+ * Which shortcuts a bot takes and how it commits to one (routePlan, routeStep). An object so the tuner
+ * (tools/debug/branch-tune.ts) can sweep it; the game never changes it.
+ * - A shortcut costs its length, plus laneCost x the length of every surface on it the car cannot drive
+ *   round (no dry lane beside it), plus the level's margin for a jump (a ramp or a gap) and for holes;
+ *   the main road from the fork to the merge its length plus its surfaces the same way. A bot takes it
+ *   when it costs less (once per race, by seat, car type, stats and level: never the random id).
+ * - Easy never takes a jump or a holes shortcut, and one with dirt only in the truck (user decision 3:
+ *   "Easy never takes a risky shortcut"); Normal only on its even seats (alternate seats: "Normal on
+ *   half the seats"); Hard whenever it pays (its margins are small).
+ * - From `decide` before a fork (main s) it commits for this pass: a jump shortcut is given up there when
+ *   full throttle from its speed would not reach the take-off speed (takeoffSpeedFor) at the lip.
+ */
+export const ROUTE = {
+  /** The margins (route units) a level adds to a shortcut's cost for a jump and for holes. */
+  margin: {
+    easy: { jump: Infinity, holes: Infinity },
+    normal: { jump: 150, holes: 250 },
+    hard: { jump: 50, holes: 150 },
+  } as Record<BotLevel, { jump: number; holes: number }>,
+  /** From this far before a fork the bot commits to the shortcut or the main road for this pass. */
+  decide: 400,
+};
+
+/** One shortcut's verdict for one bot (routePlan): what it is, the two costs, taken or not and why. */
+export interface RouteChoice {
+  branch: number; // 1 = the track's first
+  kind: string; // "jump", "holes", "dirt", "water", "plain" (joined with "+")
+  main: number; // the main road's cost from fork to merge
+  cost: number; // the shortcut's (Infinity: never, `why`)
+  take: boolean;
+  why: string;
+}
+
+/** The surfaces of road r over a..b (its s) a car cannot drive round, as laneFor costs them (length x laneCost). */
+function surfCost(r: Track, a: number, b: number, stats: CarStats): number {
+  const free = CAR_WIDTH + 2 * SURFACE_MARGIN, half = r.def.halfWidth;
+  let c = 0;
+  for (const f of r.surfaces) {
+    const len = Math.min(f.s1, b) - Math.max(f.s0, a);
+    if (len <= 0 || f.lat0 + half >= free || half - f.lat1 >= free) continue; // a dry lane beside it
+    c += len * laneCost(f.kind, stats);
+  }
+  return c;
+}
+
+/** What a shortcut holds (RouteChoice.kind). */
+function branchKind(r: Track): { jump: boolean; holes: boolean; dirt: boolean; kind: string } {
+  const jump = r.ramps.length > 0 || r.gaps.length > 0, holes = r.holes.length > 0;
+  const dirt = r.surfaces.some((f) => f.kind === SURF_DIRT), water = r.surfaces.some((f) => f.kind === SURF_WATER);
+  const kind = [jump && "jump", holes && "holes", dirt && "dirt", water && "water"].filter(Boolean).join("+") || "plain";
+  return { jump, holes, dirt, kind };
+}
+
+/** The shortcuts a bot on `seat` of `level` in a `carType` with `stats` takes on `track` (see ROUTE): bit b of mask = branch b. */
+export function routePlan(track: Track, level: BotLevel, seat: number, carType: CarType, stats: CarStats): { mask: number; rows: RouteChoice[] } {
+  const rows: RouteChoice[] = [];
+  let mask = 0;
+  track.branches.forEach((b, k) => {
+    const r = b.road, f = branchKind(r);
+    const main = b.s1 - b.s0 + surfCost(track, b.s0, b.s1, stats);
+    let cost = r.length + surfCost(r, 0, r.length, stats), why = "";
+    if (level === "easy" && (f.jump || f.holes)) why = "Easy never takes a jump or holes";
+    else if (level === "easy" && f.dirt && carType !== "truck") why = "Easy takes dirt only in the truck";
+    else if (level === "normal" && seat % 2 !== 0) why = "Normal on an odd seat keeps the main road";
+    if (why) cost = Infinity;
+    else {
+      const m = ROUTE.margin[level];
+      if (f.jump) cost += m.jump;
+      if (f.holes) cost += m.holes;
+      why = cost < main ? "costs less" : "costs more";
+    }
+    const take = cost < main;
+    if (take) mask |= 1 << k;
+    rows.push({ branch: k + 1, kind: f.kind, main, cost, take, why });
+  });
+  return { mask, rows };
+}
+
+/** A stretch of one road on a route: road (0 the main road, b + 1 branch b) from its s0, len long, starting at route distance `at`. */
+export interface RouteLeg {
+  road: number;
+  s0: number;
+  len: number;
+  at: number;
+}
+
+/**
+ * A route round a track with shortcut roads (routeOf): the main road with the branches of `mask` spliced in
+ * at their forks and merges, as one closed road, `ring`, with the Track shape. Its centreline is the main
+ * road's samples up to each fork, the branch's from its fork (on the main centreline) to its merge, then
+ * the main road's; its route distance starts at the main road's s = 0. On it, at their route distance:
+ * every ramp, gap, hole, tyre mound, surface, island, truck, barrel row, press and cell of those
+ * stretches, and as widens (for mistakeClear only: the ring's per-sample walls are the roads' own) every
+ * mouth from its fork or merge to MOUTH_CLEAR past its gore, taken or not (HARD-2: a mistake never
+ * begins near one). The per-segment start indices the driver looks ahead from (surfFrom, tyresFrom,
+ * islandsFrom, trucksFrom, barrelsFrom, pressesFrom; islandsAt) by track.ts' rules.
+ */
+export interface Route {
+  /** The branches it takes (bit b: branch b), as built: one that forks before the last one taken merges is left out. */
+  mask: number;
+  ring: Track;
+  legs: RouteLeg[];
+  /** Per global segment of the track (CarState.seg): the ring segment a query of the ring searches round. */
+  hint: Int32Array;
+  /** Per ring segment: the road it lies on. */
+  segRoad: Uint8Array;
+  /**
+   * Per ring sample: the asphalt half-width the driver's lanes keep inside (its def.halfWidth on the main road,
+   * as today's driver; on a branch its own, but in a mouth and its taper the narrower side's, the main road's
+   * width there: a lane round a main-road hole just past a merge is open from the mouth).
+   */
+  half: Float64Array;
+  /** Per ring cell: its index in track.cells (the race's cell timers, BotView.cells). */
+  cellIdx: number[];
+}
+
+/** Main samples this close to a fork or a merge are left out of a ring (the branch's end samples lie there). */
+const ROUTE_JOIN = 0.5;
+/** track.ts' look-ahead start rules (buildBuckets): a mound, an island, a barrel row, a press or a truck stays in a segment's look until this far behind it ... */
+const ROUTE_BEHIND = 40;
+/** ... and an island in a segment's bucket within this of its s range (ISLAND_BUCKET_REACH). */
+const ROUTE_ISLAND_REACH = 30;
+
+const routeMemo = new WeakMap<Track, Map<number, Route>>();
+
+/** The route of `mask` round `track` (built once per track and mask). */
+export function routeOf(track: Track, mask: number): Route {
+  let by = routeMemo.get(track);
+  if (!by) routeMemo.set(track, (by = new Map()));
+  let r = by.get(mask);
+  if (!r) by.set(mask, (r = buildRoute(track, mask)));
+  return r;
+}
+
+/** The first index of a list whose `far` edge plus ROUTE_BEHIND is past each ring sample (track.ts' xxxFrom). */
+function fromIndex<T>(cum: readonly number[], segs: number, list: readonly T[], far: (x: T) => number): number[] {
+  const out: number[] = [];
+  for (let i = 0; i < segs; i++) {
+    const k = list.findIndex((x) => far(x) + ROUTE_BEHIND > cum[i]);
+    out.push(k < 0 ? list.length : k);
+  }
+  return out;
+}
+
+/** The last index j of a strictly increasing list with xs[j] <= v (0 below it). */
+function lastAtOrBelow(xs: readonly number[], v: number): number {
+  let lo = 0, hi = xs.length - 1;
+  if (!(v >= xs[0])) return 0;
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1;
+    if (xs[mid] <= v) lo = mid;
+    else hi = mid - 1;
+  }
+  return lo;
+}
+
+function buildRoute(track: Track, mask: number): Route {
+  const bs = track.branches, L = track.length, n = track.pts.length;
+  const roads: Track[] = [track, ...bs.map((b) => b.road)];
+  // The branches taken, in fork order (one forking before the last one's merge is left out).
+  const take: number[] = [];
+  let last = -Infinity;
+  for (const k of bs.map((_, i) => i).sort((a, b) => bs[a].s0 - bs[b].s0)) {
+    if ((mask & (1 << k)) !== 0 && bs[k].s0 > last) {
+      take.push(k);
+      last = bs[k].s1;
+    }
+  }
+  const legs: RouteLeg[] = [];
+  let s = 0;
+  for (const k of take) {
+    legs.push({ road: 0, s0: s, len: bs[k].s0 - s, at: 0 });
+    legs.push({ road: k + 1, s0: 0, len: bs[k].road.length, at: 0 });
+    s = bs[k].s1;
+  }
+  legs.push({ road: 0, s0: s, len: L - s, at: 0 });
+  // The centreline, sample by sample: each with its road's per-sample half-widths and walls.
+  const pts: Vec[] = [], halfL: number[] = [], halfR: number[] = [], wallL: number[] = [], wallR: number[] = [], segRoad: number[] = [], laneHalf: number[] = [];
+  const mainAt = new Int32Array(n).fill(-1);
+  const branchAt: (Int32Array | null)[] = bs.map(() => null);
+  const firstOf: number[] = []; // per leg: its first ring sample
+  const push = (r: Track, i: number, road: number) => {
+    pts.push({ x: r.pts[i].x, y: r.pts[i].y });
+    halfL.push(r.halfL[i]);
+    halfR.push(r.halfR[i]);
+    wallL.push(r.wallL[i]);
+    wallR.push(r.wallR[i]);
+    segRoad.push(road);
+    // The lanes' half-width (Route.half): a branch's sample in one of its mouths' widens (the taper included) the narrower side's.
+    const u = r.cum[i];
+    const mouth = r !== track && r.widens.some((w) => (w as { mouth?: boolean }).mouth === true && u >= w.s0 && u <= w.s1);
+    laneHalf.push(mouth ? Math.min(r.halfL[i], r.halfR[i]) : r.def.halfWidth);
+  };
+  legs.forEach((g, li) => {
+    firstOf.push(pts.length);
+    if (g.road === 0) {
+      const lo = g.s0 === 0 ? 0 : g.s0 + ROUTE_JOIN, hi = li === legs.length - 1 ? Infinity : g.s0 + g.len - ROUTE_JOIN;
+      for (let i = 0; i < n; i++) {
+        if (track.cum[i] >= lo && track.cum[i] < hi) {
+          mainAt[i] = pts.length;
+          push(track, i, 0);
+        }
+      }
+    } else {
+      const r = roads[g.road], m = r.pts.length, at = new Int32Array(m);
+      for (let j = 0; j < m; j++) {
+        at[j] = pts.length;
+        push(r, j, j < m - 1 ? g.road : 0); // its last sample is the merge, on the main road: the segment from it is the main road's
+      }
+      branchAt[g.road - 1] = at;
+    }
+  });
+  const N = pts.length;
+  const cum = [0];
+  for (let i = 1; i <= N; i++) cum.push(cum[i - 1] + Math.hypot(pts[i % N].x - pts[i - 1].x, pts[i % N].y - pts[i - 1].y));
+  const length = cum[N];
+  // Each leg's route distance at its s0, from its first sample (a main leg's may lie a little past it).
+  legs.forEach((g, li) => {
+    const k = firstOf[li];
+    if (g.road > 0) g.at = cum[k];
+    else {
+      const i = mainAt.indexOf(k);
+      g.at = li === 0 ? 0 : i < 0 ? cum[k] : cum[k] - (track.cum[i] - g.s0);
+    }
+  });
+  // The features of each leg at their route distance.
+  const ramps: Ramp[] = [], gaps: Gap[] = [], holes: PlacedHole[] = [], tyres: PlacedTyres[] = [], surfaces: Surface[] = [], islands: PlacedIsland[] = [];
+  const trucks: PlacedTruck[] = [], barrels: PlacedBarrels[] = [], presses: PlacedPress[] = [], cells: PlacedCell[] = [], cellIdx: number[] = [];
+  const widens: Widen[] = [];
+  const zone = (a: number, b: number) => widens.push({ k: "widen", s0: a, s1: b, left: 0, right: 0 });
+  for (const g of legs) {
+    const r = roads[g.road];
+    const on = (x: number) => g.road > 0 || (x >= g.s0 && x < g.s0 + g.len);
+    const to = (x: number) => g.at + (x - g.s0);
+    const surf = (f: Surface): Surface => ({ ...f, s0: to(f.s0), s1: to(f.s1) });
+    for (const f of r.ramps) if (on(f.s)) ramps.push({ ...f, s: to(f.s) });
+    for (const f of r.gaps) if (on(f.s0)) gaps.push({ ...f, s0: to(f.s0), s1: to(f.s1) });
+    for (const f of r.holes) if (on(f.s)) holes.push({ ...f, s: to(f.s) });
+    for (const f of r.tyres) if (on(f.s)) tyres.push({ ...f, s: to(f.s) });
+    for (const f of r.surfaces) if (on(f.s0)) surfaces.push(surf(f));
+    for (const f of r.islands) if (on(f.s0)) islands.push({ ...f, s0: to(f.s0), s1: to(f.s1), surfL: f.surfL.map(surf), surfR: f.surfR.map(surf) });
+    for (const f of r.trucks) if (on(f.s)) trucks.push({ ...f, s: to(f.s), lip: to(f.lip) });
+    for (const f of r.barrels) if (on(f.s)) barrels.push({ ...f, s: to(f.s) });
+    for (const f of r.presses) if (on(f.s)) presses.push({ ...f, s: to(f.s) });
+    for (const f of r.widens) if (!(f as { mouth?: boolean }).mouth && on(f.s0)) widens.push({ ...f, s0: to(f.s0), s1: to(f.s1) });
+    track.cells.forEach((c, i) => {
+      if ((c.road ?? 0) !== g.road || !on(c.s)) return;
+      const rc: PlacedCell = { ...c, s: to(c.s) };
+      delete rc.road; // on the ring it is on the bot's road
+      cells.push(rc);
+      cellIdx.push(i);
+    });
+    // The mouths (HARD-2's exclusions): a taken branch's on its own leg, every other branch's on the main road.
+    if (g.road > 0) {
+      const b = bs[g.road - 1], fg = b.forkGore, mg = b.mergeGore;
+      if (fg && mg) {
+        zone(g.at, g.at + fg.u + MOUTH_CLEAR);
+        zone(g.at + mg.u - MOUTH_CLEAR, g.at + g.len);
+      } else zone(g.at, g.at + g.len);
+    } else {
+      for (const b of bs) {
+        if (!on(b.s0)) continue;
+        const fg = b.forkGore, mg = b.mergeGore;
+        if (fg && mg) {
+          zone(to(b.s0), to(fg.s) + MOUTH_CLEAR);
+          zone(to(mg.s) - MOUTH_CLEAR, to(b.s1));
+        } else zone(to(b.s0), to(b.s1));
+      }
+    }
+  }
+  widens.sort((a, b) => a.s0 - b.s0);
+  const islandsAt: PlacedIsland[][] = [];
+  for (let i = 0; i < N; i++) islandsAt.push(islands.filter((x) => x.s0 - ROUTE_ISLAND_REACH < cum[i + 1] && x.s1 + ROUTE_ISLAND_REACH > cum[i]));
+  const ring: Track = {
+    def: { ...track.def, id: `${track.def.id}/route-${mask}`, name: `${track.def.name} route ${mask}`, features: [], recovery: [0] },
+    pts, cum, length, wall: track.wall, checkpoints: [], ramps, gaps, holes, cells, recovery: [0],
+    halfL, halfR, wallL, wallR, water: [], dirt: [], belts: [], tyres, barrels, trucks, presses, widens, islands, sand: [], oil: [], fords: [],
+    surfaces, surfAt: [], surfFrom: [],
+    themeSurfaces: [], themeAt: [], tyresAt: [], tyresFrom: fromIndex(cum, N, tyres, (m) => m.s + m.r),
+    islandsAt, islandsFrom: fromIndex(cum, N, islands, (x) => x.s1),
+    barrelsAt: [], pressesAt: [], trucksAt: [],
+    barrelsFrom: fromIndex(cum, N, barrels, (b) => b.s + BARREL_R),
+    pressesFrom: fromIndex(cum, N, presses, (p) => p.s + PRESS_DEPTH / 2),
+    trucksFrom: fromIndex(cum, N, trucks, (t) => t.s + t.len),
+    roadNo: 0, branches: [], mouthAt: [],
+  };
+  for (let i = 0; i < N; i++) {
+    const k = surfaces.findIndex((f) => f.s1 > cum[i]);
+    ring.surfFrom.push(k < 0 ? surfaces.length : k);
+  }
+  // The hints: a segment on the ring is its own; a main segment a taken branch replaces, the branch's
+  // beside it (its mapS); a branch's not taken, the main road's beside it.
+  const mainHint = (i: number): number => {
+    if (mainAt[i] >= 0) return mainAt[i];
+    // Left out: a taken branch's stretch from its fork to its merge (or within ROUTE_JOIN of either end).
+    const c = track.cum[i];
+    for (const k of take) {
+      const b = bs[k];
+      if (c >= b.s0 - 2 * ROUTE_JOIN && c <= b.s1 + 2 * ROUTE_JOIN) return branchAt[k]![Math.min(lastAtOrBelow(b.mapS, c), segCount(b.road) - 1)];
+    }
+    // (Not reached: every main sample is on the ring or beside a taken branch.) The nearest ring sample.
+    let best = 0, bd = Infinity;
+    const p = track.pts[i];
+    for (let j = 0; j < pts.length; j++) {
+      const d = (pts[j].x - p.x) ** 2 + (pts[j].y - p.y) ** 2;
+      if (d < bd) {
+        bd = d;
+        best = j;
+      }
+    }
+    return best;
+  };
+  const hint = new Int32Array(track.mouthAt.length);
+  for (let i = 0; i < n; i++) hint[i] = mainHint(i);
+  bs.forEach((b, k) => {
+    for (let j = 0; j < segCount(b.road); j++) hint[b.base + j] = branchAt[k] ? branchAt[k]![j] : mainHint(pointAt(track, b.mapS[j]).seg);
+  });
+  let built = 0;
+  for (const k of take) built |= 1 << k;
+  return { mask: built, ring, legs, hint, segRoad: Uint8Array.from(segRoad), half: Float64Array.from(laneHalf), cellIdx };
+}
+
+/** The lanes' half-width (Route.half) at route distance s on ring segment seg: its two samples', linear between them. */
+function routeHalf(route: Route, seg: number, s: number): number {
+  const h = route.half, ring = route.ring, n = h.length;
+  const a = h[seg], b = h[seg + 1 < n ? seg + 1 : 0];
+  if (a === b) return a;
+  const c0 = ring.cum[seg], len = ring.cum[seg + 1] - c0;
+  return a + (b - a) * (len > 0 ? clamp((s - c0) / len, 0, 1) : 0);
+}
+
+/** routeStep's position on its route (one object, refilled): the leg, the road, its s on that road and the main s beside it. */
+const AT = { leg: 0, road: 0, s: 0, ms: 0 };
+
+/** Where route distance d of `route` is (into AT): its leg and road, the s on that road and (on a branch through its mapS) the main s. */
+function routeAt(track: Track, route: Route, d: number): typeof AT {
+  const legs = route.legs;
+  let li = 0;
+  while (li + 1 < legs.length && legs[li + 1].at <= d) li++;
+  const g = legs[li];
+  AT.leg = li;
+  AT.road = g.road;
+  AT.s = g.s0 + (d - g.at);
+  if (g.road === 0) AT.ms = AT.s >= track.length ? AT.s - track.length : AT.s < 0 ? AT.s + track.length : AT.s;
+  else {
+    const b = track.branches[g.road - 1], r = b.road, u = clamp(AT.s, 0, r.length);
+    const j = pointAt(r, u).seg, c0 = r.cum[j], len = r.cum[j + 1] - c0;
+    AT.ms = b.mapS[j] + (b.mapS[j + 1] - b.mapS[j]) * (len > 0 ? clamp((u - c0) / len, 0, 1) : 0);
+  }
+  return AT;
+}
+
+/** The s on road r of (x, y) projected onto r's segment seg (cum[seg] plus its distance along the segment, clamped to it). */
+function alongSeg(r: Track, seg: number, x: number, y: number): number {
+  const a = r.pts[seg], b = r.pts[(seg + 1) % r.pts.length];
+  const ex = b.x - a.x, ey = b.y - a.y, len = r.cum[seg + 1] - r.cum[seg];
+  const l = Math.sqrt(ex * ex + ey * ey) || 1;
+  return r.cum[seg] + clamp(((x - a.x) * ex + (y - a.y) * ey) / l, 0, len);
+}
+
+/** Is a car on the branch b's road at u, or on the main road at s (road 0), between its two gores (the corridors apart: walls between the roads)? */
+function pastGores(b: PlacedBranch, road: number, s: number): boolean {
+  const fg = b.forkGore, mg = b.mergeGore;
+  if (!fg || !mg) return false;
+  return road === 0 ? s > fg.s && s < mg.s : s > fg.u && s < mg.u;
+}
+
+/** Would full throttle from speed v carry the car to every take-off lip of branch b (toFork ahead of its fork) at its take-off speed? */
+function jumpReach(b: PlacedBranch, toFork: number, v: number, stats: CarStats): boolean {
+  const r = b.road;
+  for (const ramp of r.ramps) {
+    const need = takeoffSpeedFor(r, ramp);
+    if (need > 0 && speedAfter(Math.max(0, v), toFork + ramp.s + ramp.len, stats) < need) return false;
+  }
+  return true;
+}
+
+/** routeStep builds every route of a track with at most this many branches at its first plan (2^n rings). */
+const ROUTE_PREBUILD = 4;
+
+/** routeStep's answer (one object, refilled): the route this step and the bot's query on its ring. */
+const ROUTE_STEP: { route: Route; q: TrackQuery } = { route: null as unknown as Route, q: null as unknown as TrackQuery };
+
+/**
+ * One step of a bot's route on a track with branches (botControls): the plan once per race (routePlan),
+ * the car queried on its route's ring (round the ring segment beside its global segment: Route.hint),
+ * then per fork: out of its zone (more than ROUTE.decide before the fork, or past the merge) the plan
+ * again; entering it, the commitment for this pass (a jump given up when it cannot reach its take-off
+ * speed); past a gore on the other road than the route's, the car's road. A changed route: the query
+ * again on its ring, and what the driver keeps in route distance (a back-up's lip, a truck decided, a
+ * mistake) forgotten.
+ */
+function routeStep(view: BotView, mem: BotMem, c: CarState): typeof ROUTE_STEP {
+  const track = view.track, bs = track.branches;
+  if (mem.plan < 0 || mem.planTrack !== track) {
+    mem.plan = routePlan(track, mem.level, mem.seat, view.carType ?? DEFAULT_CAR, view.stats).mask;
+    mem.planTrack = track;
+    mem.route = mem.plan;
+    mem.forkDone = 0;
+    // Every route it may switch to (a jump given up, a bump past a gore), built now (the countdown, first
+    // bot only: routeOf keeps them per track) rather than in a race tick; up to ROUTE_PREBUILD branches.
+    if (bs.length <= ROUTE_PREBUILD) for (let m = 0; m < 1 << bs.length; m++) routeOf(track, m);
+  }
+  let route = routeOf(track, mem.route);
+  let q = queryTrackNear(route.ring, c.x, c.y, route.hint[c.seg]); // a ring has no branches: its own window
+  const at = routeAt(track, route, q.s);
+  const road = at.road, ms = at.ms;
+  let mask = mem.route;
+  for (let k = 0; k < bs.length; k++) {
+    const b = bs[k], bit = 1 << k;
+    if (ms < b.s0 - ROUTE.decide || ms > b.s1) {
+      mem.forkDone &= ~bit;
+      mask = (mem.plan & bit) !== 0 ? mask | bit : mask & ~bit;
+    } else if ((mem.forkDone & bit) === 0) {
+      mem.forkDone |= bit;
+      let go = (mem.plan & bit) !== 0;
+      if (go && road === 0 && ms < b.s0) {
+        const p = pointAt(route.ring, q.s);
+        go = jumpReach(b, b.s0 - ms, c.vx * Math.cos(p.h) + c.vy * Math.sin(p.h), view.stats);
+      }
+      mask = go ? mask | bit : mask & ~bit;
+    }
+  }
+  // Past a gore the car's own road (CarState.seg: the physics'), when it is not the route's there: where
+  // the car is along that segment (BR-BOTS review 1: its start can lie up to a segment before the gore).
+  const pr = roadOfSeg(track, c.seg);
+  if (pr !== road) {
+    if (pr > 0) {
+      const b = bs[pr - 1];
+      if (pastGores(b, pr, alongSeg(b.road, c.seg - b.base, c.x, c.y))) {
+        mask |= 1 << (pr - 1);
+        mem.forkDone |= 1 << (pr - 1);
+      }
+    } else if (pastGores(bs[road - 1], 0, alongSeg(track, c.seg, c.x, c.y))) {
+      mask &= ~(1 << (road - 1));
+      mem.forkDone |= 1 << (road - 1);
+    }
+  }
+  if (mask !== mem.route) {
+    mem.route = mask;
+    route = routeOf(track, mask);
+    q = queryTrackNear(route.ring, c.x, c.y, route.hint[c.seg]);
+    mem.backup = null;
+    mem.backedUpFor = -1;
+    mem.truckS = -1;
+    mem.mistake = null;
+  }
+  ROUTE_STEP.route = route;
+  ROUTE_STEP.q = q;
+  return ROUTE_STEP;
+}
+
 /** Follow the line, brake for bends, take ramps flat out, dodge holes, shoot what is ahead. */
 export function botControls(view: BotView, mem: BotMem): BotControls {
   const c = view.car;
@@ -1407,6 +1919,7 @@ export function botControls(view: BotView, mem: BotMem): BotControls {
     mem.wake = null;
     mem.mistake = null; // HARD-2: a mistake ends here
     if (c.air === 0) mem.backedUpFor = -1; // a fall or a wreck: the next approach starts over
+    if (c.fall > 0) mem.forkDone = 0; // BR-BOTS: recovered before a fork, it commits there again
     if (mem.level === "hard" && mem.hard.mistakeRate > 0) mem.flew = c.fall === 0 && c.wreck === 0; // in a jump's flight: it lands next
     return { throttle: 1, steer: 0, fire: false, mine: false };
   }
@@ -1424,11 +1937,24 @@ export function botControls(view: BotView, mem: BotMem): BotControls {
     mem.hp = hpNow;
   }
   const track = view.track;
-  // BR-PHYS: the main road's query (c.seg is a global segment; a bot the physics put on a branch in a
-  // mouth reads the main road beside it). BR-BOTS gives the bots a route onto the branches.
-  const q = queryMain(track, c.x, c.y, c.seg);
+  // BR-BOTS: on a track with branches the bot drives its route's ring (routeStep): every look-ahead below
+  // walks the route (BR-PHYS's queryMain stopgaps are gone). Without branches the ring is the track and
+  // the query today's (queryTrackNear round the car's segment).
+  let ring = track, route: Route | null = null, q: TrackQuery;
+  if (track.branches.length === 0) q = queryTrackNear(track, c.x, c.y, c.seg);
+  else {
+    const rs = routeStep(view, mem, c);
+    route = rs.route;
+    ring = route.ring;
+    q = rs.q;
+  }
+  // The road it is on (a route's leg's): its lanes' asphalt half-width and wall (Route.half), and its seat's
+  // racing line scaled to that width (on the main road: the track's, today's).
+  const half = route === null ? track.def.halfWidth : routeHalf(route, q.seg, q.s);
+  const wall = route === null ? track.wall : half + track.def.verge;
+  const lateral = half === track.def.halfWidth ? mem.lateral : (mem.lateral * (half - CAR_WIDTH / 2)) / (track.def.halfWidth - CAR_WIDTH / 2);
   const v = speedOf(c);
-  const p = pointAt(track, q.s);
+  const p = pointAt(ring, q.s);
   const dir = p.h;
   const vf = c.vx * Math.cos(dir) + c.vy * Math.sin(dir); // speed along the track
   const lat = (c.x - p.x) * -Math.sin(dir) + (c.y - p.y) * Math.cos(dir); // + = right of travel
@@ -1437,11 +1963,11 @@ export function botControls(view: BotView, mem: BotMem): BotControls {
   // among them. Water and dirt: the cheapest lane for its car type (laneFor). With none of them
   // ahead the bot holds its own racing line (mem.lateral).
   // Split lanes (M4-SURF part 2): an island ahead or beside it: the lane it takes round it (null on a plain track).
-  const split = splitFor(track, q.s, q.seg, lat, SPLIT.look + v * SPLIT.lookPerSpeed, mem.lateral, view.stats);
-  const pref = split ? clamp(lat, split.racing - 24, split.racing + 24) : clamp(lat, mem.lateral - 24, mem.lateral + 24);
+  const split = splitFor(ring, q.s, q.seg, lat, SPLIT.look + v * SPLIT.lookPerSpeed, lateral, view.stats, half);
+  const pref = split ? clamp(lat, split.racing - 24, split.racing + 24) : clamp(lat, lateral - 24, lateral + 24);
   // M4-MOVE: the next truck: jump it (decided once per approach) or go round it; the barrels and the
   // presses ahead as blockers at the race tick the bot gets to them (none on a track without them).
-  const tk = truckAhead(track, q.s, q.seg, MOVE.truckLook);
+  const tk = truckAhead(ring, q.s, q.seg, MOVE.truckLook);
   let jump: PlacedTruck | null = null;
   if (tk) {
     const toLip = tk.toRear + (tk.t.lip - tk.t.s);
@@ -1449,16 +1975,16 @@ export function botControls(view: BotView, mem: BotMem): BotControls {
     if (mem.truckS !== tk.t.s) {
       // Its seat's line in the band (advisor change 2: by seat; two seats can qualify, bandTaken below keeps them apart), fast enough.
       mem.truckS = tk.t.s;
-      mem.truckJump = Math.abs(mem.lateral - tk.t.lat) <= TRUCK_BAND && arrive >= TRUCK_MIN_SPEED + MOVE.truckMargin;
+      mem.truckJump = Math.abs(lateral - tk.t.lat) <= TRUCK_BAND && arrive >= TRUCK_MIN_SPEED + MOVE.truckMargin;
     } else if (mem.truckJump && tk.toRear > CAR_LENGTH && arrive < TRUCK_MIN_SPEED + MOVE.truckMargin / 2) mem.truckJump = false; // slowed: round it
     // The band takes one car: another car on it (or lined up for it) ahead or level gives the jump up while there is room to go round.
     if (mem.truckJump && tk.toRear > MOVE.truckYield && bandTaken(tk.t, c, view.others)) mem.truckJump = false;
     if (mem.truckJump) jump = tk.t;
   } else mem.truckS = -1;
   const laneLook = 140 + v * 0.6;
-  const movers = (MOVE.see ? track.barrels.length + track.presses.length : 0) + track.trucks.length > 0 ? moverBlockers(track, q.s, q.seg, vf, laneLook, view.rt ?? 0, tk && !jump ? tk : null) : 0;
-  const hole = laneFor(track, q.s, q.seg, laneLook, pref, mem.lateral, view.stats, split, lat, movers > 0 ? MOVERS : null, movers);
-  let lane = hole.holes || hole.dodge ? hole.lane : mem.lateral;
+  const movers = (MOVE.see ? ring.barrels.length + ring.presses.length : 0) + ring.trucks.length > 0 ? moverBlockers(ring, q.s, q.seg, vf, laneLook, view.rt ?? 0, tk && !jump ? tk : null) : 0;
+  const hole = laneFor(ring, q.s, q.seg, laneLook, pref, lateral, view.stats, split, lat, movers > 0 ? MOVERS : null, movers, half, wall);
+  let lane = hole.holes || hole.dodge ? hole.lane : lateral;
   if (jump) lane = jump.lat; // up the middle of its band
   else if (tk && tk.toRear < MOVE.truckSide) {
     // Going round it, at it or beside it: keep the side the car is on (as the mounds' side locks), never across it.
@@ -1469,10 +1995,10 @@ export function botControls(view: BotView, mem: BotMem): BotControls {
   if (hard) look *= hp.aimLook;
 
   // A ramp coming up: full throttle, straight at it (a truck jumped: as a ramp, below).
-  const ramp = rampAhead(track, q.s, RAMP_APPROACH);
+  const ramp = rampAhead(ring, q.s, RAMP_APPROACH);
   if (!ramp) mem.backedUpFor = -1;
-  const near = pointAt(track, q.s + 20).h;
-  const far = pointAt(track, q.s + 20 + Math.max(120, v * 0.9) * (hard ? hp.bendLook : 1)).h; // x 1: Normal's exact value
+  const near = pointAt(ring, q.s + 20).h;
+  const far = pointAt(ring, q.s + 20 + Math.max(120, v * 0.9) * (hard ? hp.bendLook : 1)).h; // x 1: Normal's exact value
   const turn = angleDiff(near, far);
   const bend = Math.abs(turn);
 
@@ -1481,7 +2007,7 @@ export function botControls(view: BotView, mem: BotMem): BotControls {
   if (mem.wakeRest > 0) mem.wakeRest--;
   if (errs) PASS.done = false;
   if (mem.useWake && !easy && view.raceOn && !hole.holes && !hole.dodge && !ramp && !jump && !mem.backup && mem.reversing === 0) {
-    const w = wakeLane(view, mem, c, p.x, p.y, dir, bend, track.def.halfWidth - CAR_WIDTH / 2 - 2);
+    const w = wakeLane(view, mem, c, p.x, p.y, dir, bend, half - CAR_WIDTH / 2 - 2, lateral);
     if (w) {
       lane = w.lane;
       coast = w.coast;
@@ -1490,7 +2016,7 @@ export function botControls(view: BotView, mem: BotMem): BotControls {
   // A cell close to its lane (Normal): steer to it; it beats the slipstream.
   let cell = false;
   if (!easy && view.raceOn && view.cells && !hole.holes && !jump) {
-    const cl = cellLane(view, q.s, lane, ramp ? ramp.toLip : -1, track.def.halfWidth - CAR_WIDTH / 2 - 2, hard ? hp.cellLane : CELL_LANE);
+    const cl = cellLane(view, ring, route === null ? null : route.cellIdx, q.s, lane, ramp ? ramp.toLip : -1, half - CAR_WIDTH / 2 - 2, hard ? hp.cellLane : CELL_LANE);
     if (cl !== null) {
       lane = cl;
       coast = false;
@@ -1501,8 +2027,8 @@ export function botControls(view: BotView, mem: BotMem): BotControls {
   // Hard's apex bias: only on its own racing line (a hole lane, a ramp, the slipstream and a cell
   // come first), towards the inside of the bend ahead, never onto a mine. mem.lateral stays.
   if (hard && hp.apex > 0 && !hole.holes && !hole.dodge && !ramp && !jump && !mem.wake && !cell && view.raceOn && bend > hp.apexFrom) {
-    const apex = apexLane(mem.lateral, turn, track.def.halfWidth, hp);
-    if (apexMineFree(view, c, q.s, mem.lateral, apex, hp.apexMineClear)) lane = apex;
+    const apex = apexLane(lateral, turn, half, hp);
+    if (apexMineFree(view, ring, c, q.s, lateral, apex, hp.apexMineClear)) lane = apex;
   }
   // HARD-2: the mistake under way or one beginning: only on its own racing line, with nothing of
   // advisor change 4 about (holes, a lane round anything, a ramp, a truck, a split, what moves, the
@@ -1512,12 +2038,12 @@ export function botControls(view: BotView, mem: BotMem): BotControls {
   if (errs) {
     const free = view.raceOn && view.raceSteps > MISTAKE_FROM && !hole.holes && !hole.dodge && !ramp && !jump && !tk && !split && movers === 0 &&
       !mem.wake && !cell && !mem.backup && mem.reversing === 0 && mem.islandBack === 0;
-    err = mistakeStep(view, mem, q.s, q.seg, v, bend, free, landed, PASS.done, hit);
+    err = mistakeStep(view, ring, mem, q.s, q.seg, v, bend, free, landed, PASS.done, hit);
     if (err !== null && err.kind === "wide") {
       // Running wide: the lane must cost nothing (laneFor from it, as its racing line) and pass no mine.
-      const wide = wideLane(mem.lateral, turn, track.def.halfWidth, hp, err.size);
-      const wl = laneFor(track, q.s, q.seg, laneLook, wide, wide, view.stats, null, lat, null, 0);
-      if (!wl.holes && !wl.dodge && wl.lane === wide && apexMineFree(view, c, q.s, mem.lateral, wide, hp.apexMineClear)) lane = wide;
+      const wide = wideLane(lateral, turn, half, hp, err.size);
+      const wl = laneFor(ring, q.s, q.seg, laneLook, wide, wide, view.stats, null, lat, null, 0, half, wall);
+      if (!wl.holes && !wl.dodge && wl.lane === wide && apexMineFree(view, ring, c, q.s, lateral, wide, hp.apexMineClear)) lane = wide;
       else mem.mistake = err = null; // nowhere to run wide: no mistake
     }
     // A mistake that begins this step, once it is sure to be driven (a wide line has its lane).
@@ -1525,12 +2051,20 @@ export function botControls(view: BotView, mem: BotMem): BotControls {
   }
   let aim = q.s + look;
   if (ramp && ramp.toLip < RAMP_STRAIGHTEN) aim = q.s + ramp.toLip + 180;
-  const t = pointAt(track, aim);
+  const t = pointAt(ring, aim);
   if (split) {
     // In its lane round the island, and inside the asphalt at the aim point (a taper is narrower):
     // a cell or anything else never takes it across the island.
-    const lo = Math.max(split.lo, -halfOn(track, t.seg, aim, -1) + SPLIT.edge), hi = Math.min(split.hi, halfOn(track, t.seg, aim, 1) - SPLIT.edge);
+    const lo = Math.max(split.lo, -halfOn(ring, t.seg, aim, -1) + SPLIT.edge), hi = Math.min(split.hi, halfOn(ring, t.seg, aim, 1) - SPLIT.edge);
     lane = clamp(lane, lo, Math.max(lo, hi));
+  }
+  if (route !== null) {
+    // BR-BOTS: an aim point where the road is narrower (a shortcut past its mouth's taper): inside its asphalt there.
+    const ah = routeHalf(route, t.seg, aim);
+    if (ah < half) {
+      const m = ah - CAR_WIDTH / 2 - 2;
+      lane = clamp(lane, -m, m);
+    }
   }
   const tx = t.x - Math.sin(t.h) * lane;
   const ty = t.y + Math.cos(t.h) * lane;
@@ -1543,7 +2077,7 @@ export function botControls(view: BotView, mem: BotMem): BotControls {
   // HARD-2 late brake: only the brake trigger is late (the bend is seen err.delay after its entry);
   // `bend` (the slipstream, the apex, the bend latch) is unchanged.
   let tb = bend;
-  if (err !== null && err.kind === "late-brake" && ahead(track, err.from, q.s) < err.delay) tb = 0;
+  if (err !== null && err.kind === "late-brake" && ahead(ring, err.from, q.s) < err.delay) tb = 0;
   let target = tb > 1.4 ? 200 : tb > 0.9 ? 260 : tb > 0.5 ? 330 : 1000;
   const scale = CORNER_SCALE[view.carType ?? DEFAULT_CAR];
   if (scale !== 1) target *= scale;
@@ -1571,15 +2105,15 @@ export function botControls(view: BotView, mem: BotMem): BotControls {
     } else if (toFace < stop + 90 && throttle > 0) throttle = 0;
   }
   // About to roll into a hole on the current heading (spun, bumped)? Brake while turning away.
-  if (hole.holes && v > 150 && headingIntoHole(track, c.x, c.y, c.vx, c.vy, q.s)) throttle = -1;
+  if (hole.holes && v > 150 && headingIntoHole(ring, c.x, c.y, c.vx, c.vy, q.s)) throttle = -1;
 
   // Too slow to clear the gap behind the ramp (a mine, a wall, a bump)? Back up once for a
   // longer run-up, when the car is on the asphalt, pointing along the track and has room to
   // stop before the lip. A back-up that does not get there still ends in a recovery.
   const lip = ramp ? ramp.ramp.s + ramp.ramp.len : -1;
-  if (ramp && !mem.backup && mem.backedUpFor !== lip && view.raceOn && q.dist <= halfOf(track, q) &&
+  if (ramp && !mem.backup && mem.backedUpFor !== lip && view.raceOn && q.dist <= halfOf(ring, q) &&
       Math.abs(angleDiff(c.h, dir)) < 0.6) {
-    const need = takeoffSpeedFor(track, ramp.ramp);
+    const need = takeoffSpeedFor(ring, ramp.ramp);
     const stop = (Math.max(0, vf) ** 2) / (2 * 900) + 20; // braking distance (stepCar's BRAKE) + margin
     if (need > 0 && ramp.toLip > stop && speedAfter(Math.max(0, vf), ramp.toLip, view.stats) < need) {
       mem.backup = { lip, need, steps: 0 };
@@ -1589,7 +2123,7 @@ export function botControls(view: BotView, mem: BotMem): BotControls {
   if (mem.backup) {
     const b = mem.backup;
     b.steps++;
-    const toLip = ahead(track, q.s, b.lip);
+    const toLip = ahead(ring, q.s, b.lip);
     if (toLip > RAMP_APPROACH + 200 || toLip >= runUpFor(b.need, view.stats) + 15 || b.steps > BACKUP_MAX_STEPS) {
       mem.backup = null; // room enough (or given up): go
     } else {
@@ -1606,13 +2140,13 @@ export function botControls(view: BotView, mem: BotMem): BotControls {
     const dh = angleDiff(dir, c.h);
     if (mem.islandCool > 0) mem.islandCool--;
     if (mem.islandBack === 0) {
-      mem.islandKind = islandPinned(track, split.isle, split.side, q.s, lat, dh, mem.islandCool > 0, vf);
+      mem.islandKind = islandPinned(ring, split.isle, split.side, q.s, lat, dh, mem.islandCool > 0, vf);
       if (mem.islandKind) {
         mem.islandBack = SPLIT.backMax;
         mem.islandSide = split.side;
       }
     } else if (mem.islandKind === BACK_NOSE) {
-      if (headAhead(track, split.isle, q.s) >= SPLIT.noseClear) mem.islandBack = 0; // room to turn out
+      if (headAhead(ring, split.isle, q.s) >= SPLIT.noseClear) mem.islandBack = 0; // room to turn out
     } else if (mem.islandBack <= SPLIT.backMax - SPLIT.backMin) {
       // A side: released once 12 off it or turned in less than into / 2 (+ = into it).
       const face = mem.islandSide < 0 ? split.isle.lat0 - CAR_WIDTH / 2 : split.isle.lat1 + CAR_WIDTH / 2;
@@ -1654,9 +2188,9 @@ export function botControls(view: BotView, mem: BotMem): BotControls {
   let fire = false;
   if (armed && hard) {
     // Only when the rivet would hit (see rivetWouldHit); the weapons arm first (no rivet wasted).
-    fire = view.raceSteps > ARM_STEPS && view.others.some(rivetWouldHit(track, q.s, c, hp.rivetSlack));
+    fire = view.raceSteps > ARM_STEPS && view.others.some(rivetWouldHit(ring, q.s, c, hp.rivetSlack));
     // A mine when a car follows in its wake at the distance it arrives as the mine arms.
-    const mine = mineWouldCatch(view, mem, c, q.s, lat);
+    const mine = mineWouldCatch(view, ring, mem, c, q.s, lat);
     if (mine) mem.lastMine = view.raceSteps;
     return { throttle, steer, fire, mine };
   }
