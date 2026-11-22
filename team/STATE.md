@@ -706,6 +706,8 @@ TH-LOOK-1 gate GREEN on 2e171f1 (975/975 + 145/145, build index-CNyat145.js). TH
 conflict kept both); gate running; ClickUp complete; workers released, workspace removed. BR-PHYS 123jpnbfgha (Opus) in flight:
 ctx_de494cfdd510 (~/orca/workspaces/scrap-rally/br-phys, :3010; spec tmp/spec-br-phys.md); its scripts/bots.ts:92 change waits until the
 M4-TRACKS flake fix merges (tell it). Active authors: BR-BAKE, MARSHALS-1, BR-PHYS (+ the flake fix round).
+THEME-SCHEMA gate on c92c578: 1022/1022, build index-QaMhT72h.js, bots 144/145 (only the known flake). PUSHED (user popup): origin/main =
+dcea465 (TH-LOOK-1 + THEME-SCHEMA: Breaker's Mile in the approved desert). Expected live bundle: index-QaMhT72h.js.
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
