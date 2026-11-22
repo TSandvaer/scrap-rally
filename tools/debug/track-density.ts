@@ -96,6 +96,7 @@ export interface Straight {
   s1: number;
   length: number;
   on: string[]; // the footprints on it
+  plain: number; // its longest run with no footprint on it
 }
 
 export interface Density {
@@ -212,7 +213,7 @@ export function straightsOf(t: Track, list: Footprint[]): Straight[] {
       j++;
     }
     const s0 = cum[i], s1 = cum[i] + (cum[Math.min(j + 1, n)] - cum[i]) + (j + 1 > n ? cum[(j + 1) % n] : 0);
-    runs.push({ s0, s1, length: s1 - s0, on: [] });
+    runs.push({ s0, s1, length: s1 - s0, on: [], plain: 0 });
   }
   // Keep the longest runs that do not overlap one taken already.
   runs.sort((a, b) => b.length - a.length);
@@ -224,10 +225,23 @@ export function straightsOf(t: Track, list: Footprint[]): Straight[] {
     kept.push(r);
   }
   for (const k of kept) {
+    const L = t.length;
+    const cuts: [number, number][] = [];
     for (const f of list) {
-      const L = t.length;
-      for (const off of [0, L]) if (f.s0 + off < k.s1 && k.s0 < f.s1 + off) k.on.push(f.what);
+      for (const off of [0, L]) {
+        if (f.s0 + off < k.s1 && k.s0 < f.s1 + off) {
+          if (!k.on.includes(f.what)) k.on.push(f.what);
+          cuts.push([Math.max(k.s0, f.s0 + off), Math.min(k.s1, f.s1 + off)]);
+        }
+      }
     }
+    cuts.sort((a, b) => a[0] - b[0]);
+    let at = k.s0;
+    for (const [a, b] of cuts) {
+      k.plain = Math.max(k.plain, a - at);
+      at = Math.max(at, b);
+    }
+    k.plain = Math.max(k.plain, k.s1 - at);
   }
   return kept.slice(0, 3);
 }
@@ -275,7 +289,7 @@ export function densityReport(d: Density): string[] {
     out.push(`  group ${i + 1}: s ${f0(g.s0)}..${f0(g.s1)} (${f0(g.s1 - g.s0)} long) ${g.kinds.join("+")}: ${g.members.join(", ")}; then ${f0(d.gaps[i])} of road with no obstacle`);
   });
   out.push(`dirt stretches (rule: <= ~350 declared): ${d.mud.length ? d.mud.map((m) => `${f0(m.s0)}..${f0(m.s1)} = ${f0(m.length)} (traction ${f0(m.traction)}), lat ${f0(m.lat0)}..${f0(m.lat1)}${m.splitLane ? ", a split lane" : ""}`).join("; ") : "none"}`);
-  out.push(`longest straights (heading within ${(STRAIGHT_TOL * 180 / Math.PI).toFixed(0)} deg): ${d.straights.map((s) => `${f0(s.s0)}..${f0(s.s1)} = ${f0(s.length)}${s.on.length ? ` (on it: ${s.on.join(", ")})` : " (plain)"}`).join("; ")}`);
+  out.push(`longest straights (heading within ${(STRAIGHT_TOL * 180 / Math.PI).toFixed(0)} deg): ${d.straights.map((s) => `${f0(s.s0)}..${f0(s.s1)} = ${f0(s.length)}${s.on.length ? ` (on it: ${s.on.join(", ")}; its longest plain run ${f0(s.plain)})` : " (plain)"}`).join("; ")}`);
   return out;
 }
 
