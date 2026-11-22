@@ -213,3 +213,9 @@ Added open question 9: jungle and the ford ship on a yard only until a third new
 track. 3. Each theme surface only on its own theme's tracks. 4. THEME-SCHEMA before BR-PHYS. 5. The minimap does not change with the
 theme. 6. Surface sounds later (THEME-SND). 7. Each car type's feel on the new surfaces derived from its dirt multipliers. 8. The census
 fix as in advisor change 5 (in M4-TRACKS). 9. Jungle and the ford ship on Canopy Yard only until a third new track exists.
+
+## Implementation note (orchestrator, 2026-11-22): how S7 is judged
+TH-LOOK-1 measured that the S4 lap itself sits on the 5 us timer step in every theme (the shipped tracks' own S4 laps are 1.07-1.23 of
+their S2 on the untouched tree), so "S7 <= cheapest S2 x 1.10" measures timer quantization, not the theme. S7 is judged as the theme
+against the same yard in the scrapyard look on the SAME frames: S7 theme <= S7 scrapyard x 1.05 on the means and on the faster half of the
+frames (TH-LOOK-1: 0.98-0.99); S6's rule stays for the views; S7's absolute numbers are printed beside the shipped tracks' S4 for the record.

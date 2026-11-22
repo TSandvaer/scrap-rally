@@ -692,6 +692,11 @@ waits for the user's pasted values).
 THEME-SCHEMA review 1 REQUEST_CHANGES (ctx_70f3da126e82 kept): map-sheet.ts:214 probe on a 1-px step (6 false FAILs on the yards) + pin the
 widen count to 8. Fix round + merge main sent to ctx_0362282f9fe4. Review notes added to THEME-SURF (ford traction rect) and THEME-TRACKS
 (track-density footprints).
+M4-TRACKS flake-fix review REQUEST_CHANGES (ctx_27271d92a5da kept): Breaker's Mile contact happens only after the skew ends (title false);
+Slag Harbour barrel contact can be 0 by design. Both sent back to the author ctx_81ccfeeade7a: make the skewed contact real and checked, on both.
+TH-LOOK-1 done: c4900c3 (theme machinery + provisional desert; scrapyard bit-identical; speed gate PASS; S7 0.991/1.007; census 14.09 MB;
+975/975 + 145/145; report tmp/th-look-1/REPORT.md; sheets/shots in ~/orca/workspaces/scrap-rally/th-look-1/tmp/th-look/). Fable reviewer
+ctx_765df883d782 (tmp/review-th-look-1.md). Desert preview shown to the user inline (taste is separate; merge does not wait on it).
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
