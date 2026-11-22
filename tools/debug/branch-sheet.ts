@@ -41,12 +41,32 @@
 // and at 390x844@3, in the yard's own look and in the desert (`&theme=`): each as the whole
 // window, and one sheet a size of all of them (at 390x844@3: the game canvas cut out of each).
 //
-// --bench: metric A at 1280x720, one cell a page load, the order turned round from run to run,
-// as tools/debug/world-bench.ts measures S6 and S7 (it takes the benchmark's lock). The cells:
-// S2 on each shipped track; S8 (client/bench.ts: a lap of Branch Yard at 430 u/s that takes
-// every shortcut); S4 on Branch Yard (the lap of its main road, past all six mouths) and the same
-// frames on the road without its shortcuts (&plain=1); the shipped tracks' own S4 laps; and, as
-// information, S8's frames over the road without shortcuts. The rule is printed with the verdict.
+// --bench: bench scene S8 (client/bench.ts: a lap of Branch Yard at 430 u/s that takes every
+// shortcut) and S4 on Branch Yard (the lap of its main road, past all six mouths), metric A at
+// 1280x720, one cell a page load, the order turned round from run to run, as
+// tools/debug/world-bench.ts measures S6 and S7 (it takes the benchmark's lock). Beside them: S2
+// and S4 on each shipped track, and each of the two laps on the same road without its shortcut
+// roads (&plain=1: the same camera and cars; S4's twin is the same lap exactly, S8's passes over
+// bare ground where the shortcuts are).
+// - The budget (coordinator's decision 2026-11-22; PLAN-BRANCH.md, "how the Branch Yard
+//   fly-through (S8) is judged"): what S8 guards is that a shortcut adds no cost to drawing a frame. A fly-through's frames without a bake step are held against the
+//   same frames without shortcuts: the mean of the faster half of its frames at or below 1.05
+//   times its twin's, for S4 on Branch Yard and for S8. And the whole lap is held against a lap
+//   the game ships: S8 at or below 1.05 times the dearest of the three shipped S4 laps of the
+//   same run, on the mean of the frames and on the mean of their faster half. Each is the median
+//   of the per-run ratios.
+// - Not against S2: a lap's median sits on a step of the 5 us timer above S2's, with a shortcut
+//   or without (0.070 ms against 0.060 to 0.065; the shipped tracks' own laps are 1.17 to 1.25
+//   times the cheapest S2). Held against S2, S8 would measure the timer. Its ratios against S2
+//   (the ticket's first reading: at most 1.10) are printed as information.
+// - Not the mean of all the frames against the twin, which S7's rule holds a theme to: a theme
+//   bakes the same road, a shortcut is a second one. That mean is the baking, spread over the
+//   lap, and it follows the cost units the bake spent (on the main road's lap 1.19 times the
+//   units and 1.19 times the mean): more road to bake, not slower drawing. It is printed as
+//   information, with the units, the p95, the longest frame and what a unit takes as the page
+//   saw it; `--units` has what a tile costs to bake with and without the shortcuts (a unit takes
+//   the same).
+// Exit code 0 within, 1 over, 2 without a verdict (fewer than 5 runs).
 //
 // --alloc: Renderer.frame on Branch Yard, six cars taking every shortcut (on the verge every
 // other lap: the dust's lookup on a shortcut), V8's sampling heap profiler with the objects
@@ -885,17 +905,16 @@ async function bench(port: number): Promise<number> {
   });
 
   // 1. The ticket's first rule: the fly-through's median against S2's, at most 1.10.
-  console.log("\n**1. Against S2 (the median of the per-run ratios of the medians; budget 1.10).** A median is a whole number of the timer's steps (5 us), so a ratio of two of them moves in jumps of about 0.08.\n");
+  console.log("\n**1. Against S2 (information: the median of the per-run ratios of the medians, against the ticket's first reading of at most 1.10).** A median is a whole number of the timer's steps (5 us), so a ratio of two of them moves in jumps of about 0.08: a lap sits a step above S2 with a shortcut or without.\n");
   console.log("| | S2 rust-bowl | S2 crusher-run | S2 overpass-knot | against the cheapest |");
   console.log("|---|---:|---:|---:|---:|");
   const worst: number[] = [];
   for (const k of [S8, MAIN, PLAIN, ...LAPS]) {
     const rs = [0, 1, 2].map((s) => median(ratio(k, s, (x) => x.p50)));
     worst[k] = Math.max(...rs);
-    console.log(`| ${cells[k].what} | ${rs.map(f).join(" | ")} | ${f(worst[k])} ${worst[k] <= 1.1 ? "within" : "over"} |`);
+    console.log(`| ${cells[k].what} | ${rs.map(f).join(" | ")} | ${f(worst[k])} (${worst[k] <= 1.1 ? "under" : "over"} 1.10) |`);
   }
   const lapsOver = LAPS.filter((k) => worst[k] > 1.1).length + (worst[PLAIN] > 1.1 ? 1 : 0);
-  const first = worst[S8] <= 1.1 && worst[MAIN] <= 1.1;
   const hist = (k: number): number[] => {
     const sum = new Array<number>(41).fill(0);
     for (const x of got[k]) x.steps.forEach((n, i) => (sum[i] += n));
@@ -914,7 +933,7 @@ async function bench(port: number): Promise<number> {
   const mMean = ratio(MAIN, PLAIN, (x) => x.mean), mLow = ratio(MAIN, PLAIN, (x) => x.lowMean), mP50 = ratio(MAIN, PLAIN, (x) => x.p50), mP95 = ratio(MAIN, PLAIN, (x) => x.p95);
   const mUnits = ratio(MAIN, PLAIN, (x) => x.bakeUnits), mPer = ratio(MAIN, PLAIN, perUnit);
   const gMean = ratio(S8, OVER_GROUND, (x) => x.mean), gLow = ratio(S8, OVER_GROUND, (x) => x.lowMean), gUnits = ratio(S8, OVER_GROUND, (x) => x.bakeUnits);
-  console.log("\n**2. The same frames without shortcuts (budget 1.05, as S7's, on the frames without a bake step).** With &plain=1 a cell's camera and cars are drawn on the same road without its shortcut roads. S4 on Branch Yard is the lap of its main road, past all six mouths: its twin is the same lap exactly. S8's twin passes over bare ground where the shortcuts are, its cars off any road there (the dust's lookup then searches the whole track for them every frame: that twin is the slower for it).\n");
+  console.log("\n**2. The same frames without shortcuts (budget 1.05 on the frames without a bake step).** With &plain=1 a cell's camera and cars are drawn on the same road without its shortcut roads. S4 on Branch Yard is the lap of its main road, past all six mouths: its twin is the same lap exactly. S8's twin passes over bare ground where the shortcuts are, its cars off any road there (the dust's lookup then searches the whole track for them every frame: that twin is the slower for it).\n");
   console.log("Held to the budget: the mean of the faster half of the frames, which is what a frame costs that has no bake step in it. The mean of all the frames is not: it is the baking, spread over the lap, and a road that was not there before is more to bake. It is given beside the cost units the bake spent, which it follows (a frame bakes for a fixed number of units, so more units are more frames with a share of the baking in them, not longer ones: `--units` has what a tile costs and what a unit takes, with and without the shortcuts).\n");
   console.log("| against the same frames without shortcuts | run by run | median ratio | budget 1.05 |");
   console.log("|---|---|---:|---|");
@@ -944,9 +963,9 @@ async function bench(port: number): Promise<number> {
     console.log(`\nNo verdict: ${RUNS} run${RUNS > 1 ? "s" : ""} (five make one).`);
     return 2;
   }
-  console.log(`\nThe rule: a fly-through is within its budget if its median is at most 1.10 times the cheapest S2's (1). One that is not, while a lap sits on a step of the timer above S2 without any shortcut (of the three shipped tracks' own laps and Branch Yard's without shortcuts, ${lapsOver} of 4 are over 1.10 too), is held against the same frames without shortcuts instead: a frame without a bake step in it at most 1.05 times its twin's (2), and, since the baking of a road has no twin without the road, the whole lap at most 1.05 times the dearest lap the game ships, on the mean of the frames and on the mean of their faster half (3). S7's rule also held the mean of all the frames to 1.05 against the twin: a theme bakes the same road, a shortcut is a second one, so here that mean is information (${f(median(mMean))} on the main road's lap, with ${f(median(mUnits))} times the bake units).`);
-  const ok = first || (lapsOver > 0 && second && third);
-  console.log(`Verdict: ${ok ? "WITHIN" : "OVER"}. (1) the main road's lap ${f(worst[MAIN])} ${worst[MAIN] <= 1.1 ? "within" : "over"}, the lap through every shortcut ${f(worst[S8])} ${worst[S8] <= 1.1 ? "within" : "over"}, against the cheapest S2. (2) ${second ? "within" : "OVER"}: ${f(median(mLow))} and ${f(median(gLow))}. (3) ${third ? "within" : "OVER"}: ${f(median(sMean))} and ${f(median(sLow))}.`);
+  console.log(`\nThe rule (coordinator's decision 2026-11-22): what S8 guards is that a shortcut adds no cost to drawing a frame. A fly-through's frames without a bake step are held against the same frames without shortcuts, the mean of the faster half at most 1.05 times its twin's (2); and the whole lap against the dearest lap the game ships, at most 1.05 times it on the mean of the frames and on the mean of their faster half (3). It is not held against S2 (1): a lap's median sits on a step of the timer above S2's with a shortcut or without (of the three shipped tracks' own laps and Branch Yard's without shortcuts, ${lapsOver} of 4 are over 1.10 here). Nor is the mean of all the frames held against the twin, as S7's rule holds a theme's: a theme bakes the same road, a shortcut is a second one, and that mean follows the bake units (${f(median(mMean))} on the main road's lap, with ${f(median(mUnits))} times the units): more road to bake, not slower drawing.`);
+  const ok = second && third;
+  console.log(`Verdict: ${ok ? "WITHIN" : "OVER"}. (2) ${second ? "within" : "OVER"}: ${f(median(mLow))} and ${f(median(gLow))}. (3) ${third ? "within" : "OVER"}: ${f(median(sMean))} and ${f(median(sLow))}. (Information, 1: against the cheapest S2 the main road's lap ${f(worst[MAIN])}, the lap through every shortcut ${f(worst[S8])}.)`);
   return ok ? 0 : 1;
 }
 
