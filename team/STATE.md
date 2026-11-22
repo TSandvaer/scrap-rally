@@ -648,6 +648,9 @@ User: merge M4-TRACKS when the review approves (popup; keep the gate). HARD-2 do
 rate 0 = goldens; falls 0; loss +0.08..+1.25 %, pace 0 lone lap 30.29 s vs Hard 29.22 vs Normal 30.71; 921/921 + 135/135 x2; report
 tmp/hard-2/HARD-2-report.md). Conflicts with m4-tracks + br-schema (appends). Opus reviewer ctx_8f7a8c933e4d (tmp/review-hard-2.md).
 TUNING COPY :3009 = HARD-2 7688eea (worktree split-taste, SCRAP_DEV_BOTS=1; node pid 63109, npm pid 63083); the tracks copy is stopped.
+M4-TRACKS review APPROVE (ctx_ca6629690be1, released; F1 bench.ts quick-look throws on tracks without SPOTS -> sent to TH-LOOK-1, it owns
+bench.ts). M4-TRACKS MERGED c90ee9c; gate running. BR-SCHEMA told to merge main in its fix round (sim-test + golden conflicts). HARD-2:
+after its review, the author merges main and re-runs falls-0 on the new tracks (advisor 9) before the merge.
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
