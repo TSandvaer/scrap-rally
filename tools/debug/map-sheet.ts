@@ -358,6 +358,27 @@ async function child(root: string, out: string): Promise<void> {
         return [probes, onLine, touching];
       };
 
+      /**
+       * The nearest point of the main centreline between s = s0 and s = s1 to a point: how far, and its s.
+       * Worked out here, not asked of the tree: since BR-PHYS the tree's own query near a mouth answers
+       * with the nearer road, which on a shortcut is the shortcut.
+       */
+      const nearMain = (x: number, y: number, s0: number, s1: number): { dist: number; s: number } => {
+        const pts: { x: number; y: number }[] = track.pts, cum: number[] = track.cum;
+        let dist = Infinity, s = s0;
+        for (let i = 0; i < pts.length; i++) {
+          if (cum[i + 1] < s0 || cum[i] > s1) continue;
+          const a = pts[i], c = pts[(i + 1) % pts.length], dx = c.x - a.x, dy = c.y - a.y, len2 = dx * dx + dy * dy;
+          const t = len2 ? Math.max(0, Math.min(1, ((x - a.x) * dx + (y - a.y) * dy) / len2)) : 0;
+          const d = Math.hypot(x - a.x - dx * t, y - a.y - dy * t);
+          if (d < dist) {
+            dist = d;
+            s = cum[i] + (cum[i + 1] - cum[i]) * t;
+          }
+        }
+        return { dist, s };
+      };
+
       // The fit: every road's points.
       let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity, m0 = Infinity, n0 = Infinity, m1 = -Infinity, n1 = -Infinity;
       for (const p of track.pts) {
@@ -408,10 +429,9 @@ async function child(root: string, out: string): Promise<void> {
           };
           // Where the two lines have parted for good: from the gore on, the first place on the shortcut 5 px
           // from the main centreline (the nearest point of it), at most a third of the shortcut along.
-          let uFar: number = g.u, sFar: number = g.s, hint = pointAt(track, g.s).seg;
+          let uFar: number = g.u, sFar: number = g.s;
           for (; dir > 0 ? uFar < L / 3 : uFar > (2 * L) / 3; uFar += (dir * 0.25) / sc) {
-            const p = pointAt(r, uFar), q = T.queryTrackNear(track, p.x, p.y, hint);
-            hint = q.seg;
+            const p = pointAt(r, uFar), q = nearMain(p.x, p.y, b.s0 - 200, b.s1 + 200);
             sFar = q.s;
             if (q.dist * sc >= 5) break;
           }
