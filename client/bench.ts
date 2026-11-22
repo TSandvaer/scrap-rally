@@ -23,6 +23,12 @@
 // well (gfx/theme.ts themedTrack: the benchmark's and the preview's switch, never the game's);
 // without it every cell is what it was. Under metric A a cell also notes the tiles baked and the
 // cost units spent on them while it was measured (gfx/world.ts worldStats).
+// &scene=S8 is a cell of its own as well (BR-BAKE; PLAN-BRANCH.md 3): a lap of the Branch Yard
+// test track at 430 u/s that takes every shortcut (the main road to a fork, down the shortcut,
+// on from its merge), whatever &track says. &plain=1 draws a cell's frames on the same road
+// without its shortcut roads, the same camera and cars (tools/debug/branch-sheet.ts --bench:
+// S4's lap of Branch Yard's main road with and without them; S8's frames then pass over bare
+// ground, their cars off any road).
 // &frames=<n> &warm=<n> &over=<ms> &canvas=sw|default|gpu &readback=0|1
 // &panel=<element id> (metric B: show that DOM panel over the canvas). &hold=<frame> draws
 // that one frame of the cell and stops (no timing): what a bench scene looks like.
@@ -30,7 +36,7 @@
 
 import { BASE_STATS } from "../shared/physics";
 import { testTrack } from "../shared/testtracks";
-import { gridSlot, pointAt, recoveryAt, type Track } from "../shared/track";
+import { buildTrack, gridSlot, pointAt, recoveryAt, type Track } from "../shared/track";
 import { trackById, trackList } from "../shared/tracks";
 import { airTicksFor, FALL_TICKS, GHOST_TICKS, RIVET_RANGE, RIVET_SPEED } from "../shared/weapons";
 import { isTheme, themedTrack, themeOf } from "./gfx/theme";
@@ -60,7 +66,10 @@ export const YARD_SCENE = "S6";
 export const YARD_TRACK = "preview-yard";
 /** The scene of a themed Preview Yard: asked for by name too. */
 export const THEME_SCENE = "S7";
-export type SceneId = (typeof SCENES)[number] | typeof YARD_SCENE | typeof THEME_SCENE;
+/** The scene of the Branch Yard test track (shortcut roads): asked for by name too. */
+export const BRANCH_SCENE = "S8";
+export const BRANCH_TRACK = "branch-yard";
+export type SceneId = (typeof SCENES)[number] | typeof YARD_SCENE | typeof THEME_SCENE | typeof BRANCH_SCENE;
 const TITLES: Record<SceneId, string> = {
   S1: "grid: 6 cars, countdown",
   S2: "features: jump, fall, ghost",
@@ -69,6 +78,7 @@ const TITLES: Record<SceneId, string> = {
   S5: "recovery teleport, 3 leader cuts",
   S6: "Preview Yard: 6 cars, barrels, press, truck, pools, 3 cells",
   S7: "Preview Yard in a theme: S6's views, then a lap at 430 u/s",
+  S8: "Branch Yard: a lap at 430 u/s that takes every shortcut",
 };
 
 /** One scripted frame: everything Renderer.follow / shake / frame is given. */
@@ -275,6 +285,63 @@ function lapFrames(track: Track): number {
 }
 
 /**
+ * The way round a track that takes every shortcut (S8): its legs in order, each a road and the
+ * stretch of it that is driven (the main road to a fork, the shortcut from end to end, the main
+ * road on from its merge), and how long the way is.
+ */
+function shortcutRoute(track: Track): { legs: { road: Track; from: number; to: number; at: number }[]; length: number } {
+  const legs: { road: Track; from: number; to: number; at: number }[] = [];
+  let s = 0, at = 0;
+  const leg = (road: Track, from: number, to: number) => {
+    if (to <= from) return;
+    legs.push({ road, from, to, at });
+    at += to - from;
+  };
+  for (const b of [...track.branches].sort((p, q) => p.s0 - q.s0)) {
+    leg(track, s, b.s0);
+    leg(b.road, 0, b.road.length);
+    s = b.s1;
+  }
+  leg(track, s, track.length);
+  return { legs, length: at };
+}
+
+/** S8: S4's pack and camera on the way round that takes every shortcut. */
+function routeScene(track: Track, n: number, rnd: () => number): Frame[] {
+  const { legs, length } = shortcutRoute(track);
+  // A car d along the way (it goes round and round), `lat` to the right of its road's centreline.
+  const on = (k: number, d: number, lat: number): CarView => {
+    const lap = ((d % length) + length) % length;
+    let leg = legs[0];
+    for (const l of legs) if (l.at <= lap) leg = l;
+    const s = leg.from + lap - leg.at;
+    // A shortcut may be narrower than the main road: the pack closes up across it.
+    return carAt(leg.road, k, s, (lat * leg.road.def.halfWidth) / track.def.halfWidth, { height: rampHop(leg.road, s, TOP) });
+  };
+  const pack = [0, 40, -45, 90, -95, 150].map((ds, i) => ({ ds, lat: i ? [-30, 28, 10, -12, 35][i - 1] + (rnd() - 0.5) * 8 : 0 }));
+  const out: Frame[] = [];
+  for (let i = 0; i < n; i++) {
+    const d = (i * TOP) / FPS;
+    const cars = pack.map((c, k) => on(k, d + c.ds, c.lat));
+    const own = cars[0];
+    out.push({ cx: own.x + Math.cos(own.h) * TOP * 0.28, cy: own.y + Math.sin(own.h) * TOP * 0.28, snap: i === 0, shake: 0, cars, fx: NO_FX, hud: raceHud(i) });
+  }
+  return out;
+}
+
+const plains = new Map<string, Track>();
+
+/** A track's road without its shortcut roads (&plain=1): the same definition less its branches, built once. */
+function plainOf(track: Track): Track {
+  let t = plains.get(track.def.id);
+  if (!t) {
+    t = buildTrack({ ...track.def, id: `${track.def.id}-plain`, features: (track.def.features ?? []).filter((f) => f.k !== "branch") });
+    plains.set(track.def.id, t);
+  }
+  return t;
+}
+
+/**
  * S5: the camera's two long moves. The own car drives into a hazard, falls, and is put back
  * at the recovery point (frames 0-299); then it is gone and the camera follows the leader,
  * which changes twice to a car far away (300-599). The camera eases as in main.ts draw().
@@ -387,6 +454,9 @@ function script(scene: SceneId, track: Track, n: number): Frame[] {
       const views = Math.min(n, FRAMES);
       return [...yardScene(track, views, rnd), ...lapScene(track, n - views, rnd)];
     }
+    case "S8":
+      // The way is Branch Yard's own, whatever the frames are drawn on (&plain=1: its road without the shortcuts).
+      return routeScene(testTrack(BRANCH_TRACK)!, n, rnd);
   }
 }
 
@@ -400,7 +470,7 @@ function script(scene: SceneId, track: Track, n: number): Frame[] {
  * has seen none of it when the measurement starts.
  */
 function warmIndex(scene: SceneId, i: number, n: number): number {
-  return scene === "S4" || scene === "S5" ? i % Math.min(LEAD_IN, n) : i % n;
+  return scene === "S4" || scene === "S5" || scene === "S8" ? i % Math.min(LEAD_IN, n) : i % n;
 }
 
 // ---- clock ------------------------------------------------------------------------
@@ -566,7 +636,7 @@ interface Opts {
 }
 
 function framesFor(scene: SceneId, track: Track, o: Opts): Frame[] {
-  return script(scene, track, o.frames ?? (scene === "S4" ? lapFrames(track) : scene === "S7" ? FRAMES + lapFrames(track) : FRAMES));
+  return script(scene, track, o.frames ?? (scene === "S4" ? lapFrames(track) : scene === "S7" ? FRAMES + lapFrames(track) : scene === "S8" ? Math.ceil((shortcutRoute(testTrack(BRANCH_TRACK)!).length / TOP) * FPS) : FRAMES));
 }
 
 function runA(canvas: HTMLCanvasElement, scene: SceneId, track: Track, o: Opts): CellA {
@@ -743,7 +813,7 @@ function report(out: BenchOut): string {
     else if (!c.supported) lines.push(`${id}  performance.memory is not available in this browser`);
     else lines.push(`${id}  ${String(Math.round((c.allocBytes - c.probeBytes) / c.n)).padStart(11)}  ${(c.allocBytes / 1024).toFixed(0).padStart(8)}  ${(c.deltaBytes / 1024).toFixed(0).padStart(8)}  ${String(c.gcDrops).padStart(3)}`);
   }
-  lines.push("", ...[...SCENES, YARD_SCENE, THEME_SCENE].map((s) => `${s}  ${TITLES[s as SceneId]}`));
+  lines.push("", ...[...SCENES, YARD_SCENE, THEME_SCENE, BRANCH_SCENE].map((s) => `${s}  ${TITLES[s as SceneId]}`));
   return lines.join("\n");
 }
 
@@ -801,17 +871,23 @@ export async function runBench(view: HTMLCanvasElement, params: URLSearchParams)
   try {
     if (!["A", "B", "C"].includes(metric)) throw new Error(`unknown metric ${metric}`);
     const one = params.get("scene")?.toUpperCase() as SceneId | undefined;
-    const yard = one === YARD_SCENE || one === THEME_SCENE;
+    const branch = one === BRANCH_SCENE;
+    const yard = one === YARD_SCENE || one === THEME_SCENE || branch;
     if (one && !yard && !(SCENES as readonly string[]).includes(one)) throw new Error(`unknown scene ${one}`);
     const scenes: SceneId[] = one ? [one] : metric === "A" ? [...SCENES] : [metric === "B" ? "S4" : "S3"];
     const named = params.get("track");
     // The look of another theme on the cell's track: asked for with &theme=, and S7's by default.
     const asked = params.get("theme") ?? (one === THEME_SCENE ? "desert" : null);
     if (asked !== null && !isTheme(asked)) throw new Error(`unknown theme ${asked}`);
-    const themed = (t: Track): Track => (isTheme(asked) ? themedTrack(t, asked) : t);
+    // &plain=1: the cell's road without its shortcut roads (a track that has none is itself).
+    const plain = params.get("plain") === "1";
+    const themed = (t: Track): Track => {
+      const road = plain && t.branches.length ? plainOf(t) : t;
+      return isTheme(asked) ? themedTrack(road, asked) : road;
+    };
     // Without &track: every track the scenes have their spots on (SPOTS). A track without them
     // (the long ones, M4-TRACKS) is left out of the quick look, not an error; asked for by name it still is one.
-    const tracks = (yard ? [testTrack(YARD_TRACK)!] : named ? [testTrack(named) ?? trackById(named)] : trackList().filter((e) => SPOTS[e.id]).map((e) => trackById(e.id))).map(themed);
+    const tracks = (yard ? [testTrack(branch ? BRANCH_TRACK : YARD_TRACK)!] : named ? [testTrack(named) ?? trackById(named)] : trackList().filter((e) => SPOTS[e.id]).map((e) => trackById(e.id))).map(themed);
     const hold = num("hold");
     if (hold !== null) {
       const frames = framesFor(scenes[0], tracks[0], opts);
