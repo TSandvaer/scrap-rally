@@ -441,6 +441,13 @@ export interface CellA {
   over: number; // frames slower than overMs
   head: number[]; // the first six frame times (a canvas switching to software shows here)
   checksum: string; // FNV-1a of every CHECK_EVERY-th frame's pixels: equal = the same picture
+  /**
+   * The mean of the faster half of the frames, and how many frames took each whole number of
+   * timer steps of 5 us up to 0.2 ms (the last entry: all slower ones). The median is a whole
+   * number of steps; these tell two cells apart that differ by less (tools/debug/world-bench.ts).
+   */
+  lowMean: number;
+  steps: number[];
   theme: string; // the theme the cell's track was drawn in (gfx/theme.ts)
   baked: number; // tiles baked while the frames were measured ...
   bakeUnits: number; // ... and the cost units a frame's share of the baking spent on them (worldStats.units)
@@ -505,6 +512,22 @@ function summary(times: Float64Array): { mean: number; p50: number; p95: number;
   let sum = 0;
   for (const t of s) sum += t;
   return { mean: sum / s.length, p50: quantile(s, 0.5), p95: quantile(s, 0.95), p99: quantile(s, 0.99), max: s[s.length - 1] };
+}
+
+/** The mean of the faster half of the frames: what a frame without a bake step in it costs, finer than the timer's step. */
+function lowMean(times: Float64Array): number {
+  const s = Float64Array.from(times).sort();
+  const n = Math.max(1, s.length >> 1);
+  let sum = 0;
+  for (let i = 0; i < n; i++) sum += s[i];
+  return sum / n;
+}
+
+/** How many frames took 0, 1, 2 ... 39 timer steps of 5 us (rounded), and in the last entry how many took longer. */
+function stepCounts(times: Float64Array): number[] {
+  const out = new Array<number>(41).fill(0);
+  for (const t of times) out[Math.min(40, Math.round(t / 0.005))]++;
+  return out;
 }
 
 function countOver(times: Float64Array, ms: number): number {
@@ -606,6 +629,8 @@ function runA(canvas: HTMLCanvasElement, scene: SceneId, track: Track, o: Opts):
       over: countOver(times, o.overMs),
       head: Array.from(times.subarray(0, 6)),
       checksum: hash.toString(16).padStart(8, "0"),
+      lowMean: lowMean(times),
+      steps: stepCounts(times),
       theme: themeOf(track),
       baked,
       bakeUnits,

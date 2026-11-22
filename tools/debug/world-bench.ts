@@ -159,6 +159,8 @@ interface CellA {
   theme?: string;
   baked?: number;
   bakeUnits?: number;
+  lowMean?: number;
+  steps?: number[];
   n: number;
   mean: number;
   p50: number;
@@ -259,6 +261,25 @@ async function main(): Promise<number> {
   // What the theme itself costs: the same frames in the theme and on the yard's own look.
   const own = got[S7].map((x, r) => x.p50 / got[S7_YARD][r].p50), ownMean = got[S7].map((x, r) => x.mean / got[S7_YARD][r].mean), ownP95 = got[S7].map((x, r) => x.p95 / got[S7_YARD][r].p95);
   console.log(`S7 in the ${THEME} against the same frames on the yard's own look (information): the medians ${own.map(f).join(" ")}, median ratio ${f(median(own))}; the means ${ownMean.map(f).join(" ")}, median ${f(median(ownMean))}; the p95s ${ownP95.map(f).join(" ")}, median ${f(median(ownP95))}.\n`);
+  // Finer than the median, which is a whole number of timer steps: the mean of each cell's faster
+  // half (frames without a bake step in them), and where the frames of the two S7 cells fall, step by step.
+  const low = (k: number) => got[k].map((x) => x.lowMean ?? NaN);
+  console.log("| cell | the faster half of its frames, mean, run by run | median |");
+  console.log("|---|---|---:|");
+  for (let k = 0; k < JUDGED; k++) console.log(`| ${name(k)} | ${low(k).map((v) => v.toFixed(4)).join(" ")} | ${median(low(k)).toFixed(4)} |`);
+  const lowOwn = low(S7).map((v, r) => v / low(S7_YARD)[r]);
+  console.log(`\nS7 in the ${THEME} against the same frames on the yard's own look, the faster halves' means: ${lowOwn.map(f).join(" ")}, median ratio ${f(median(lowOwn))}.\n`);
+  const hist = (k: number): number[] => {
+    const sum = new Array<number>(41).fill(0);
+    for (const x of got[k]) (x.steps ?? []).forEach((n, i) => (sum[i] += n));
+    return sum;
+  };
+  const hT = hist(S7), hY = hist(S7_YARD);
+  console.log(`Frames by the time they took, all ${RUNS} runs together (a column a timer step of 5 us; the median falls where half the frames are reached):\n`);
+  console.log(`| ms | ${[10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20].map((i) => (i * 0.005).toFixed(3)).join(" | ")} | slower than 0.100 |`);
+  console.log(`|---|${new Array(12).fill("---:").join("|")}|`);
+  for (const [label, h] of [[`S7 ${THEME}`, hT], ["S7 scrapyard", hY]] as const) console.log(`| ${label} | ${[10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20].map((i) => h[i]).join(" | ")} | ${h.slice(21).reduce((a, b) => a + b, 0)} |`);
+  console.log("");
   await bakeUnits();
   console.log(`\n${ua}`);
   const worst = Math.max(worst6, worst7);
