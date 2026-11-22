@@ -36,7 +36,7 @@ the main checkout and commits them on main (`chore(team): ...`) before every mer
 ## 1. Pick the wave
 
 From the ClickUp list take `to do` tickets whose dependencies ("Depends on: <id>") are
-complete. **At most 2 author workers at a time** (user decision 2026-11-14; reviewers do not
+complete. **At most 3 author workers at a time** (user decision 2026-11-22, was 2; reviewers do not
 count). Never two workers on the same files; most features touch server/room.ts or
 client/game.ts, so sequence those.
 

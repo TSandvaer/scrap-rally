@@ -12,7 +12,7 @@ Plans: `PLAN.md` (architecture, netcode, status), `PLAN-M2.md` (weapons, scrap, 
   not write feature code; every code change is made by a supervised Orca worker in its own
   workspace. Procedure: `.claude/skills/orca-wave/SKILL.md`.
 - Tickets: ClickUp list `scrap-rally` (id `1200210000012904`).
-- At most **2 workers** at a time; never two workers on the same files.
+- At most **3 author workers** at a time (user, 2026-11-22; reviewers and QA do not count); never two workers on the same files.
 - **Local merges**: workers commit to local branches and never push; the orchestrator merges into
   local `main` after a reviewer worker's APPROVE. Push to GitHub (`origin` =
   TSandvaer/scrap-rally) only when the user asks.
