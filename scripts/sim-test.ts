@@ -14711,11 +14711,12 @@ function thLists(): void {
       jungle.fords.length === 1 && jungle.fords[0].vx === -60 && jungle.themeSurfaces[0].kind === thT.SURF_FORD && jungle.themeSurfaces[0].vx === -60 && jungle.sand.length + jungle.oil.length === 0,
     `oil ${city.oil.length}, fords ${jungle.fords.length} vx ${jungle.fords[0]?.vx}`,
   );
-  // Never in surfaces / surfAt: physics' lookup (surfaceAt) finds the pool, not the sand; a track without theme surfaces has empty lists.
+  // THEME-SURF (ClickUp 123jpnbfgj3) made them act: in surfaces / surfAt too (the same objects as themeSurfaces),
+  // so physics' lookup (surfaceAt) finds the sand and the pool beside it; a track without theme surfaces has empty lists.
   const inSand = pointAt(t, 950), inPool = pointAt(t, 4150);
   check(
-    "theme lists: the theme surfaces are never in track.surfaces / surfAt (surfaceAt, physics' lookup, finds nothing on the sand and the pool beside it); every shipped track has none (empty lists, themeAt one frozen empty list a segment)",
-    t.surfaces.length === 1 && t.surfaces[0].kind === thT.SURF_WATER && thT.surfaceAt(t, inSand.seg, 950, 0) === null && thT.surfaceAt(t, inPool.seg, 4150, -32)?.kind === thT.SURF_WATER &&
+    "theme lists (THEME-SURF): the theme surfaces are in track.surfaces / surfAt too, the same objects as themeSurfaces (surfaceAt, physics' lookup, finds the sand and the pool beside it); every shipped track has none (empty lists, themeAt one frozen empty list a segment)",
+    t.surfaces.length === 3 && felt.every((f) => t.surfaces.includes(f)) && thT.surfaceAt(t, inSand.seg, 950, 0) === felt[0] && thT.surfaceAt(t, inPool.seg, 4150, -32)?.kind === thT.SURF_WATER &&
       trackList().every((e) => {
         const x = trackById(e.id);
         return x.sand.length + x.oil.length + x.fords.length + x.themeSurfaces.length === 0 && x.themeAt.length === thT.segCount(x) && x.themeAt.every((l) => l.length === 0 && Object.isFrozen(l));
@@ -14733,10 +14734,10 @@ function thLists(): void {
       bt.sand.length === 0 && bt.themeSurfaces.length === 0 && validateTrack(bt).length === 0,
     `${road.def.id}: sand ${road.sand.map((f) => `${f.s0}..${f.s1}`).join(", ")}; ${validateTrack(bt).join(" | ") || "valid"}`,
   );
-  // No physics or bot change: three server bots race each theme yard and its twin without the theme
-  // surfaces (and theme): every tick's controls and car states the same.
+  // THEME-SURF made them act: three server bots race each theme yard and its twin without the theme
+  // surfaces (and theme), and drive differently (they cost the theme surfaces and go round them).
   const rows: string[] = [];
-  let same = true;
+  let same = false;
   for (const def of THEME_YARDS) {
     const twin = { ...def, features: def.features!.filter((f) => f.k !== "sand" && f.k !== "oil" && f.k !== "ford") };
     delete twin.theme;
@@ -14766,12 +14767,12 @@ function thLists(): void {
       return { trace: out.join(";"), far };
     });
     const ok = runs[0].trace === runs[1].trace;
-    same &&= ok && runs[0].far > 7400;
-    rows.push(`${def.id}: ${ok ? "same" : "DIFFERS"} over ${60 * 45} ticks (the lead bot past s ${thF(runs[0].far)})`);
+    same ||= ok || !(runs[0].far > 7400);
+    rows.push(`${def.id}: ${ok ? "SAME" : "differs"} over ${60 * 45} ticks (the lead bot past s ${thF(runs[0].far)})`);
   }
   check(
-    "theme lists: no physics or bot change: three server bots on each theme yard drive exactly as on its twin without the theme surfaces (controls and car states every tick, 45 s, over both slots)",
-    same,
+    "theme lists (THEME-SURF): the theme surfaces act: three server bots on each theme yard no longer drive as on its twin without them (controls and car states, 45 s, over both slots: they cost them and go round)",
+    !same,
     rows.join("; "),
   );
 }
@@ -16216,6 +16217,357 @@ function bbShipped(): void {
 }
 
 for (const t of [bbPlan, bbRing, bbCursor, bbGores, bbJumpSkip, bbRaces, bbGain, bbMistakes, bbCpu, bbShipped]) {
+  console.log(`\n# ${t.name}`);
+  try {
+    t();
+  } catch (e) {
+    check(`${t.name} threw`, false, String((e as Error).stack ?? e));
+  }
+}
+
+// ---- sand, oil and ford physics + bots (THEME-SURF, PLAN-THEMES.md 2.3, advisor change 6, user decision 7; ClickUp 123jpnbfgj3, 2026-11-22) ----
+// This section's imports (hoisted like the ones at the top).
+import * as tsP from "../shared/physics";
+import * as tsT from "../shared/track";
+import * as tsBd from "../shared/botdrive";
+import * as tsTune from "../tools/debug/theme-tune";
+import { validateJumpSweep as tsJumpSweep, validateRunUps as tsRunUps } from "../shared/weapons";
+import { BRANCH_YARD as TS_BRANCH_YARD, THEME_LOOP as TS_LOOP, THEME_YARDS as TS_YARDS } from "../shared/testtracks";
+import { CAR_TYPES as TS_CAR_TYPES, CARS as TS_CARS } from "../shared/cars";
+import { statsFor as tsStatsFor } from "../shared/shop";
+import { botTiming as tsTiming } from "../server/bots";
+
+const tsClock = { t0: 0 };
+const tsF = (v: number, d = 1) => v.toFixed(d);
+/** THEME_LOOP with this theme, these features and recovery points (validated by the callers that need it). */
+const tsWith = (theme: tsT.TrackDef["theme"], features: Feature[], recovery = [0]) =>
+  buildTrack({ id: "theme-surf", name: "Theme Surf", ...(theme ? { theme } : {}), control: TS_LOOP, halfWidth: 64, verge: 44, features, recovery });
+/** A car on track t at s, lat, heading along the road at speed v (sliding sideways at vl, + = right). */
+function tsCar(t: Track, s: number, lat: number, v: number, vl = 0): CarState {
+  const p = pointAt(t, s);
+  const nx = -Math.sin(p.h), ny = Math.cos(p.h);
+  return { x: p.x + nx * lat, y: p.y + ny * lat, h: p.h, vx: Math.cos(p.h) * v + nx * vl, vy: Math.sin(p.h) * v + ny * vl, seg: p.seg, wreck: 0, air: 0, fall: 0, boost: 0 };
+}
+/** The car's speed along and across its heading. */
+const tsVel = (c: CarState) => ({ f: c.vx * Math.cos(c.h) + c.vy * Math.sin(c.h), l: -c.vx * Math.sin(c.h) + c.vy * Math.cos(c.h) });
+const tsStats = (car: (typeof TS_CAR_TYPES)[number], lv: number) => tsStatsFor(car, { engine: lv, tyres: lv, welder: lv });
+
+function tsModels(): void {
+  tsClock.t0 = performance.now();
+  // Criterion 1: the models of PLAN-THEMES 2.3, each type's factors from its dirt ones, the table's numbers.
+  const rows: string[] = [];
+  let formula = true, table = true, measured = true;
+  for (const lv of [0, 3]) {
+    for (const car of TS_CAR_TYPES) {
+      const st = tsStats(car, lv);
+      const sd = tsP.themeDrag(tsT.SURF_SAND, st), fd = tsP.themeDrag(tsT.SURF_FORD, st), og = tsP.themeGrip(tsT.SURF_OIL, st);
+      formula &&= sd === 1 + 0.55 * (st.dirtDrag - 1) && fd === 1 + 0.3 * (st.dirtDrag - 1) && tsP.themeDrag(tsT.SURF_OIL, st) === 1 &&
+        tsP.themeGrip(tsT.SURF_SAND, st) === 0.8 && og === st.dirtGrip * 0.25 && tsP.themeGrip(tsT.SURF_FORD, st) === 0.7 && tsP.OIL_TURN === 0.4;
+      const sandTop = st.topSpeed / sd, fordTop = st.topSpeed / fd;
+      // The steady speed at full throttle with drag d per second: vf = vf (1 - d DT) + a DT (1 - d DT), so a (1 - d DT) / d.
+      const steady = (f: number) => {
+        const d = (st.accel / st.topSpeed) * f;
+        return (st.accel * (1 - d * DT)) / d;
+      };
+      const ms = tsTune.measuredTop("sand", st), mf = tsTune.measuredTop("ford", st);
+      measured &&= Math.abs(ms - steady(sd)) < 0.05 && Math.abs(mf - steady(fd)) < 0.05;
+      const tg = tsTune.TARGETS[car];
+      if (lv === 0) table &&= Math.abs(sandTop - tg.sandTop) <= 0.5 && Math.abs(fordTop - tg.fordTop) <= 0.5 && Math.abs(og - tg.oilGrip) <= 0.00051; // the table's rounding
+      rows.push(`${TS_CARS[car].name} L${lv}: sand top ${tsF(sandTop)} u/s (steady per tick ${tsF(ms)}), ford top ${tsF(fordTop)} (${tsF(mf)}), oil grip x${og.toFixed(4)}${lv === 0 ? ` [table ${tg.sandTop} / ${tg.fordTop} / x${tg.oilGrip}]` : ""}`);
+    }
+  }
+  console.log(`  ${rows.join("\n  ")}`);
+  check(
+    "theme surf models: sand drag x (1 + 0.55 (dirtDrag - 1)) and grip x 0.8, oil grip x dirtGrip x 0.25 and turn x 0.4, a ford drag x (1 + 0.3 (dirtDrag - 1)) and grip x 0.7, each type's from its own dirt multipliers (shared/physics.ts themeDrag, themeGrip), at L0 and L3",
+    formula,
+    rows.join("; "),
+  );
+  check(
+    "theme surf models: PLAN-THEMES 2.3's table: top speed on sand 210 / 177 / 323 u/s, in a ford 274 / 242 / 364 u/s, grip on oil x 0.093 / 0.075 / 0.15 (Sport / Racer / Truck, no upgrades)",
+    table,
+    rows.filter((r) => r.includes("L0")).join("; "),
+  );
+  check(
+    "theme surf models: driven at full throttle down a long strip, each type's steady speed on sand and in a ford is the per-tick equilibrium of that drag, a (1 - d DT) / d (asphalt's 430 is 421.3 the same way), at L0 and L3",
+    measured,
+    rows.join("; "),
+  );
+  // One step against hand-made references: sand is the dirt verge's step with the dirt drag set to sand's;
+  // oil is the asphalt's step along the car bit for bit, its turn 0.4 of the asphalt's; a ford is the belt's
+  // drift (the same vx) plus its drag; the sideways grip of each.
+  const dry = tsWith(undefined, []);
+  const desert = tsWith("desert", [{ k: "sand", s0: 800, s1: 1100, lat0: -64, lat1: 64 }]);
+  const city = tsWith("city", [{ k: "oil", s0: 800, s1: 980, lat0: -64, lat1: 64 }]);
+  const jungle = tsWith("jungle", [{ k: "ford", s0: 800, s1: 940, lat0: -64, lat1: 64, vx: 60 }]);
+  const dirt = tsWith(undefined, [{ k: "dirt", s0: 800, s1: 1100, lat0: -64, lat1: 64 }]);
+  const belt = tsWith(undefined, [{ k: "belt", s0: 800, s1: 1100, lat0: -64, lat1: 64, vx: 60 }]);
+  const one = (t: Track, c: CarState, input: tsP.Input, st: tsP.CarStats) => {
+    const x = cloneCar(c);
+    stepCar(x, input, st, t);
+    return x;
+  };
+  const same = (a: CarState, b: CarState) => (["x", "y", "h", "vx", "vy", "seg"] as const).every((k) => Object.is(a[k], b[k]));
+  const near = (a: number, b: number, tol = 1e-9) => Math.abs(a - b) <= tol * Math.max(1, Math.abs(b));
+  const steps: string[] = [];
+  let sandOk = true, oilOk = true, fordOk = true, gripOk = true;
+  for (const car of TS_CAR_TYPES) {
+    const st = tsStats(car, 0);
+    for (const input of [{ throttle: 1, steer: 0 }, { throttle: -1, steer: 0 }, { throttle: 0, steer: 0 }]) {
+      const c = tsCar(desert, 950, 0, 300);
+      const onSand = one(desert, c, input, st), onDirt = one(dirt, c, input, { ...st, dirtDrag: tsP.themeDrag(tsT.SURF_SAND, st) });
+      sandOk &&= near(tsVel(onSand).f, tsVel(onDirt).f, 1e-12) && near(onSand.x, onDirt.x, 1e-12) && near(onSand.y, onDirt.y, 1e-12);
+      const oc = tsCar(city, 900, 0, 300);
+      oilOk &&= same(one(city, oc, input, st), one(dry, oc, input, st));
+    }
+    // Oil's steering: the same step with full lock turns 0.4 as far as on the asphalt.
+    const oc = tsCar(city, 900, 0, 300);
+    const turnOil = angleDiff(oc.h, one(city, oc, { throttle: 0, steer: 1 }, st).h), turnDry = angleDiff(oc.h, one(dry, oc, { throttle: 0, steer: 1 }, st).h);
+    oilOk &&= near(turnOil, turnDry * 0.4, 1e-12);
+    // The ford: the belt's drift (its position less the dry step's, across the road: vx DT) and its drag along.
+    const fc = tsCar(jungle, 870, 0, 300);
+    const inFord = one(jungle, fc, { throttle: 1, steer: 0 }, st), onBelt = one(belt, fc, { throttle: 1, steer: 0 }, st);
+    const asDirt = one(dirt, fc, { throttle: 1, steer: 0 }, { ...st, dirtDrag: tsP.themeDrag(tsT.SURF_FORD, st) });
+    const across = (a: CarState, b: CarState) => (a.x - b.x) * -Math.sin(fc.h) + (a.y - b.y) * Math.cos(fc.h);
+    fordOk &&= near(tsVel(inFord).f, tsVel(asDirt).f, 1e-12) && near(across(inFord, asDirt), 60 * DT, 1e-9) && near(across(onBelt, one(dry, fc, { throttle: 1, steer: 0 }, st)), 60 * DT, 1e-9);
+    // Sideways: a car sliding at 50 u/s keeps exp(-grip x factor x DT) of it (coasting, no steering).
+    for (const [t, kind, s0] of [[desert, tsT.SURF_SAND, 950], [city, tsT.SURF_OIL, 900], [jungle, tsT.SURF_FORD, 870]] as const) {
+      const c = tsCar(t, s0, 0, 300, 50);
+      const got = tsVel(one(t, c, { throttle: 0, steer: 0 }, st)).l;
+      gripOk &&= near(got, 50 * Math.exp(-st.grip * tsP.themeGrip(kind, st) * DT), 1e-9);
+    }
+    steps.push(`${car}: turn on oil ${turnOil.toExponential(4)} rad vs asphalt ${turnDry.toExponential(4)}; ford drift ${tsF(across(inFord, asDirt), 4)} per tick`);
+  }
+  check("theme surf step: on sand a car steps as on the dirt verge with sand's drag (along the car, throttle, brake and coast; every type)", sandOk);
+  check("theme surf step: on oil every force along the car is the asphalt's (throttle, brake, coast: bit for bit) and full lock turns x 0.4 of the asphalt's", oilOk, steps.join("; "));
+  check("theme surf step: in a ford the car is moved the belt's drift (vx DT across the road, as a belt with the same vx) and slowed by the ford's drag along it", fordOk, steps.join("; "));
+  check("theme surf step: sideways, a sliding car keeps exp(-grip x the surface's grip factor x DT) of its slide on sand, oil and in a ford", gripOk);
+  // No new CarState (or snapshot) field: prediction stays exact (the surfaces are static data in per-segment buckets).
+  const keys = Object.keys(cloneCar(tsCar(dry, 100, 0, 0))).join(",");
+  check("theme surf state: no new CarState field (cloneCar copies the same 10 as before): the surfaces are static per-segment data, so the client's prediction replays them exactly", keys === "x,y,h,vx,vy,seg,wreck,air,fall,boost", keys);
+}
+
+function tsVerge(): void {
+  // Criterion 2 (advisor change 6): validation keeps every theme surface inside the asphalt (one failing def per
+  // kind), and physics defines the stacking anyway: on a theme surface its own factors replace the verge's.
+  const errs = (theme: tsT.TrackDef["theme"], f: Feature) => validateTrack(tsWith(theme, [f])).join(" | ");
+  const sandV = errs("desert", { k: "sand", s0: 800, s1: 1100, lat0: 0, lat1: 90 });
+  const oilV = errs("city", { k: "oil", s0: 800, s1: 980, lat0: -90, lat1: 0 });
+  const fordV = errs("jungle", { k: "ford", s0: 800, s1: 940, lat0: -64, lat1: 70, vx: 60 });
+  check(
+    "theme surf verge: validation requires every theme surface inside the asphalt: sand, oil and a ford reaching onto the verge are each refused",
+    sandV.includes("sand 800.0..1100.0: reaches past the asphalt") && oilV.includes("oil 800.0..980.0: reaches past the asphalt") && fordV.includes("ford 800.0..940.0: reaches past the asphalt"),
+    [sandV, oilV, fordV].join(" || ").slice(0, 600),
+  );
+  // Built past validation: sand from lat 0 to 100 (felt 12..88), a car on it on the asphalt (lat 30) and on
+  // the verge (lat 75) steps the same along the car (sand's drag, not sand x dirtDrag); without the sand the
+  // verge's dirt drag applies.
+  const t = tsWith("desert", [{ k: "sand", s0: 800, s1: 1100, lat0: 0, lat1: 100 }]);
+  const bare = tsWith(undefined, []);
+  const rows: string[] = [];
+  let ok = true;
+  for (const car of TS_CAR_TYPES) {
+    const st = tsStats(car, 0);
+    const vf = (tr: Track, lat: number) => {
+      const c = tsCar(tr, 950, lat, 300);
+      stepCar(c, { throttle: 1, steer: 0 }, st, tr);
+      return tsVel(c).f;
+    };
+    const a = vf(t, 30), b = vf(t, 75), v = vf(bare, 75);
+    ok &&= Math.abs(a - b) < 1e-9 && v < a - 1;
+    rows.push(`${car}: on sand on the asphalt ${tsF(a, 4)}, on sand on the verge ${tsF(b, 4)}, on the bare verge ${tsF(v, 4)} u/s after a tick from 300`);
+  }
+  check("theme surf verge: a theme surface never stacks with the verge's dirt drag: on sand off the asphalt (a track built past validation) a car steps exactly as on sand on the asphalt, not as on sand and dirt", ok, rows.join("; "));
+}
+
+function tsRules(): void {
+  // Criterion 3: the run-ups through every theme surface (validateRunUps' through-runs, shared/weapons.ts throughRuns),
+  // one failing def per kind and one on a branch road; water's other rules for the three are thRules' (THEME-SCHEMA).
+  const jump: Feature[] = [{ k: "ramp", s: 2200, len: 80 }, { k: "gap", s0: 2292, s1: 2492 }];
+  const run = (theme: tsT.TrackDef["theme"], f: Feature[]) => {
+    const t = tsWith(theme, f, [0, 1300]);
+    return { v: validateTrack(t).join(" | "), r: tsRunUps(t).join(" | ") };
+  };
+  const plain = run("desert", jump), sand = run("desert", [...jump, { k: "sand", s0: 1850, s1: 2195, lat0: 0, lat1: 64 }]);
+  check(
+    "theme surf run-ups: sand on the right half of a jump's run-up (valid) fails validateRunUps: the run through the sand's middle takes off too slow and lands short (the jump alone, and the run on the clear lane beside it, pass)",
+    plain.v === "" && plain.r === "" && sand.v === "" && sand.r.includes("driven through the sand 1850.0..2195.0 at lat 32.0: lands short in a gap") && !sand.r.includes("hazard at s=2200.0): lands"),
+    sand.r || "passes",
+  );
+  const hole: Feature = { k: "hole", s: 2060, lat: 0, r: 24 };
+  const hOnly = run("city", [hole]), oil = run("city", [{ k: "oil", s0: 1800, s1: 2000, lat0: -64, lat1: 64 }, hole]);
+  check(
+    "theme surf run-ups: an oil slick across a straight just before a hole (valid) fails validateRunUps: the run through it cannot steer round the hole (the hole alone passes)",
+    hOnly.v === "" && hOnly.r === "" && oil.v === "" && oil.r.includes("driven through the oil 1800.0..2000.0 at lat 0.0: falls into a hole"),
+    oil.r || "passes",
+  );
+  const pit: Feature = { k: "hole", s: 2000, lat: 30, r: 20 };
+  const pOnly = run("jungle", [pit]);
+  const right = run("jungle", [{ k: "ford", s0: 1800, s1: 1960, lat0: -64, lat1: 64, vx: 100 }, pit]);
+  const left = run("jungle", [{ k: "ford", s0: 1800, s1: 1960, lat0: -64, lat1: 64, vx: -100 }, pit]);
+  check(
+    "theme surf run-ups: a ford drifting right toward a hole just past it (valid) fails validateRunUps (falls into the hole), the same ford drifting left passes, and so does the hole alone",
+    pOnly.v === "" && pOnly.r === "" && right.v === "" && right.r.includes("driven through the ford 1800.0..1960.0 at lat 0.0: falls into a hole") && left.v === "" && left.r === "",
+    `right: ${right.r || "passes"}; left: ${left.r || "passes"}`,
+  );
+  // On a branch (courseRuns): Branch Yard as desert, its jump cut's gap 200 long, sand on the right half of its run-up.
+  const [a, b, c] = TS_BRANCH_YARD.features!.filter((f): f is tsT.Branch => f.k === "branch");
+  const by = (extra: tsT.RoadFeature[]) => buildTrack({ ...TS_BRANCH_YARD, theme: "desert", features: [a, { ...b, features: [{ k: "ramp", s: 1150, len: 80 }, { k: "gap", s0: 1230, s1: 1430 }, ...extra] }, c] });
+  const bPlain = by([]), bSand = by([{ k: "sand", s0: 880, s1: 1140, lat0: 0, lat1: 56 }]);
+  const bp = tsRunUps(bPlain).join(" | "), bs = tsRunUps(bSand).join(" | ");
+  check(
+    "theme surf run-ups: on a branch road too (courseRuns): Branch Yard as desert with sand on the right half of its jump cut's run-up fails, through the main road's recovery point and the branch's; without the sand it passes",
+    validateTrack(bPlain).length === 0 && validateTrack(bSand).length === 0 && bp === "" &&
+      bs.includes("through branch 2 (fork s=9209.6, merge s=12532.5), driven through the sand u 880.0..1140.0 on branch 2 at lat 28.0: lands short") &&
+      bs.includes("run-up from branch 2 recovery point u=850.0 (hazard at u=1150.0), driven through the sand u 880.0..1140.0 on branch 2"),
+    bs || "passes",
+  );
+  // Every type at L0 and L3: the yards (their truck jumps: validateJumpSweep) and the failing defs above stay failing.
+  const sandT = tsWith("desert", [...jump, { k: "sand", s0: 1850, s1: 2195, lat0: 0, lat1: 64 }], [0, 1300]);
+  const per: string[] = [];
+  let all = true;
+  for (const car of TS_CAR_TYPES) {
+    for (const lv of [0, 3]) {
+      const st = tsStats(car, lv);
+      const yardErrs = TS_YARDS.flatMap((d) => [...tsRunUps(testTrack(d.id)!, st), ...tsJumpSweep(testTrack(d.id)!, 537, st)]);
+      const caught = tsRunUps(sandT, st).some((m) => m.includes("driven through the sand"));
+      all &&= yardErrs.length === 0 && caught === (car !== "truck");
+      per.push(`${car} L${lv}: yards ${yardErrs.length ? yardErrs.join(" / ") : "pass"}; sand run-up ${caught ? "caught" : "passes"}`);
+    }
+  }
+  check(
+    "theme surf run-ups: for every type at L0 and L3 the three yards pass validateRunUps and validateJumpSweep (at 537 u/s) with the surfaces acting; the sand run-up above is caught for the Sport and the Racer, and the Truck (least bogged: 323 u/s on sand) clears it",
+    all,
+    per.join("; "),
+  );
+}
+
+function tsBots(): void {
+  // Criterion 5: lane costs, the ford's upstream aim, and 3 bots per level and car type on each yard.
+  const costs: string[] = [];
+  let costOk = true;
+  for (const car of TS_CAR_TYPES) {
+    const st = tsStats(car, 0);
+    const want = {
+      sand: tsP.themeDrag(tsT.SURF_SAND, st) - 1, ford: tsP.themeDrag(tsT.SURF_FORD, st) - 1,
+      oil: 1.8 * Math.sqrt(TS_CARS.sport.base.dirtGrip / st.dirtGrip), water: 1.5 * Math.sqrt(TS_CARS.sport.base.dirtGrip / st.dirtGrip), dirt: st.dirtDrag - 1,
+    };
+    costOk &&= tsBd.laneCost(tsT.SURF_SAND, st) === want.sand && tsBd.laneCost(tsT.SURF_FORD, st) === want.ford && tsBd.laneCost(tsT.SURF_OIL, st) === want.oil &&
+      tsBd.laneCost(tsT.SURF_WATER, st) === want.water && tsBd.laneCost(tsT.SURF_DIRT, st) === want.dirt && tsBd.laneCost(tsT.SURF_BELT, st) === 0;
+    costs.push(`${car}: sand ${tsF(want.sand, 3)}, ford ${tsF(want.ford, 3)}, oil ${tsF(want.oil, 3)} (water ${tsF(want.water, 3)}, dirt ${tsF(want.dirt, 3)})`);
+  }
+  check("theme surf bots: laneCost: sand and a ford their drag factor - 1, oil 1.8 x sqrt(Sport's dirt grip / the type's); water, dirt and belts as before", costOk, costs.join("; "));
+  // fordAim: 0 with no ford (every shipped track), 0 for a lane round a ford (its dry edge), upstream otherwise.
+  const canopy = testTrack("canopy-yard")!;
+  const at = (t: Track, s: number, lane: number) => tsBd.fordAim(t, s, pointAt(t, s).seg, 150, 300, lane);
+  const shipped = trackList().every((e) => {
+    const t = trackById(e.id);
+    for (let s = 0; s < t.length; s += 97) if (at(t, s, 0) !== 0) return false;
+    return true;
+  });
+  const up1 = at(canopy, 760, 0), edge = at(canopy, 760, -56), up2 = at(canopy, 7110, 0);
+  check(
+    "theme surf bots: fordAim is 0 on every shipped track and for a lane on a ford's dry edge (-56: it goes round), and upstream for a lane through it (Canopy Yard's ford drifting right: aim left; drifting left: aim right)",
+    shipped && edge === 0 && up1 < -5 && up2 > 5,
+    `shipped all 0: ${shipped}; at s 760 lane 0 ${tsF(up1)}, lane -56 ${edge}; at s 7110 lane 0 ${tsF(up2)}`,
+  );
+  // A server bot made to cross a ford (no dry edge: theme-tune fordBot): it comes out much nearer its line with the aim.
+  const ford: string[] = [];
+  let aimOk = true;
+  for (const vx of [60, -100]) {
+    for (const car of TS_CAR_TYPES) {
+      const on = tsTune.fordBot(car, vx, tsBd.FORD_AIM.gain), off = tsTune.fordBot(car, vx, 0);
+      aimOk &&= Math.abs(on.exit) < 0.6 * Math.abs(off.exit) && Math.sign(off.exit) === Math.sign(vx);
+      ford.push(`vx ${vx} ${car}: exit lat ${tsF(on.exit)} with the aim, ${tsF(off.exit)} without (lane 0)`);
+    }
+  }
+  console.log(`  ${ford.join("\n  ")}`);
+  check("theme surf bots: aimed upstream: a server bot crossing a ford (drift 60 right, 100 left) comes out of it at most 0.6 of the offset it has without the aim, for every type", aimOk, ford.join("; "));
+  // The races: every yard, Easy / Normal / Hard, 3 bots of one car type, 3 laps, twice.
+  const races = tsTune.themeRaces();
+  console.log(`  ${races.map(tsTune.raceLine).join("\n  ")}`);
+  const bad = races.filter((r) => !(r.a.phase === "results" && r.a.finished === 3 && r.a.falls.every((f) => f <= 1) && r.same));
+  check(
+    `theme surf bots: 3 server bots per level (Easy, Normal, Hard) and car type (Sport, Racer, Truck) finish each theme yard (Dune, Block, Canopy) 3 laps, identically on a rerun, at most 1 fall per bot per race (${races.length} races)`,
+    races.length === 27 && bad.length === 0,
+    bad.map(tsTune.raceLine).join(" | ") || `${races.length} races, falls ${races.reduce((n, r) => n + r.a.falls.reduce((x, y) => x + y, 0), 0)} in all`,
+  );
+}
+
+function tsParity(): void {
+  // Criterion 6 (sim side): a car driven through the middle of every theme surface of each yard, stepped from a
+  // clone at every tick, gives the reference's pose bit for bit (no hidden state: what the client's replay needs).
+  const rows: string[] = [];
+  let all = true;
+  for (const def of TS_YARDS) {
+    const t = testTrack(def.id)!;
+    for (const car of TS_CAR_TYPES) {
+      const st = tsStats(car, 0);
+      const c = tsCar(t, 300, 0, 0);
+      const env = raceEnv(t);
+      let mismatch = 0, on = 0;
+      for (let rt = 1; rt <= 60 * 40; rt++) {
+        const q = queryTrackNear(t, c.x, c.y, c.seg);
+        const f = t.themeSurfaces.find((x) => q.s >= x.s0 - 150 && q.s <= x.s1);
+        const lane = f ? (f.lat0 + f.lat1) / 2 : 0;
+        const a = pointAt(t, q.s + 60 + speedOf(c) * 0.2);
+        const input = { throttle: 1, steer: clamp(angleDiff(c.h, Math.atan2(a.y + Math.cos(a.h) * lane - c.y, a.x - Math.sin(a.h) * lane - c.x)) * 2.2, -1, 1) };
+        const clone = cloneCar(c);
+        env.rt = rt;
+        stepRaceCar(c, input, st, env);
+        stepRaceCar(clone, input, st, raceEnv(t, rt, 0));
+        if (!(["x", "y", "h", "vx", "vy", "seg", "wreck", "air", "fall", "boost"] as const).every((k) => Object.is(c[k], clone[k]))) mismatch++;
+        const g = tsT.surfaceAt(t, q.seg, q.s, q.lat);
+        if (g && tsP.isThemeSurface(g.kind)) on++;
+      }
+      all &&= mismatch === 0 && on > 30;
+      rows.push(`${def.id} ${car}: ${mismatch} mismatches, ${on} ticks on its theme surfaces`);
+    }
+  }
+  check("theme surf parity: a car driven through every theme surface of each yard (40 s), stepped from a clone at every tick, equals the reference bit for bit (every type)", all, rows.join("; "));
+}
+
+function tsCpu(): void {
+  // Criterion 7: the bot-step bound (PLAN-M4.md:208: median <= 0.05 ms, fail above 0.2) and the room tick, 5 Hard bots, 3 laps of each yard.
+  const pct = (a: number[], p: number) => [...a].sort((x, y) => x - y)[Math.min(a.length - 1, Math.floor(a.length * p))];
+  const rows: string[] = [];
+  let ok = true;
+  for (const def of TS_YARDS) {
+    const r = withDevTrack(def.id, () => {
+      const sim = new Sim(3);
+      const host = sim.add("Host");
+      sim.room.setTrack(host, def.id);
+      for (let k = 0; k < 5; k++) sim.room.addBot(host, "hard", sim.now);
+      sim.room.start(host, sim.now);
+      while (sim.room.phase !== "racing") sim.tick();
+      sim.room.retire(host);
+      const tickMs: number[] = [], steps: number[] = [];
+      tsTiming.samples = steps;
+      let ticks = 0;
+      try {
+        while (sim.room.phase === "racing" && ticks < 60 * 300) {
+          sim.tickNo++;
+          sim.now += 1000 / 60;
+          const t0 = performance.now();
+          sim.room.tick(sim.tickNo, sim.now);
+          tickMs.push(performance.now() - t0);
+          ticks++;
+        }
+      } finally {
+        tsTiming.samples = null;
+      }
+      const fins = [...sim.room.players.values()].filter((p) => p.bot).map((p) => p.progress?.fin ?? 0);
+      return { tickMs, steps, fins, track: sim.room.trackId };
+    });
+    const med = pct(r.steps, 0.5), tickMed = pct(r.tickMs, 0.5);
+    ok &&= r.track === def.id && med <= 0.05 && r.fins.every((f) => f > 0);
+    rows.push(`${def.id}: bot step median ${tsF(med * 1000, 2)} us, p99 ${tsF(pct(r.steps, 0.99) * 1000, 2)} us over ${r.steps.length} steps; room tick median ${tsF(tickMed * 1000, 2)} us, p99 ${tsF(pct(r.tickMs, 0.99) * 1000, 2)} us; finishes ${r.fins.map((f) => tsF(f / 1000)).join(", ")} s`);
+  }
+  console.log(`  CPU (5 Hard bots, 3 laps; the ticket's BR-BOTS numbers on Branch Yard: bot step median 1.63 us, room tick median 17.17 us; bbCpu above prints this run's):\n  ${rows.join("\n  ")}`);
+  check("theme surf CPU: 5 Hard server bots race 3 laps of each theme yard, all finishing: the median bot step stays <= 0.05 ms (the gate fails above 0.2 ms); room tick printed", ok, rows.join("; "));
+  console.log(`  THEME-SURF sim-test sections' runtime (tsModels .. tsCpu): ${((performance.now() - tsClock.t0) / 1000).toFixed(1)} s`);
+}
+
+for (const t of [tsModels, tsVerge, tsRules, tsBots, tsParity, tsCpu]) {
   console.log(`\n# ${t.name}`);
   try {
     t();
