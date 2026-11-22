@@ -423,3 +423,7 @@ mounds is approved. The new long tracks (Slag Harbour, Breaker's Mile) must NOT 
 spaced groups with clear road between them, never two obstacle kinds back to back without a breather, and stretches of plain racing
 (straights and bends with nothing on them) between the feature sections. M4-TRACKS reports, per track, the share of the lap that is
 plain road and the shortest gap between two obstacle groups, and the user judges the density at the taste gate.
+
+**Mud length (user, 2026-11-22, after driving the Split Yard on :3009):** "in the split yard the mud area is too long" (its dirt lane
+is 700 units, s 6050-6750). Binding for M4-TRACKS: no dirt/mud stretch longer than ~350 units (a lane of dirt in a split counts);
+report each one's length per track; the user judges at the taste gate.
