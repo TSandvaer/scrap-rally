@@ -13,6 +13,8 @@ import {
   PRESS_DEPTH,
   pressDown,
   queryTrackNear,
+  globalSeg,
+  roadFor,
   segDir,
   SURF_BELT,
   SURF_DIRT,
@@ -51,7 +53,7 @@ export interface CarState {
   h: number; // heading, radians (0 = +x, increasing = clockwise on screen)
   vx: number;
   vy: number;
-  seg: number; // last track segment, the search hint for track queries
+  seg: number; // last track segment, the search hint for track queries (BR-PHYS: a global one, shared/track.ts globalSeg: >= the main road's n on a branch)
   wreck: number; // ticks left wrecked (frozen), 0 = driving; see shared/weapons.ts
   // Jumps and falls (shared/weapons.ts stepRaceCar).
   air: number; // ticks left in the air (committed flight: velocity and heading frozen), 0 = grounded
@@ -182,15 +184,18 @@ export function stepCar(c: CarState, input: Input, stats: CarStats, track: Track
   let vl = -c.vx * sin + c.vy * cos;
 
   const q = queryTrackNear(track, c.x, c.y, c.seg);
-  c.seg = q.seg;
+  // BR-PHYS (PLAN-BRANCH 2.2): the road the car is on (the track itself without branches) holds every
+  // per-segment lookup below; c.seg keeps the global segment (the hint), q.seg is on the road.
+  const road = roadFor(track, q);
+  c.seg = globalSeg(track, q);
   // M4-MOVE: what moves and the trucks near the car (empty lists on a track without any), and the
   // truck whose ramp it rides this tick (by the start-of-tick pose, as stepRaceCar's take-off).
-  const rows = track.barrelsAt[q.seg], gates = track.pressesAt[q.seg], trucks = track.trucksAt[q.seg];
-  const riding = trucks !== undefined && trucks.length > 0 ? truckRamp(track, trucks, q, c.vx, c.vy) : null;
+  const rows = road.barrelsAt[q.seg], gates = road.pressesAt[q.seg], trucks = road.trucksAt[q.seg];
+  const riding = trucks !== undefined && trucks.length > 0 ? truckRamp(road, trucks, q, c.vx, c.vy) : null;
   // The surface under the car's centre (M4-SURF; null on a track without any: exactly as before).
-  const surf = surfaceAt(track, q.seg, q.s, q.lat);
+  const surf = surfaceAt(road, q.seg, q.s, q.lat);
   const wet = surf !== null && surf.kind === SURF_WATER;
-  const onRoad = q.dist <= halfOf(track, q) && !(surf !== null && surf.kind === SURF_DIRT);
+  const onRoad = q.dist <= halfOf(road, q) && !(surf !== null && surf.kind === SURF_DIRT);
   const boosted = c.boost > 0;
   const accel = boosted ? stats.accel * BOOST_ACCEL : stats.accel;
   let drag = (accel / (boosted ? stats.topSpeed * BOOST_TOP : stats.topSpeed)) * (wet ? WATER_FORCE : onRoad ? 1 : stats.dirtDrag);
@@ -220,11 +225,11 @@ export function stepCar(c: CarState, input: Input, stats: CarStats, track: Track
   c.y += c.vy * DT;
   if (surf !== null && surf.kind === SURF_BELT) {
     // The belt's drift, toward the right of travel at the car (a fixed move each tick).
-    const d = segDir(track, q.seg);
+    const d = segDir(road, q.seg);
     c.x -= d.y * surf.vx * DT;
     c.y += d.x * surf.vx * DT;
   }
-  const tyres = track.tyresAt[q.seg];
+  const tyres = road.tyresAt[q.seg];
   if (tyres !== undefined && tyres.length > 0) collideTyres(c, tyres);
   if (rows !== undefined && rows.length > 0) collideBarrels(c, rows, rt);
   if (gates !== undefined && gates.length > 0) collidePresses(c, gates, rt);
@@ -589,10 +594,12 @@ export function wallLimit(track: Track, q?: TrackQuery): number {
  */
 function collideWalls(c: CarState, track: Track): void {
   const q = queryTrackNear(track, c.x, c.y, c.seg);
-  c.seg = q.seg;
-  const isles = track.islandsAt[q.seg];
+  // BR-PHYS: the nearer road's wall (in a mouth the union of the two corridors, PLAN-BRANCH 2.3).
+  const road = roadFor(track, q);
+  c.seg = globalSeg(track, q);
+  const isles = road.islandsAt[q.seg];
   if (isles !== undefined && isles.length > 0) collideIslands(c, q, isles);
-  const limit = wallLimit(track, q);
+  const limit = wallLimit(road, q);
   if (q.dist <= limit) return;
   c.x -= q.nx * (q.dist - limit);
   c.y -= q.ny * (q.dist - limit);

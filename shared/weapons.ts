@@ -21,7 +21,7 @@ import {
 import {
   BARREL_R,
   barrelLat,
-  clearSpot,
+  clearSpotOn,
   gapAt,
   halfOf,
   halfOn,
@@ -32,13 +32,19 @@ import {
   pointAt,
   PRESS_DEPTH,
   pressDown,
+  queryMain,
   queryTrackNear,
   recoveryAt,
+  globalSeg,
+  recoveryFor,
+  roadFor,
+  roadOf,
   segDir,
   tractionRect,
   TRUCK_BAND,
   TRUCK_HALF,
   wallOf,
+  wrapS,
   type PlacedCell,
   type PlacedIsland,
   type PlacedTruck,
@@ -232,16 +238,18 @@ export function stepRaceCar(c: CarState, input: Input, stats: CarStats, env: Rac
   let ev: RaceStepEvent | null = null;
   if (!((c.air ?? 0) > 0)) {
     // Level-triggered checks on the pose the last tick left. c.seg is not touched here,
-    // so a plain drive step is exactly stepCar.
+    // so a plain drive step is exactly stepCar. BR-PHYS: on the road the query is on (the
+    // nearer one in a mouth): its lips, trucks, gaps and holes, its walls for "lost".
     const q = queryTrackNear(track, c.x, c.y, c.seg);
-    if (isLost(track, q)) {
+    const road = roadFor(track, q);
+    if (isLost(road, q)) {
       startFall(c);
       return "fall";
     }
-    if ((lipAt(track, q.s) || onTruckLip(track, q)) && forwardSpeed(c, track, q) >= MIN_TAKEOFF_SPEED) {
+    if ((lipAt(road, q.s) || onTruckLip(road, q)) && forwardSpeed(c, road, q) >= MIN_TAKEOFF_SPEED) {
       c.air = airTicksFor(speedOf(c));
       ev = "takeoff";
-    } else if (overHazard(track, c.x, c.y, q.s)) {
+    } else if (overHazard(road, c.x, c.y, q.s)) {
       startFall(c);
       return "fall";
     } else {
@@ -255,9 +263,10 @@ export function stepRaceCar(c: CarState, input: Input, stats: CarStats, env: Rac
   c.x += c.vx * DT;
   c.y += c.vy * DT;
   const q = queryTrackNear(track, c.x, c.y, c.seg);
-  c.seg = q.seg;
+  const road = roadFor(track, q);
+  c.seg = globalSeg(track, q);
   c.air = c.air! - 1;
-  if (isLost(track, q) || (c.air === 0 && (q.dist > wallOf(track, q) || overHazard(track, c.x, c.y, q.s)))) {
+  if (isLost(road, q) || (c.air === 0 && (q.dist > wallOf(road, q) || overHazard(road, c.x, c.y, q.s)))) {
     startFall(c);
     return "fall";
   }
@@ -282,24 +291,30 @@ function onTruckLip(track: Track, q: TrackQuery): boolean {
  * Place a fallen car at the last recovery point at or before its s (it has not moved), on the
  * nearest clear lane there (M4-SURF: never in a tyre mound; validation keeps solids SOLID_CLEAR
  * from recovery points, so that is the centerline). M4-MOVE: clearSpot, also clear of the barrels'
- * path, the presses and the trucks.
+ * path, the presses and the trucks. BR-PHYS (PLAN-BRANCH 2.5, user decision 6): on the road it fell
+ * on (the nearer one): on a branch its last recovery point at or before u, else the main road's
+ * before the fork (recoveryFor, clearSpotOn).
  */
 export function recover(c: CarState, track: Track): void {
   const q = queryTrackNear(track, c.x, c.y, c.seg);
-  const r = recoveryAt(track, q.s);
-  const at = clearSpot(track, r);
-  place(c, track, at.s, at.lat);
+  const r = recoveryFor(track, q.road, q.s);
+  const at = clearSpotOn(track, r.road, r.s);
+  place(c, track, at.road, at.s, at.lat);
 }
 
-/** Put a car `lat` units right of the centerline at s (0 = on it), facing along the track, standing still. */
-function place(c: CarState, track: Track, s: number, lat = 0): void {
-  const p = pointAt(track, s);
+/**
+ * Put a car `lat` units right of the centerline at s (0 = on it) on road `road` (0 = the main road;
+ * BR-PHYS: its global segment in c.seg), facing along the track, standing still.
+ */
+function place(c: CarState, track: Track, road: number, s: number, lat = 0): void {
+  const own = road === track.roadNo; // the track's own road (the main road on a track)
+  const p = pointAt(own ? track : roadOf(track, road), s);
   c.x = lat === 0 ? p.x : p.x - Math.sin(p.h) * lat;
   c.y = lat === 0 ? p.y : p.y + Math.cos(p.h) * lat;
   c.h = p.h;
   c.vx = 0;
   c.vy = 0;
-  c.seg = p.seg;
+  c.seg = own ? p.seg : track.branches[road - 1].base + p.seg;
   c.air = 0;
   c.fall = 0;
   c.boost = 0;
@@ -315,10 +330,12 @@ function place(c: CarState, track: Track, s: number, lat = 0): void {
  */
 export function respawn(c: CarState, track: Track): void {
   const q = queryTrackNear(track, c.x, c.y, c.seg);
-  const p = pointAt(track, q.s);
-  const s = overHazard(track, p.x, p.y, q.s) ? recoveryAt(track, q.s) : q.s;
-  const at = clearSpot(track, s, 4, q.lat);
-  place(c, track, at.s, at.lat);
+  // BR-PHYS: on its own road (the nearer one); a hazard there sends it to recoveryFor's point.
+  const road = roadFor(track, q);
+  const p = pointAt(road, q.s);
+  const back = overHazard(road, p.x, p.y, q.s) ? recoveryFor(track, q.road, q.s) : null;
+  const at = clearSpotOn(track, back === null ? q.road : back.road, back === null ? q.s : back.s, 4, q.lat);
+  place(c, track, at.road, at.s, at.lat);
 }
 
 export function wreckCar(c: CarState): void {
@@ -368,9 +385,11 @@ export function moveShot(s: Shot, track: Track, rt: number): boolean {
   const step = Math.hypot(s.vx, s.vy) * DT;
   s.travelled += step;
   const q = queryTrackNear(track, s.x, s.y, s.seg);
-  s.seg = q.seg;
-  return s.travelled <= RIVET_RANGE && q.dist <= wallOf(track, q) && !shotIntoTyres(track.tyresAt[q.seg], x0, y0, s.x, s.y) && !shotIntoIslands(track, q, x0, y0, s.x, s.y) &&
-    !shotIntoMovers(track, q.seg, x0, y0, s.x, s.y, rt, s.travelled - step);
+  // BR-PHYS: the road the rivet is over (the nearer one in a mouth), its global segment kept.
+  const road = roadFor(track, q);
+  s.seg = globalSeg(track, q);
+  return s.travelled <= RIVET_RANGE && q.dist <= wallOf(road, q) && !shotIntoTyres(road.tyresAt[q.seg], x0, y0, s.x, s.y) && !shotIntoIslands(road, q, x0, y0, s.x, s.y) &&
+    !shotIntoMovers(road, q.seg, x0, y0, s.x, s.y, rt, s.travelled - step);
 }
 
 /**
@@ -555,13 +574,16 @@ const DODGE_REACH = 160;
  */
 function clearLane(track: Track, s: number, side = -1): number {
   const L = track.length;
+  // BR-PHYS (advisor change 4): on a branch's open road nothing wraps (u is clamped, distances are plain).
+  const open = track.roadNo > 0;
   const reach = (o: { s: number; r: number }) => {
+    if (open) return Math.abs(s - o.s) < o.r + DODGE_REACH;
     const ds = Math.abs(s - o.s) % L;
     return Math.min(ds, L - ds) < o.r + DODGE_REACH;
   };
   const near: { lat: number; r: number }[] = track.holes.filter(reach);
   for (const m of track.tyres) if (reach(m)) near.push(m);
-  const ws = (((s % L) + L) % L);
+  const ws = open ? wrapS(track, s) : (((s % L) + L) % L);
   const isle = track.islands.find((f) => ws >= f.s0 - DODGE_REACH && ws <= f.s1 + CAR_LENGTH);
   if (isle) {
     // The lane beside the island on `side`, kept inside the asphalt here (a taper is narrower).
@@ -597,7 +619,8 @@ const WATER_LEAD = 150;
  * middle from WATER_LEAD before it to its end (inside the asphalt there, widened or not).
  */
 function runUpInput(track: Track, c: CarState, through?: { s0: number; s1: number; lat0: number; lat1: number }, side = -1): Input {
-  const q = queryTrackNear(track, c.x, c.y, c.seg);
+  // The main road's query (BR-PHYS: queryMain; a mouth's branch never takes this run off its road).
+  const q = queryMain(track, c.x, c.y, c.seg);
   const s = q.s + 40 + speedOf(c) * 0.25;
   const t = pointAt(track, s);
   let lat = clearLane(track, s, side);
@@ -671,7 +694,191 @@ export function validateRunUps(track: Track, stats: CarStats = BASE_STATS): stri
       }
     }
   }
+  if (track.branches.length > 0) branchRunUps(track, stats, errors);
   return errors;
+}
+
+// ---- run-ups through the branches (BR-PHYS, PLAN-BRANCH 2.8, advisor change 3, user decision 6) ----
+// A shipped track has no branch and never runs any of this. Per branch: one run from the main road's
+// recovery point at or before its fork, through the whole branch and past its merge (where a fall before
+// the branch's first recovery point goes back to); and from each of the branch's recovery points a run
+// past its hazards before the next one (as the main road's). Each on the lanes round any island in it
+// and through every pool in it, as validateRunUps drives the main road. The run follows its course (the
+// legs below), not the queried road, so a mouth's road choice never sends it the wrong way.
+
+/** A run's way: legs end to end, each on one road (0 = the main road) from s0 on it; `at` its start in course distance, len its length (the last runs on). */
+interface Leg { road: number; s0: number; len: number; at: number }
+
+/** A pool on a course: its traction rectangle on its road and where it lies in course distance. */
+interface CoursePool { road: number; d0: number; d1: number; lat0: number; lat1: number }
+
+/** The leg holding course distance d (before the first: the first; from the last one's start on: the last). */
+function legAt(legs: readonly Leg[], d: number): Leg {
+  let k = 0;
+  while (k + 1 < legs.length && d >= legs[k + 1].at) k++;
+  return legs[k];
+}
+
+/** The road and its s at course distance d. */
+function courseAt(track: Track, legs: readonly Leg[], d: number): { roadNo: number; road: Track; s: number } {
+  const g = legAt(legs, d);
+  return { roadNo: g.road, road: roadOf(track, g.road), s: g.s0 + (d - g.at) };
+}
+
+/** Where s on road `road` lies on the course (of the legs on that road that hold it, the first), NaN if on none. */
+function onCourse(track: Track, legs: readonly Leg[], road: number, s: number): number {
+  const L = track.length;
+  for (const g of legs) {
+    if (g.road !== road) continue;
+    const a = road === 0 ? (((s - g.s0) % L) + L) % L : s - g.s0;
+    if (a >= 0 && a <= g.len) return g.at + a;
+  }
+  return NaN;
+}
+
+/** A course leg reads a query only this far before or past its ends (a mouth, MOUTH_LEN_MAX 600, and room). */
+const LEG_REACH = 700;
+
+/**
+ * A query's course distance (on its road): each leg on that road reads it along the leg (on the main road
+ * both ways round the lap), counted only within LEG_REACH of the leg (a mouth's main road beside a fork or
+ * a merge) unless none is; of those, the reading nearest `prev`. NaN off the course's roads.
+ */
+function courseOf(track: Track, legs: readonly Leg[], q: TrackQuery, prev: number): number {
+  const L = track.length;
+  let best = NaN, bestOff = Infinity, any = NaN, anyOff = Infinity;
+  for (const g of legs) {
+    if (g.road !== q.road) continue;
+    const a0 = g.road === 0 ? (((q.s - g.s0) % L) + L) % L : q.s - g.s0;
+    for (let w = 0; w < (g.road === 0 ? 2 : 1); w++) {
+      const a = w === 0 ? a0 : a0 - L;
+      const d = g.at + a, off = Math.abs(d - prev);
+      if (off < anyOff) {
+        any = d;
+        anyOff = off;
+      }
+      if (a >= -LEG_REACH && a <= g.len + LEG_REACH && off < bestOff) {
+        best = d;
+        bestOff = off;
+      }
+    }
+  }
+  return best === best ? best : any;
+}
+
+/** runUpInput on a course: at the point 40 + speed / 4 ahead along it, on its road's hole-free lane (or the pool's middle). */
+function courseInput(track: Track, legs: readonly Leg[], c: CarState, d: number, through: CoursePool | undefined, side: number): Input {
+  const at = courseAt(track, legs, d + 40 + speedOf(c) * 0.25);
+  const t = pointAt(at.road, at.s);
+  let lat = clearLane(at.road, at.s, side);
+  if (through && d >= through.d0 - WATER_LEAD && d <= through.d1) {
+    lat = clamp((through.lat0 + through.lat1) / 2, -(halfOn(at.road, t.seg, at.s, -1) - CAR_WIDTH / 2), halfOn(at.road, t.seg, at.s, 1) - CAR_WIDTH / 2);
+  }
+  const tx = t.x - Math.sin(t.h) * lat, ty = t.y + Math.cos(t.h) * lat;
+  return { throttle: 1, steer: clamp(angleDiff(c.h, Math.atan2(ty - c.y, tx - c.x)) * 2.2, -1, 1) };
+}
+
+/** runUp on a course: from rest at course distance d0, past `end` beyond it: "" = gets past, else what goes wrong. */
+function courseRun(track: Track, legs: readonly Leg[], d0: number, end: number, stats: CarStats, through: CoursePool | undefined, side: number): string {
+  const st = courseAt(track, legs, d0);
+  const p = pointAt(st.road, st.s);
+  const seg = st.roadNo === 0 ? p.seg : track.branches[st.roadNo - 1].base + p.seg;
+  const c: CarState = { x: p.x, y: p.y, h: p.h, vx: 0, vy: 0, seg, wreck: 0, air: 0, fall: 0, boost: 0 };
+  const env = raceEnv(track);
+  let d = d0;
+  let tookOff = -1;
+  let problem = "";
+  for (let i = 0; i < RUN_UP_MAX_TICKS && !problem; i++) {
+    const wasAir = c.air > 0;
+    const v0 = speedOf(c);
+    env.rt = i + 1;
+    const ev = stepRaceCar(c, courseInput(track, legs, c, d, through, side), stats, env);
+    const q = queryTrackNear(track, c.x, c.y, c.seg);
+    const nd = courseOf(track, legs, q, d);
+    if (nd === nd) d = nd; // NaN: off the course's roads (never: there are two), keep the last
+    const road = roadFor(track, q);
+    const where = q.road === 0 ? `s=${q.s.toFixed(1)}` : `u=${q.s.toFixed(1)} on branch ${q.road}`;
+    if (ev === "takeoff") tookOff = v0;
+    const jump = tookOff >= 0 ? ` (took off at ${tookOff.toFixed(0)} u/s)` : "";
+    if (ev === "fall") {
+      const why = !gapAt(road, q.s)
+        ? wasAir ? "lands outside the walls" : "falls into a hole"
+        : wasAir ? "lands short in a gap" : `rolls into a gap at ${v0.toFixed(0)} u/s (take-off needs ${MIN_TAKEOFF_SPEED})`;
+      problem = `${why} at ${where}${wasAir ? jump : ""}`;
+    } else if (wasAir && c.air === 0 && q.dist > halfOf(road, q)) {
+      problem = `lands off the asphalt at ${where} (${q.dist.toFixed(1)} from the centerline)${jump}`;
+    } else if (d - d0 > end + CAR_LENGTH && c.air === 0) {
+      return "";
+    }
+  }
+  return problem || "never gets past it";
+}
+
+/** The runs of one course from d0 past `end` beyond it: each island lane, then through each pool in it (as validateRunUps). */
+function courseRuns(track: Track, legs: readonly Leg[], d0: number, end: number, stats: CarStats, what: string, errors: string[]): void {
+  const name = (side: number) => (side < 0 ? "the left lane" : "the right lane");
+  const roads = [...new Set(legs.map((g) => g.road))];
+  const inRun = (d: number) => d === d && d >= d0 && d < d0 + end;
+  const isles: { road: number; d0: number; d1: number; mid: number }[] = [];
+  const pools: (CoursePool & { what: string })[] = [];
+  for (const k of roads) {
+    const r = roadOf(track, k);
+    for (const f of r.islands) {
+      const a = onCourse(track, legs, k, f.s0);
+      if (inRun(a)) isles.push({ road: k, d0: a, d1: a + (f.s1 - f.s0), mid: f.mid });
+    }
+    for (const w of r.water) {
+      const a = onCourse(track, legs, k, w.s0);
+      if (!inRun(a)) continue;
+      const pool = tractionRect(w);
+      if (!(pool.s1 > pool.s0 && pool.lat1 > pool.lat0)) continue; // no area a car feels
+      const at = k === 0 ? `s` : `u`;
+      pools.push({ road: k, d0: a + (pool.s0 - w.s0), d1: a + (pool.s1 - w.s0), lat0: pool.lat0, lat1: pool.lat1, what: `the water ${at} ${w.s0.toFixed(1)}..${w.s1.toFixed(1)}${k === 0 ? "" : ` on branch ${k}`}` });
+    }
+  }
+  const sides = isles.length ? [-1, 1] : [-1];
+  for (const side of sides) {
+    const problem = courseRun(track, legs, d0, end, stats, undefined, side);
+    if (problem) errors.push(`${what}${isles.length ? ` through ${name(side)} of the split` : ""}: ${problem}`);
+  }
+  for (const pool of pools) {
+    const by = isles.find((f) => f.road === pool.road && pool.d0 < f.d1 && pool.d1 > f.d0);
+    const mid = (pool.lat0 + pool.lat1) / 2;
+    for (const side of by ? [mid < by.mid ? -1 : 1] : sides) {
+      const wet = courseRun(track, legs, d0, end, stats, pool, side);
+      if (wet) errors.push(`${what}, driven through ${pool.what} at lat ${mid.toFixed(1)}${isles.length ? ` (${name(side)} of the split)` : ""}: ${wet}`);
+    }
+  }
+}
+
+/** validateRunUps' runs through every branch (see above). */
+function branchRunUps(track: Track, stats: CarStats, errors: string[]): void {
+  const L = track.length;
+  track.branches.forEach((b, k) => {
+    const road = k + 1, r = b.road, len = r.length;
+    // From the main road's recovery point at or before the fork, through the branch, past the merge.
+    const r0 = recoveryAt(track, b.s0);
+    const A = (((b.s0 - r0) % L) + L) % L;
+    // The last leg: the main road past the merge (the run ends a car's length past it; a leg's reach is finite).
+    const through: Leg[] = [{ road: 0, s0: r0, len: A, at: 0 }, { road, s0: 0, len, at: A }, { road: 0, s0: b.s1, len: 2 * LEG_REACH, at: A + len }];
+    courseRuns(track, through, 0, A + len, stats, `run-up from main recovery point s=${r0.toFixed(1)} through branch ${road} (fork s=${b.s0.toFixed(1)}, merge s=${b.s1.toFixed(1)})`, errors);
+    // From each of the branch's recovery points, past its hazards before the next one.
+    const legs: Leg[] = [{ road, s0: 0, len, at: 0 }, { road: 0, s0: b.s1, len: 2 * LEG_REACH, at: len }];
+    r.recovery.forEach((u, i) => {
+      const until = i + 1 < r.recovery.length ? r.recovery[i + 1] : len;
+      let start = Infinity, end = -Infinity;
+      const add = (s0: number, s1: number) => {
+        if (s0 < u || s0 >= until) return;
+        start = Math.min(start, s0);
+        end = Math.max(end, s1);
+      };
+      for (const x of r.ramps) add(x.s, x.s + x.len + LIP_ZONE);
+      for (const g of r.gaps) add(g.s0, g.s1);
+      for (const h of r.holes) add(h.s - h.r, h.s + h.r);
+      if (start === Infinity) return;
+      courseRuns(track, legs, u, end - u, stats, `run-up from branch ${road} recovery point u=${u.toFixed(1)} (hazard at u=${start.toFixed(1)})`, errors);
+    });
+  });
 }
 
 /**
@@ -692,7 +899,7 @@ function runUp(track: Track, r: number, end: number, stats: CarStats, through?: 
     const v0 = speedOf(c);
     env.rt = i + 1; // as if the run started at GO
     const ev = stepRaceCar(c, runUpInput(track, c, through, side), stats, env);
-    const q = queryTrackNear(track, c.x, c.y, c.seg);
+    const q = queryMain(track, c.x, c.y, c.seg);
     let d = q.s - sPrev;
     if (d > L / 2) d -= L;
     else if (d < -L / 2) d += L;
@@ -741,20 +948,26 @@ export function validateJumpSweep(track: Track, maxSpeed: number, stats: CarStat
   // either side of it; it has no gap behind it, so every speed from MIN_TAKEOFF_SPEED up must land.
   // A truck's flight starts TRUCK_SWEEP_IN into its take-off zone (a ramp's 0.5): its band lies off the
   // centre line, where in a bend the start's own s can be a little short of the one on the centre line.
-  const lips: { lip: number; lanes: readonly number[]; what: string; into: number }[] = [
-    ...track.ramps.map((r) => ({ lip: r.s + r.len, lanes: SWEEP_LANES, what: "jump", into: 0.5 })),
-    ...track.trucks.map((t) => ({ lip: t.lip, lanes: [t.lat - TRUCK_SWEEP, t.lat, t.lat + TRUCK_SWEEP], what: `truck jump (truck at s=${t.s.toFixed(1)})`, into: TRUCK_SWEEP_IN })),
+  const lips: { lip: number; lanes: readonly number[]; what: string; into: number; road: number }[] = [
+    ...track.ramps.map((r) => ({ lip: r.s + r.len, lanes: SWEEP_LANES, what: "jump", into: 0.5, road: 0 })),
+    ...track.trucks.map((t) => ({ lip: t.lip, lanes: [t.lat - TRUCK_SWEEP, t.lat, t.lat + TRUCK_SWEEP], what: `truck jump (truck at s=${t.s.toFixed(1)})`, into: TRUCK_SWEEP_IN, road: 0 })),
   ];
-  for (const { lip, lanes, what, into } of lips) {
+  // BR-PHYS (PLAN-BRANCH 2.8): every branch's lips too, flown on the whole track from its road.
+  track.branches.forEach((b, k) => {
+    const r = b.road, on = ` on branch ${k + 1}`;
+    for (const x of r.ramps) lips.push({ lip: x.s + x.len, lanes: SWEEP_LANES, what: `jump${on}`, into: 0.5, road: k + 1 });
+    for (const t of r.trucks) lips.push({ lip: t.lip, lanes: [t.lat - TRUCK_SWEEP, t.lat, t.lat + TRUCK_SWEEP], what: `truck jump${on} (truck at u=${t.s.toFixed(1)})`, into: TRUCK_SWEEP_IN, road: k + 1 });
+  });
+  for (const { lip, lanes, what, into, road } of lips) {
     for (const lane of lanes) {
       let landed = -1; // the slowest speed that lands
       const bad: { v: number; why: string }[] = [];
       for (const v of speeds) {
-        const why = flyOff(track, lip, lane, v, stats, onAsphalt, into);
+        const why = flyOff(track, lip, lane, v, stats, onAsphalt, into, road);
         if (!why && landed < 0) landed = v;
         else if (why && landed >= 0) bad.push({ v, why });
       }
-      const at = `${what} at the lip s=${lip.toFixed(1)}, lane ${lane}`;
+      const at = `${what} at the lip ${road === 0 ? "s" : "u"}=${lip.toFixed(1)}, lane ${lane}`;
       if (landed < 0) errors.push(`${at}: no take-off up to ${maxSpeed.toFixed(0)} u/s lands`);
       else if (bad.length) errors.push(`${at}: lands from ${landed} u/s, but not at ${bad.map((b) => b.v.toFixed(0)).join(", ")} u/s (${bad[0].why})`);
     }
@@ -767,21 +980,25 @@ const TRUCK_SWEEP = 10;
 /** ... from this far into its take-off zone (LIP_ZONE 12). */
 const TRUCK_SWEEP_IN = 2;
 
-/** Fly off the lip at s=lip, `lane` units right of the centerline, at speed v: "" = lands on the asphalt. */
-function flyOff(track: Track, lip: number, lane: number, v: number, stats: CarStats, onAsphalt: boolean, into = 0.5): string {
-  const p = pointAt(track, lip + into);
+/**
+ * Fly off the lip at s=lip, `lane` units right of the centerline, at speed v: "" = lands on the asphalt.
+ * road: the lip's road (BR-PHYS: a branch's, its u; 0 = the main road); the flight is on the whole track.
+ */
+function flyOff(track: Track, lip: number, lane: number, v: number, stats: CarStats, onAsphalt: boolean, into = 0.5, road = 0): string {
+  const p = pointAt(road === 0 ? track : roadOf(track, road), lip + into);
   const c: CarState = {
     x: p.x - Math.sin(p.h) * lane, y: p.y + Math.cos(p.h) * lane, h: p.h, vx: Math.cos(p.h) * v, vy: Math.sin(p.h) * v,
-    seg: p.seg, wreck: 0, air: 0, fall: 0, boost: 0,
+    seg: road === 0 ? p.seg : track.branches[road - 1].base + p.seg, wreck: 0, air: 0, fall: 0, boost: 0,
   };
   const env = raceEnv(track);
   for (let i = 0; i < MAX_AIR_TICKS + 2; i++) {
     const wasAir = c.air > 0;
     const ev = stepRaceCar(c, { throttle: 1, steer: 0 }, stats, env);
     const q = queryTrackNear(track, c.x, c.y, c.seg);
-    if (ev === "fall") return `falls at s=${q.s.toFixed(1)}, ${q.dist.toFixed(1)} from the centerline`;
+    const at = q.road === 0 ? `s=${q.s.toFixed(1)}` : `u=${q.s.toFixed(1)} on branch ${q.road}`;
+    if (ev === "fall") return `falls at ${at}, ${q.dist.toFixed(1)} from the centerline`;
     if (i === 0 && ev !== "takeoff") return "does not take off";
-    if (wasAir && c.air === 0) return onAsphalt && q.dist > halfOf(track, q) ? `lands off the asphalt at s=${q.s.toFixed(1)} (${q.dist.toFixed(1)} from the centerline)` : "";
+    if (wasAir && c.air === 0) return onAsphalt && q.dist > halfOf(roadFor(track, q), q) ? `lands off the asphalt at ${at} (${q.dist.toFixed(1)} from the centerline)` : "";
   }
   return "still in the air";
 }
@@ -813,23 +1030,27 @@ export const CELL_MIN_TAKEOFF = 300;
  * zone, as validateJumpSweep flies it.
  */
 export function airCellReach(track: Track, cell: PlacedCell, maxSpeed: number): { min: number; max: number; lanes: number } | null {
-  const L = track.length;
-  const lim = wallLimit(track);
+  // BR-PHYS: a branch's cell (cell.road, its s in u) off its own road's lips, flown on the whole track.
+  const road = cell.road ?? 0;
+  const own = road === 0 ? track : roadOf(track, road);
+  const base = road === 0 ? 0 : track.branches[road - 1].base;
+  const L = own.length;
+  const lim = wallLimit(own);
   let min = Infinity, max = -Infinity;
   const lanes = new Set<number>();
   const lips: { lip: number; lane0: number; lane1: number; into: number }[] = [
-    ...track.ramps.map((ramp) => ({ lip: ramp.s + ramp.len, lane0: -Math.floor(lim), lane1: lim, into: 0.5 })),
-    ...track.trucks.map((t) => ({ lip: t.lip, lane0: t.band0, lane1: t.band1, into: TRUCK_SWEEP_IN })),
+    ...own.ramps.map((ramp) => ({ lip: ramp.s + ramp.len, lane0: -Math.floor(lim), lane1: lim, into: 0.5 })),
+    ...own.trucks.map((t) => ({ lip: t.lip, lane0: t.band0, lane1: t.band1, into: TRUCK_SWEEP_IN })),
   ];
   for (const { lip, lane0, lane1, into } of lips) {
-    const ahead = (((cell.s - lip) % L) + L) % L;
+    const ahead = road === 0 ? (((cell.s - lip) % L) + L) % L : cell.s - lip; // an open road's u never wraps
     if (ahead <= 0 || ahead > maxSpeed * (MAX_AIR_TICKS / 60) + 20) continue;
     for (let lane = lane0; lane <= lane1; lane += 4) {
       for (let v = CELL_MIN_TAKEOFF; v <= maxSpeed; v += SWEEP_STEP) {
-        const p = pointAt(track, lip + into);
+        const p = pointAt(own, lip + into);
         const c: CarState = {
           x: p.x - Math.sin(p.h) * lane, y: p.y + Math.cos(p.h) * lane, h: p.h, vx: Math.cos(p.h) * v, vy: Math.sin(p.h) * v,
-          seg: p.seg, wreck: 0, air: 0, fall: 0, boost: 0,
+          seg: base + p.seg, wreck: 0, air: 0, fall: 0, boost: 0,
         };
         const env = raceEnv(track);
         for (let i = 0; i < MAX_AIR_TICKS + 2; i++) {
@@ -860,7 +1081,7 @@ export function validateCells(track: Track, maxSpeed: number): string[] {
   for (const c of track.cells) {
     if (!c.air) continue;
     if (!airCellReach(track, c, maxSpeed)) {
-      errors.push(`air cell at s=${c.s.toFixed(1)}, lat ${c.lat}: not on the arc of any take-off between ${CELL_MIN_TAKEOFF} and ${maxSpeed.toFixed(0)} u/s (high enough to take it)`);
+      errors.push(`air cell at ${c.road === undefined ? "s" : "u"}=${c.s.toFixed(1)}${c.road === undefined ? "" : ` on branch ${c.road}`}, lat ${c.lat}: not on the arc of any take-off between ${CELL_MIN_TAKEOFF} and ${maxSpeed.toFixed(0)} u/s (high enough to take it)`);
     }
   }
   return errors;
