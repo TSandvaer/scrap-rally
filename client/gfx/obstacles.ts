@@ -141,7 +141,11 @@ function moversOf(track: Track, scenery: Scenery = sceneryFor(track)): Movers | 
 }
 
 function layOut(track: Track, tones: ObstacleTones): Movers | null {
-  if (!track.barrels.length && !track.presses.length && !track.belts.length) return null;
+  // What moves on a shortcut road moves too (BR-BAKE): every road of the track is laid out, the
+  // main one first. A row and a press are placed in the world as they are; a belt's arrows lie
+  // along its own road.
+  const roads = track.branches.length ? [track, ...track.branches.map((b) => b.road)] : [track];
+  if (!roads.some((r) => r.barrels.length || r.presses.length || r.belts.length)) return null;
   const set: Movers = { tones, rows: [], gates: [], bands: [], fits: true, used: 0 };
   // Shelves, left to right, top to bottom.
   let px = 0, py = TOP, ph = 0;
@@ -161,12 +165,12 @@ function layOut(track: Track, tones: ObstacleTones): Movers | null {
     set.used += w * h;
     return at;
   };
-  for (const b of track.barrels) {
+  for (const road of roads) for (const b of road.barrels) {
     const at = place(ROLL * BARREL, BARREL);
     const reach = Math.max(Math.abs(b.lat0), Math.abs(b.lat1)) * ZOOM + BARREL;
     set.rows.push({ b, x: b.x * ZOOM, y: b.y * ZOOM, nx: b.nx * ZOOM, ny: b.ny * ZOOM, reach, ax: at.x, ay: at.y });
   }
-  for (const p of track.presses) {
+  for (const road of roads) for (const p of road.presses) {
     const width = p.lat1 - p.lat0, mid = (p.lat0 + p.lat1) / 2;
     const cos = Math.abs(Math.cos(p.h)), sin = Math.abs(Math.sin(p.h));
     // The slab's box at its heading, an even number of pixels each way.
@@ -181,7 +185,7 @@ function layOut(track: Track, tones: ObstacleTones): Movers | null {
     }
     set.gates.push({ p, x: Math.round((p.x + p.nx * mid) * ZOOM), y: Math.round((p.y + p.ny * mid) * ZOOM), w, h, ax: at.x, ay: at.y, lamps });
   }
-  for (const b of track.belts) {
+  for (const road of roads) for (const b of road.belts) {
     const width = b.lat1 - b.lat0, room = width - 2 * ARROW_EDGE; // the room an arrow's middle has to run in
     const fits = width >= BELT_ARROW_WIDTH && b.s1 - b.s0 >= BELT_ARROW_LENGTH;
     const rows = fits ? Math.max(1, Math.round((b.s1 - b.s0 - 12) / ARROW_ROWS)) : 0;
@@ -194,7 +198,7 @@ function layOut(track: Track, tones: ObstacleTones): Movers | null {
     };
     const way = b.vx < 0 ? -1 : 1;
     for (let r = 0; r < rows; r++) {
-      const q = pointAt(track, b.s0 + ((b.s1 - b.s0) * (r + 0.5)) / rows);
+      const q = pointAt(road, b.s0 + ((b.s1 - b.s0) * (r + 0.5)) / rows);
       band.x[r] = q.x * ZOOM;
       band.y[r] = q.y * ZOOM;
       band.nx[r] = -Math.sin(q.h) * ZOOM;
@@ -203,7 +207,7 @@ function layOut(track: Track, tones: ObstacleTones): Movers | null {
       const a = Math.atan2(Math.cos(q.h) * way, -Math.sin(q.h) * way);
       band.head[r] = Math.round((a / (Math.PI * 2)) * ARROW_HEADINGS + ARROW_HEADINGS) % ARROW_HEADINGS;
     }
-    const mid = pointAt(track, (b.s0 + b.s1) / 2), lat = (b.lat0 + b.lat1) / 2;
+    const mid = pointAt(road, (b.s0 + b.s1) / 2), lat = (b.lat0 + b.lat1) / 2;
     band.cx = (mid.x - Math.sin(mid.h) * lat) * ZOOM;
     band.cy = (mid.y + Math.cos(mid.h) * lat) * ZOOM;
     band.reach = (Math.hypot(b.s1 - b.s0, b.lat1 - b.lat0) / 2) * ZOOM + ARROW;
