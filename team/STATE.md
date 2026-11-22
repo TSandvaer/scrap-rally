@@ -643,6 +643,7 @@ NOSELECT-1 123jpnbfgjj (Opus) in flight: ctx_2980deef1d34 (~/orca/workspaces/scr
 index.html, style.css, maybe input.ts). Active authors: HARD-2, TH-LOOK-1, NOSELECT-1.
 BR-SCHEMA review 1 REQUEST_CHANGES (ctx_d7ef3257a313 kept for re-review): branch roads get no self-crossing / close-sections check
 (reproduced). Fix round sent to ctx_d7d9decab927 (tmp/br-schema-review-1-fix.md; + 2 nits). Review notes for BR-PHYS added to its ticket.
+M4-TRACKS taste APPROVED by the user (both tracks; popup-confirmed). Merge on review APPROVE.
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
