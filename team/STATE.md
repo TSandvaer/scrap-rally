@@ -578,6 +578,8 @@ exactly when down; 887/887 + 133/133 twice; shots in the m4-move workspace tmp/m
 over a hole; F3 decided: band rivets pass that truck; F4 truck side-gap rule; notes: 2 seats jump vs comment, spectator rt < 0 in
 countdown. Fix round sent to ctx_ea8124df2107 (tmp/m4-move/review-1-fix.md); reviewer ctx_b64bf57fdff3 kept for the re-review
 (fixes + the criterion-9 delta ac6eddf/333fdfa). Move Yard taste copy after the fix round.
+DEPLOYED 2026-11-22 (user): live index-C6OiUqFq.js (curl), bundle holds {mode:`point`,...,aimFull:35,brakeAngle:110}. QA11 live worker
+ctx_1c351f557824 (muted; spec tmp/spec-qa-live-11.md; report tmp/qa11-live-report.md): TOUCH-5 point mode + SURF-2 regression.
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
