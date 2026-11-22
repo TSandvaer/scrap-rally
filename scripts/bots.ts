@@ -399,6 +399,7 @@ async function run(ctx: Ctx, bots: Bot[]): Promise<void> {
   await runLong(ctx, bots);
   await runHard2(ctx, bots);
   await runBranch(ctx, bots);
+  await runBranchBots(ctx, bots);
 }
 
 const lost = new Map<string, (ConnReason | undefined)[]>();
@@ -2632,6 +2633,78 @@ async function runBranch(ctx: Ctx, bots: Bot[]): Promise<void> {
     S.script = null;
     if (room && tick) room.tick = tick;
     for (const b of [H, S]) b.game.leave();
+    if (old === undefined) delete process.env.SCRAP_DEV_TRACK;
+    else process.env.SCRAP_DEV_TRACK = old;
+  }
+}
+
+// ---- bots take the shortcuts over sockets (BR-BOTS, PLAN-BRANCH.md 2.6, ClickUp 123jpnbfghc, 2026-11-22) ----------
+// This section's imports (hoisted like the ones at the top).
+import { roadOfSeg as bbRoadOfSeg } from "../shared/track";
+
+/**
+ * A socket bot's route over a lagged link (BR-BOTS criterion 5): on Branch Yard (SCRAP_DEV_TRACK=branch-yard
+ * for this section only) a lagged (80±10 ms) Hard socket bot on lane 0 (seat 2 by its lane: seatOfLane; a
+ * Sport: its plan takes all three shortcuts, scripts/bot-ai.ts BotDriver -> shared/botdrive.ts routePlan)
+ * races an unlagged Normal socket bot on lane 24 (seat 1: Normal on an odd seat keeps the main road),
+ * weapons off. The Hard bot drives through all three shortcuts (server ticks on each), keeps a median
+ * reconciliation error below 0.5, no error above 50 and at most 4 state mismatches; the Normal one keeps
+ * the main road (only mouth ticks on a branch) and its median below 0.5; both finish.
+ */
+async function runBranchBots(ctx: Ctx, bots: Bot[]): Promise<void> {
+  const old = process.env.SCRAP_DEV_TRACK;
+  process.env.SCRAP_DEV_TRACK = "branch-yard";
+  const N = new Bot("November8", ctx.url, 24);
+  const S = new Bot("Sierra8", ctx.url, 0, { lag: 80, jitter: 10 }, undefined, "hard");
+  bots.push(N, S);
+  for (const b of [N, S]) b.weapons = false;
+  let room: ReturnType<typeof ctx.server.rooms.rooms.get> | undefined;
+  let tick: ((t: number, now: number) => void) | null = null;
+  try {
+    N.game.create(N.name);
+    await waitFor("branch bots: N welcome", () => !!N.game.you, 3000);
+    S.game.join(N.game.code, S.name);
+    await waitFor("branch bots: S in N's room", () => N.game.players.length === 2 && !!S.game.you, 3000);
+    room = ctx.server.rooms.rooms.get(N.game.code)!;
+    await waitFor("branch bots: both on Branch Yard", () => N.game.trackId === "branch-yard" && S.game.trackId === "branch-yard", 3000);
+    const yard = S.game.track;
+    // Server state: ticks each car spends on each branch.
+    const r = room;
+    tick = r.tick.bind(r);
+    const on = { s: [0, 0, 0], n: [0, 0, 0] };
+    r.tick = (t: number, now: number) => {
+      tick!(t, now);
+      if (r.phase !== "racing") return;
+      const sc = r.players.get(S.game.you)?.car, nc = r.players.get(N.game.you)?.car;
+      if (sc && !r.players.get(S.game.you)?.progress?.fin && sc.seg >= yard.pts.length) on.s[bbRoadOfSeg(yard, sc.seg) - 1]++;
+      if (nc && !r.players.get(N.game.you)?.progress?.fin && nc.seg >= yard.pts.length) on.n[bbRoadOfSeg(yard, nc.seg) - 1]++;
+    };
+    const sMem = (S.driver as unknown as { mem: BotMem }).mem, nMem = (N.driver as unknown as { mem: BotMem }).mem;
+    // Their plans as they race (the driver chooses again between races: read them while they race).
+    const plan = { s: -1, n: -1 };
+    S.afterStep = () => void (S.game.phase === "racing" && sMem.plan >= 0 && (plan.s = sMem.plan));
+    N.afterStep = () => void (N.game.phase === "racing" && nMem.plan >= 0 && (plan.n = nMem.plan));
+    const e0 = S.game.recErrors.length, st0 = S.game.recStateErrors, n0 = N.game.recErrors.length;
+    const rows = await runRace("branch bots", bots, N, [N, S]);
+    const s = stats(S.game.recErrors.slice(e0)), sn = stats(N.game.recErrors.slice(n0));
+    const st = S.game.recStateErrors - st0;
+    console.log(
+      `      Sierra8 (Hard socket bot, lane 0 = seat ${sMem.seat}, 80±10 ms) plan ${plan.s}, Hard socket bot server ticks on branches ${on.s.join("/")}; November8 (Normal, lane 24 = seat ${nMem.seat}) plan ${plan.n}, ticks on branches ${on.n.join("/")} (mouths); ` +
+        `Sierra8 rec err n=${s.n} median=${s.median.toFixed(3)} p95=${s.p95.toFixed(3)} max=${s.max.toFixed(2)}, state mismatches ${st}, rtt=${S.game.rtt.toFixed(1)}ms; November8 rec err n=${sn.n} median=${sn.median.toFixed(3)} max=${sn.max.toFixed(2)}; ` +
+        `finish ${rows.map((x) => `${x.name} ${(x.timeMs / 1000).toFixed(2)}s`).join(", ")}`,
+    );
+    check(
+      "branch bots over sockets: a lagged (80±10 ms) Hard socket bot on lane 0 (seat 2 by its lane) takes all three shortcuts (its plan 7; server ticks on each branch) and keeps a median reconciliation error below 0.5, no error above 50, at most 4 state mismatches; a Normal socket bot on lane 24 (seat 1, an odd seat) keeps the main road (plan 0, only mouth ticks on a branch) with its median below 0.5; both finish",
+      rows.length === 2 && rows.every((x) => x.timeMs > 0) && sMem.seat === 2 && plan.s === 7 && on.s.every((x) => x > 300) && s.n > 500 && s.median < 0.5 && s.max <= 50 && st <= 4 &&
+        nMem.seat === 1 && plan.n === 0 && on.n.every((x) => x < 300) && sn.n > 500 && sn.median < 0.5 && N.errors.length + S.errors.length === 0,
+      `Sierra8 plan ${plan.s}, on branches ${on.s.join("/")}; median ${s.median.toFixed(3)}, max ${s.max.toFixed(2)}, state mismatches ${st}; November8 plan ${plan.n}, on branches ${on.n.join("/")}, median ${sn.median.toFixed(3)}`,
+    );
+  } finally {
+    if (room && tick) room.tick = tick;
+    for (const b of [N, S]) {
+      b.afterStep = null;
+      b.game.leave();
+    }
     if (old === undefined) delete process.env.SCRAP_DEV_TRACK;
     else process.env.SCRAP_DEV_TRACK = old;
   }
