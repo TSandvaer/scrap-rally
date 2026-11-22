@@ -553,6 +553,11 @@ export class TouchPad {
     return { ...this.memo };
   }
 
+  /** The thumb on the stick now, or none (touch-drive's per-step check: the offset each step was read with). */
+  stickNow(): Stick | null {
+    return this.state.stick;
+  }
+
   /** The weapons' counts (rivets, mines); written only when one changed. */
   setAmmo(rivets: number, mines: number): void {
     if (this.rivets !== rivets) {
