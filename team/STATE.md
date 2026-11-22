@@ -639,6 +639,8 @@ shortest gaps 1041/1338, mud 330; census fixed: HUD allowance from trackList().l
 tmp/m4-tracks/m4-tracks-report.md). Conflicts with br-schema (sim-test, golden): second to merge resolves. Opus reviewer ctx_ca6629690be1
 (tmp/review-m4-tracks.md). TASTE COPY :3009 = M4-TRACKS 4d4e97b (worktree split-taste, no dev flag; node pid 16214, npm pid 16191);
 the Move Yard copy is stopped. Active authors: HARD-2, TH-LOOK-1 (M4-TRACKS + BR-SCHEMA idle in review). Nothing else startable yet.
+NOSELECT-1 123jpnbfgjj (Opus) in flight: ctx_2980deef1d34 (~/orca/workspaces/scrap-rally/noselect-1, :3013; spec tmp/spec-noselect-1.md;
+index.html, style.css, maybe input.ts). Active authors: HARD-2, TH-LOOK-1, NOSELECT-1.
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
