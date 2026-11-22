@@ -23,17 +23,26 @@
 //   the three shipped tracks. A lap is where tiles are baked, so it shows what baking the
 //   furniture costs a frame at its worst (the p95, the p99 and the frames over 4 ms).
 //
-// Bench scene S7 against S2 (TH-LOOK-1; PLAN-THEMES.md 2.4): S6's frames and then S4's lap, on
-// Preview Yard in the desert (the benchmark's `&theme=` switch), held to the same budget of 1.10
-// times S2, each of the three. Beside it the same frames on the yard's own look (S7 scrapyard):
-// what the theme itself costs a frame is the ratio of those two. And what a theme's tiles cost
-// to bake, worked out here in Node from the bake itself (client/gfx/world.ts bakeTileIndices
-// with its trace): the cost units of every tile the lap crosses, per theme (a frame's share of
-// the baking is counted in these units, so a dearer tile takes more frames, not a longer one).
+// Bench scene S7 (TH-LOOK-1; PLAN-THEMES.md 2.4): S6's frames and then S4's lap, on Preview Yard
+// in the desert (the benchmark's `&theme=` switch), and the same frames on the yard's own look
+// (S7 scrapyard), one right after the other in every run.
+// - The budget (coordinator's decision 2026-11-22): what S7 guards is that a theme adds no cost
+//   to a frame, so the theme is held against the yard's own look on the SAME frames: S7 in the
+//   theme at or below 1.05 times S7 scrapyard, on the mean of the frames and on the mean of their
+//   faster half (the frames without a bake step in them), each the median of the per-run ratios.
+// - Not against S2: a lap's median sits on a step of the 5 us timer in every theme (0.070 or
+//   0.075 ms against S2's 0.065: 1.08 or 1.15), and so do the shipped tracks' own S4 laps on the
+//   tree before themes (1.07 to 1.23 times their S2). Held against S2, S7 would measure the
+//   timer, not the theme. Its ratios against S2 are printed as information, and for the record
+//   S7's absolute numbers beside the S4 laps of the same run.
+// - What a theme's tiles cost to bake is worked out here in Node from the bake itself
+//   (client/gfx/world.ts bakeTileIndices with its trace): the cost units of every tile the lap
+//   crosses, per theme (a frame's share of the baking is counted in these units, so a dearer
+//   tile takes more frames, not a longer one).
 //
 // It takes the benchmark's machine-wide lock (scrap-rally-bench.lock in the temp directory), so
 // it never runs beside `npm run bench`, and waits while a live benchmark holds it.
-// Exit code 0 within the budget, 1 over it, 2 without a verdict (--quick, or fewer than 5 runs).
+// Exit code 0 with S6 and S7 within their budgets, 1 with one over, 2 without a verdict (--quick, or fewer than 5 runs).
 
 import { execFile } from "node:child_process";
 import { createReadStream, existsSync, mkdtempSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
@@ -48,7 +57,8 @@ const args = process.argv.slice(2);
 const option = (name: string, fallback: number) => (args.includes(name) ? Number(args[args.indexOf(name) + 1]) : fallback);
 const QUICK = args.includes("--quick");
 const RUNS = QUICK ? 1 : option("--runs", 5);
-const BUDGET = 1.1;
+const BUDGET = 1.1; // S6 against S2
+const THEME_BUDGET = 1.05; // S7 in a theme against S7 on the yard's own look
 const THEME = args.includes("--theme") ? args[args.indexOf("--theme") + 1] : "desert";
 const ROOT = path.resolve(fileURLToPath(new URL("../..", import.meta.url)));
 const run = promisify(execFile);
@@ -243,32 +253,47 @@ async function main(): Promise<number> {
     console.log(`| ${name(k)} | ${got[k][0].n} | ${f(median(p50))} | ${f(Math.max(...p50) - Math.min(...p50))} | ${f(median(got[k].map((x) => x.mean)))} | ${f(median(got[k].map((x) => x.p95)))} | ${f(median(got[k].map((x) => x.p99)))} | ${median(got[k].map((x) => x.over))} | ${median(got[k].map((x) => x.baked ?? 0))} | ${f(median(got[k].map((x) => x.ctorMs)))} | ${f(median(got[k].map((x) => x.firstMs)))} | ${[...new Set(got[k].map((x) => x.checksum))].join(" ")} |`);
   });
   console.log("\nA median is a whole number of the timer's steps (5 us): a ratio of two of them moves in jumps of about 0.08 here. The mean of a cell's frames is finer and its ratio is given beside the median's, as information: S6 cuts between its three views at frames 200 and 400, and the views together need more tiles than the pool of 24 holds, so each cut bakes what the pool gave away at once (the frame over 4 ms); S2 never moves its camera.\n");
-  // A scene against each S2: the ratio of the medians run by run, and the worst of the three median ratios.
-  const against = (scene: number): number => {
-    console.log(`| ${name(scene)} against | ratio of the medians, run by run | median ratio | budget 1.10 | ratio of the means, run by run | median |`);
+  // A scene against each S2: the ratio of the medians run by run, and the worst of the three
+  // median ratios. S6 is judged by it; for S7 it is information (see the top of the file).
+  const against = (scene: number, judged: boolean): number => {
+    console.log(`| ${name(scene)} against | ratio of the medians, run by run | median ratio | ${judged ? "budget 1.10" : "against 1.10 (information: no budget)"} | ratio of the means, run by run | median |`);
     console.log("|---|---|---:|---|---|---:|");
     let worst = 0;
     for (let k = 0; k < 3; k++) {
       const ratios = got[scene].map((x, r) => x.p50 / got[k][r].p50), means = got[scene].map((x, r) => x.mean / got[k][r].mean);
       const m = median(ratios);
       worst = Math.max(worst, m);
-      console.log(`| S2 ${cells[k].track} | ${ratios.map(f).join(" ")} | ${f(m)} | ${m <= BUDGET ? "within" : "OVER"} | ${means.map(f).join(" ")} | ${f(median(means))} |`);
+      console.log(`| S2 ${cells[k].track} | ${ratios.map(f).join(" ")} | ${f(m)} | ${m <= BUDGET ? (judged ? "within" : "under") : judged ? "OVER" : "over"} | ${means.map(f).join(" ")} | ${f(median(means))} |`);
     }
     console.log("");
     return worst;
   };
-  const worst6 = against(S6), worst7 = against(S7), worstYard = against(S7_YARD);
-  // What the theme itself costs: the same frames in the theme and on the yard's own look.
-  const own = got[S7].map((x, r) => x.p50 / got[S7_YARD][r].p50), ownMean = got[S7].map((x, r) => x.mean / got[S7_YARD][r].mean), ownP95 = got[S7].map((x, r) => x.p95 / got[S7_YARD][r].p95);
-  console.log(`S7 in the ${THEME} against the same frames on the yard's own look (information): the medians ${own.map(f).join(" ")}, median ratio ${f(median(own))}; the means ${ownMean.map(f).join(" ")}, median ${f(median(ownMean))}; the p95s ${ownP95.map(f).join(" ")}, median ${f(median(ownP95))}.\n`);
+  const worst6 = against(S6, true), worst7 = against(S7, false), worstYard = against(S7_YARD, false);
+  // S7's budget: the theme against the yard's own look on the same frames, run by run, on the
+  // mean of the frames and on the mean of their faster half; the median of the per-run ratios of each.
+  const low = (k: number) => got[k].map((x) => x.lowMean ?? NaN);
+  const ownMean = got[S7].map((x, r) => x.mean / got[S7_YARD][r].mean), ownLow = low(S7).map((v, r) => v / low(S7_YARD)[r]);
+  const own = got[S7].map((x, r) => x.p50 / got[S7_YARD][r].p50), ownP95 = got[S7].map((x, r) => x.p95 / got[S7_YARD][r].p95);
+  const themeMean = median(ownMean), themeLow = median(ownLow);
+  console.log(`| S7 in the ${THEME} against S7 on the yard's own look (the same frames) | run by run | median ratio | budget ${THEME_BUDGET.toFixed(2)} |`);
+  console.log("|---|---|---:|---|");
+  console.log(`| the mean of the frames | ${ownMean.map(f).join(" ")} | ${f(themeMean)} | ${themeMean <= THEME_BUDGET ? "within" : "OVER"} |`);
+  console.log(`| the mean of their faster half | ${ownLow.map(f).join(" ")} | ${f(themeLow)} | ${themeLow <= THEME_BUDGET ? "within" : "OVER"} |`);
+  console.log(`| the median (information: whole timer steps) | ${own.map(f).join(" ")} | ${f(median(own))} | |`);
+  console.log(`| the p95 (information) | ${ownP95.map(f).join(" ")} | ${f(median(ownP95))} | |`);
+  console.log("");
+  // For the record only: S7's absolute numbers beside the laps of the same run.
+  console.log("For the record (no budget): S7 beside the S4 laps of this run, ms a frame, the median of the runs.\n");
+  console.log("| cell | frames | median | the faster half's mean | mean | p95 | p99 |");
+  console.log("|---|---:|---:|---:|---:|---:|---:|");
+  for (const k of [S7, S7_YARD, ...cells.map((_, i) => i).slice(JUDGED)]) console.log(`| ${name(k)} | ${got[k][0].n} | ${f(median(got[k].map((x) => x.p50)))} | ${median(low(k)).toFixed(4)} | ${f(median(got[k].map((x) => x.mean)))} | ${f(median(got[k].map((x) => x.p95)))} | ${f(median(got[k].map((x) => x.p99)))} |`);
+  console.log("");
   // Finer than the median, which is a whole number of timer steps: the mean of each cell's faster
   // half (frames without a bake step in them), and where the frames of the two S7 cells fall, step by step.
-  const low = (k: number) => got[k].map((x) => x.lowMean ?? NaN);
   console.log("| cell | the faster half of its frames, mean, run by run | median |");
   console.log("|---|---|---:|");
   for (let k = 0; k < JUDGED; k++) console.log(`| ${name(k)} | ${low(k).map((v) => v.toFixed(4)).join(" ")} | ${median(low(k)).toFixed(4)} |`);
-  const lowOwn = low(S7).map((v, r) => v / low(S7_YARD)[r]);
-  console.log(`\nS7 in the ${THEME} against the same frames on the yard's own look, the faster halves' means: ${lowOwn.map(f).join(" ")}, median ratio ${f(median(lowOwn))}.\n`);
+  console.log("");
   const hist = (k: number): number[] => {
     const sum = new Array<number>(41).fill(0);
     for (const x of got[k]) (x.steps ?? []).forEach((n, i) => (sum[i] += n));
@@ -282,14 +307,14 @@ async function main(): Promise<number> {
   console.log("");
   await bakeUnits();
   console.log(`\n${ua}`);
-  const worst = Math.max(worst6, worst7);
+  const ok6 = worst6 <= BUDGET, ok7 = themeMean <= THEME_BUDGET && themeLow <= THEME_BUDGET;
   if (RUNS < 5) {
-    console.log(`\nNo verdict: ${RUNS} run${RUNS > 1 ? "s" : ""} (five make one). Against the cheapest S2 the ratios were ${f(worst6)} (S6), ${f(worst7)} (S7 ${THEME}) and ${f(worstYard)} (S7 scrapyard).`);
+    console.log(`\nNo verdict: ${RUNS} run${RUNS > 1 ? "s" : ""} (five make one). S6 against the cheapest S2: ${f(worst6)}. S7 in the ${THEME} against the yard's own look: the means ${f(themeMean)}, the faster halves ${f(themeLow)}.`);
     return 2;
   }
-  console.log(`\nS6: ${worst6 <= BUDGET ? "WITHIN" : "OVER"} the budget (its median at most 1.10 times S2's): ${f(worst6)} against the cheapest of the three S2 cells.`);
-  console.log(`S7 (${THEME}): ${worst7 <= BUDGET ? "WITHIN" : "OVER"} the budget: ${f(worst7)} against the cheapest of the three S2 cells (the same frames on the yard's own look: ${f(worstYard)}).`);
-  return worst <= BUDGET ? 0 : 1;
+  console.log(`\nS6: ${ok6 ? "WITHIN" : "OVER"} the budget (its median at most 1.10 times S2's): ${f(worst6)} against the cheapest of the three S2 cells.`);
+  console.log(`S7 (${THEME}): ${ok7 ? "WITHIN" : "OVER"} the budget (at most ${THEME_BUDGET.toFixed(2)} times the same frames on the yard's own look, on the mean of the frames and on the mean of their faster half): ${f(themeMean)} and ${f(themeLow)}. (Information: against the cheapest S2 its median is ${f(worst7)}, the yard's own look ${f(worstYard)}: a step of the timer either way.)`);
+  return ok6 && ok7 ? 0 : 1;
 }
 
 /**
