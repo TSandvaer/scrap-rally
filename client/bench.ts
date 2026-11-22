@@ -16,7 +16,14 @@
 // per page). &scene=S6 is a cell of its own, on the Preview Yard test track whatever &track
 // says (M4-WORLD: the road's furniture; it is not among the cells a page runs without &scene,
 // and the gate does not judge it: tools/debug/world-bench.ts holds it against S2). &track may
-// also name a test track (shared/testtracks.ts) for S4 under metric A: the lap needs no spots. &frames=<n> &warm=<n> &over=<ms> &canvas=sw|default|gpu &readback=0|1
+// also name a test track (shared/testtracks.ts) for S4 under metric A: the lap needs no spots.
+// &scene=S7 is a cell of its own too (TH-LOOK-1; PLAN-THEMES.md 2.4): S6's frames and then S4's
+// lap, on the Preview Yard in another theme, `&theme=<name>` (default desert; scrapyard gives the
+// same frames on the yard's own look). `&theme=` switches the look of any other cell's track as
+// well (gfx/theme.ts themedTrack: the benchmark's and the preview's switch, never the game's);
+// without it every cell is what it was. Under metric A a cell also notes the tiles baked and the
+// cost units spent on them while it was measured (gfx/world.ts worldStats).
+// &frames=<n> &warm=<n> &over=<ms> &canvas=sw|default|gpu &readback=0|1
 // &panel=<element id> (metric B: show that DOM panel over the canvas). &hold=<frame> draws
 // that one frame of the cell and stops (no timing): what a bench scene looks like.
 // Results: window.scrapBench and the panel on screen.
@@ -26,6 +33,8 @@ import { testTrack } from "../shared/testtracks";
 import { gridSlot, pointAt, recoveryAt, type Track } from "../shared/track";
 import { trackById, trackList } from "../shared/tracks";
 import { airTicksFor, FALL_TICKS, GHOST_TICKS, RIVET_RANGE, RIVET_SPEED } from "../shared/weapons";
+import { isTheme, themedTrack, themeOf } from "./gfx/theme";
+import { worldStats } from "./gfx/world";
 import { Renderer, type CarView, type CellView, type HudView, type WorldFx } from "./render";
 
 const FPS = 60;
@@ -49,7 +58,9 @@ export const SCENES = ["S1", "S2", "S3", "S4", "S5"] as const;
 /** The scene of the Preview Yard test track: asked for by name, never part of a run of all cells. */
 export const YARD_SCENE = "S6";
 export const YARD_TRACK = "preview-yard";
-export type SceneId = (typeof SCENES)[number] | typeof YARD_SCENE;
+/** The scene of a themed Preview Yard: asked for by name too. */
+export const THEME_SCENE = "S7";
+export type SceneId = (typeof SCENES)[number] | typeof YARD_SCENE | typeof THEME_SCENE;
 const TITLES: Record<SceneId, string> = {
   S1: "grid: 6 cars, countdown",
   S2: "features: jump, fall, ghost",
@@ -57,6 +68,7 @@ const TITLES: Record<SceneId, string> = {
   S4: "lap at 430 u/s, 6 cars",
   S5: "recovery teleport, 3 leader cuts",
   S6: "Preview Yard: 6 cars, barrels, press, truck, pools, 3 cells",
+  S7: "Preview Yard in a theme: S6's views, then a lap at 430 u/s",
 };
 
 /** One scripted frame: everything Renderer.follow / shake / frame is given. */
@@ -369,6 +381,12 @@ function script(scene: SceneId, track: Track, n: number): Frame[] {
       return teleportScene(track, n, rnd);
     case "S6":
       return yardScene(track, n, rnd);
+    case "S7": {
+      // S6's frames (its three views), then S4's lap of the same track: the furniture standing
+      // in view, then every tile of the yard baked on the way round.
+      const views = Math.min(n, FRAMES);
+      return [...yardScene(track, views, rnd), ...lapScene(track, n - views, rnd)];
+    }
   }
 }
 
@@ -423,6 +441,9 @@ export interface CellA {
   over: number; // frames slower than overMs
   head: number[]; // the first six frame times (a canvas switching to software shows here)
   checksum: string; // FNV-1a of every CHECK_EVERY-th frame's pixels: equal = the same picture
+  theme: string; // the theme the cell's track was drawn in (gfx/theme.ts)
+  baked: number; // tiles baked while the frames were measured ...
+  bakeUnits: number; // ... and the cost units a frame's share of the baking spent on them (worldStats.units)
 }
 
 export interface CellB {
@@ -522,7 +543,7 @@ interface Opts {
 }
 
 function framesFor(scene: SceneId, track: Track, o: Opts): Frame[] {
-  return script(scene, track, o.frames ?? (scene === "S4" ? lapFrames(track) : FRAMES));
+  return script(scene, track, o.frames ?? (scene === "S4" ? lapFrames(track) : scene === "S7" ? FRAMES + lapFrames(track) : FRAMES));
 }
 
 function runA(canvas: HTMLCanvasElement, scene: SceneId, track: Track, o: Opts): CellA {
@@ -550,12 +571,14 @@ function runA(canvas: HTMLCanvasElement, scene: SceneId, track: Track, o: Opts):
 
     const r = new Renderer(canvas, track);
     const times = new Float64Array(n);
+    const baked0 = worldStats.baked, units0 = worldStats.units;
     for (let i = 0; i < n; i++) {
       t0 = realNow();
       play(r, frames[i], i);
       read();
       times[i] = realNow() - t0;
     }
+    const baked = worldStats.baked - baked0, bakeUnits = worldStats.units - units0;
 
     // The same frames once more for the checksum (the camera eases, so every frame's follow
     // runs; only the hashed frames are drawn).
@@ -583,6 +606,9 @@ function runA(canvas: HTMLCanvasElement, scene: SceneId, track: Track, o: Opts):
       over: countOver(times, o.overMs),
       head: Array.from(times.subarray(0, 6)),
       checksum: hash.toString(16).padStart(8, "0"),
+      theme: themeOf(track),
+      baked,
+      bakeUnits,
     };
   } finally {
     pinClock(false);
@@ -692,7 +718,7 @@ function report(out: BenchOut): string {
     else if (!c.supported) lines.push(`${id}  performance.memory is not available in this browser`);
     else lines.push(`${id}  ${String(Math.round((c.allocBytes - c.probeBytes) / c.n)).padStart(11)}  ${(c.allocBytes / 1024).toFixed(0).padStart(8)}  ${(c.deltaBytes / 1024).toFixed(0).padStart(8)}  ${String(c.gcDrops).padStart(3)}`);
   }
-  lines.push("", ...[...SCENES, YARD_SCENE].map((s) => `${s}  ${TITLES[s as SceneId]}`));
+  lines.push("", ...[...SCENES, YARD_SCENE, THEME_SCENE].map((s) => `${s}  ${TITLES[s as SceneId]}`));
   return lines.join("\n");
 }
 
@@ -750,11 +776,15 @@ export async function runBench(view: HTMLCanvasElement, params: URLSearchParams)
   try {
     if (!["A", "B", "C"].includes(metric)) throw new Error(`unknown metric ${metric}`);
     const one = params.get("scene")?.toUpperCase() as SceneId | undefined;
-    const yard = one === YARD_SCENE;
+    const yard = one === YARD_SCENE || one === THEME_SCENE;
     if (one && !yard && !(SCENES as readonly string[]).includes(one)) throw new Error(`unknown scene ${one}`);
     const scenes: SceneId[] = one ? [one] : metric === "A" ? [...SCENES] : [metric === "B" ? "S4" : "S3"];
     const named = params.get("track");
-    const tracks = yard ? [testTrack(YARD_TRACK)!] : named ? [testTrack(named) ?? trackById(named)] : trackList().map((e) => trackById(e.id));
+    // The look of another theme on the cell's track: asked for with &theme=, and S7's by default.
+    const asked = params.get("theme") ?? (one === THEME_SCENE ? "desert" : null);
+    if (asked !== null && !isTheme(asked)) throw new Error(`unknown theme ${asked}`);
+    const themed = (t: Track): Track => (isTheme(asked) ? themedTrack(t, asked) : t);
+    const tracks = (yard ? [testTrack(YARD_TRACK)!] : named ? [testTrack(named) ?? trackById(named)] : trackList().map((e) => trackById(e.id))).map(themed);
     const hold = num("hold");
     if (hold !== null) {
       const frames = framesFor(scenes[0], tracks[0], opts);
