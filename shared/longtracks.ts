@@ -24,6 +24,8 @@ import type { TrackDef } from "./track";
 export const SLAG_HARBOUR: TrackDef = {
   id: "slag-harbour",
   name: "Slag Harbour",
+  // THEME-SCHEMA (PLAN-THEMES 2.6): the dockside becomes a harbour quarter; looks only (its oil slick comes with THEME-TRACKS).
+  theme: "city",
   control: [
     [1800, 3700], [2400, 3650], [2900, 3450], [3400, 3420], [3900, 3580], [4500, 3700], [5200, 3700],
     [5900, 3700], [6400, 3550], [6600, 3100], [6500, 2600], [6250, 2150], [6300, 1650], [6500, 1200], [6300, 700], [5800, 500],
@@ -73,6 +75,8 @@ export const SLAG_HARBOUR: TrackDef = {
 export const BREAKERS_MILE: TrackDef = {
   id: "breakers-mile",
   name: "Breaker's Mile",
+  // THEME-SCHEMA (PLAN-THEMES 2.6): its straights a desert highway, the chasm a canyon; looks only (its sand comes with THEME-TRACKS).
+  theme: "desert",
   control: [
     [2100, 800], [2700, 800], [3300, 800], [3900, 800], [4400, 860], [4720, 1120], [4850, 1550], [4850, 2050],
     [5050, 2550], [5500, 2780], [6100, 2850], [6600, 2800], [6950, 3200], [6850, 3800], [6300, 4200], [5600, 4250], [5000, 4250],
