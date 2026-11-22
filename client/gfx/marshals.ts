@@ -33,8 +33,9 @@
 // the road, so they share the flag's pictures: one waves toward the track while the other does.
 // Each picture is worked out pixel centre by pixel centre in the figure's own frame (no blend,
 // no anti-aliasing), then lit as the cars are: the sun top-left, a dark outline, a cast shadow.
-// The sheet is painted with the Renderer, and again when a Renderer of a track with another
-// heading draws. A frame allocates nothing.
+// The sheet is worked out with the Renderer, put on its canvas in the first frame that draws a
+// marshal, and painted again when a Renderer of a track with another heading draws. A frame
+// allocates nothing.
 
 import type { RaceView } from "../render";
 import { pointAt, type Track } from "../../shared/track";
@@ -301,20 +302,36 @@ export function marshalIndexSheet(h: number, sheet: Uint8Array = new Uint8Array(
   return sheet;
 }
 
-// The sheet's canvas holds the pictures of one heading; its indices and where the cells lie.
-let leased = NaN;
+// The sheet as indices and where its cells lie: those of one heading (`baked`). Its canvas holds
+// the pictures of `painted`.
+let baked = NaN;
+let painted = NaN;
 const index = new Uint8Array(MARSHAL_W * MARSHAL_H);
 export const MARSHAL_AT = new Int8Array(M_CELLS * 2);
 let image: ImageData | null = null;
 let words: Uint32Array | null = null;
 let colours: Uint32Array | null = null;
 
-/** The sheet's canvas with the pictures of heading `h`: painted now if it held another's. */
+/** Work out the sheet of heading `h`, unless it is the one worked out last. */
+function bake(h: number): void {
+  if (h === baked) return;
+  baked = h;
+  painted = NaN;
+  marshalIndexSheet(h, index, MARSHAL_AT);
+}
+
+/**
+ * The sheet's canvas with the pictures of heading `h`: put on it now if it held another's. The
+ * canvas is not made before a frame draws from it, as every sprite sheet's: the view that is
+ * drawn on when the first sheet is made decides where they all live (sprites.ts spritesFor), and
+ * a page builds a Renderer on a canvas it may never draw on (main.ts does, before the benchmark
+ * takes over).
+ */
 function lease(h: number): HTMLCanvasElement {
   const made = marshalSheet();
-  if (h !== leased) {
-    leased = h;
-    marshalIndexSheet(h, index, MARSHAL_AT);
+  bake(h);
+  if (h !== painted) {
+    painted = h;
     if (typeof ImageData !== "undefined") {
       if (!image || !words) {
         image = new ImageData(MARSHAL_W, MARSHAL_H);
@@ -378,7 +395,7 @@ export class Marshals {
       n++;
     }
     this.count = n;
-    if (n) lease(this.heading); // painted with the Renderer, not in its first frame
+    if (n) bake(this.heading); // worked out with the Renderer; its first frame only puts it on the canvas
   }
 
   /**
