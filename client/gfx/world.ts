@@ -52,7 +52,7 @@
 // The scrapyard is the theme every shipped track has: its tiles are what they were, bit for bit.
 
 import { MAX_PLAYERS } from "../../shared/protocol";
-import { BARREL_R, gapAt, gridSlot, halfOn, holeAt, pointAt, PRESS_DEPTH, PUDDLE_TRACTION_INSET, queryRoads, queryTrack, queryTrackNear, TRUCK_BAND, TRUCK_CAB, TRUCK_HALF, wallAt, widenAt, type Gap, type Track, type Vec } from "../../shared/track";
+import { BARREL_R, gapAt, gridSlot, halfOn, holeAt, pointAt, PRESS_DEPTH, PUDDLE_TRACTION_INSET, queryMain, queryRoads, queryTrack, TRUCK_BAND, TRUCK_CAB, TRUCK_HALF, wallAt, widenAt, type Gap, type Track, type Vec } from "../../shared/track";
 import type { CarView } from "../render";
 import { BAYER4, PALETTE, type PaletteName } from "./palette";
 import { KEEP_OFF, sceneryFor, sceneryOf, type Scenery } from "./theme";
@@ -973,15 +973,16 @@ function buildArt(track: Track, scenery: Scenery): Art {
       const g = end ? b.mergeGore : b.forkGore;
       if (!g) continue;
       // Walk the shortcut from its end of the mouth to the gore: how far its centreline is from
-      // the main road's (the nearest point of it, searched as a car's is), and the point between
-      // them that is as far from the one as from the other (looked for along the shortcut's
-      // normal, by halving: `lane` is that distance).
+      // the main road's (the nearest point of it, searched round the last one's segment as a
+      // car's is; queryMain: the main road's own query, which in a mouth a car's is not), and
+      // the point between them that is as far from the one as from the other (looked for along
+      // the shortcut's normal, by halving: `lane` is that distance).
       const from = end ? r.length : 0, dir = end ? -1 : 1, reach = Math.abs(g.u - from);
       let hint = pointAt(track, end ? b.s1 : b.s0).seg;
       let arrowsAt = -1, arrowsS = 0, tip: Vec | null = null, kerbs: Vec | null = null, sideM = 1, sideB = 1;
       for (let d = 0; d <= reach && !kerbs; d += 2) {
         const p = pointAt(r, from + dir * d);
-        const q = queryTrackNear(track, p.x, p.y, hint);
+        const q = queryMain(track, p.x, p.y, hint);
         hint = q.seg;
         // The side of the shortcut the main road lies on: as a query's side, of the main road's nearest point.
         const toward = Math.cos(p.h) * -q.ny - Math.sin(p.h) * -q.nx < 0 ? -1 : 1;
@@ -989,7 +990,7 @@ function buildArt(track: Track, scenery: Scenery): Art {
         let lo = 0, hi = q.dist;
         for (let step = 0; step < 24; step++) {
           const v = (lo + hi) / 2;
-          if (queryTrackNear(track, p.x + nx * v, p.y + ny * v, hint).dist > v) lo = v;
+          if (queryMain(track, p.x + nx * v, p.y + ny * v, hint).dist > v) lo = v;
           else hi = v;
         }
         const lane = (lo + hi) / 2;

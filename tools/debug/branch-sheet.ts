@@ -428,7 +428,27 @@ function layout(t: Track): void {
   // How much of it lies along the shortcuts (beyond the main road's own strip of junk: its wall + 190 + a heap's size).
   const far = art.junk.filter((j) => queryTrack(t, j.x / ZOOM, j.y / ZOOM).dist > t.wall + 230).length;
   say(far > 0, `junk along the shortcuts: ${far} pieces lie further from the main road than its own heaps reach`);
-  say(art.mouths === t.branches.length * 2, `mouth paint: ${art.mouths} mouths have their wedge (a fork its arrows too), of ${t.branches.length * 2}`);
+  // The paint of the mouths: bone-white asphalt (nothing else paints the asphalt that colour on a
+  // track without an island), counted where it lies along the main road. Each fork has its two
+  // arrows and its wedge, each merge its wedge; and none of it lies anywhere else.
+  const bone = sceneryOf("scrapyard").index.bone1;
+  const painted = t.branches.map(() => [0, 0]);
+  let stray = 0;
+  for (const [tx, ty] of tilesOf(t)) {
+    const kinds = tile(t, tx, ty, true), idx = tile(t, tx, ty, false);
+    for (let p = 0; p < idx.length; p++) {
+      if (idx[p] !== bone || kinds[p] !== KIND.tarmac) continue;
+      const q = queryTrack(t, (tx * TILE + (p % TILE) + 0.5) / ZOOM, (ty * TILE + Math.floor(p / TILE) + 0.5) / ZOOM);
+      let found = false;
+      t.branches.forEach((b, j) => {
+        if (found || q.dist > 2 * t.wall) return;
+        if (b.forkGore && q.s >= b.s0 && q.s <= b.forkGore.s) painted[j][0]++, (found = true);
+        else if (b.mergeGore && q.s >= b.mergeGore.s && q.s <= b.s1) painted[j][1]++, (found = true);
+      });
+      if (!found) stray++;
+    }
+  }
+  say(art.mouths === t.branches.length * 2 && stray === 0 && painted.every((m) => m[0] >= 1200 && m[1] >= 500), `mouth paint: ${art.mouths} of ${t.branches.length * 2} mouths have their wedge; painted asphalt pixels per mouth (fork with its two arrows, merge): ${painted.map((m) => m.join(", ")).join(" | ")}; ${stray} anywhere else`);
 }
 
 // ---- a Renderer in Node --------------------------------------------------------------------------
