@@ -3,6 +3,8 @@
 // points placed by distance along the centerline (s). All queries are pure so client and
 // server agree.
 
+import { isTheme, themeOf, THEMES, type Theme } from "./theme";
+
 export interface Vec { x: number; y: number }
 
 /**
@@ -57,6 +59,29 @@ export interface Dirt { k: "dirt"; s0: number; s1: number; lat0: number; lat1: n
  * road at vx units/s (+ = toward the right of travel), a fixed drift each tick. Static.
  */
 export interface Belt { k: "belt"; s0: number; s1: number; lat0: number; lat1: number; vx: number }
+
+// ---- theme surfaces (THEME-SCHEMA, PLAN-THEMES.md 2.3, advisor changes 6, 7, 10) ----------------
+// One per theme, each only on its own theme's tracks (validateTrack): sand on a desert track, oil
+// on a city one, a ford on a jungle one. Shaped like water and dirt: a rectangle s0..s1 by lat0..lat1
+// in track coordinates, inside the asphalt; the declared rectangle is what is drawn (the bounds the
+// puddle is painted in, as water's: TH-LOOK-2, TH-LOOK-3) and a car is to feel it inside tractionRect
+// (THEME-SURF). They do NOTHING yet: buildTrack places them in their own lists (Track.sand, oil,
+// fords) and in Track.themeSurfaces / themeAt, never in Track.surfaces / surfAt, so physics and the
+// bots see none of them (no physics or bot change until THEME-SURF).
+
+/** Sand (desert): "bogs you, keeps your line" (THEME-SURF). At most SAND_LEN_MAX long, and with the dirt it runs into (LOOSE_JOIN) too. */
+export interface Sand { k: "sand"; s0: number; s1: number; lat0: number; lat1: number }
+
+/** An oil slick (city): "steering goes, brakes stay" (THEME-SURF). At most OIL_LEN_MAX long; a dry lane beside it, or on a straight (water's rule). */
+export interface Oil { k: "oil"; s0: number; s1: number; lat0: number; lat1: number }
+
+/**
+ * A ford (jungle): a stream across the road that is to drift a car on it across the road at vx
+ * units/s (+ = toward the right of travel), as a belt does, and slow it (THEME-SURF): "aim upstream".
+ * FORD_LEN_MIN..FORD_LEN_MAX long, FORD_VX_MIN <= |vx| <= FORD_VX_MAX, on a straight, and no solid
+ * within FORD_CLEAR past it (nor beside it).
+ */
+export interface Ford { k: "ford"; s0: number; s1: number; lat0: number; lat1: number; vx: number }
 
 /** A tyre mound (M4-SURF): a static solid circle of radius r (TYRES_R_MIN..TYRES_R_MAX) at s, lat. */
 export interface Tyres { k: "tyres"; s: number; lat: number; r: number }
@@ -130,7 +155,7 @@ export interface PlacedIsland extends Island {
 }
 
 /** What a road carries (the main road or a branch): every feature but a branch. */
-export type RoadFeature = Ramp | Gap | Hole | Cell | Water | Dirt | Belt | Tyres | Barrels | Truck | Press | Widen | Island;
+export type RoadFeature = Ramp | Gap | Hole | Cell | Water | Dirt | Belt | Sand | Oil | Ford | Tyres | Barrels | Truck | Press | Widen | Island;
 
 /**
  * A shortcut road (BR-SCHEMA, PLAN-BRANCH.md 2.1): it leaves the main road at a fork at main s0 and
@@ -165,6 +190,13 @@ export interface TrackDef {
   features?: Feature[];
   /** Recovery points (s): one before every hazard, plus the start line. None = [0]. */
   recovery?: number[];
+  /**
+   * THEME-SCHEMA (PLAN-THEMES 2.1): the track's surroundings, fixed per track. None = the scrapyard
+   * (shared/theme.ts themeOf); the three original tracks never get one. buildTrack ignores it (a
+   * branch's road carries its track's); validateTrack refuses an unknown one and allows each theme
+   * surface only on its own theme's tracks.
+   */
+  theme?: Theme;
 }
 
 /** A hole with its centre in world coordinates (computed once by buildTrack). */
@@ -288,6 +320,11 @@ export interface Track {
   presses: PlacedPress[];
   widens: Widen[];
   islands: PlacedIsland[];
+  // THEME-SCHEMA: the theme surfaces as declared (each its draw rectangle), sorted by s0. They do
+  // nothing yet (THEME-SURF): never in surfaces / surfAt below.
+  sand: Sand[];
+  oil: Oil[];
+  fords: Ford[];
   // M4-SURF: what a car feels, in per-segment buckets built once (no scan of every feature per tick).
   /** Water, dirt and belts where a car feels them (Surface), sorted by s0. */
   surfaces: Surface[];
@@ -295,6 +332,13 @@ export interface Track {
   surfAt: readonly Surface[][];
   /** Per segment i: the first index in surfaces whose s1 > cum[i] (the bots look ahead from there). */
   surfFrom: number[];
+  /**
+   * THEME-SCHEMA: the theme surfaces where a car is to feel them (Surface: kind SURF_SAND, SURF_OIL or
+   * SURF_FORD, the traction rectangle, a ford's vx), sorted by s0, and per segment i the ones whose s
+   * range overlaps cum[i]..cum[i + 1] (as surfAt). Read by nothing yet: THEME-SURF makes them act.
+   */
+  themeSurfaces: Surface[];
+  themeAt: readonly Surface[][];
   /** Per segment i: the tyre mounds a car or a rivet whose nearest segment is i can touch. */
   tyresAt: readonly PlacedTyres[][];
   /** Per segment i: the first index in tyres whose far edge (s + r) is less than TYRES_BEHIND behind cum[i]. */
@@ -337,12 +381,17 @@ export interface Track {
 export const SURF_WATER = 1;
 export const SURF_DIRT = 2;
 export const SURF_BELT = 3;
+/** THEME-SCHEMA's theme surfaces (Track.themeSurfaces): nothing reads them yet (THEME-SURF). */
+export const SURF_SAND = 4;
+export const SURF_OIL = 5;
+export const SURF_FORD = 6;
 
 /**
  * A surface as a car feels it (M4-SURF): a water pool or a dirt patch by its traction rectangle
  * (tractionRect: the declared one less PUDDLE_TRACTION_INSET), a belt by its declared rectangle; a
  * car whose centre is strictly inside (s0 < s < s1, lat0 < lat < lat1) is on it. vx: a belt's drift
- * (units/s, + = toward the right of travel), 0 for water and dirt.
+ * (units/s, + = toward the right of travel), 0 for water and dirt. THEME-SCHEMA: sand, oil and a
+ * ford by their traction rectangles (a ford's vx its drift), in Track.themeSurfaces only.
  */
 export interface Surface {
   kind: number;
@@ -587,6 +636,28 @@ export const BRANCH_SEP = 40;
 /** The tyre-stack nose at each gore: its radius (in the tyre mounds' range). */
 export const GORE_NOSE_R = 24;
 
+// THEME-SCHEMA constants (PLAN-THEMES 2.3, advisor change 6; the user's mud rule, PLAN-M4.md "Mud length").
+/** A sand patch is at most this long (the user's rule for mud: no stretch longer than ~350 units). */
+export const SAND_LEN_MAX = 350;
+/**
+ * ... and so is a stretch of loose ground with sand in it: sand and dirt patches (any lat) whose s
+ * ranges overlap or lie less than LOOSE_JOIN apart are one stretch, at most SAND_LEN_MAX from the
+ * first one's s0 to the last one's s1. LOOSE_JOIN: a quarter of a second of firm road at 400 u/s, no
+ * breather (the user's 700-unit lane was "too long"; two patches end to end are one long one).
+ */
+export const LOOSE_JOIN = 100;
+/** An oil slick is at most this long. */
+export const OIL_LEN_MAX = 200;
+/** A ford's length range, and its drift's (|vx|, units/s). */
+export const FORD_LEN_MIN = 40;
+export const FORD_LEN_MAX = 160;
+export const FORD_VX_MIN = 20;
+export const FORD_VX_MAX = 100;
+/** No solid lies within this far past a ford (along the track, edge to edge, across the whole road), nor beside it: the drift carries a car out of it sideways. */
+export const FORD_CLEAR = 80;
+/** Which theme each theme surface belongs to (validateTrack's gating, advisor change 10). */
+export const THEME_OF_SURFACE: Readonly<Record<"sand" | "oil" | "ford", Theme>> = { sand: "desert", oil: "city", ford: "jungle" };
+
 // ---- the traction area of a puddle (M4-WORLD; moved here from client/gfx/puddle-shape.ts by M4-SURF, unchanged) ----
 // User decisions 2026-11-21: "dirt and water puddles should not be square, it should read as a
 // puddle", and "the traction square" is to be made smaller so that it fits inside the puddle.
@@ -600,7 +671,7 @@ export const GORE_NOSE_R = 24;
 // against it): a car is never slowed or sent sliding by ground that does not show it.
 
 /** A puddle's declared rectangle: a water pool's or a dirt patch's, in track coordinates (world units). */
-export type PuddleRect = Pick<Water, "s0" | "s1" | "lat0" | "lat1"> | Pick<Dirt, "s0" | "s1" | "lat0" | "lat1">;
+export type PuddleRect = Pick<Water | Dirt | Sand | Oil | Ford, "s0" | "s1" | "lat0" | "lat1">;
 
 /** The traction area lies this far inside a puddle's declared rectangle, on every side (world units). */
 export const PUDDLE_TRACTION_INSET = 12;
@@ -697,9 +768,14 @@ function newRoad(def: TrackDef, pts: Vec[], cum: number[], length: number, roadN
     presses: [],
     widens: [],
     islands: [],
+    sand: [],
+    oil: [],
+    fords: [],
     surfaces: [],
     surfAt: [],
     surfFrom: [],
+    themeSurfaces: [],
+    themeAt: [],
     tyresAt: [],
     tyresFrom: [],
     islandsAt: [],
@@ -758,6 +834,15 @@ function placeFeatures(track: Track, features: readonly Feature[], rec: readonly
       case "belt":
         track.belts.push({ ...f });
         break;
+      case "sand":
+        track.sand.push({ ...f });
+        break;
+      case "oil":
+        track.oil.push({ ...f });
+        break;
+      case "ford":
+        track.fords.push({ ...f });
+        break;
       case "tyres": {
         const p = trackPoint(track, f.s, f.lat);
         track.tyres.push({ ...f, x: p.x, y: p.y, seg: p.seg });
@@ -799,6 +884,9 @@ function placeFeatures(track: Track, features: readonly Feature[], rec: readonly
   track.water.sort((a, b) => a.s0 - b.s0);
   track.dirt.sort((a, b) => a.s0 - b.s0);
   track.belts.sort((a, b) => a.s0 - b.s0);
+  track.sand.sort((a, b) => a.s0 - b.s0);
+  track.oil.sort((a, b) => a.s0 - b.s0);
+  track.fords.sort((a, b) => a.s0 - b.s0);
   track.tyres.sort((a, b) => a.s - b.s);
   track.barrels.sort((a, b) => a.s - b.s);
   track.trucks.sort((a, b) => a.s - b.s);
@@ -889,6 +977,22 @@ function buildBuckets(track: Track): void {
   track.surfFrom = surfFrom;
   track.tyresAt = tyresAt;
   track.tyresFrom = tyresFrom;
+  // THEME-SCHEMA: the theme surfaces, as surfaces are (their traction rectangles, per segment), in
+  // lists of their own that nothing reads yet (THEME-SURF): a track without any shares one frozen
+  // empty list per segment.
+  const theme: Surface[] = [];
+  for (const f of track.sand) theme.push({ kind: SURF_SAND, ...tractionRect(f), vx: 0 });
+  for (const f of track.oil) theme.push({ kind: SURF_OIL, ...tractionRect(f), vx: 0 });
+  for (const f of track.fords) theme.push({ kind: SURF_FORD, ...tractionRect(f), vx: f.vx });
+  theme.sort((a, b) => a.s0 - b.s0 || a.lat0 - b.lat0);
+  track.themeSurfaces = theme;
+  const themeAt: Surface[][] = [];
+  for (let i = 0; i < n; i++) {
+    const a = cum[i], b = cum[i + 1];
+    const on = theme.length ? theme.filter((f) => f.s0 < b && f.s1 > a) : [];
+    themeAt.push(on.length ? on : (NO_SURFACES as Surface[]));
+  }
+  track.themeAt = themeAt;
   // M4-SURF part 2: the islands by segment (by s: they lie on one section, and a car's or a rivet's
   // nearest segment is on its own section), where the bots look ahead for them, and the surfaces in
   // each island's lanes.
@@ -1569,6 +1673,9 @@ export function validateTrack(track: Track): string[] {
   const errors: string[] = [];
   const L = track.length;
   const f1 = (v: number) => v.toFixed(1);
+  // THEME-SCHEMA: a theme is one of THEMES, or none (the scrapyard).
+  const named: unknown = track.def.theme;
+  if (named !== undefined && !isTheme(named)) errors.push(`theme ${JSON.stringify(named)}: not a theme (one of ${THEMES.join(", ")}, or none for the scrapyard)`);
   const straight = startStraightEnd(track);
   const zone = (what: string, lo: number, hi: number) => {
     if (!(lo >= 0 && hi <= L && lo <= hi)) errors.push(`${what}: outside 0..${f1(L)} (or wraps past the start line)`);
@@ -1695,12 +1802,14 @@ function footDist(track: Track, f: Foot, s: number, lat: number): number {
 }
 
 /**
- * The widest stretch of asphalt across the road at s with no water and no static solid on it
- * (islands, tyre mounds, trucks): the dry lane a pool in a bend must leave.
+ * The widest stretch of asphalt across the road at s with no water, no oil (THEME-SCHEMA, advisor
+ * change 6) and no static solid on it (islands, tyre mounds, trucks): the dry lane a pool or an oil
+ * slick in a bend must leave.
  */
 function widestDry(track: Track, s: number): number {
   const blocked: [number, number][] = [];
   for (const w of track.water) if (s >= w.s0 && s <= w.s1) blocked.push([w.lat0, w.lat1]);
+  for (const o of track.oil) if (s >= o.s0 && s <= o.s1) blocked.push([o.lat0, o.lat1]);
   for (const i of track.islands) if (s >= i.s0 && s <= i.s1) blocked.push([i.lat0, i.lat1]);
   for (const t of track.tyres) {
     const ds = Math.abs(s - t.s);
@@ -1773,6 +1882,14 @@ function sideGap(track: Track, s0: number, s1: number, lat0: number, lat1: numbe
  *   there would touch it).
  * - A pool leaves a dry lane of at least DRY_LANE_MIN at every s it covers, or lies on a straight
  *   (the road turns less than POOL_STRAIGHT_TOLERANCE over it).
+ * - THEME-SCHEMA (PLAN-THEMES 2.3, advisor changes 6 and 10), the theme surfaces: each only on its own
+ *   theme's tracks (sand desert, oil city, ford jungle; themeOf, a branch's road its track's); inside
+ *   the asphalt (the declared rectangle, at every sample: the verge rule); one surface at a time with
+ *   the others; water's rules (off take-off zones and recovery points); sand <= SAND_LEN_MAX, and so is
+ *   a stretch of sand and dirt less than LOOSE_JOIN apart; oil <= OIL_LEN_MAX with water's dry-lane-or-
+ *   straight rule (widestDry blocks water and oil alike); a ford FORD_LEN_MIN..FORD_LEN_MAX long, its
+ *   drift FORD_VX_MIN..FORD_VX_MAX either way, on a straight, no solid beside it or within FORD_CLEAR
+ *   past it.
  */
 function validateSchema(track: Track, errors: string[], zone: (what: string, lo: number, hi: number) => void): void {
   const f1 = (v: number) => v.toFixed(1);
@@ -1809,6 +1926,59 @@ function validateSchema(track: Track, errors: string[], zone: (what: string, lo:
       if (wallToWall && turn > POOL_STRAIGHT_TOLERANCE) errors.push(`${what}: runs wall to wall in a bend (the road turns ${turn.toFixed(3)} rad over it; its inside's arrows would reach past its end)`);
     }
     surfaces.push(rect(what, b));
+  }
+  // THEME-SCHEMA (PLAN-THEMES 2.3, advisor changes 6 and 10): the theme surfaces. Each only on its own
+  // theme's tracks (themeOf: a branch's road carries its track's theme; the theme-less yards and the
+  // shipped tracks are the scrapyard, which has none). The verge rule (advisor change 6): the declared
+  // rectangle lies inside the asphalt at every sample, so a car only ever feels one on the asphalt (its
+  // traction rectangle is PUDDLE_TRACTION_INSET further in) and it never stacks with the verge's dirt
+  // drag. One surface at a time with water, dirt and belts (the overlap check below). Their lengths
+  // here; water's rules for all three and the ford's clearance further down.
+  const theme = themeOf(track.def);
+  const themed = (kind: keyof typeof THEME_OF_SURFACE, what: string, f: Sand | Oil | Ford) => {
+    const want = THEME_OF_SURFACE[kind];
+    if (theme !== want) errors.push(`${what}: ${kind} lies only on a ${want} track (this one is ${theme})`);
+    for (const s of samplesIn(track, f.s0, f.s1)) {
+      if (f.lat0 < -halfAt(track, s, -1) || f.lat1 > halfAt(track, s, 1)) {
+        errors.push(`${what}: reaches past the asphalt at s=${f1(s)} (a theme surface lies inside the asphalt, lat ${f1(-halfAt(track, s, -1))}..${f1(halfAt(track, s, 1))} there)`);
+        break;
+      }
+    }
+    surfaces.push(rect(what, f));
+  };
+  for (const f of track.sand) {
+    const what = `sand ${span(f.s0, f.s1)}`;
+    if (!(f.s1 - f.s0 <= SAND_LEN_MAX)) errors.push(`${what}: ${f1(f.s1 - f.s0)} long, longer than ${SAND_LEN_MAX} (the mud rule)`);
+    themed("sand", what, f);
+  }
+  // The mud rule for a stretch (adopted advisor suggestion): sand and the dirt it runs into, LOOSE_JOIN.
+  const loose = [...track.sand.map((f) => ({ s0: f.s0, s1: f.s1, sand: true })), ...track.dirt.map((f) => ({ s0: f.s0, s1: f.s1, sand: false }))].sort((a, b) => a.s0 - b.s0);
+  for (let i = 0; i < loose.length; ) {
+    let j = i, hi = loose[i].s1, sand = loose[i].sand;
+    while (j + 1 < loose.length && loose[j + 1].s0 < hi + LOOSE_JOIN) {
+      j++;
+      hi = Math.max(hi, loose[j].s1);
+      sand ||= loose[j].sand;
+    }
+    const lo = loose[i].s0;
+    if (sand && j > i && hi - lo > SAND_LEN_MAX) {
+      errors.push(`sand and dirt ${span(lo, hi)}: ${j - i + 1} patches less than ${LOOSE_JOIN} apart, one stretch of loose ground ${f1(hi - lo)} long, longer than ${SAND_LEN_MAX} (the mud rule)`);
+    }
+    i = j + 1;
+  }
+  for (const f of track.oil) {
+    const what = `oil ${span(f.s0, f.s1)}`;
+    if (!(f.s1 - f.s0 <= OIL_LEN_MAX)) errors.push(`${what}: ${f1(f.s1 - f.s0)} long, longer than ${OIL_LEN_MAX}`);
+    themed("oil", what, f);
+  }
+  for (const f of track.fords) {
+    const what = `ford ${span(f.s0, f.s1)}`;
+    const len = f.s1 - f.s0;
+    if (!(len >= FORD_LEN_MIN && len <= FORD_LEN_MAX)) errors.push(`${what}: ${f1(len)} long, outside ${FORD_LEN_MIN}..${FORD_LEN_MAX}`);
+    if (!(Math.abs(f.vx) >= FORD_VX_MIN && Math.abs(f.vx) <= FORD_VX_MAX)) errors.push(`${what}: drift vx ${f.vx} outside ${FORD_VX_MIN} <= |vx| <= ${FORD_VX_MAX}`);
+    const turn = turnOver(track, f.s0, f.s1);
+    if (turn > POOL_STRAIGHT_TOLERANCE) errors.push(`${what}: not on a straight (the road turns ${turn.toFixed(3)} rad over it, more than ${POOL_STRAIGHT_TOLERANCE})`);
+    themed("ford", what, f);
   }
 
   // Solids.
@@ -1944,6 +2114,13 @@ function validateSchema(track: Track, errors: string[], zone: (what: string, lo:
     }
   }
   across(solids, hazards, "");
+  // THEME-SCHEMA: no solid beside a ford or within FORD_CLEAR past it, across the whole road.
+  for (const f of track.fords) {
+    const reach = box("", f.s0, f.s1 + FORD_CLEAR);
+    for (const x of solids) {
+      if (feetOverlap(reach, x)) errors.push(`ford ${span(f.s0, f.s1)}: ${x.what} lies beside it or within ${FORD_CLEAR} past it (no solid there: its drift carries a car out of it sideways)`);
+    }
+  }
   among(widens, "");
   across(widens, jumps, " (a widened road has no jumps)");
 
@@ -1960,9 +2137,18 @@ function validateSchema(track: Track, errors: string[], zone: (what: string, lo:
     }
   }
 
-  // Water: off take-off zones and recovery points; a dry lane, or on a straight.
-  for (const w of track.water) {
-    const what = `water ${span(w.s0, w.s1)}`;
+  // Water: off take-off zones and recovery points; a dry lane, or on a straight. THEME-SCHEMA (PLAN-THEMES
+  // 2.3, advisor change 6): water's rules for the theme surfaces too, after water's (so a track without
+  // them reports as before): sand, oil and fords off take-off zones and recovery points; oil leaves a
+  // dry lane (water and oil both count as blocked there, widestDry) or lies on a straight (a ford is on
+  // one already).
+  const wet: { what: string; w: Water | Sand | Oil | Ford; dry: boolean }[] = [
+    ...track.water.map((w) => ({ what: `water ${span(w.s0, w.s1)}`, w, dry: true })),
+    ...track.sand.map((w) => ({ what: `sand ${span(w.s0, w.s1)}`, w, dry: false })),
+    ...track.oil.map((w) => ({ what: `oil ${span(w.s0, w.s1)}`, w, dry: true })),
+    ...track.fords.map((w) => ({ what: `ford ${span(w.s0, w.s1)}`, w, dry: false })),
+  ];
+  for (const { what, w, dry: needsDry } of wet) {
     const pool = box(what, w.s0, w.s1, w.lat0, w.lat1);
     for (const r of track.ramps) {
       if (feetOverlap(pool, box("", r.s + r.len, r.s + r.len + LIP_ZONE))) errors.push(`${what}: on the take-off zone of the ramp at s=${f1(r.s)}`);
@@ -1974,7 +2160,7 @@ function validateSchema(track: Track, errors: string[], zone: (what: string, lo:
       const car = box("", w.s0 - CAR_HALF_LEN, w.s1 + CAR_HALF_LEN, w.lat0 - CAR_HALF_WID, w.lat1 + CAR_HALF_WID);
       if (footDist(track, car, r, 0) === 0) errors.push(`${what}: on recovery point s=${f1(r)} (a car put back there touches it)`);
     }
-    for (const s of samplesIn(track, w.s0, w.s1)) {
+    for (const s of needsDry ? samplesIn(track, w.s0, w.s1) : []) {
       const dry = widestDry(track, s);
       if (dry >= DRY_LANE_MIN) continue;
       const turn = turnOver(track, w.s0, w.s1);
@@ -2099,6 +2285,8 @@ function buildBranch(main: Track, bd: Branch, roadNo: number, base: number): Pla
   const def: TrackDef = {
     id: `${main.def.id}/branch-${roadNo}`, name: `${main.def.name} shortcut ${roadNo}`, control: bd.control, halfWidth: bd.halfWidth, verge: main.def.verge,
     features: bd.features, recovery: bd.recovery,
+    // THEME-SCHEMA: a branch's road carries its track's theme (validateTrack's gating of its theme surfaces).
+    ...(main.def.theme !== undefined ? { theme: main.def.theme } : {}),
   };
   const road = newRoad(def, pts, cum, length, roadNo);
   placeFeatures(road, bd.features ?? [], bd.recovery ?? [], mouths);
