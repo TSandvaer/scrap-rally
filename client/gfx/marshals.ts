@@ -420,14 +420,16 @@ export class Marshals {
     // What changed since the frame before. A car that comes in is news only when the frame
     // before showed the race going: the cars already in when a race is first shown (a new
     // Renderer, one that drew the menu's tour until now, a spectator who joins) are none. Nor is
-    // a first frame in the middle of a race a GO.
+    // a first frame in the middle of a race a GO. This frame may show the results already: the
+    // car whose finish ends the race (alone: the winner; else the last one in) is counted in
+    // with them, the server ends the race in the step that car finishes in.
     const was = this.phase;
     if (phase !== was) {
       if (phase === RACING && was === COUNTDOWN) this.since[0] = now;
       this.phase = phase;
     }
     if (finished !== this.finished) {
-      if (finished > this.finished && phase === RACING && was === RACING) this.since[1] = now;
+      if (finished > this.finished && (phase === RACING || phase === OVER) && was === RACING) this.since[1] = now;
       this.finished = finished;
     }
     const n = this.count;

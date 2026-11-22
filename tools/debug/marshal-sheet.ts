@@ -33,7 +33,9 @@
 //   its cell has a pixel in the view, and nothing is drawn far off;
 // - the phases, on the Marshals class with the race handed over as client/main.ts hands it over:
 //   the left marshal's flag and its pace (fast, steady, slow, still) at every step of a whole
-//   race and the start of the next; a race whose last lap is on from GO; a spectator who joins
+//   race and the start of the next (its last car in ends it: the results come in the same frame
+//   as that car, and it still gets its burst); a race alone, ended by its winner the same way; a
+//   race whose last lap is on from GO; a spectator who joins
 //   late (no burst for the cars already in, one for the next); a paused race (held up and still
 //   through the pause and its 3-2-1, a GO again when it goes on, no burst for a car already in);
 // - the wave's four pictures of each flag are four different pictures, and the three flags
@@ -434,11 +436,30 @@ function phases(say: (good: boolean, what: string) => void): void {
     step("winner in", "chequered, fast", 840, { finished: 1 });
     step("3.8 s on", "chequered, steady", 3000);
     step("second car in", "chequered, fast", 840, { finished: 2 });
-    step("results", "chequered, slow", 3840, { phase: 3, lastLap: false });
+    step("3.8 s on", "chequered, steady", 3000); // its burst is over: the next one is the next car's own
+    // The last car in ends the race: the server sets the results in the step it finishes in, so
+    // the frame that counts it in is the first frame of the results. It gets its burst too.
+    step("last car in, which ends the race", "chequered, fast", 840, { finished: 3, phase: 3, lastLap: false });
+    step("the results, 3.8 s on", "chequered, slow", 3000);
     step("lobby again", "furled, still", 1000, { phase: 0, finished: 0 });
     step("next countdown", "held up, still", 3000, { phase: 1 });
     step("next GO", "pennant, fast", 840, { phase: 2 });
     tell("a whole race handed over as main.ts does it", steps);
+  }
+  // A race alone: the winner's finish ends it, so the results come in the same frame as the car.
+  {
+    const { race, run } = stage();
+    const steps: [string, string, string][] = [];
+    Object.assign(race, { phase: 1 });
+    run(1000);
+    Object.assign(race, { phase: 2 });
+    run(5000);
+    Object.assign(race, { lastLap: true });
+    steps.push(["the last lap", "last lap's flag, fast", run(2000)]);
+    Object.assign(race, { finished: 1, phase: 3, lastLap: false });
+    steps.push(["the winner in, and the results with it", "chequered, fast", run(840)]);
+    steps.push(["3.8 s on", "chequered, slow", run(3000)]);
+    tell("a race alone, ended by its winner", steps);
   }
   // A one-lap race: the last lap is on from GO, but GO comes first.
   {
