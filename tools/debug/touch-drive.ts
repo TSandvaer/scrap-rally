@@ -382,16 +382,20 @@ const DEG = Math.PI / 180;
 
 /**
  * Point mode (TOUCH-5): what the stick gives for the thumb's offset and the car the pad was handed
- * that step (heading, forward speed; null: no car), with the memo it ended on (rev): the steer is
- * pointSteer of the error; the throttle -1 when reversing (rev 1 or 2) or pointed past brakeAngle
- * above brakeSpeed, else 1; nothing inside the dead zone.
+ * that step (heading, forward speed; null: no car), with the memo it ended on (rev, brake): the steer
+ * is pointSteer of the error; the throttle -1 when reversing (rev 1 or 2) or braking a turn (brake
+ * 1), else 1; nothing inside the dead zone. The memo is checked against the error and speed too: a
+ * brake only pointed behind above brakeSpeed, and pointed behind (not reversing) always a turn's
+ * brake state (1 or 2); else the throttle comes back NaN (a mismatch).
  */
-function pointExpect(dx: number, dy: number, h: number | null, vf: number, rev: number, p: StickParams): [number, number] {
+function pointExpect(dx: number, dy: number, h: number | null, vf: number, rev: number, brake: number, p: StickParams): [number, number] {
   const aim = pointAim(dx, dy, p);
   if (aim === null || h === null) return [0, 0];
   const err = wrapAngle(aim - h);
-  const brake = Math.abs(err) / DEG > p.brakeAngle && vf > POINT_RULES.brakeSpeed;
-  return [rev === 1 || rev === 2 || brake ? -1 : 1, pointSteer(err, vf, p)];
+  const behind = Math.abs(err) / DEG > p.brakeAngle;
+  const reversing = rev === 1 || rev === 2;
+  const memoOk = brake === 1 ? behind && !reversing && vf > POINT_RULES.brakeSpeed : brake === 2 ? behind && !reversing : !behind || reversing;
+  return [memoOk ? (reversing || brake === 1 ? -1 : 1) : NaN, pointSteer(err, vf, p)];
 }
 
 // ---- driving by touch ----------------------------------------------------------------
@@ -399,28 +403,44 @@ function pointExpect(dx: number, dy: number, h: number | null, vf: number, rev: 
 /**
  * Wraps Game.step (debug page) to see every step's Controls as main.ts hands them over. Point mode's
  * per-step check (TOUCH-5): each step also logs the own car's heading and forward speed as the pad
- * was handed them (main.ts reads game.car right before; nothing moves it in between) and the pad's
- * memo after the read: [throttle, steer, h | null, vf, rev, fire] (DRAIN takes the log).
+ * was handed them (main.ts reads game.car right before; nothing moves it in between), the pad's
+ * memo after the read, the step's index in its frame (a rAF counter: every step one frame() runs
+ * sees the same count; 1 and up are catch-up steps, where a car read once a frame would be stale)
+ * and the knob's colour as the step's read left it (1 gas, -1 brake, 0 neither):
+ * [throttle, steer, h | null, vf, rev, fire, brake, index, knob] (DRAIN takes the log).
  */
 const PATCH_STEP = `(() => {
-  const g = window.scrapDebug.game, pad = window.scrapDebug.touchPad;
+  const g = window.scrapDebug.game, pad = window.scrapDebug.touchPad, knob = document.getElementById('touch-knob');
   if (g.__touchStep) return true;
   g.__touchStep = true;
   const step = g.step.bind(g);
-  window.__td = { last: null, steps: 0, mines: 0, fire: 0, both: 0, log: [] };
+  window.__td = { last: null, steps: 0, mines: 0, fire: 0, both: 0, log: [], frame: 0, stepFrame: -1, inFrame: 0 };
+  const tick = () => { window.__td.frame++; requestAnimationFrame(tick); };
+  requestAnimationFrame(tick);
   g.step = (ctl, ms) => {
     const t = window.__td;
     t.last = ctl; t.steps++;
     if (ctl.mine) t.mines++;
     if (ctl.fire) t.fire++;
     if (ctl.fire && ctl.throttle !== 0) t.both++;
-    const c = g.car;
-    if (t.log.length < 3000) t.log.push([ctl.throttle, ctl.steer, c ? c.h : null, c ? c.vx * Math.cos(c.h) + c.vy * Math.sin(c.h) : 0, pad.pointMemo().rev, ctl.fire]);
+    t.inFrame = t.frame === t.stepFrame ? t.inFrame + 1 : 0;
+    t.stepFrame = t.frame;
+    const c = g.car, m = pad.pointMemo();
+    if (t.log.length < 3000) t.log.push([ctl.throttle, ctl.steer, c ? c.h : null, c ? c.vx * Math.cos(c.h) + c.vy * Math.sin(c.h) : 0, m.rev, ctl.fire, m.brake, t.inFrame, knob.classList.contains('gas') ? 1 : knob.classList.contains('brake') ? -1 : 0]);
     return step(ctl, ms);
   };
   return true;
 })()`;
-type StepLog = [throttle: number, steer: number, h: number | null, vf: number, rev: number, fire: boolean];
+type StepLog = [throttle: number, steer: number, h: number | null, vf: number, rev: number, fire: boolean, brake: number, inFrame: number, knob: number];
+/**
+ * Catch-up frames on demand (TOUCH-5 review F1): headless Chrome runs about one step a frame, so a
+ * car read once a frame instead of once a step would pass. While on, the page's main thread is
+ * blocked BLOCK_MS every BLOCK_EVERY_MS: the next frame catches up several steps (main.ts runs up to
+ * MAX_CATCH_UP 5), and those steps are checked like the others.
+ */
+const BLOCK_MS = 50, BLOCK_EVERY_MS = 300;
+const BLOCK_ON = `(() => { clearInterval(window.__block); window.__block = setInterval(() => { const t = performance.now(); while (performance.now() - t < ${BLOCK_MS}); }, ${BLOCK_EVERY_MS}); return true; })()`;
+const BLOCK_OFF = "(clearInterval(window.__block), true)";
 const DRAIN = "window.__td.log.splice(0)";
 
 interface Pose {
@@ -681,18 +701,35 @@ function reportDrive(tag: string, log: DriveLog, laps: number): void {
 interface PointLog {
   laps: number; seconds: number; steps: number; matched: number; mismatched: string[]; gasSteer: number; fractional: number; brake: number; reverse: number; coast: number; aims: number;
   brakeTests: number; coastTests: number; fireBursts: number; fireWithStick: number; rivetsUsed: number; mineTaps: number; minesStepped: number; minesUsed: number;
-  /** The knob's colour against the last checked step's throttle, sampled while no finger moved; colour changes seen with the thumb still (per-step refresh). */
+  /** The knob's colour at each checked step against its throttle; throttle changes from step to step with no finger moved that the knob followed (per-step refresh). */
   knobSamples: number; knobMatched: number; knobStillChanges: number;
+  /** Checked steps that were the 2nd or later in their frame (catch-up), and how many of them did not match. */
+  catchUp: number; catchUpBad: number; maxInFrame: number;
 }
 
 /** Each logged step against point mode's functions for the thumb's offset now (the thumb did not move while they were made). */
 function checkSteps(d: PageDriver, batch: StepLog[], log: PointLog): void {
   const [dx, dy] = d.offset();
   const fire = d.fingers.has(LEFT);
-  for (const [t, s, h, vf, rev, f] of batch) {
+  let prev = NaN;
+  for (const [t, s, h, vf, rev, f, brake, inFrame, knob] of batch) {
     log.steps++;
-    const [et, es] = pointExpect(dx, dy, h, vf, rev, d.params);
-    if (t === et && s === es && f === fire) {
+    // The knob's colour is this step's throttle (read() sets it every step); a throttle change from
+    // the step before in the same batch (no finger moved) is a change under a still thumb.
+    log.knobSamples++;
+    if (knob === Math.sign(t)) {
+      log.knobMatched++;
+      if (!Number.isNaN(prev) && t !== prev) log.knobStillChanges++;
+    }
+    prev = t;
+    const [et, es] = pointExpect(dx, dy, h, vf, rev, brake, d.params);
+    const ok = t === et && s === es && f === fire;
+    if (inFrame > 0) {
+      log.catchUp++;
+      if (!ok) log.catchUpBad++;
+    }
+    log.maxInFrame = Math.max(log.maxInFrame, inFrame);
+    if (ok) {
       log.matched++;
       if (t === 1 && s !== 0) log.gasSteer++;
       if (s !== 0 && Math.abs(s) < 1) log.fractional++;
@@ -700,21 +737,22 @@ function checkSteps(d: PageDriver, batch: StepLog[], log: PointLog): void {
       if (t === -1 && (rev === 1 || rev === 2)) log.reverse++;
       if (t === 0 && s === 0) log.coast++;
       if (f && t !== 0) log.fireWithStick++;
-    } else if (log.mismatched.length < 8) log.mismatched.push(`thumb ${dx},${dy} h ${h?.toFixed(3)} vf ${vf.toFixed(1)} rev ${rev}: want ${et}/${es} fire ${fire} -> ${t}/${s} fire ${f}`);
+    } else if (log.mismatched.length < 8) log.mismatched.push(`thumb ${dx},${dy} h ${h?.toFixed(3)} vf ${vf.toFixed(1)} rev ${rev} brake ${brake} step ${inFrame} in its frame: want ${et}/${es} fire ${fire} -> ${t}/${s} fire ${f}`);
   }
 }
 
 /**
  * Drive by touch in point mode until `laps` are done (or the car finished). The right thumb lands
  * once and points where the car should go: at the centre line ahead (120 + 0.3 x speed on), moved
- * when that direction is more than 6° from where it points (a human's coarse updates). Once a lap at
- * speed it points behind the car for half a second (a brake test), once it rests in the dead zone
- * (a coast test); FIRE and MINE as the rate driver. Every logged step made while no finger moved is
- * checked against point mode's own functions (the two batches after a change are skipped).
+ * when that direction is more than 6° from where it points (a human's coarse updates). Once a lap
+ * above 320 u/s it points behind the car for half a second (a brake test: braking to 150 lasts past
+ * the skipped batches, so the knob is seen turning from brake to gas under the still thumb), once it
+ * rests in the dead zone (a coast test); FIRE and MINE as the rate driver. Every logged step made
+ * while no finger moved is checked against point mode's own functions (the two batches after a
+ * change are skipped). The main thread is blocked now and then (BLOCK_ON) for catch-up frames.
  */
 async function drivePoint(d: PageDriver, laps: number, midRace?: (lap: number) => Promise<void>): Promise<PointLog> {
-  const log: PointLog = { laps: 0, seconds: 0, steps: 0, matched: 0, mismatched: [], gasSteer: 0, fractional: 0, brake: 0, reverse: 0, coast: 0, aims: 0, brakeTests: 0, coastTests: 0, fireBursts: 0, fireWithStick: 0, rivetsUsed: 0, mineTaps: 0, minesStepped: 0, minesUsed: 0, knobSamples: 0, knobMatched: 0, knobStillChanges: 0 };
-  let stillColour = "";
+  const log: PointLog = { laps: 0, seconds: 0, steps: 0, matched: 0, mismatched: [], gasSteer: 0, fractional: 0, brake: 0, reverse: 0, coast: 0, aims: 0, brakeTests: 0, coastTests: 0, fireBursts: 0, fireWithStick: 0, rivetsUsed: 0, mineTaps: 0, minesStepped: 0, minesUsed: 0, knobSamples: 0, knobMatched: 0, knobStillChanges: 0, catchUp: 0, catchUpBad: 0, maxInFrame: 0 };
   let p = await d.cdp.eval<Pose>(POSE);
   const track = findTrack(p.track);
   if (!track) throw new Error(`unknown track ${p.track}`);
@@ -724,88 +762,81 @@ async function drivePoint(d: PageDriver, laps: number, midRace?: (lap: number) =
   let brakeLap = -1, coastLap = -1, lapStart = Date.now(), lapSeen = p.lap, nextFire = Date.now() + 3000, fireUntil = 0, mineLap = -1, midLap = -1;
   let fireAmmo0 = 0, mineAmmo0 = 0, mineSteps0 = 0;
   await d.cdp.eval(DRAIN);
-  while (Date.now() - t0 < 360_000) {
-    p = await d.cdp.eval<Pose>(POSE);
-    const batch = await d.cdp.eval<StepLog[]>(DRAIN);
-    if (dirty > 0) {
-      dirty--;
-      stillColour = "";
-    } else if (d.stick && p.phase === "racing") {
-      checkSteps(d, batch, log);
-      // The knob's colour follows the throttle every step (point mode: the car moves under a still
-      // thumb), not only when the thumb moves: it is the last step's (a step may land in between).
-      if (batch.length) {
-        const v = await d.view();
-        const t = batch[batch.length - 1][0];
-        log.knobSamples++;
-        if (v.colour === (t > 0 ? "gas" : t < 0 ? "brake" : "neutral")) log.knobMatched++;
-        if (stillColour && v.colour !== stillColour) log.knobStillChanges++;
-        stillColour = v.colour;
+  await d.cdp.eval(BLOCK_ON);
+  try {
+    while (Date.now() - t0 < 360_000) {
+      p = await d.cdp.eval<Pose>(POSE);
+      const batch = await d.cdp.eval<StepLog[]>(DRAIN);
+      if (dirty > 0) dirty--;
+      else if (d.stick && p.phase === "racing") checkSteps(d, batch, log);
+      if (p.fin || p.lap >= laps || (p.phase !== "racing" && p.phase !== "countdown")) break;
+      const now = Date.now();
+      if (p.lap !== lapSeen) {
+        lapSeen = p.lap;
+        lapStart = now;
       }
+      const speed = Math.hypot(p.vx, p.vy);
+      const q = queryTrackNear(track, p.x, p.y, p.seg);
+      const ahead = pointAt(track, q.s + 120 + 0.3 * speed);
+      let want = Math.atan2(ahead.y - p.y, ahead.x - p.x) / DEG;
+      let wantShare = 0.7;
+      if (!test && p.phase === "racing" && p.lap > brakeLap && now - lapStart > 4000 && speed > 320) {
+        [test, testUntil, testAim, brakeLap] = ["brake", now + 500, p.h / DEG + 180, p.lap];
+        log.brakeTests++;
+      } else if (!test && p.phase === "racing" && p.lap > coastLap && now - lapStart > 9000) {
+        [test, testUntil, coastLap] = ["coast", now + 700, p.lap];
+        log.coastTests++;
+      }
+      if (test && now > testUntil) test = "";
+      if (test === "brake") want = testAim;
+      if (test === "coast") wantShare = P.pointDead * 0.5;
+      if (!d.stick) {
+        await d.thumbDown(...(await d.rest()));
+        aimDeg = NaN;
+        dirty = 2;
+      }
+      if (!(Math.abs(angleDiff(aimDeg * DEG, want * DEG)) <= 6 * DEG) || share !== wantShare) {
+        await d.thumbToward(want, wantShare);
+        [aimDeg, share, dirty] = [want, wantShare, 2];
+        log.aims++;
+      }
+      // The left thumb: FIRE for 1.2 s every 4 s, once armed.
+      if (p.armed && !d.fingers.has(LEFT) && now > nextFire) {
+        fireAmmo0 = p.ammo[0];
+        await d.fingers.at(LEFT, ...centre((await d.box("#touch-fire"))!));
+        fireUntil = now + 1200;
+        log.fireBursts++;
+        dirty = 2;
+      } else if (d.fingers.has(LEFT) && now > fireUntil) {
+        await d.fingers.lift(LEFT);
+        log.rivetsUsed += Math.max(0, fireAmmo0 - p.ammo[0]);
+        nextFire = now + 2800;
+        dirty = 2;
+      }
+      // A third finger taps MINE once a lap (armed, with mines left).
+      if (p.armed && p.lap > mineLap && p.ammo[1] > 0 && !d.fingers.has(LEFT)) {
+        mineLap = p.lap;
+        mineAmmo0 = p.ammo[1];
+        mineSteps0 = p.mines;
+        await d.tap("#touch-mine");
+        log.mineTaps++;
+        const after = await d.cdp.eval<Pose>(POSE);
+        log.minesStepped += after.mines - mineSteps0;
+        log.minesUsed += Math.max(0, mineAmmo0 - after.ammo[1]);
+        dirty = 2;
+      }
+      if (midRace && p.lap >= 1 && midLap < 0 && p.phase === "racing" && !d.fingers.has(LEFT) && !test) {
+        midLap = p.lap;
+        await d.cdp.eval(BLOCK_OFF);
+        await midRace(p.lap);
+        await d.cdp.eval(BLOCK_ON);
+        aimDeg = NaN;
+        dirty = 2;
+      }
+      await sleep(25);
     }
-    if (p.fin || p.lap >= laps || (p.phase !== "racing" && p.phase !== "countdown")) break;
-    const now = Date.now();
-    if (p.lap !== lapSeen) {
-      lapSeen = p.lap;
-      lapStart = now;
-    }
-    const speed = Math.hypot(p.vx, p.vy);
-    const q = queryTrackNear(track, p.x, p.y, p.seg);
-    const ahead = pointAt(track, q.s + 120 + 0.3 * speed);
-    let want = Math.atan2(ahead.y - p.y, ahead.x - p.x) / DEG;
-    let wantShare = 0.7;
-    if (!test && p.phase === "racing" && p.lap > brakeLap && now - lapStart > 4000 && speed > 260) {
-      [test, testUntil, testAim, brakeLap] = ["brake", now + 500, p.h / DEG + 180, p.lap];
-      log.brakeTests++;
-    } else if (!test && p.phase === "racing" && p.lap > coastLap && now - lapStart > 9000) {
-      [test, testUntil, coastLap] = ["coast", now + 400, p.lap];
-      log.coastTests++;
-    }
-    if (test && now > testUntil) test = "";
-    if (test === "brake") want = testAim;
-    if (test === "coast") wantShare = P.pointDead * 0.5;
-    if (!d.stick) {
-      await d.thumbDown(...(await d.rest()));
-      aimDeg = NaN;
-      dirty = 2;
-    }
-    if (!(Math.abs(angleDiff(aimDeg * DEG, want * DEG)) <= 6 * DEG) || share !== wantShare) {
-      await d.thumbToward(want, wantShare);
-      [aimDeg, share, dirty] = [want, wantShare, 2];
-      log.aims++;
-    }
-    // The left thumb: FIRE for 1.2 s every 4 s, once armed.
-    if (p.armed && !d.fingers.has(LEFT) && now > nextFire) {
-      fireAmmo0 = p.ammo[0];
-      await d.fingers.at(LEFT, ...centre((await d.box("#touch-fire"))!));
-      fireUntil = now + 1200;
-      log.fireBursts++;
-      dirty = 2;
-    } else if (d.fingers.has(LEFT) && now > fireUntil) {
-      await d.fingers.lift(LEFT);
-      log.rivetsUsed += Math.max(0, fireAmmo0 - p.ammo[0]);
-      nextFire = now + 2800;
-      dirty = 2;
-    }
-    // A third finger taps MINE once a lap (armed, with mines left).
-    if (p.armed && p.lap > mineLap && p.ammo[1] > 0 && !d.fingers.has(LEFT)) {
-      mineLap = p.lap;
-      mineAmmo0 = p.ammo[1];
-      mineSteps0 = p.mines;
-      await d.tap("#touch-mine");
-      log.mineTaps++;
-      const after = await d.cdp.eval<Pose>(POSE);
-      log.minesStepped += after.mines - mineSteps0;
-      log.minesUsed += Math.max(0, mineAmmo0 - after.ammo[1]);
-      dirty = 2;
-    }
-    if (midRace && p.lap >= 1 && midLap < 0 && p.phase === "racing" && !d.fingers.has(LEFT) && !test) {
-      midLap = p.lap;
-      await midRace(p.lap);
-      aimDeg = NaN;
-      dirty = 2;
-    }
-    await sleep(25);
+  } finally {
+    await d.cdp.eval(BLOCK_OFF).catch(() => undefined);
   }
   log.laps = p.lap;
   log.seconds = Math.round((Date.now() - t0) / 1000);
@@ -829,9 +860,14 @@ function reportPoint(tag: string, log: PointLog, laps: number): void {
   check(`${tag}: two thumbs at once: FIRE held while the stick drives (steps with throttle and fire both), rivets fired`, log.fireWithStick > 10 && log.rivetsUsed > 0, `${log.fireBursts} bursts, ${log.fireWithStick} steps gas+fire, ${log.rivetsUsed} rivets`);
   check(`${tag}: a MINE tap reaches exactly one step's mine and drops one mine`, log.mineTaps > 0 && log.minesStepped === log.mineTaps && log.minesUsed === log.mineTaps, `${log.mineTaps} taps, ${log.minesStepped} steps with mine, ${log.minesUsed} mines dropped`);
   check(
-    `${tag}: the knob's colour is the last step's throttle (gas / brake / neutral) while the thumb is still, and it changes with the car under a still thumb (refreshed every step, not only on a move)`,
-    log.knobSamples > 100 && log.knobMatched >= log.knobSamples * 0.97 && log.knobStillChanges > 0,
-    `${log.knobMatched}/${log.knobSamples} samples match, ${log.knobStillChanges} changes with the thumb still`,
+    `${tag}: catch-up frames (the main thread blocked ${BLOCK_MS} ms every ${BLOCK_EVERY_MS} ms): steps that were the 2nd or later in their frame are point mode's for that step's own car (read fresh every step, advisor change 1), none off`,
+    log.catchUp >= 30 && log.catchUpBad === 0,
+    `${log.catchUp - log.catchUpBad}/${log.catchUp} catch-up steps match, up to step ${log.maxInFrame + 1} of a frame`,
+  );
+  check(
+    `${tag}: at every checked step the knob's colour is that step's throttle (gas / brake / neutral), also where the throttle changed with the car under a still thumb (refreshed every step, not only on a move)`,
+    log.knobSamples > 300 && log.knobMatched === log.knobSamples && log.knobStillChanges > 0,
+    `${log.knobMatched}/${log.knobSamples} steps match, ${log.knobStillChanges} throttle changes under a still thumb followed`,
   );
 }
 
@@ -881,7 +917,7 @@ async function pointStickChecks(d: PageDriver, tag: string): Promise<void> {
     const [t, s, m] = pointControls(dx, dy, car, memo, d.params);
     memo = m;
     const colour = t > 0 ? "gas" : t < 0 ? "brake" : "neutral";
-    const stepsOk = batch.length > 0 && batch.every(([bt, bs, bh, bvf, brev]) => bt === t && bs === s && bh === h0 && bvf === 0 && brev === m.rev);
+    const stepsOk = batch.length > 0 && batch.every(([bt, bs, bh, bvf, brev, , bbrake]) => bt === t && bs === s && bh === h0 && bvf === 0 && brev === m.rev && bbrake === m.brake);
     const sOk = wantT === 0 ? s === 0 : wantS < 0 ? Math.abs(s) > 0.03 && Math.abs(s) < 1 && Math.sign(s) === Math.sign(off) : wantS === 0 ? Math.abs(s) <= 0.03 : Math.abs(s) === 1 && Math.sign(s) === Math.sign(off);
     const knobR = Math.hypot(v.kx, v.ky);
     const stopOk = stepsOk && t === wantT && sOk && v.colour === colour && knobR <= R + 0.11 && Math.abs(v.cx - d.stick!.cx) < 0.6;
