@@ -427,3 +427,36 @@ plain road and the shortest gap between two obstacle groups, and the user judges
 **Mud length (user, 2026-11-22, after driving the Split Yard on :3009):** "in the split yard the mud area is too long" (its dirt lane
 is 700 units, s 6050-6750). Binding for M4-TRACKS: no dirt/mud stretch longer than ~350 units (a lane of dirt in a split counts);
 report each one's length per track; the user judges at the taste gate.
+
+## Addendum 2026-11-22: HARD-2, Hard bots make human mistakes + a dev tuning knob — PENDING (Fable review, then the user's approval)
+
+**Why.** User 2026-11-22, racing the Hard bots: "the hard bots are a bit too hard, they drive perfect!" (Hard today: 40-55 % of the gap
+between Normal's lap and flat-out, a clean apex line, rivets about 3 in 4; shared/botdrive.ts:110 `HARD`). This is the second round of
+Hard tuning, so the precision tool goes to the user. User popups: **human mistakes** (keep the pace on straights; now and then a late
+brake into a bend, running wide, a missed apex, a wobble after a bump); **a dev knob the user sets** (race on the Mac, paste the values,
+they become the defaults).
+
+**Design.**
+1. **Mistakes are deterministic:** drawn from a hash of (seat slot, lap, segment index) - never the random id or Math.random (PLAN-M4
+   advisor change 2), so a rerun is identical and the client never needs to predict them (bots run on the server; socket bots use the
+   same botdrive code with their own seat).
+2. **Kinds (Hard only; Easy and Normal unchanged):** (a) late brake: the bend lookahead shortened for one bend so it arrives too fast and
+   runs wide or scrubs; (b) wide line: the apex bias inverted or dropped for one bend; (c) wobble: after a contact or a landing, a few ticks
+   of over-correcting steer, decaying; (d) hesitation: a short lift on a straight after an overtake or a hit. Each with a size.
+3. **Rate:** mistakes per lap per bot (expected value), spread over the lap's bends; none in the first 3 s after GO and none on a jump
+   run-up or a hole lane (a mistake must never cause a fall: the validator's run-ups and the hole lane stay exact).
+4. **The knob (dev only):** an env flag `SCRAP_DEV_BOTS=1` (off on Render, like SCRAP_DEV_TRACK) lets the host's lobby show a "Bot
+   tune" panel under `?debug=1`: sliders for Hard mistake rate (per lap), mistake size, pace scale (the corner/brake/look factors as one
+   0-1 knob between today's Hard and Normal), rivet aim (rivetSlack). Values go to the server by a dev-only message, clamped, ignored
+   unless the flag is set, applied from the next race (fixed for a race); the panel shows them as text to copy. The user's pasted values
+   become the Hard defaults (HARD-3, small).
+5. **Byte identity:** with mistake rate 0 and the knob at today's values, Hard's bot streams equal today's (the M4-HARD Hard goldens
+   SAME); Easy/Normal goldens SAME always; shipped tracks unchanged.
+
+**Ticket HARD-2 (Opus)** owns shared/botdrive.ts (HARD params + mistakes), server/bots.ts and server/room.ts (the dev flag, the dev-only
+message, per-room params), shared/protocol.ts (the dev message type), client/bottune.ts (new, lazy-loaded under ?debug=1 like the touch
+panel) + its mount in client/main.ts, appended sim-test and bots sections, tools/debug/hard-tune.ts. NOT shared/track.ts (BR-SCHEMA),
+shared/tracks.ts / shared/longtracks.ts (M4-TRACKS), client/gfx/* (themes). Accept: mistakes deterministic (rerun identical) and never
+cause a fall (3 laps x every shipped track x car type x seats, falls 0); measured Hard lap-time loss and wall/obstacle contacts per
+mistake rate (a table); rate 0 = today's Hard goldens; the knob works on a dev copy (screenshots, a race at two settings) and is absent
+without the flag; Easy/Normal untouched; check, test twice, build. Taste: the user races Hard on the Mac with the knob and pastes values.
