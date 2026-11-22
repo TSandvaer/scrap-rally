@@ -702,6 +702,18 @@ gate running; ClickUp ready for qa test; workers released, workspace removed; de
 IN FLIGHT: BR-BAKE 123jpnbfghb (Fable) ctx_373cca46924f (~/orca/workspaces/scrap-rally/br-bake, :3011; spec tmp/spec-br-bake.md);
 MARSHALS-1 123jpnbfgjb (Fable) ctx_d2ef6307e5f5 (~/orca/workspaces/scrap-rally/marshals-1, :3016; spec tmp/spec-marshals-1.md).
 BR-PHYS next when THEME-SCHEMA merges (3rd author slot). Desert APPROVED by the user (push gate cleared).
+TH-LOOK-1 gate GREEN on 2e171f1 (975/975 + 145/145, build index-CNyat145.js). THEME-SCHEMA re-review APPROVE; MERGED c92c578 (README
+conflict kept both); gate running; ClickUp complete; workers released, workspace removed. BR-PHYS 123jpnbfgha (Opus) in flight:
+ctx_de494cfdd510 (~/orca/workspaces/scrap-rally/br-phys, :3010; spec tmp/spec-br-phys.md); its scripts/bots.ts:92 change waits until the
+M4-TRACKS flake fix merges (tell it). Active authors: BR-BAKE, MARSHALS-1, BR-PHYS (+ the flake fix round).
+THEME-SCHEMA gate on c92c578: 1022/1022, build index-QaMhT72h.js, bots 144/145 (only the known flake). PUSHED (user popup): origin/main =
+dcea465 (TH-LOOK-1 + THEME-SCHEMA: Breaker's Mile in the approved desert). Expected live bundle: index-QaMhT72h.js.
+DEPLOYED (user): live index-QaMhT72h.js (curl), bundle holds theme:`desert`. QA14 live worker dispatched (spec tmp/spec-qa-live-14.md;
+report tmp/qa14-live-report.md). Flake fix f9b0f6d/e8aadad (skewed contacts certain + checked on both long tracks) re-review sent to
+ctx_27271d92a5da.
+Flake fix re-review APPROVE; MERGED 45383dd; gate running; M4-TRACKS workers released, workspace removed; BR-PHYS told 'go for bots.ts:92'.
+QA14 live PASS (ctx_71fbdd000662, released): Breaker's Mile desert (9 bots, 0 falls), other 4 tracks scrapyard, frame work 5.9 vs 5.2 ms,
+no console errors. ClickUp complete: TH-LOOK-1.
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
