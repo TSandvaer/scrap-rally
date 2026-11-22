@@ -676,6 +676,9 @@ gate running; ClickUp ready for qa test; workers released, workspace hard-2 remo
 Bot tune row; SCRAP_DEV_BOTS=1; node pid 96649). Active authors: TH-LOOK-1, THEME-SCHEMA, M4-TRACKS flake fix.
 HARD-2 gate GREEN on d111e89 (975/975 + 145/145, build index-CAou9HUR.js). PUSHED (user popup): origin/main = 4496ac7 (M4-TRACKS,
 NOSELECT-1, BR-SCHEMA, HARD-2). Expected live bundle after Manual Deploy: index-CAou9HUR.js.
+M4-TRACKS flake fixed: f064035 (scripts/bots.ts only: blind bot stops 4 short of the press, stall starts at the warning tick; old 1/8 PASS,
+new 35/35; gate green x2). Quick reviewer ctx_27271d92a5da (tmp/review-tracks-flake.md). Observation: Slag Harbour's lagged barrel ticks
+vary (6..42, never 0 so far).
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
