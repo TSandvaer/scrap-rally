@@ -560,6 +560,7 @@ build ok; ClickUp 123jpnbffz4 ready for qa test; author released, workspace m4-s
 ~150 u/s): fix round sent to ctx_ef45d3475cfa (tmp/touch-5/review-1-fix.md; merge main first; reviewer ctx_09e09c787a72 kept).
 M4-MOVE 123jpnbffz5 (Opus) in flight: ctx_2677067f1bc7 (~/orca/workspaces/scrap-rally/m4-move, :3008; spec tmp/spec-m4-move.md; base
 ae4db2c). Its criterion 9 (WorldFx.rt fill in client/main.ts) waits until TOUCH-5 merges: then tell it "go for 9, git merge main".
+MOVE asked: server/combat.ts Combat.step rt param + :126, server/room.ts:1062 pass raceTick (rivets die on barrels/press) -> yes, those lines only.
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
