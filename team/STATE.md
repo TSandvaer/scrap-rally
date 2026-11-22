@@ -725,6 +725,9 @@ BR-BOTS (Opus) started as a one-off 4th author (user popup). DONE ALL FOUR: BR-B
 (each merges clean into main; the 3 Fable branches conflict pairwise only in tools/debug/README.md). Reviewers: BR-BAKE ctx_fb09b3361ccf,
 BR-MAP ctx_4e40bed80056, MARSHALS-1 ctx_2a3e4c9c5a1a (Fable), BR-BOTS ctx_dfe9940aaeb7 (Opus). S8 rule accepted (PLAN-BRANCH note).
 Merge order: BR-BAKE, BR-MAP, MARSHALS-1 (re-run marshal-sheet --check after BR-BAKE), BR-BOTS. Then wave 4: the user drives Branch Yard.
+BR-MAP review APPROVE (2 map-sheet false-FAIL findings on slanted shortcuts -> comment on BR-TRACKS). BR-MAP MERGED c73653d (order relaxed:
+README-only conflicts); gate running; ClickUp ready for qa test; workers released, workspace removed; sheets saved in tmp/br-map/.
+BR-BAKE head moved to 2771b39 (docs/tool only, S8 rule) - its reviewer told to include it.
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
