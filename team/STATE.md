@@ -652,6 +652,9 @@ M4-TRACKS review APPROVE (ctx_ca6629690be1, released; F1 bench.ts quick-look thr
 bench.ts). M4-TRACKS MERGED c90ee9c; gate running. BR-SCHEMA told to merge main in its fix round (sim-test + golden conflicts). HARD-2:
 after its review, the author merges main and re-runs falls-0 on the new tracks (advisor 9) before the merge.
 User: HARD-2 merges on review APPROVE; tuning later (keep the :3009 SCRAP_DEV_BOTS copy up; pasted values -> HARD-3).
+M4-TRACKS gate on main c90ee9c: check 0, sim 907/907, build ok (index-D5zCxkUp.js), bots 142/143: FAIL 'breakers-mile over sockets ...
+hits them' (contacts 0; author/reviewer had press 1 tick) = timing flake in the new check. Fix sent to the M4-TRACKS author ctx_25b6cddb77d6
+(make it deterministic, 10x PASS); BR-SCHEMA + HARD-2 told it is known. No push until main is green.
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
