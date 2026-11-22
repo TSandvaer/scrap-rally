@@ -735,6 +735,19 @@ BR-MAP gate GREEN on c73653d (1046/1046 + 150/150, build index-Smw27BZH.js).
 Walkthrough (user popups): marshals approved as they are; shortcut look approved (drive next); invite-link fallback -> selectable =
 NOSELECT-2 123jpnbfgvn (after MARSHALS-1 merges). NEXT: merge BR-BAKE, MARSHALS-1, BR-BOTS on their verdicts; then NOSELECT-2; then a
 Branch Yard copy on :3009 for the wave-4 drive (replaces the HARD-2 tuning copy only if the user has tuned; else use another port).
+BR-BOTS re-review APPROVE (ctx_826f3d8729fe; no findings; gore pairs 440 -> 0, fork-mouth walls 14 -> 4; both fix sites covered by
+the new checks; sim 1064/1064, bots 154/154). BR-BOTS MERGED 9400bcd (clean); gate GREEN (check, 1064/1064, 154/154, build
+index-CWGC6Rba.js); ClickUp ready for qa test; workers released; workspace + branch removed.
+BR-BAKE review APPROVE (ctx_fb09b3361ccf; tmp/br-bake/BR-BAKE-review.md): shipped tracks 0 px / hashes identical, 0 wrong-side pixels on
+Branch Yard, speed gate PASS, S8 WITHIN. Non-blocking: a shortcut WIDER than its main road bakes its gap too narrow (world.ts:1527; none
+today), predict() 2nd pass, own() posts under a crossing gap (hypothesis) -> all three on the BR-TRACKS ticket. Benchmark longest Branch
+Yard frame 16.985 ms (bench pins performance.now so the 6 ms bake cap never ends it; in a race the cap applies - not measured: watch for a
+hitch in the wave-4 drive). BR-BAKE MERGED ceb4e8c (README: both sides kept); gate GREEN (check, 1064/1064, 154/154, build
+index-BgDgKaUv.js); ClickUp ready for qa test; workers released; workspace + branch removed. MARSHALS-1 author told to merge main + re-run
+marshal-sheet --check (msg_0f1f171d4920).
+THEME-SURF 123jpnbfgj3 in flight: ctx_9557ecf4735b (Opus, ~/orca/workspaces/scrap-rally/theme-surf, :3010; spec tmp/spec-theme-surf.md; no
+shared files with MARSHALS-1). Active authors: MARSHALS-1, THEME-SURF. TH-LOOK-2 waits for
+MARSHALS-1 (shares render.ts + canvas-census.ts). Ford direction cue moved from THEME-SURF to TH-LOOK-3 (drawing = world.ts, Fable).
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).

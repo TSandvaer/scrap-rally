@@ -40,6 +40,18 @@
 //   crosses, per theme (a frame's share of the baking is counted in these units, so a dearer
 //   tile takes more frames, not a longer one).
 //
+// Bench scene S8 (BR-BAKE; PLAN-BRANCH.md 3: a lap of the Branch Yard test track that takes every
+// shortcut road) is not measured here but by tools/debug/branch-sheet.ts --bench, with S2 and the
+// S4 laps beside it as here. Its rule, for the record beside S7's (coordinator's decision
+// 2026-11-22): a shortcut is to add no cost to drawing a frame, so the frames without a bake
+// step are held against the same frames without shortcuts (the mean of the faster half at or
+// below 1.05 times), and the whole lap against the dearest shipped S4 lap of the same run (at or
+// below 1.05 times, on the mean of the frames and on the mean of their faster half). Not against
+// S2, for S7's reason (the timer's step). And not the mean of all the frames against the same
+// frames without shortcuts, which S7 holds a theme to: a theme bakes the same road, a shortcut
+// is a second one (1.19 times the bake units, 1.19 times the mean): more road to bake, not
+// slower drawing.
+//
 // It takes the benchmark's machine-wide lock (scrap-rally-bench.lock in the temp directory), so
 // it never runs beside `npm run bench`, and waits while a live benchmark holds it.
 // Exit code 0 with S6 and S7 within their budgets, 1 with one over, 2 without a verdict (--quick, or fewer than 5 runs).

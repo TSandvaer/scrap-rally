@@ -270,6 +270,36 @@ function widened(track: Track, seg: number): void {
   F[QDIST] -= half[seg] + (half[next] - half[seg]) * t - track.def.halfWidth;
 }
 
+/**
+ * As nearTrack, on any road of a track with shortcut roads (BR-BAKE): the main road's segments
+ * wrap; a shortcut's road is open (its last sample has no segment), so there the stretch asked
+ * for is cut off at its two ends.
+ */
+function nearOn(road: Track, from: number, count: number): number {
+  if (road.roadNo === 0) return nearTrack(road, from, count);
+  const x = F[QX], y = F[QY];
+  const pts = road.pts, top = pts.length - 2;
+  let hi = from + count - 1;
+  if (hi > top) hi = top;
+  let lo = from < 0 ? 0 : from;
+  if (lo > hi) lo = hi;
+  let best = Infinity, seg = lo;
+  for (let i = lo; i <= hi; i++) {
+    const a = pts[i], b = pts[i + 1];
+    const ex = b.x - a.x, ey = b.y - a.y;
+    let t = ((x - a.x) * ex + (y - a.y) * ey) / (ex * ex + ey * ey || 1);
+    t = t < 0 ? 0 : t > 1 ? 1 : t;
+    const px = a.x + ex * t - x, py = a.y + ey * t - y;
+    const d2 = px * px + py * py;
+    if (d2 < best) {
+      best = d2;
+      seg = i;
+    }
+  }
+  F[QDIST] = Math.sqrt(best);
+  return seg;
+}
+
 export class Actors {
   private sheets: SharedSheets | null = null;
   private frameNo = 0;
@@ -331,6 +361,11 @@ export class Actors {
   private readonly dustOld: string;
   private readonly moving: Obstacles; // what moves on the road (barrels, presses, a belt's arrows)
   private readonly wide: boolean; // the road is widened somewhere: its edge is not everywhere halfWidth out
+  // BR-BAKE: a track with shortcut roads. Its roads (the main one first) and each one's first
+  // global segment (shared/track.ts: the main road's segments, then each branch's from its base);
+  // null on a track without one, whose dust is looked up as it always was.
+  private readonly roads: readonly Track[] | null;
+  private readonly bases: Int32Array;
 
   /** `scenery`: the track's theme as the Renderer resolved it (a caller without one gets the track's own). */
   constructor(
@@ -344,6 +379,62 @@ export class Actors {
     this.dustOld = scenery.dust[1];
     this.moving = new Obstacles(ctx, track, scenery);
     this.wide = track.widens.length > 0;
+    this.roads = track.branches.length ? [track, ...track.branches.map((b) => b.road)] : null;
+    this.bases = Int32Array.from([0, ...track.branches.map((b) => b.base)]);
+  }
+
+  /**
+   * The dust's lookup on a track with shortcut roads: the global segment nearest to (F[QX],
+   * F[QY]), and in F[QDIST] its distance from that road's centreline, less what the road is
+   * wider there than the main road's plain width (so the main road's halfWidth is the asphalt's
+   * edge on every road, and its wall the wall). `hint`: the global segment it was on (its road
+   * is searched round it, and where a mouth is near, the other road round its own place there:
+   * shared/track.ts mouthAt), or -1: every road, whole. The nearer centreline wins, as it does
+   * for the physics and the bake (queryRoads).
+   */
+  private nearRoads(hint: number): number {
+    const track = this.track, roads = this.roads!, bases = this.bases;
+    let road = 0, seg = 0, raw = Infinity;
+    if (hint < 0) {
+      for (let k = 0; k < roads.length; k++) {
+        const i = nearOn(roads[k], 0, roads[k].pts.length);
+        if (F[QDIST] < raw) {
+          raw = F[QDIST];
+          road = k;
+          seg = i;
+        }
+      }
+    } else {
+      for (let k = roads.length - 1; k > 0; k--) {
+        if (hint >= bases[k]) {
+          road = k;
+          break;
+        }
+      }
+      seg = nearOn(roads[road], hint - bases[road] - 6, 13);
+      raw = F[QDIST];
+      const other = track.mouthAt[hint];
+      if (other >= 0) {
+        let k = 0;
+        for (let j = roads.length - 1; j > 0; j--) {
+          if (other >= bases[j]) {
+            k = j;
+            break;
+          }
+        }
+        const i = nearOn(roads[k], other - bases[k] - 6, 13);
+        if (F[QDIST] < raw) {
+          raw = F[QDIST];
+          road = k;
+          seg = i;
+        }
+      }
+    }
+    const on = roads[road];
+    F[QDIST] = raw;
+    if (on.widens.length > 0) widened(on, seg);
+    if (road > 0) F[QDIST] += track.def.halfWidth - on.def.halfWidth;
+    return bases[road] + seg;
   }
 
   /**
@@ -641,15 +732,22 @@ export class Actors {
           const track = this.track;
           F[QX] = c.x;
           F[QY] = c.y;
-          let seg = this.seg[s] < 0 ? nearTrack(track, 0, track.pts.length) : nearTrack(track, this.seg[s] - 6, 13);
-          // A widened road: the distance from where its edge would be without the widening. Before
-          // the test below: the outer verge of a widened road lies further from the centreline than
-          // a plain road's wall, and a car there is where it was (tools/debug/verge-scan.ts).
-          if (this.wide) widened(track, seg);
-          // Not where it was (put back on the track elsewhere): look everywhere, once.
-          if (F[QDIST] > track.wall + 30) {
-            seg = nearTrack(track, 0, track.pts.length);
+          let seg: number;
+          if (this.roads !== null) {
+            // A track with shortcut roads: every road is one to throw dust beside.
+            seg = this.nearRoads(this.seg[s]);
+            if (F[QDIST] > track.wall + 30) seg = this.nearRoads(-1);
+          } else {
+            seg = this.seg[s] < 0 ? nearTrack(track, 0, track.pts.length) : nearTrack(track, this.seg[s] - 6, 13);
+            // A widened road: the distance from where its edge would be without the widening. Before
+            // the test below: the outer verge of a widened road lies further from the centreline than
+            // a plain road's wall, and a car there is where it was (tools/debug/verge-scan.ts).
             if (this.wide) widened(track, seg);
+            // Not where it was (put back on the track elsewhere): look everywhere, once.
+            if (F[QDIST] > track.wall + 30) {
+              seg = nearTrack(track, 0, track.pts.length);
+              if (this.wide) widened(track, seg);
+            }
           }
           this.seg[s] = seg;
           if (F[QDIST] > track.def.halfWidth + 2 && F[QDIST] < track.wall + 30) {

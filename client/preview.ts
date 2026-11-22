@@ -27,7 +27,11 @@
 // &scene=tour is a drive round any track, to see one whole in a theme: &track=<id> (a shipped
 // track or a test track; default crusher-run), &s=<distance> where it starts (default 0); a
 // pack of six at 300 u/s, the camera on the first as in a race. With &freeze=1 it stands at
-// &s; &t=<seconds> holds it 300 units further a second.
+// &s; &t=<seconds> holds it 300 units further a second. &road=<n> drives down the track's n-th
+// shortcut road instead (BR-BAKE: 1 = its first), from its fork to its merge.
+//
+// The shortcut roads of the Branch Yard test track (BR-BAKE; PLAN-BRANCH.md 2.7), after the tour
+// in the list: branch-1-fork, branch-1-cut, branch-1-merge and the same for shortcuts 2 and 3.
 //
 // Two more pages for the graphics polish (PLAN-GFX.md), neither wired into the game:
 // &scene=palette  the "scrapyard 32" sheet (client/gfx/palette.ts), at 1280x720
@@ -87,6 +91,7 @@ interface Scene {
   title: string;
   rust?: boolean; // drawn on Rust Bowl instead of the preview track
   yard?: boolean; // drawn on the Preview Yard test track (shared/testtracks.ts)
+  branch?: boolean; // drawn on the Branch Yard test track
   on?: Track; // drawn on this track (the tour)
   cam: (t: number) => { x: number; y: number };
   cars: (t: number) => CarView[];
@@ -684,18 +689,112 @@ function tour(params: URLSearchParams): Scene {
   const track = testTrack(id) ?? findTrack(id) ?? trackById("crusher-run");
   const s0 = Number(params.get("s") ?? 0) || 0, pace = 300;
   const pack = [0, 46, -52, 104, -110, 170], lanes = [0, -30, 28, 12, -14, 34];
+  // &road=n: down the n-th shortcut road (an open road: the pack stops at its merge).
+  const branch = track.branches[Number(params.get("road") ?? 0) - 1];
+  const road = branch ? branch.road : track;
+  const wide = road.def.halfWidth / 64;
   return {
     name: "tour",
-    title: `Tour of ${track.def.name}`,
+    title: branch ? `Tour of ${track.def.name}, shortcut ${road.roadNo}` : `Tour of ${track.def.name}`,
     on: track,
     cam: (t) => {
-      const p = pointAt(track, s0 + t * pace);
+      const p = pointAt(road, s0 + t * pace);
       return { x: p.x + Math.cos(p.h) * pace * 0.28, y: p.y + Math.sin(p.h) * pace * 0.28 };
     },
-    cars: (t) => pack.map((ds, i) => car(track, i, s0 + t * pace + ds, lanes[i], { height: jumpHeight(track, s0 + t * pace + ds, pace), car: (["sport", "racer", "truck"] as const)[i % 3] })),
+    cars: (t) => pack.map((ds, i) => car(road, i, s0 + t * pace + ds, branch ? lanes[i] * wide : lanes[i], { height: jumpHeight(road, s0 + t * pace + ds, pace), car: (["sport", "racer", "truck"] as const)[i % 3] })),
     fx: (t) => ({ ...NO_FX, rt: Math.round(t * 60) }),
     key: 0,
   };
+}
+
+/**
+ * Shortcut roads (BR-BAKE; PLAN-BRANCH.md 2.7) on the Branch Yard test track: per shortcut its
+ * fork (the mouth with the two roads' union of kerbs and walls, the arrows and the wedge painted
+ * in it, the nose where the walls part), its cut (what makes it a risk: dirt, a jump, pits) and
+ * its merge. The cars are scripted, as everywhere here: some stay on the main road, some take
+ * the shortcut, one runs wide on a shortcut's verge (its dust), and nothing pushes them.
+ */
+function shortcuts(): Scene[] {
+  const yard = testTrack("branch-yard")!;
+  const out: Scene[] = [];
+  const kinds = ["sport", "racer", "truck"] as const;
+  const loop = (v: number, span: number) => ((v % span) + span) % span;
+  yard.branches.forEach((b, k) => {
+    const r = b.road, len = r.length, side = b.side, half = r.def.halfWidth;
+    // Half-way between the two roads where the shortcut is u along: the middle of a mouth's picture.
+    const between = (u: number) => () => {
+      const p = pointAt(r, u), q = queryTrack(yard, p.x, p.y);
+      return { x: p.x - (q.nx * q.dist) / 2, y: p.y - (q.ny * q.dist) / 2 };
+    };
+    const fork = b.forkGore ? b.forkGore.u * 0.56 : 0, merge = b.mergeGore ? len - (len - b.mergeGore.u) * 0.56 : len;
+    // A car d past the fork on the way that takes the shortcut (before it: on the main road), and
+    // one d along the shortcut on the way back onto the main road (past its end: on the main road).
+    const leave = (i: number, d: number, lat: number, more: Partial<CarView> = {}) => (d < 0 ? car(yard, i, b.s0 + d, lat, more) : car(r, i, d, lat, more));
+    const rejoin = (i: number, d: number, lat: number, more: Partial<CarView> = {}) => (d > len ? car(yard, i, b.s1 + d - len, lat, more) : car(r, i, d, lat, more));
+    // What the cut is: its place along the shortcut, and the line a car takes through it.
+    const jump = r.ramps.length > 0, pits = r.holes.length > 0;
+    const cut = jump ? r.ramps[0].s + r.ramps[0].len + 50 : pits ? (r.holes[0].s + r.holes[r.holes.length - 1].s) / 2 : r.dirt.length ? (r.dirt[0].s0 + r.dirt[0].s1) / 2 : len / 2;
+    // Between pits a car is on the other side of the road from the nearest one, easing across.
+    const weave = (u: number): number => {
+      let lat = 0, w = 0;
+      for (const h of r.holes) {
+        const near = Math.max(0, 1 - Math.abs(u - h.s) / 150);
+        lat += (h.lat < 0 ? 22 : -22) * near;
+        w += near;
+      }
+      return w > 1 ? lat / w : lat;
+    };
+    const what = jump ? "a jump" : pits ? "pits" : r.dirt.length ? "dirt" : "plain";
+    const v = jump ? 380 : 320, span = 900;
+    out.push(
+      {
+        name: `branch-${k + 1}-fork`,
+        title: `Shortcut ${k + 1} (${what}): the fork, its arrows and its nose`,
+        branch: true,
+        cam: between(fork),
+        cars: (t) => [
+          leave(0, -330 + loop(t * v + 600, span), 16 * side), // past the arrows at the held moment, beside the wedge
+          car(yard, 1, b.s0 - 330 + loop(t * v + 610, span), -30 * side, { car: "racer" }),
+          leave(2, -330 + loop(t * 290 + 250, span), 24 * side, { car: "truck" }),
+          car(yard, 3, b.s0 - 330 + loop(t * 340 + 330, span), -8 * side),
+          car(yard, 4, b.s0 - 330 + loop(t * 300 + 40, span), -34 * side, { car: "truck" }),
+          leave(5, -330 + loop(t * 330 + 760, span), 6 * side, { car: "racer" }),
+        ],
+        key: 0,
+      },
+      {
+        name: `branch-${k + 1}-cut`,
+        title: `Shortcut ${k + 1}: ${what}`,
+        branch: true,
+        cam: () => pointAt(r, cut),
+        cars: (t) =>
+          [0, 1, 2, 3, 4].map((i) => {
+            const u = cut - 420 + loop(t * (v - i * 14) + [330, 560, 130, 700, 20][i], 840);
+            // The last one runs wide on the verge all the way (but not into a pit's or a gap's reach): dust.
+            const lat = i === 4 && !jump && !pits ? -(half + 16) : pits ? weave(u) + (i - 2) * 3 : [0, 22, -24, 10, -14][i] * (half / 64);
+            return car(r, i, u, lat, { height: jumpHeight(r, u, v - i * 14), car: kinds[i % 3] });
+          }),
+        lead: 0.5,
+        key: 0.5,
+      },
+      {
+        name: `branch-${k + 1}-merge`,
+        title: `Shortcut ${k + 1}: the merge`,
+        branch: true,
+        cam: between(merge),
+        cars: (t) => [
+          rejoin(0, len - 560 + loop(t * v + 300, span), 14 * side),
+          car(yard, 1, b.s1 - 560 + loop(t * v + 620, span), -28 * side, { car: "racer" }),
+          rejoin(2, len - 560 + loop(t * 290 + 90, span), 26 * side, { car: "truck" }),
+          car(yard, 3, b.s1 - 560 + loop(t * 340 + 240, span), -6 * side),
+          car(yard, 4, b.s1 - 560 + loop(t * 300 + 770, span), -32 * side, { car: "truck" }),
+          rejoin(5, len - 560 + loop(t * 330 + 520, span), 4 * side, { car: "racer" }),
+        ],
+        key: 0,
+      },
+    );
+  });
+  return out;
 }
 
 /** Run the preview on the game canvas (the game itself is not started). */
@@ -704,15 +803,16 @@ export function runPreview(canvas: HTMLCanvasElement, params: URLSearchParams): 
   if (params.get("scene") === "mock") return showMock(canvas, params.get("mock") === "today");
   const list = scenes();
   list.push(tour(params)); // after every other scene: their places in the list, and so their captions, stay
+  list.push(...shortcuts()); // (and these after the tour, for the same reason)
   // &theme=: the looks of another theme on the same roads. Here only: the game draws a track in its own theme.
   const theme = params.get("theme");
   const themed = (track: Track): Track => (isTheme(theme) ? themedTrack(track, theme) : track);
   const renderers = new Map<string, Renderer>();
   const rendererFor = (scene: Scene) => {
-    const on = scene.on ? "tour" : scene.yard ? "yard" : scene.rust ? "rust" : "eight";
+    const on = scene.on ? "tour" : scene.branch ? "branch" : scene.yard ? "yard" : scene.rust ? "rust" : "eight";
     let r = renderers.get(on);
     if (!r) {
-      r = new Renderer(canvas, themed(scene.on ?? (scene.yard ? testTrack("preview-yard")! : scene.rust ? trackById("rust-bowl") : previewTrack().track)));
+      r = new Renderer(canvas, themed(scene.on ?? (scene.branch ? testTrack("branch-yard")! : scene.yard ? testTrack("preview-yard")! : scene.rust ? trackById("rust-bowl") : previewTrack().track)));
       renderers.set(on, r);
     }
     return r;
