@@ -10568,7 +10568,7 @@ function touchPointSteer(): void {
 
 function touchPointDead(): void {
   // Inside the dead zone: no gas, no steer (the car coasts), and the memo afresh, whatever was latched.
-  const latched: PointMemo = { rev: 1, stuck: 12 };
+  const latched: PointMemo = { rev: 1, stuck: 12, brake: 2 };
   const [t0, s0, m0] = pointControls(10, -10, pcar(0, 200), latched, PT);
   // No car (between races): nothing.
   const [t1, s1, m1] = pointControls(...thumb(90), null, latched, PT);
@@ -10587,7 +10587,7 @@ function touchPointDead(): void {
   for (let dx = -110; dx <= 110; dx += 7) {
     for (let dy = -110; dy <= 110; dy += 7) {
       const st: Stick = { id: 1, cx: 200, cy: 500, x: 200 + dx, y: 500 + dy };
-      const [rt, rs, rm] = stickOutput(st, SP, pcar(37, -50), { rev: 2, stuck: 30 });
+      const [rt, rs, rm] = stickOutput(st, SP, pcar(37, -50), { rev: 2, stuck: 30, brake: 1 });
       const [et, es] = stickControls(dx, dy, SP);
       same &&= rt === et && rs === es && rm === POINT_IDLE;
     }
@@ -10629,13 +10629,13 @@ function touchPointThrottle(): void {
   const thr = (off: number, vf: number, memo: PointMemo = POINT_IDLE, live = true) => pointThrottle(off * TDEG, { h: 0, vf, live }, memo, PT);
   // Pointed within brakeAngle (110°): gas at every speed, forward or backward (gas while rolling backward brakes).
   const gas = [0, 45, 90, 110].every((off) => [-300, -21, 0, 29, 151, 430].every((vf) => thr(off, vf)[0] === 1 && thr(off, vf)[1].rev === 0));
-  // Pointed past it: brake above brakeSpeed (150), gas from there down to just above revSpeed (30),
-  // reverse to turn round (latch 1) at 30 and under, any backward speed too.
-  const rows = [430, 151, 150, 100, 31, 30, 10, 0, -50, -300].map((vf) => [vf, ...thr(170, vf)] as const);
-  const want = [-1, -1, 1, 1, 1, -1, -1, -1, -1, -1];
+  // Pointed past it (a new turn): brake above brakeSpeed + brakeHyst (180), gas from there down to
+  // just above revSpeed (30), reverse to turn round (latch 1) at 30 and under, any backward speed too.
+  const rows = [430, 181, 180, 151, 100, 31, 30, 10, 0, -50, -300].map((vf) => [vf, ...thr(170, vf)] as const);
+  const want = [-1, -1, 1, 1, 1, 1, -1, -1, -1, -1, -1];
   const behindOk = rows.every(([vf, t, m], i) => t === want[i] && m.rev === (vf <= R.revSpeed ? 1 : 0)) && thr(111, 0)[0] === -1 && thr(-111, 0)[0] === -1 && thr(-170, 200)[0] === -1;
   check(
-    `touch point throttle: within ${PT.brakeAngle}° gas at any speed; past it brake above ${R.brakeSpeed} u/s, gas down to ${R.revSpeed + 1}, reverse at ${R.revSpeed} and under (also rolling backward); both sides`,
+    `touch point throttle: within ${PT.brakeAngle}° gas at any speed; past it (a new turn) brake above ${R.brakeSpeed + R.brakeHyst} u/s, gas down to ${R.revSpeed + 1}, reverse at ${R.revSpeed} and under (also rolling backward); both sides`,
     gas && behindOk,
     rows.map(([vf, t, m]) => `${vf}: ${t}${m.rev ? " rev" : ""}`).join(", "),
   );
@@ -10678,8 +10678,8 @@ function touchPointThrottle(): void {
   const dead = steps(60, 90, 3, POINT_IDLE, false); // not driving (the countdown, a wreck): never counts
   const moving = steps(60, 90, R.stuckSpeed); // |vf| at the threshold: moving, never stuck
   const backward = steps(32, 90, -3); // |vf| counts both ways
-  const out1 = thr(18, -40, { rev: 2, stuck: 0 }); // 18° off: still reversing (aimFull / 2 = 17.5)
-  const out2 = thr(17, -40, { rev: 2, stuck: 0 });
+  const out1 = thr(18, -40, { rev: 2, stuck: 0, brake: 0 }); // 18° off: still reversing (aimFull / 2 = 17.5)
+  const out2 = thr(17, -40, { rev: 2, stuck: 0, brake: 0 });
   check(
     `touch point throttle: stuck (gas, |vf| < ${R.stuckSpeed} for ${R.stuckTicks} driving steps, > ${PT.aimFull}° off) reverses out from the next step; not under ${PT.aimFull}° off, not while the car does not drive, not at |vf| ${R.stuckSpeed}; rolling back slowly counts too; the reverse out lasts until under ${PT.aimFull / 2}° off`,
     firstRev === R.stuckTicks && stuck.out.slice(firstRev).every((t) => t === -1) && stuck.memo.rev === 2 && near.out.every((t) => t === 1) && near.memo.stuck === R.stuckTicks &&
@@ -10689,10 +10689,10 @@ function touchPointThrottle(): void {
   );
   // Stuck reversing (backed into something): gas (latch 3), and no reverse to turn round, even
   // pointed behind, until it rolls forward faster than revSpeed; stuck again under gas: reverse again.
-  const backedIn = steps(32, 90, 2, { rev: 2, stuck: 0 });
+  const backedIn = steps(32, 90, 2, { rev: 2, stuck: 0, brake: 0 });
   const after = steps(5, 170, 10, backedIn.memo);
   const freed = thr(170, R.revSpeed + 1, after.memo);
-  const wiggle = steps(32, 90, 2, { rev: 3, stuck: 0 });
+  const wiggle = steps(32, 90, 2, { rev: 3, stuck: 0, brake: 0 });
   check(
     `touch point throttle: stuck while reversing out drives forward (gas) and stays forward pointed behind until faster than ${R.revSpeed} u/s; stuck again under gas reverses again`,
     backedIn.out.indexOf(1) === R.stuckTicks && backedIn.memo.rev === 3 && after.out.every((t) => t === 1) && after.memo.rev === 3 && freed[1].rev === 0 && wiggle.memo.rev === 2 && wiggle.out.indexOf(-1) === R.stuckTicks,
@@ -10701,24 +10701,87 @@ function touchPointThrottle(): void {
   // One total function: every error (1° steps), speed (-400..450 u/s), memo and live gives gas or
   // brake/reverse, a steer in -1..1 in hundredths and a valid memo, the same every time.
   let total = true, n = 0;
-  for (let off = -180; off <= 180; off += 1) {
+  for (let off = -180; off <= 180; off += 2) {
     for (let vf = -400; vf <= 450; vf += 10) {
       for (const rev of [0, 1, 2, 3] as const) {
         for (const st of [0, 15, R.stuckTicks]) {
-          for (const live of [true, false]) {
-            const memo: PointMemo = { rev, stuck: st };
+          for (const [live, brake] of [[true, 0], [true, 1], [true, 2], [false, 0], [false, 1], [false, 2]] as const) {
+            const memo: PointMemo = { rev, stuck: st, brake };
             const car = { h: 0.3, vf, live };
             const [tx, ty] = thumb(off + 0.3 / TDEG);
             const a = pointControls(tx, ty, car, memo, PT);
             const b = pointControls(tx, ty, car, memo, PT);
             n++;
-            total &&= (a[0] === 1 || a[0] === -1) && a[1] >= -1 && a[1] <= 1 && r100(a[1]) === a[1] && [0, 1, 2, 3].includes(a[2].rev) && a[2].stuck >= 0 && a[2].stuck <= R.stuckTicks && JSON.stringify(a) === JSON.stringify(b);
+            total &&= (a[0] === 1 || a[0] === -1) && a[1] >= -1 && a[1] <= 1 && r100(a[1]) === a[1] && [0, 1, 2, 3].includes(a[2].rev) && [0, 1, 2].includes(a[2].brake) && a[2].stuck >= 0 && a[2].stuck <= R.stuckTicks && JSON.stringify(a) === JSON.stringify(b);
           }
         }
       }
     }
   }
-  check(`touch point throttle: one total function: ${n} cases (every error, speed, memo, live) give gas or brake/reverse, a steer in hundredths and a valid memo, the same twice`, total);
+  check(`touch point throttle: one total function: ${n} cases (every error in 2° steps, speed, memo incl. the brake latch, live) give gas or brake/reverse, a steer in hundredths and a valid memo, the same twice`, total);
+}
+
+function touchPointBrake(): void {
+  // The brake for a turn pointed behind, once a turn with a speed hysteresis (review F2: around
+  // brakeSpeed 150 the throttle blipped brake for single steps). A turn starting above brakeSpeed +
+  // brakeHyst (180) brakes down to brakeSpeed (150), then gas until it no longer points behind; one
+  // starting slower is gas throughout.
+  const R = POINT_RULES;
+  const thr = (off: number, vf: number, memo: PointMemo = POINT_IDLE) => pointThrottle(off * TDEG, { h: 0, vf, live: true }, memo, PT);
+  const braking: PointMemo = { rev: 0, stuck: 0, brake: 1 };
+  const spent: PointMemo = { rev: 0, stuck: 0, brake: 2 };
+  const unit = [
+    ["new turn at 181: brake", thr(170, 181), -1, 1],
+    ["new turn at 180: gas, no brake this turn", thr(170, 180), 1, 2],
+    ["braking at 151: still", thr(170, 151, braking), -1, 1],
+    ["braking at 150: gas", thr(170, 150, braking), 1, 2],
+    ["braked, at 400 still behind: gas", thr(170, 400, spent), 1, 2],
+    ["braked, no longer behind: the turn is over", thr(100, 400, spent), 1, 0],
+    ["braking, then reversing (at 30): no brake latch", thr(170, 30, braking), -1, 0],
+  ] as const;
+  const bad = unit.filter(([, [t, m], wt, wb]) => t !== wt || m.brake !== wb).map(([n, [t, m]]) => `${n}: got ${t} brake ${m.brake}`);
+  check(`touch point brake: a turn pointed behind brakes from above ${R.brakeSpeed + R.brakeHyst} u/s down to ${R.brakeSpeed}, once a turn; a turn starting slower is gas`, bad.length === 0, bad.join(" | ") || unit.map(([n]) => n).join("; "));
+  // Closed loops: the throttle's sign changes over a whole turn (open field), each car type (and the
+  // Racer with tyres 3), from 140 to 430 u/s, 115° to 180° off both ways, dry and wet: at most once.
+  const seqOf = (f: ReturnType<typeof pointField>, stats: ReturnType<typeof statsFor>, v0: number, off: number, n: number) => {
+    const c: CarState = { x: f.x, y: f.y, h: 0, vx: v0, vy: 0, seg: f.seg, wreck: 0, air: 0, fall: 0, boost: 0 };
+    const [dx, dy] = thumb(off);
+    let memo: PointMemo = POINT_IDLE, seq = "";
+    for (let t = 0; t < n; t++) {
+      const vf = c.vx * Math.cos(c.h) + c.vy * Math.sin(c.h);
+      const [throttle, steer, next] = pointControls(dx, dy, { h: c.h, vf, live: true }, memo, PT);
+      memo = next;
+      seq += throttle > 0 ? "+" : "-";
+      stepCar(c, { throttle: r100(throttle), steer: r100(steer) }, stats, f.track);
+    }
+    return seq;
+  };
+  const changes = (seq: string) => [...seq].filter((ch, i) => i > 0 && ch !== seq[i - 1]).length;
+  const dry = pointField(false);
+  const racer = POINT_CARS[1][1];
+  const r160 = seqOf(dry, racer, 160, 170, 24), r300 = seqOf(dry, racer, 300, 170, 24);
+  const hist = new Map<number, number>();
+  let worst = "", most = 0;
+  for (const water of [false, true]) {
+    const f = water ? pointField(true) : dry;
+    for (const [name, stats] of POINT_CARS) {
+      for (let v0 = 140; v0 <= 430; v0 += 30) {
+        for (const off of [115, 125, 135, 145, 155, 165, 175, 180]) {
+          for (const side of [1, -1]) {
+            const seq = seqOf(f, stats, v0, side * off, 150);
+            const k = changes(seq);
+            hist.set(k, (hist.get(k) ?? 0) + 1);
+            if (k > most) [most, worst] = [k, `${water ? "wet " : ""}${name} ${v0} u/s ${side * off}°: ${seq.slice(0, 40)}`];
+          }
+        }
+      }
+    }
+  }
+  check(
+    "touch point brake: over a whole turn the throttle changes sign at most once (brake, then gas): the Racer from 160 u/s 170° off (was -++-++++-+++++++-) and from 300; every car type, 140-430 u/s, 115-180° off both ways, dry and wet",
+    changes(r160) <= 1 && changes(r300) === 1 && r300.startsWith("-") && most <= 1,
+    `Racer 160: ${r160}, Racer 300: ${r300}; changes per turn ${[...hist].sort((a, b) => a[0] - b[0]).map(([k, n]) => `${k}: ${n} turns`).join(", ")}${most > 1 ? `; worst ${worst}` : ""}`,
+  );
 }
 
 /** A wide open field (a 3000 half-width loop) for turns with no wall near, optionally all water there. */
@@ -12326,7 +12389,7 @@ function splitDevFlag(): void {
   );
 }
 
-for (const t of [rivets, gating, mines, wrecks, finishing, garage, armDelay, engine, readyCheck, collisions, trackFeatures, roomTrack, jumpsWired, shippedTracks, botDriver, botLaps, mineCap, chatRoom, chatClient, sound, raceSounds, surfaceSounds, audioUnlock, menuHostOnly, menuStop, menuRestart, menuKick, menuLock, menuHandover, menuClient, menuRestartClient, retireRules, retireField, retireRaceEnd, retireGarage, retireRefund, retireOthers, retireNotices, retireClient, pauseRefused, pauseFreeze, pauseResume, pauseHold, pauseAuto, pauseCooldown, pauseGrace, pauseCountdown, pauseControls, pauseClient, musicSwitch, soundMigration, soundLayers, soundServer, soundRandom, soundRoomDrag, soundSliderGrip, soundClient, songs, songPlayer, ghostRivets, minesSetting, minesStay, minesCap, minesFade, minesAtStart, minesCleared, minesPaused, minesClient, botsPointAt, botsAdd, botsKickHost, botsHandover, botsFullRoom, botsSoloStart, botsRace, botsShop, botsTick, botsCpu, botsClient, carsTypes, carsStats, carsPick, carsRejoin, carsBots, carsRunUps, carsBalance, carsCut, carsClient, envRt, envStep, envClient, draftRule, draftStraight, draftClient, draftJumps, draftBots, cellsRule, boostPhysics, cellsServer, cellsClient, cellsValidate, cellsBots, cellsOffCentre, schemaTypes, schemaArrays, schemaLateral, schemaRt, schemaValidate, schemaPreview, schemaDataOnly, hardGolden, hardLevels, hardShop, hardWeapons, hardApex, hardPace, hardTraffic, hardVs, hardClient, hardCpu, touchStickCentre, touchStickClamp, touchStickDead, touchStickCurve, touchStickOutput, touchStickRounding, touchStickOwner, touchMulti, touchRelease, touchMine, touchMerge, touchPointAim, touchPointSteer, touchPointDead, touchPointThrottle, touchPointTurns, touchPointWater, touchPointLap, touchPointWall, surfTraction, surfBuckets, surfWater, surfDirt, surfBelt, surfMounds, surfRivets, surfRespawn, surfValidate, surfLanes, surfBots, surfShipped, surfParity, surfCpu, surfDevFlag, splitWalls, splitIslands, splitProgress, splitValidate, splitBots, splitParity, splitCpu, splitMounds, splitDevFlag]) {
+for (const t of [rivets, gating, mines, wrecks, finishing, garage, armDelay, engine, readyCheck, collisions, trackFeatures, roomTrack, jumpsWired, shippedTracks, botDriver, botLaps, mineCap, chatRoom, chatClient, sound, raceSounds, surfaceSounds, audioUnlock, menuHostOnly, menuStop, menuRestart, menuKick, menuLock, menuHandover, menuClient, menuRestartClient, retireRules, retireField, retireRaceEnd, retireGarage, retireRefund, retireOthers, retireNotices, retireClient, pauseRefused, pauseFreeze, pauseResume, pauseHold, pauseAuto, pauseCooldown, pauseGrace, pauseCountdown, pauseControls, pauseClient, musicSwitch, soundMigration, soundLayers, soundServer, soundRandom, soundRoomDrag, soundSliderGrip, soundClient, songs, songPlayer, ghostRivets, minesSetting, minesStay, minesCap, minesFade, minesAtStart, minesCleared, minesPaused, minesClient, botsPointAt, botsAdd, botsKickHost, botsHandover, botsFullRoom, botsSoloStart, botsRace, botsShop, botsTick, botsCpu, botsClient, carsTypes, carsStats, carsPick, carsRejoin, carsBots, carsRunUps, carsBalance, carsCut, carsClient, envRt, envStep, envClient, draftRule, draftStraight, draftClient, draftJumps, draftBots, cellsRule, boostPhysics, cellsServer, cellsClient, cellsValidate, cellsBots, cellsOffCentre, schemaTypes, schemaArrays, schemaLateral, schemaRt, schemaValidate, schemaPreview, schemaDataOnly, hardGolden, hardLevels, hardShop, hardWeapons, hardApex, hardPace, hardTraffic, hardVs, hardClient, hardCpu, touchStickCentre, touchStickClamp, touchStickDead, touchStickCurve, touchStickOutput, touchStickRounding, touchStickOwner, touchMulti, touchRelease, touchMine, touchMerge, touchPointAim, touchPointSteer, touchPointDead, touchPointThrottle, touchPointBrake, touchPointTurns, touchPointWater, touchPointLap, touchPointWall, surfTraction, surfBuckets, surfWater, surfDirt, surfBelt, surfMounds, surfRivets, surfRespawn, surfValidate, surfLanes, surfBots, surfShipped, surfParity, surfCpu, surfDevFlag, splitWalls, splitIslands, splitProgress, splitValidate, splitBots, splitParity, splitCpu, splitMounds, splitDevFlag]) {
   console.log(`\n# ${t.name}`);
   try {
     t();

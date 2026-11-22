@@ -131,18 +131,27 @@ export const STICK_DEFAULTS: Readonly<StickParams> = { mode: "point", radius: 95
  * the panel: they follow from the physics (shared/physics.ts stepCar), not from taste.
  * - brakeSpeed 150: pointed past brakeAngle, faster than this brakes (BRAKE 900 u/s²) so the car
  *   slows into the turn; slower, gas turns it round forward at the full turn rate (FULL_TURN_SPEED 140).
+ * - brakeHyst 30: a speed hysteresis on the brake, once a turn (the memo's brake): a turn pointed
+ *   behind brakes only if it starts above brakeSpeed + 30 (180), then down to brakeSpeed (150), and
+ *   not again until the car no longer points behind; so the throttle changes sign at most once a
+ *   turn (brake, then gas) instead of single-step brake blips each time gas lifts vf past 150
+ *   (TOUCH-5 review F2: the knob flashed red for single frames). Measured over every car type,
+ *   140-430 u/s and 115-180° off, dry and wet: at most 1 change (was up to 8). The release stays at
+ *   150: lower (120) brakes under FULL_TURN_SPEED and turns slower (top-speed U-turns 1-4 steps
+ *   longer); the entry margin sets how fast a turn must start to brake at all.
  * - revSpeed 30: pointed past brakeAngle at or under this (or rolling backward), it reverses
  *   instead: from about a standstill a forward U-turn barely turns (the turn scales with vf / 140).
  * - flipSpeed 20: rolling backward faster than this the steer is flipped (the physics turns the
  *   other way in reverse), so the nose still swings toward the aim; more than the most one step
- *   changes vf (BRAKE / 60 = 15), so the speed the step turns with has the same sign.
+ *   changes vf (BRAKE / 60 = 15), so the speed the step turns with has the same sign. (The closed
+ *   loops do not depend on the margin, so no test pins it: it rests on that bound.)
  * - revHyst 30: a reverse to turn round ends only under brakeAngle - 30° (80° by default), so the
  *   car does not chatter between reverse and gas (gas while rolling backward brakes).
  * - stuckSpeed 15 and stuckTicks 30: the throttle on, |vf| under 15 for 30 driving steps (0.5 s;
  *   a start from rest passes 15 in 2 steps, 6 on water) is stuck: nose in a wall and pointed more
  *   than aimFull off, it reverses out until under aimFull / 2 off; stuck reversing, it drives forward.
  */
-export const POINT_RULES = { brakeSpeed: 150, revSpeed: 30, flipSpeed: 20, revHyst: 30, stuckSpeed: 15, stuckTicks: 30 } as const;
+export const POINT_RULES = { brakeSpeed: 150, brakeHyst: 30, revSpeed: 30, flipSpeed: 20, revHyst: 30, stuckSpeed: 15, stuckTicks: 30 } as const;
 
 /** Where things are on screen: cached by TouchPad, measured again after a resize. */
 export interface PadGeometry {
@@ -236,14 +245,17 @@ export interface PadCar {
  * Point mode's memory between steps (TouchPad keeps it; the functions are pure). rev: 0 gas; 1
  * reversing to turn round (pointed behind from slow); 2 reversing out of a wall (stuck under gas);
  * 3 gas only (stuck reversing: no reverse to turn round until it rolls forward again). stuck: the
- * driving steps in a row with |vf| under POINT_RULES.stuckSpeed (at most stuckTicks).
+ * driving steps in a row with |vf| under POINT_RULES.stuckSpeed (at most stuckTicks). brake: the
+ * brake for a turn pointed behind, once a turn with a speed hysteresis round brakeSpeed.
  */
 export interface PointMemo {
   readonly rev: 0 | 1 | 2 | 3;
   readonly stuck: number;
+  /** The brake for a turn pointed behind (not reversing): 0 no such turn, 1 braking, 2 braked or started slow (gas until it no longer points behind). */
+  readonly brake: 0 | 1 | 2;
 }
 
-export const POINT_IDLE: PointMemo = { rev: 0, stuck: 0 };
+export const POINT_IDLE: PointMemo = { rev: 0, stuck: 0, brake: 0 };
 
 /** Where the thumb points (radians, screen axes = world axes: 0 = right, + = clockwise), or null inside the dead zone. */
 export function pointAim(dx: number, dy: number, p: StickParams): number | null {
@@ -264,8 +276,9 @@ export function pointSteer(err: number, vf: number, p: StickParams): number {
  * Point mode's throttle: one total function of the heading error (radians), the car's signed
  * forward speed and the memo, giving gas (1) or brake/reverse (-1) and the next memo.
  * - Pointed within brakeAngle: gas.
- * - Pointed past brakeAngle: brake above brakeSpeed, gas down to revSpeed, at or under it (and at
- *   any backward speed) reverse to turn round, until under brakeAngle - revHyst.
+ * - Pointed past brakeAngle: a turn that starts above brakeSpeed + brakeHyst brakes down to
+ *   brakeSpeed, then gas (once a turn); else gas down to revSpeed; at or under it (and at any
+ *   backward speed) reverse to turn round, until under brakeAngle - revHyst.
  * - Stuck (stuckTicks driving steps with |vf| under stuckSpeed): under gas and more than aimFull
  *   off, reverse out until under aimFull / 2 off; while reversing, gas (and no reverse to turn
  *   round until it rolls forward faster than revSpeed).
@@ -283,9 +296,16 @@ export function pointThrottle(err: number, car: PadCar, memo: PointMemo, p: Stic
     else if (off > p.aimFull) rev = 2;
   }
   if (rev === 0 && behind && car.vf <= R.revSpeed) rev = 1;
-  const throttle = rev === 1 || rev === 2 || (behind && car.vf > R.brakeSpeed) ? -1 : 1;
+  const reversing = rev === 1 || rev === 2;
+  let brake: 0 | 1 | 2 = 0;
+  if (!reversing && behind) {
+    if (memo.brake === 1) brake = car.vf > R.brakeSpeed ? 1 : 2; // released at brakeSpeed (see brakeHyst)
+    else if (memo.brake === 2) brake = 2;
+    else brake = car.vf > R.brakeSpeed + R.brakeHyst ? 1 : 2;
+  }
+  const throttle = reversing || brake === 1 ? -1 : 1;
   const stuck = car.live && rev === memo.rev && Math.abs(car.vf) < R.stuckSpeed ? Math.min(R.stuckTicks, memo.stuck + 1) : 0;
-  return [throttle, rev === memo.rev && stuck === memo.stuck ? memo : { rev, stuck }];
+  return [throttle, rev === memo.rev && stuck === memo.stuck && brake === memo.brake ? memo : { rev, stuck, brake }];
 }
 
 /**
