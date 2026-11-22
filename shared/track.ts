@@ -1268,7 +1268,9 @@ export function wallAt(track: Track, s: number, side: number): number {
  * Without a widen on the track: def.halfWidth, exactly.
  */
 export function halfOf(track: Track, q: TrackQuery): number {
-  return track.widens.length === 0 ? track.def.halfWidth : halfOn(track, q.seg, q.s, q.side);
+  // BR-PHYS: a query of a track with branches may be on a branch: its road's (roadFor); the track's own otherwise.
+  const r = q.road === track.roadNo ? track : track.branches[q.road - 1].road;
+  return r.widens.length === 0 ? r.def.halfWidth : halfOn(r, q.seg, q.s, q.side);
 }
 
 /**
@@ -1291,7 +1293,8 @@ export function halfOn(track: Track, seg: number, s: number, side: number): numb
 
 /** The wall's distance from the centerline where a query is (its side, its s): halfOf plus the verge; track.wall without a widen, exactly. */
 export function wallOf(track: Track, q: TrackQuery): number {
-  return track.widens.length === 0 ? track.wall : halfOf(track, q) + track.def.verge;
+  const r = q.road === track.roadNo ? track : track.branches[q.road - 1].road; // BR-PHYS: the query's road (halfOf)
+  return r.widens.length === 0 ? r.wall : halfOf(r, q) + r.def.verge;
 }
 
 /**
