@@ -155,8 +155,8 @@ export const BARREL_RESTITUTION = 0.5;
  * 537 u/s), so the body never touches a car arriving in the band fast enough.
  */
 export const TRUCK_RAMP_LEAD = 25;
-/** A squeeze is an overlap deeper than this left after the walls (an exact touch is not one). */
-const SQUEEZE_EPS = 1e-3;
+/** A squeeze is an overlap deeper than this left after the walls (an exact touch, to rounding, is not one). */
+const SQUEEZE_EPS = 1e-6;
 
 export function cloneCar(c: CarState): CarState {
   return { x: c.x, y: c.y, h: c.h, vx: c.vx, vy: c.vy, seg: c.seg, wreck: c.wreck, air: c.air, fall: c.fall, boost: c.boost };
@@ -441,7 +441,9 @@ export function collidePresses(c: CarState, gates: readonly PlacedPress[], rt: n
     if (ca > ha + CAPSULE_HALF + CAPSULE_R || ca < -ha - CAPSULE_HALF - CAPSULE_R || cl < g.lat0 - CAPSULE_HALF - CAPSULE_R || cl > g.lat1 + CAPSULE_HALF + CAPSULE_R) continue;
     const a0 = ca - da, l0 = cl - dl, a1 = ca + da, l1 = cl + dl;
     let nx: number, ny: number, depth: number;
-    if (segMeetsBox(a0, l0, a1, l1, ha, g.lat0, g.lat1)) {
+    // The axis meets the box, or touches it (a distance this small has no direction to push along).
+    const d = segMeetsBox(a0, l0, a1, l1, ha, g.lat0, g.lat1) ? 0 : segToBox(a0, l0, a1, l1, ha, g.lat0, g.lat1);
+    if (d < 1e-6) {
       // Under it: along the road to the nearer side, the whole capsule out.
       const back = Math.max(a0, a1) + CAPSULE_R + ha, ahead = ha - Math.min(a0, a1) + CAPSULE_R;
       const sgn = ahead < back ? 1 : -1;
@@ -449,10 +451,9 @@ export function collidePresses(c: CarState, gates: readonly PlacedPress[], rt: n
       ny = gy * sgn;
       depth = sgn > 0 ? ahead : back;
     } else {
-      const d = segToBox(a0, l0, a1, l1, ha, g.lat0, g.lat1);
       if (d >= CAPSULE_R) continue;
       // Box frame -> world: (a, l) is along gx, gy and across g.nx, g.ny.
-      const na = (PA - KA) / d, nl = (PL - KL) / d; // d > 0: the axis does not meet the box
+      const na = (PA - KA) / d, nl = (PL - KL) / d; // d >= 1e-6: the axis is clear of the box
       nx = gx * na + g.nx * nl;
       ny = gy * na + g.ny * nl;
       depth = CAPSULE_R - d;
