@@ -154,3 +154,4 @@
 - 2026-11-22 — MARSHALS-1 speed (orchestrator): one 5 us timer step more on S1 where the marshals are drawn (four sprites), none where culled - accepted. Small final round (late-join flag burst, flags during a pause, stale comment, per-side walls) before the merge.
 - 2026-11-22 — Marshals taste (user, walkthrough popup, after the inline preview): "Approve as they are" (incl. the low vest/yellow-flag contrast on the lightest desert sand; the outline carries it).
 - 2026-11-22 — Shortcut roads look (user, walkthrough popup, after the inline preview of the BR-BAKE sheet and the BR-MAP minimap): "Approve the look, drive next" -> BR-BAKE merges on review APPROVE; then a Branch Yard copy for the wave-4 drive (3 Hard bots).
+- 2026-11-22 — Invite-link fallback (user, walkthrough popup): "Make it selectable" -> NOSELECT-2 123jpnbfgvn (tiny; after MARSHALS-1 merges, as it needs client/main.ts).

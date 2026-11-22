@@ -732,6 +732,9 @@ BR-BOTS review 1 REQUEST_CHANGES (ctx_dfe9940aaeb7 kept): routeStep tests pastGo
 fork gore the route keeps the other road for up to one segment (14 vs 4 wall contacts in fork-mouth drives). Fix round + merge main sent to
 ctx_0bc7149aa317 (tmp/br-bots/BR-BOTS-review-1.md).
 BR-MAP gate GREEN on c73653d (1046/1046 + 150/150, build index-Smw27BZH.js).
+Walkthrough (user popups): marshals approved as they are; shortcut look approved (drive next); invite-link fallback -> selectable =
+NOSELECT-2 123jpnbfgvn (after MARSHALS-1 merges). NEXT: merge BR-BAKE, MARSHALS-1, BR-BOTS on their verdicts; then NOSELECT-2; then a
+Branch Yard copy on :3009 for the wave-4 drive (replaces the HARD-2 tuning copy only if the user has tuned; else use another port).
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
