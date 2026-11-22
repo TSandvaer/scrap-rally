@@ -1054,6 +1054,9 @@ function draw(alpha: number, elapsed: number): void {
   const fx = effects.frame(now, game.otherShots(), game.localShots, game.visibleMines(), game.you, own, others);
   fx.cells = cellOut;
   fx.nCells = catchCells();
+  // What moves (M4-MOVE: barrels, presses, belts' arrows) at the race tick the own car's drawn step ran
+  // at, a spectator's at the latest snapshot's (Game.drawTick); none before a snapshot: a still picture.
+  fx.rt = game.drawTick();
   driving(game.car, game.smooth, game.contact, others); // tyre marks: by the cars' driving, not by what the prediction does to them on screen
   renderer.frame(cars, fx, hudView());
 }
