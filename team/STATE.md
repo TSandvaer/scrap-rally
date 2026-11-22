@@ -568,6 +568,8 @@ M4-MOVE part 1 done: dc42d82 (8 commits on ae4db2c; report tmp/m4-move/m4-move-r
 dropped, no x1.3, Move Yard (SCRAP_DEV_TRACK=move-yard), bots 0 contacts weapons off; shipped SAME; 866/866 + 133/133 twice. Merges
 clean with main and touch-5. Only criterion 9 left (main.ts fx.rt = game.drawTick(); after TOUCH-5 merges). Opus reviewer ctx_b64bf57fdff3
 (tmp/review-m4-move.md) on part 1 now; criterion 9 = a delta review later; taste copy after criterion 9 (art static until then).
+TOUCH-5 re-review APPROVE (ctx_a0987104e2a7, released; tmp/touch-5/touch5-review-2.md; note: a turn pointed behind at 150-180 u/s
+never brakes now, uses more room). MERGED 56e6a45; gate running. MOVE told 'go for criterion 9' (merge main, fx.rt = game.drawTick()).
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
