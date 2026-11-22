@@ -701,7 +701,7 @@ TH-LOOK-1 review APPROVE (Fable; cosmetic desert notes on the ticket; mud rim on
 gate running; ClickUp ready for qa test; workers released, workspace removed; desert sheet + 58 shots saved in tmp/th-look-1/.
 IN FLIGHT: BR-BAKE 123jpnbfghb (Fable) ctx_373cca46924f (~/orca/workspaces/scrap-rally/br-bake, :3011; spec tmp/spec-br-bake.md);
 MARSHALS-1 123jpnbfgjb (Fable) ctx_d2ef6307e5f5 (~/orca/workspaces/scrap-rally/marshals-1, :3016; spec tmp/spec-marshals-1.md).
-BR-PHYS next when THEME-SCHEMA merges (3rd author slot). PUSH GATE: the desert needs the user's OK before Breaker's Mile goes live in it.
+BR-PHYS next when THEME-SCHEMA merges (3rd author slot). Desert APPROVED by the user (push gate cleared).
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
