@@ -31,7 +31,9 @@
 //   throws dust, one on its asphalt throws none, and how many segments a frame searches for it;
 // - what moves (client/gfx/obstacles.ts): on a copy of the track with a belt, a row of barrels
 //   and a press on a shortcut, each is laid out and drawn there, and its bed is baked there;
-// - the gaps: a shortcut's void ends at the shortcut's own wall (no void pixel further out).
+// - the gaps: a shortcut's void ends at the shortcut's own wall (no void pixel further out);
+// - a fall on a shortcut: the tiles round the place the car is put back at (its own recovery
+//   point, or the main road's before the fork: shared/track.ts recoveryFor) are baked ahead.
 //
 // --shots: the working tree is built into a temp directory and served on 127.0.0.1 (--port), one
 // browser session (brb-sheet-<pid>, muted, closed at the end). The preview's scenes of Branch
@@ -60,9 +62,9 @@ import { promisify } from "node:util";
 import { FONT_LETTERS, SMALL } from "../../client/gfx/font";
 import { rgbOf, SCRAPYARD } from "../../client/gfx/palette";
 import { sceneryOf, themedTrack, themeOf, type Scenery, type Theme } from "../../client/gfx/theme";
-import { artLayout, bakePeaks, bakeTileIndices, bakeTileKinds, bakeTileMarked, KIND, TILE, VIEW_H, VIEW_W, ZOOM } from "../../client/gfx/world";
+import { artLayout, bakePeaks, bakeTileIndices, bakeTileKinds, bakeTileMarked, KIND, poolTileIndices, TILE, VIEW_H, VIEW_W, World, ZOOM } from "../../client/gfx/world";
 import { BRANCH_YARD, testTrack } from "../../shared/testtracks";
-import { BRANCH_GUIDE, buildTrack, halfOn, pointAt, queryRoads, queryTrack, roadOf, validateTrack, type Feature, type PlacedBranch, type Track } from "../../shared/track";
+import { BRANCH_GUIDE, buildTrack, halfOn, pointAt, queryRoads, queryTrack, recoveryFor, roadOf, validateTrack, type Feature, type PlacedBranch, type Track } from "../../shared/track";
 import { blank, decodePng, paste, savePng, type Picture } from "./png";
 
 const args = process.argv.slice(2);
@@ -517,6 +519,44 @@ async function dust(t: Track): Promise<void> {
   const main = drive(t, 2000, 2700, t.def.halfWidth + 20);
   console.log(`      the main road's verge, far from a mouth: ${main.specks} of ${main.frames} frames with dust, ${main.median} segments searched a frame (most ${main.most})`);
   say(good && main.specks > main.frames / 2 && main.most <= 30, `dust on every shortcut's verge and none on its asphalt; never more than 30 of the track's ${all} segments searched in a frame (13 round where the car was, 13 more of the other road near a mouth, 1 for the road's width)`);
+}
+
+/**
+ * Where the own car will be put back after a fall on a shortcut (client/gfx/world.ts predict:
+ * the tiles round that place are baked ahead while it falls): a car falling in the middle of
+ * each shortcut, and the place shared/track.ts recoveryFor names for it (a shortcut's own
+ * recovery point, or the main road's before the fork). The tile under that place is baked while
+ * the car falls and the view stands on it; and it is not while the same car just stands there.
+ */
+function putBack(t: Track): void {
+  nodeDom();
+  const seen: string[] = [];
+  let good = true;
+  t.branches.forEach((b, k) => {
+    const r = b.road;
+    // Over the shortcut's gap or pit where it has one (a fall into it), else off its road's middle (a fall off it).
+    const u = r.gaps.length ? (r.gaps[0].s0 + r.gaps[0].s1) / 2 : r.holes.length ? r.holes[r.holes.length - 1].s : r.length / 2;
+    const p = r.holes.length && !r.gaps.length ? { x: r.holes[r.holes.length - 1].x, y: r.holes[r.holes.length - 1].y, h: 0 } : pointAt(r, u);
+    const to = recoveryFor(t, r.roadNo, u), at = pointAt(roadOf(t, to.road), to.s);
+    const tx = Math.floor((at.x * ZOOM) / TILE), ty = Math.floor((at.y * ZOOM) / TILE);
+    // A copy of the track a go: its tiles are its own (the pool is keyed by the track).
+    const baked = (falling: boolean): boolean => {
+      const track: Track = { ...t };
+      const w = new World(quietCanvas(null).getContext() as CanvasRenderingContext2D, track);
+      const car = { id: "c0", x: p.x, y: p.y, h: p.h, color: "#e8552d", name: "", me: true, wreck: false, ghost: false, ...(falling ? { falling: 0.5 } : {}) };
+      const ox = Math.round(p.x * ZOOM) - VIEW_W / 2, oy = Math.round(p.y * ZOOM) - VIEW_H / 2;
+      for (let i = 0; i < 240; i++) {
+        w.aim(p.x, p.y, 1000 / 60, i === 0);
+        w.draw(ox, oy, [car]);
+      }
+      return poolTileIndices(track, tx, ty) !== null;
+    };
+    const still = baked(false), fell = baked(true);
+    const far = Math.hypot(at.x - p.x, at.y - p.y);
+    seen.push(`shortcut ${k + 1} at u ${u.toFixed(0)}: back to ${to.road ? `its own recovery point at u ${to.s.toFixed(0)}` : `the main road's at s ${to.s.toFixed(0)}`}, ${far.toFixed(0)} units away: its tile baked while it falls ${fell ? "yes" : "NO"}, while it stands ${still ? "yes (in view anyway)" : "no"}`);
+    if (!fell) good = false;
+  });
+  say(good && seen.length > 0, `where a car that falls on a shortcut is put back is baked ahead (recoveryFor's place): ${seen.join("; ")}`);
 }
 
 /** What moves on a shortcut is laid out and drawn there, and its bed baked there. */
@@ -1056,6 +1096,7 @@ try {
     lists(track);
     layout(track);
     await dust(track);
+    putBack(track);
     await movers();
     console.log(failed ? `\n${failed} check(s) failed.` : "\nEvery check holds.");
     code = failed ? 1 : 0;
