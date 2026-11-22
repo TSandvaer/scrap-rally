@@ -1358,7 +1358,7 @@ export function mistakeSpots(track: Track, bendLook: number): number {
  * One step of Hard's mistakes (mistakeRate > 0 only): the one under way goes on (ended when `free`
  * is false, after its steps or past its end), the bend-entry latch moves, and at a bend entry, a
  * landing, a pass done or given up, or a hit, with `free` and none under way, a new one may begin (mistakeDraw against
- * the rate's chance, then mistakeClear): {kind, size, end} latched in mem.mistake.
+ * the rate's chance, then mistakeClear): {kind, size, end} latched in mem.mistake (t 0 on the step it begins).
  */
 function mistakeStep(
   view: BotView, mem: BotMem, s: number, seg: number, v: number, bend: number, free: boolean, landed: boolean, passed: boolean, hit: boolean,
@@ -1387,8 +1387,7 @@ function mistakeStep(
   const n = what === 1 ? 360 : what === 2 ? Math.round(30 + 40 * size) : Math.round(12 + 36 * size);
   const delay = kind === "late-brake" ? LATE_LOOK * size * (20 + Math.max(120, v * 0.9) * hp.bendLook) : 0;
   m = mem.mistake = { kind, size, from: s, end: s + len, delay, t: 0, n, sign: mistakeDraw(mem.seed, lap, seg, 4 * what + 3) < 0.5 ? -1 : 1 };
-  mem.onMistake?.(kind, size, s, lap);
-  return m;
+  return m; // botControls reports it (onMistake) once it is driven: a wide line may find no free lane
 }
 
 /** Follow the line, brake for bends, take ramps flat out, dodge holes, shoot what is ahead. */
@@ -1518,6 +1517,8 @@ export function botControls(view: BotView, mem: BotMem): BotControls {
       if (!wl.holes && !wl.dodge && wl.lane === wide && apexMineFree(view, c, q.s, mem.lateral, wide, hp.apexMineClear)) lane = wide;
       else mem.mistake = err = null; // nowhere to run wide: no mistake
     }
+    // A mistake that begins this step, once it is sure to be driven (a wide line has its lane).
+    if (err !== null && err.t === 0) mem.onMistake?.(err.kind, err.size, q.s, view.lap ?? 0);
   }
   let aim = q.s + look;
   if (ramp && ramp.toLip < RAMP_STRAIGHTEN) aim = q.s + ramp.toLip + 180;

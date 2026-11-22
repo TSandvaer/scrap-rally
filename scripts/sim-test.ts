@@ -14017,6 +14017,35 @@ function hard2Latch(): void {
     s0 >= 0 && seen.join() === "hesitate@lap1" && t1 === 1 && t2 === 0 && early.mistake === null && landed.mistake?.kind === "wobble" && laps.join() === "2" && sk.join() === "hesitate@lap1",
     `straight at s ${s0}; direct ${seen.join() || "none"}, throttle ${t1} -> ${t2}; early ${early.mistake?.kind ?? "none"}; landing ${landed.mistake?.kind ?? "none"}; botStep laps ${laps.join() || "none"}; BotDriver ${sk.join() || "none"}`,
   );
+  // A wide line is reported (onMistake: the server log, the counts) only once it is driven: at a bend
+  // entry whose draw is "wide", a mine on the outside lane leaves it nowhere to run wide, so no mistake
+  // begins and none is reported; without the mine the same bend reports "wide" (review nit 2).
+  let e0 = -1;
+  for (let s = 200; s < t.length && e0 < 0; s += 5) {
+    const at = (x: number) => Math.abs(angleDiff(pointAt(t, x + 20).h, pointAt(t, x + 20 + 360 * h2Bot.HARD.bendLook).h));
+    if (at(s) > 0.5 && at(s - 5) <= 0.5 && h2Bot.mistakeClear(t, s)) e0 = s;
+  }
+  const ep = pointAt(t, e0);
+  const eturn = angleDiff(pointAt(t, e0 + 20).h, pointAt(t, e0 + 20 + 360 * h2Bot.HARD.bendLook).h);
+  const entry: CarState = { x: ep.x, y: ep.y, h: ep.h, vx: Math.cos(ep.h) * 400, vy: Math.sin(ep.h) * 400, seg: ep.seg, wreck: 0, air: 0, fall: 0, boost: 0 };
+  const mq = pointAt(t, e0 + 100), out = -Math.sign(eturn) * 20;
+  const wideAt = (seed: number, mine: boolean) => {
+    const m = h2Mem();
+    m.seed = seed;
+    const said: string[] = [];
+    m.onMistake = (k) => void said.push(k);
+    const mines = mine ? [{ x: mq.x - Math.sin(mq.h) * out, y: mq.y + Math.cos(mq.h) * out }] : [];
+    botControls({ car: { ...entry }, track: t, stats: BASE_STATS, raceOn: true, raceSteps: 600, others: [], mines, lap: 1 }, m);
+    return { said: said.join(), kind: m.mistake?.kind ?? "none" };
+  };
+  let wseed = -1;
+  for (let seed = 0; seed < 64 && wseed < 0; seed++) if (wideAt(seed, false).said === "wide") wseed = seed;
+  const free = wseed >= 0 ? wideAt(wseed, false) : null, blocked = wseed >= 0 ? wideAt(wseed, true) : null;
+  check(
+    "hard2 latch: a wide line is reported only once it is driven: with a mine on the outside lane no mistake begins and none is reported; the same bend entry without it reports \"wide\" (review nit 2)",
+    e0 >= 0 && !!free && !!blocked && free.said === "wide" && free.kind === "wide" && blocked.said === "" && blocked.kind === "none",
+    `bend entry at s ${e0} (turn ${eturn.toFixed(2)}), seed ${wseed}: free ${free?.said || "none"} / ${free?.kind}; mine on the outside lane ${blocked?.said || "nothing reported"} / ${blocked?.kind}`,
+  );
   // Exclusions: mistakeClear holds nowhere a feature lies within MISTAKE_LOOK ahead (or beside), and
   // the start of a mistake needs it. Crusher Run: before its ramps and holes, no; far from them, yes.
   const cr = trackById("crusher-run");

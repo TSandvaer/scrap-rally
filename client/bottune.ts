@@ -1,7 +1,8 @@
 // Debug only (?debug=1, HARD-2): the Hard bots' Bot tune panel, loaded by main.ts only then. It shows
 // only to the host, in the lobby, of a room on a server started with the dev flag SCRAP_DEV_BOTS=1
 // (the room message's botTune; without the flag the server sends none and refuses the message). A
-// BOT TUNE button (top right) opens a panel with a slider per knob value (shared/botdrive.ts BotTune):
+// "Bot tune" row under the lobby's Add bot row (in the lobby's own column, so nothing floats over the
+// speaker or the ☰ menu at any width) opens a panel below it with a slider per knob value (BotTune):
 // Hard's mistake rate per lap and their size, its pace (1 = today's Hard, 0 = Normal's bend pace) and
 // its rivet aim (HARD.rivetSlack). Each change goes to the server ({t:"botTune"}); the next race's
 // Hard bots drive with it (the server log prints each mistake: seat, lap, s, kind). The values are
@@ -66,17 +67,19 @@ function asText(t: BotTune): string {
 
 const same = (a: BotTune, b: BotTune) => a.rate === b.rate && a.size === b.size && a.pace === b.pace && a.aim === b.aim;
 
-/** The panel's own look: placed top right over the lobby; rows, sliders and text as the touch panel's (client/style.css .tune-*). */
+/**
+ * The panel's own look (style.css is not this panel's): a row in the lobby's column under Add bot
+ * (.track-pick, as the Track and Music rows) and the panel in the flow below it, so the lobby scrolls
+ * it like the rest; rows, sliders and text as the touch panel's (client/style.css .tune-*).
+ */
 const STYLE = `
-.bottune-btn { position: fixed; top: 10px; right: 10px; z-index: 30; min-height: 36px; padding: 0 10px; font: inherit; font-size: 12px;
-  font-weight: 700; letter-spacing: 1px; color: var(--haz1); background: rgba(18, 14, 11, 0.9); border: 2px solid var(--haz1); cursor: pointer; }
-.bottune-panel { position: fixed; top: 54px; right: 10px; z-index: 30; width: min(280px, calc(100vw - 32px)); max-height: calc(100dvh - 70px);
-  overflow: auto; display: flex; flex-direction: column; gap: 4px; padding: 8px 10px; font-size: 11px; background: rgba(18, 14, 11, 0.95);
-  border: 2px solid var(--line); box-shadow: 4px 4px 0 var(--cast); }
+.bottune-row .bottune-btn { flex: 1; min-width: 0; color: var(--haz1); border-color: var(--haz1); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.bottune-panel { display: flex; flex-direction: column; gap: 4px; margin: 2px 0 8px; padding: 8px 10px; font-size: 11px;
+  background: rgba(18, 14, 11, 0.95); border: 2px solid var(--line); box-shadow: 4px 4px 0 var(--cast); text-align: left; }
 .bottune-panel .tune-head { display: flex; justify-content: space-between; align-items: center; }
 .bottune-note { margin: 0; color: var(--muted-solid); }
 .bottune-server { margin: 0; color: var(--haz2); }
-.bottune-hidden { display: none; }
+.bottune-row.bottune-hidden, .bottune-panel.bottune-hidden { display: none; }
 `;
 
 export function mountBotTune(game: Game, root: HTMLElement): void {
@@ -85,10 +88,14 @@ export function mountBotTune(game: Game, root: HTMLElement): void {
   document.head.append(style);
 
   let tune = load();
-  const btn = el("button", "bottune-btn bottune-hidden", "BOT TUNE");
+  const tuneRow = el("div", "track-pick bottune-row bottune-hidden");
+  tuneRow.append(el("span", "label", "Bot tune"));
+  const btn = el("button", "btn small bottune-btn", "Hard bots ▾");
   btn.type = "button";
   btn.setAttribute("aria-label", "Tune the Hard bots");
   btn.setAttribute("aria-expanded", "false");
+  btn.setAttribute("aria-controls", "bottune-panel");
+  tuneRow.append(btn);
   const panel = el("section", "bottune-panel bottune-hidden");
   panel.id = "bottune-panel";
   panel.setAttribute("aria-label", "Hard bot tuning");
@@ -137,7 +144,10 @@ export function mountBotTune(game: Game, root: HTMLElement): void {
   reset.type = "button";
   row.append(copy, reset);
   panel.append(server, text, row);
-  root.append(btn, panel);
+  // Under the lobby's Add bot row (host only, lobby only, like this panel); without it, at the end of root.
+  const after = document.getElementById("bot-add");
+  if (after) after.after(tuneRow, panel);
+  else root.append(tuneRow, panel);
 
   /** The sliders, their values and the text from `tune`; the server's line from the room message. */
   function render(): void {
@@ -149,10 +159,14 @@ export function mountBotTune(game: Game, root: HTMLElement): void {
     renderServer();
   }
   let serverShown = "";
+  let btnShown = "";
   function renderServer(): void {
     const t = game.botTune;
     const now = t ? `Next race: ${t.rate.toFixed(1)}/lap, size ${t.size.toFixed(2)}, pace ${t.pace.toFixed(2)}, slack ${t.aim.toFixed(1)}${same(t, tune) ? "" : " (sending…)"}` : "";
     if (now !== serverShown) server.textContent = serverShown = now;
+    // The row's button says what the next race's Hard bots do, open or shut.
+    const label = t ? `${t.rate === 0 ? "No mistakes" : `${t.rate.toFixed(1)}/lap, size ${t.size.toFixed(2)}`}${t.pace === 1 ? "" : `, pace ${t.pace.toFixed(2)}`} ${panel.classList.contains("bottune-hidden") ? "▾" : "▴"}` : "";
+    if (label !== btnShown) btn.textContent = btnShown = label;
   }
   let sendTimer = 0;
   /** To the server now (a slider let go) or shortly (while one moves). */
@@ -175,6 +189,7 @@ export function mountBotTune(game: Game, root: HTMLElement): void {
   const setOpen = (open: boolean) => {
     panel.classList.toggle("bottune-hidden", !open);
     btn.setAttribute("aria-expanded", String(open));
+    renderServer();
   };
   btn.addEventListener("click", () => setOpen(panel.classList.contains("bottune-hidden")));
   close.addEventListener("click", () => setOpen(false));
@@ -196,7 +211,7 @@ export function mountBotTune(game: Game, root: HTMLElement): void {
   let syncedFor = "";
   window.setInterval(() => {
     const on = allowed();
-    btn.classList.toggle("bottune-hidden", !on);
+    tuneRow.classList.toggle("bottune-hidden", !on);
     if (!on) {
       setOpen(false);
       return;
