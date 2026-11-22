@@ -12728,7 +12728,81 @@ function moveDevFlag(): void {
   );
 }
 
-for (const t of [moveBarrels, moveSolids, moveLandings, moveRivets, moveRespawn, moveSweep, moveBuckets, moveParity, moveBots, moveShipped, moveCpu, moveDevFlag]) {
+function moveDraw(): void {
+  // Where what moves is drawn (PLAN-M4 section 3): Game.drawTick, the race tick main.ts gives the
+  // renderer (WorldFx.rt), is the race tick the server applies the step that made the drawn own car
+  // at (zero lag, over the wire: every frame of a lap of the Move Yard); a spectator (retired, no car)
+  // gets the latest snapshot's; before the first snapshot there is none (a still picture).
+  const realNow = performance.now.bind(performance);
+  const clock = { now: 1_000_000 };
+  performance.now = () => clock.now;
+  try {
+    const out = withDevTrack(MOVE_YARD.id, () => {
+      const rooms = new Rooms(1);
+      const ws = [wiredGame(rooms, clock), wiredGame(rooms, clock)];
+      const before = ws[0].game.drawTick();
+      ws[0].game.create("Car0");
+      ws[0].open();
+      ws[0].flush();
+      const room = [...rooms.rooms.values()][0];
+      ws[1].game.join(room.code, "Car1");
+      ws[1].open();
+      for (const w of ws) w.flush();
+      ws[1].game.setReady(true);
+      for (const w of ws) w.flush();
+      ws[0].game.start();
+      ws[0].flush();
+      const driver = new BotDriver(ws[1].game, 0);
+      driver.weapons = false;
+      // The server's race tick for each of Car1's inputs (by seq, at the tick it applied it).
+      const truth = new Map<number, number>();
+      const tick = room.tick.bind(room);
+      let last = -1;
+      room.tick = (t: number, now: number) => {
+        tick(t, now);
+        const p = room.players.get(ws[1].game.you);
+        if (p && p.car && p.ack !== last && room.phase === "racing") {
+          last = p.ack;
+          truth.set(p.ack, room.rt);
+        }
+      };
+      const drawn = new Map<number, number | undefined>();
+      let retired = false, spectator = 0, spectatorOk = 0;
+      for (let i = 0; i < 60 * 60 && !room.players.get(ws[1].game.you)?.progress?.fin; i++) {
+        clock.now += 1000 / 60;
+        rooms.step(clock.now);
+        for (const w of ws) w.flush();
+        ws[0].game.step(NO_CONTROLS, 1000 / 60);
+        ws[1].game.step(driver.controls(), 1000 / 60);
+        if (room.phase === "racing") drawn.set(ws[1].game.seq - 1, ws[1].game.drawTick());
+        if (room.phase === "racing" && !retired && room.rt > 30) {
+          ws[0].game.retire();
+          retired = true;
+        }
+        if (retired && !ws[0].game.car && ws[0].game.latest) {
+          spectator++;
+          if (ws[0].game.drawTick() === ws[0].game.latest.rtBase) spectatorOk++;
+        }
+      }
+      let same = 0, n = 0;
+      for (const [seq, rt] of truth) {
+        if (!drawn.has(seq)) continue;
+        n++;
+        if (drawn.get(seq) === rt) same++;
+      }
+      return { before, same, n, spectator, spectatorOk };
+    });
+    check(
+      "move draw: Game.drawTick (WorldFx.rt) is the race tick the server applied the step that made the drawn own car at, every frame of a lap (zero lag); a spectator's is the latest snapshot's; none before a snapshot",
+      out.before === undefined && out.n > 1000 && out.same === out.n && out.spectator > 100 && out.spectatorOk === out.spectator,
+      `${out.same}/${out.n} frames; spectator ${out.spectatorOk}/${out.spectator}`,
+    );
+  } finally {
+    performance.now = realNow;
+  }
+}
+
+for (const t of [moveBarrels, moveSolids, moveLandings, moveRivets, moveRespawn, moveSweep, moveBuckets, moveParity, moveBots, moveShipped, moveDraw, moveCpu, moveDevFlag]) {
   console.log(`\n# ${t.name}`);
   try {
     t();

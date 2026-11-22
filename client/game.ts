@@ -1071,6 +1071,19 @@ export class Game {
     return this.latest ? rtAt(this.latest, this.pending.length) : 0;
   }
 
+  /**
+   * The race tick a frame shows what moves at (M4-MOVE; client/render.ts WorldFx.rt, PLAN-M4 section 3
+   * "Where moving things are drawn"): with an own car, the one its drawn pose was stepped at (its last
+   * predicted step, rtAt(latest, pending.length - 1); the latest snapshot's own with nothing pending),
+   * so the barrels and presses are drawn where its own step met them; without one (a spectator) the
+   * latest snapshot's. undefined before the first snapshot (a still picture).
+   */
+  drawTick(): number | undefined {
+    const s = this.latest;
+    if (!s) return undefined;
+    return this.car ? rtAt(s, this.pending.length - 1) : s.rtBase;
+  }
+
   /** Boost ticks a cell would give the own car by a snapshot's race distances (0 without a car in it). */
   private boostOfferIn(snap: Snapshot): number {
     const own = snap.cars.get(this.you);
