@@ -29,10 +29,16 @@
 //   those in the air; the lamps burn. For LIFT ticks after it goes up its shadow leaves
 //   the way it came (the gate is open by then: PRESS_UP).
 // - A belt: bone-white arrows running across the road with the belt, at its speed.
+//
+// Themes (PLAN-THEMES.md): the sheet is no baked tile, it has the effects' palette, the global
+// 32, whatever the track's theme. A theme picks its tones from those (gfx/theme.ts
+// ObstacleTones): what a barrel is made of, a slab's edge. The slab keeps its hazard stripes
+// and the lamps their red in every theme. A track's sprites are painted in its theme's tones.
 
 import { barrelLat, BARREL_R, pointAt, PRESS_DEPTH, PRESS_DOWN, PRESS_WARN_TICKS, PRESS_WARNING, pressState, type PlacedBarrels, type PlacedPress, type Track } from "../../shared/track";
 import { P, PALETTE, type PaletteName } from "./palette";
 import { fxPalette, FX_SHADOW, OBST_H, OBST_W, obstacleSheet } from "./sprites";
+import { sceneryFor, type ObstacleTones, type Scenery } from "./theme";
 import { VIEW_H, VIEW_W, ZOOM } from "./world";
 
 // The sheet's layout.
@@ -113,6 +119,7 @@ interface Band {
 
 /** What moves on a track, laid out once. */
 interface Movers {
+  tones: ObstacleTones; // the track's theme's choice of the global palette
   rows: Row[];
   gates: Gate[];
   bands: Band[];
@@ -120,20 +127,22 @@ interface Movers {
   used: number; // sheet pixels its own sprites take
 }
 
+// Keyed by the track object, which has one theme (gfx/theme.ts: the preview's `&theme=` switch
+// hands over a copy of the track that names another).
 const movers = new WeakMap<Track, Movers | null>();
 
-function moversOf(track: Track): Movers | null {
+function moversOf(track: Track, scenery: Scenery = sceneryFor(track)): Movers | null {
   let m = movers.get(track);
-  if (m === undefined) {
-    m = layOut(track);
+  if (m === undefined || (m !== null && m.tones !== scenery.obstacles)) {
+    m = layOut(track, scenery.obstacles);
     movers.set(track, m);
   }
   return m;
 }
 
-function layOut(track: Track): Movers | null {
+function layOut(track: Track, tones: ObstacleTones): Movers | null {
   if (!track.barrels.length && !track.presses.length && !track.belts.length) return null;
-  const set: Movers = { rows: [], gates: [], bands: [], fits: true, used: 0 };
+  const set: Movers = { tones, rows: [], gates: [], bands: [], fits: true, used: 0 };
   // Shelves, left to right, top to bottom.
   let px = 0, py = TOP, ph = 0;
   const place = (w: number, h: number): { x: number; y: number } => {
@@ -236,8 +245,8 @@ function paintArrows(out: Uint8Array): void {
   }
 }
 
-/** The ROLL frames of a barrel whose axis lies along heading h, side by side from (ax, ay). */
-function paintBarrels(out: Uint8Array, ax: number, ay: number, h: number): void {
+/** The ROLL frames of a barrel whose axis lies along heading h, side by side from (ax, ay), in a theme's tones. */
+function paintBarrels(out: Uint8Array, ax: number, ay: number, h: number, t: ObstacleTones["barrel"]): void {
   const cos = Math.cos(h), sin = Math.sin(h);
   // How far the barrel's right side (across the road, to the right of travel) is turned to the sun, which stands top-left.
   const light = (sin - cos) / Math.SQRT2;
@@ -260,11 +269,11 @@ function paintBarrels(out: Uint8Array, ax: number, ay: number, h: number): void 
         const tone = Math.abs(nv) > 0.86 ? 0 : sun < -0.3 ? 1 : sun > 0.3 ? 3 : 2; // the far edge, shade, body, lit
         const round = Math.asin(nv); // this spot's place round the barrel
         let tones: readonly PaletteName[];
-        if (au > BARREL_HALF - 1.3) tones = ["soot2", "soot3", "soot3", "dirt0"]; // the rims
-        else if (au > 3.3 && au < 4.8) tones = ["steel0", "steel1", "steel2", "steel3"]; // the hoops
-        else if (au < 2.9 && Math.abs(wrap(round - mark)) < 0.62) tones = ["bone0", "bone0", "bone1", "bone2"]; // the label
-        else if (Math.abs(wrap(round - mark - Math.PI)) < 0.24) tones = ["soot3", "rust0", "rust0", "rust1"]; // the seam, half a turn on
-        else tones = ["rust0", "rust1", "rust2", "rust3"];
+        if (au > BARREL_HALF - 1.3) tones = t.rims;
+        else if (au > 3.3 && au < 4.8) tones = t.hoops;
+        else if (au < 2.9 && Math.abs(wrap(round - mark)) < 0.62) tones = t.label;
+        else if (Math.abs(wrap(round - mark - Math.PI)) < 0.24) tones = t.seam; // half a turn on from the label
+        else tones = t.body;
         out[at(x, y)] = IDX[tones[tone]];
       }
     }
@@ -281,8 +290,8 @@ function paintBarrels(out: Uint8Array, ax: number, ay: number, h: number): void 
   }
 }
 
-/** A press's slab from (ax, ay) and its silhouette right of it, w x h each, at heading h and `width` across the road. */
-function paintSlab(out: Uint8Array, ax: number, ay: number, w: number, h: number, heading: number, width: number): void {
+/** A press's slab from (ax, ay) and its silhouette right of it, w x h each, at heading h and `width` across the road, in a theme's tones. */
+function paintSlab(out: Uint8Array, ax: number, ay: number, w: number, h: number, heading: number, width: number, t: ObstacleTones["slab"]): void {
   const cos = Math.cos(heading), sin = Math.sin(heading);
   // How far inside the slab the middle of pixel (x, y) is (world units; below 0 = outside); `face` gets the face it is nearest.
   let face = 0, uu = 0, vv = 0;
@@ -302,9 +311,9 @@ function paintSlab(out: Uint8Array, ax: number, ay: number, w: number, h: number
       const e = inside(x, y);
       let c = 0;
       if (e >= 0) {
-        if (e < 1.3) c = IDX.soot1; // its outline
-        else if (e < 3.7) c = lit[face] ? IDX.steel3 : IDX.steel0; // its edge in the sun and away from it
-        else c = Math.floor((uu + vv + 4000) / 5.5) & 1 ? IDX.haz1 : IDX.soot2; // its top: hazard stripes all over, so it is not taken for its bed
+        if (e < 1.3) c = IDX[t.outline];
+        else if (e < 3.7) c = lit[face] ? IDX[t.lit] : IDX[t.dark]; // its edge in the sun and away from it
+        else c = Math.floor((uu + vv + 4000) / 5.5) & 1 ? IDX[t.stripeA] : IDX[t.stripeB]; // its top: hazard stripes all over, so it is not taken for its bed
       } else if (x >= 3 && y >= 4 && inside(x - 3, y - 4) >= 0) c = FX_SHADOW; // the shadow it casts when down
       out[o] = c;
       out[o + w] = inside(x, y) >= 0 ? IDX.soot0 : 0; // the silhouette
@@ -328,8 +337,8 @@ function lease(set: Movers): HTMLCanvasElement {
     whole = true;
   }
   sheet.fill(0, TOP * OBST_W);
-  for (const r of set.rows) if (r.ax >= 0) paintBarrels(sheet, r.ax, r.ay, r.b.h);
-  for (const g of set.gates) if (g.ax >= 0) paintSlab(sheet, g.ax, g.ay, g.w, g.h, g.p.h, g.p.lat1 - g.p.lat0);
+  for (const r of set.rows) if (r.ax >= 0) paintBarrels(sheet, r.ax, r.ay, r.b.h, set.tones.barrel);
+  for (const g of set.gates) if (g.ax >= 0) paintSlab(sheet, g.ax, g.ay, g.w, g.h, g.p.h, g.p.lat1 - g.p.lat0, set.tones.slab);
   if (words && image && palette) {
     for (let i = whole ? 0 : TOP * OBST_W; i < sheet.length; i++) words[i] = palette[sheet[i]];
     if (whole) made.ctx.putImageData(image, 0, 0);
@@ -352,11 +361,13 @@ export function obstacleIndexSheet(track: Track): Uint8Array | null {
 export class Obstacles {
   private readonly set: Movers | null;
 
+  /** `scenery`: the track's theme as the Renderer resolved it (a caller without one gets the track's own). */
   constructor(
     private readonly ctx: CanvasRenderingContext2D,
     track: Track,
+    scenery: Scenery = sceneryFor(track),
   ) {
-    this.set = moversOf(track);
+    this.set = moversOf(track, scenery);
     if (this.set) lease(this.set); // painted with the Renderer, not in its first frame
   }
 

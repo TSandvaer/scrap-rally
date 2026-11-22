@@ -21,6 +21,14 @@
 // A held moment pins performance.now() too while it draws (smoke and the mine blink read it),
 // so the same URL gives the same pixels on every load.
 //
+// &theme=<scrapyard|desert|city|jungle> draws every scene in that theme instead of the track's
+// own (PLAN-THEMES.md 2.5: the looks alone, on the same road; a theme without art is the
+// scrapyard). The preview's switch only: in the game a track's theme is its definition's.
+// &scene=tour is a drive round any track, to see one whole in a theme: &track=<id> (a shipped
+// track or a test track; default crusher-run), &s=<distance> where it starts (default 0); a
+// pack of six at 300 u/s, the camera on the first as in a race. With &freeze=1 it stands at
+// &s; &t=<seconds> holds it 300 units further a second.
+//
 // Two more pages for the graphics polish (PLAN-GFX.md), neither wired into the game:
 // &scene=palette  the "scrapyard 32" sheet (client/gfx/palette.ts), at 1280x720
 // &scene=mock     one piece of track baked with the palette (&mock=today: the same view as
@@ -28,9 +36,10 @@
 
 import { testTrack } from "../shared/testtracks";
 import { buildTrack, gridSlot, pointAt, queryTrack, queryTrackNear, widenAt, type Track, type TrackDef } from "../shared/track";
-import { trackById } from "../shared/tracks";
+import { findTrack, trackById } from "../shared/tracks";
 import { airTicksFor, FALL_TICKS, GHOST_TICKS } from "../shared/weapons";
 import { BAYER4, CAR_COLORS, CAR_NEUTRALS, carTones, CSS_MIRROR, LIT, P, PALETTE, RAMPS, rgbOf, SHADE, type PaletteName } from "./gfx/palette";
+import { isTheme, themedTrack } from "./gfx/theme";
 import { Renderer, VIEW_H, VIEW_W, type CarView, type CellView, type HudView, type WorldFx } from "./render";
 
 const COLORS = ["#e8552d", "#33a3e8", "#f2c230", "#5cc46b", "#c46ad6", "#e8e2d4"];
@@ -78,7 +87,8 @@ interface Scene {
   title: string;
   rust?: boolean; // drawn on Rust Bowl instead of the preview track
   yard?: boolean; // drawn on the Preview Yard test track (shared/testtracks.ts)
-  cam: () => { x: number; y: number };
+  on?: Track; // drawn on this track (the tour)
+  cam: (t: number) => { x: number; y: number };
   cars: (t: number) => CarView[];
   key: number; // seconds: the moment &freeze=1 holds
   fx?: (t: number) => WorldFx; // fixture scenes: shots, mines, sparks
@@ -665,17 +675,44 @@ function catchUp(track: Track, rust: Track): Scene[] {
   ];
 }
 
+/**
+ * The tour (&scene=tour): a drive round any track from &s on, a pack of six at 300 u/s with the
+ * camera on the first as in a race; the race tick runs, so what moves on a test track moves.
+ */
+function tour(params: URLSearchParams): Scene {
+  const id = params.get("track") ?? "crusher-run";
+  const track = testTrack(id) ?? findTrack(id) ?? trackById("crusher-run");
+  const s0 = Number(params.get("s") ?? 0) || 0, pace = 300;
+  const pack = [0, 46, -52, 104, -110, 170], lanes = [0, -30, 28, 12, -14, 34];
+  return {
+    name: "tour",
+    title: `Tour of ${track.def.name}`,
+    on: track,
+    cam: (t) => {
+      const p = pointAt(track, s0 + t * pace);
+      return { x: p.x + Math.cos(p.h) * pace * 0.28, y: p.y + Math.sin(p.h) * pace * 0.28 };
+    },
+    cars: (t) => pack.map((ds, i) => car(track, i, s0 + t * pace + ds, lanes[i], { height: jumpHeight(track, s0 + t * pace + ds, pace), car: (["sport", "racer", "truck"] as const)[i % 3] })),
+    fx: (t) => ({ ...NO_FX, rt: Math.round(t * 60) }),
+    key: 0,
+  };
+}
+
 /** Run the preview on the game canvas (the game itself is not started). */
 export function runPreview(canvas: HTMLCanvasElement, params: URLSearchParams): void {
   if (params.get("scene") === "palette") return showPalette(canvas);
   if (params.get("scene") === "mock") return showMock(canvas, params.get("mock") === "today");
   const list = scenes();
+  list.push(tour(params)); // after every other scene: their places in the list, and so their captions, stay
+  // &theme=: the looks of another theme on the same roads. Here only: the game draws a track in its own theme.
+  const theme = params.get("theme");
+  const themed = (track: Track): Track => (isTheme(theme) ? themedTrack(track, theme) : track);
   const renderers = new Map<string, Renderer>();
   const rendererFor = (scene: Scene) => {
-    const on = scene.yard ? "yard" : scene.rust ? "rust" : "eight";
+    const on = scene.on ? "tour" : scene.yard ? "yard" : scene.rust ? "rust" : "eight";
     let r = renderers.get(on);
     if (!r) {
-      r = new Renderer(canvas, scene.yard ? testTrack("preview-yard")! : scene.rust ? trackById("rust-bowl") : previewTrack().track);
+      r = new Renderer(canvas, themed(scene.on ?? (scene.yard ? testTrack("preview-yard")! : scene.rust ? trackById("rust-bowl") : previewTrack().track)));
       renderers.set(on, r);
     }
     return r;
@@ -701,7 +738,7 @@ export function runPreview(canvas: HTMLCanvasElement, params: URLSearchParams): 
     const held = fixedT !== undefined;
     const t = fixedT === undefined ? (now - start) / 1000 : (fixedT ?? scene.key);
     const r = rendererFor(scene);
-    const cam = scene.cam();
+    const cam = scene.cam(t);
     r.follow(cam.x, cam.y, 16, true);
     const caption = !hud
       ? ""
