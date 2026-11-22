@@ -394,6 +394,7 @@ async function run(ctx: Ctx, bots: Bot[]): Promise<void> {
   await runCells(ctx, bots);
   await runHard(ctx, bots);
   await runSurf(ctx, bots);
+  await runSplit(ctx, bots);
 }
 
 const lost = new Map<string, (ConnReason | undefined)[]>();
@@ -2022,12 +2023,21 @@ async function runSurf(ctx: Ctx, bots: Bot[]): Promise<void> {
     );
     const r = room;
     tick = r.tick.bind(r);
-    const met = { belt: 0, water: 0, dirt: 0, mound: 0 };
+    // What it meets (M4-SURF part 2, the M4-SURF-1 review's F4: the check below asserts every one the
+    // title names): ticks on a belt, in water and on dirt, tyre mounds passed (its s crossing a mound's)
+    // and touched, take-offs.
+    const met = { belt: 0, water: 0, dirt: 0, mound: 0, passed: 0, jumps: 0 };
+    let sPrev = -1, wasAir = false;
     r.tick = (t: number, now: number) => {
       tick!(t, now);
       const c = r.players.get(S.game.you)?.car;
-      if (!c || c.air > 0 || c.fall > 0 || r.phase !== "racing") return;
+      if (!c || r.phase !== "racing" || r.players.get(S.game.you)?.progress?.fin) return;
+      if (c.air > 0 && !wasAir) met.jumps++;
+      wasAir = c.air > 0;
+      if (c.air > 0 || c.fall > 0) return;
       const q = queryTrackNear(r.track, c.x, c.y, c.seg);
+      if (sPrev >= 0 && q.s > sPrev && q.s - sPrev < 50) for (const m of r.track.tyres) if (sPrev < m.s && q.s >= m.s) met.passed++;
+      sPrev = q.s;
       const f = surfSurfaceAt(r.track, q.seg, q.s, q.lat);
       if (f?.kind === SURF_BELT_K) met.belt++;
       else if (f?.kind === SURF_WATER_K) met.water++;
@@ -2038,14 +2048,96 @@ async function runSurf(ctx: Ctx, bots: Bot[]): Promise<void> {
     const rows = await runRace("surf", bots, H, [H, S]);
     const s = stats(S.game.recErrors.slice(e0));
     const st = S.game.recStateErrors - st0;
+    const laps = H.game.laps;
     console.log(
-      `      Sierra (80±10 ms, lane -24) on the Surf Yard: ticks on belt ${met.belt}, water ${met.water}, dirt ${met.dirt}, touching a mound ${met.mound}; rec err n=${s.n} median=${s.median.toFixed(3)} p95=${s.p95.toFixed(3)} max=${s.max.toFixed(2)}; ` +
+      `      Sierra (80±10 ms, lane -24) on the Surf Yard (${laps} laps): ticks on belt ${met.belt}, water ${met.water}, dirt ${met.dirt}; mounds passed ${met.passed}, touched ${met.mound} ticks; take-offs ${met.jumps}; rec err n=${s.n} median=${s.median.toFixed(3)} p95=${s.p95.toFixed(3)} max=${s.max.toFixed(2)}; ` +
         `state mismatches ${st}; finish ${rows.map((x) => `${x.name} ${(x.timeMs / 1000).toFixed(2)}s`).join(", ")}`,
     );
+    // The title says what is asserted (F4): the belts and the pools driven on, every mound passed and the
+    // jump taken every lap. (Its lane, -24, keeps it off the dirt patches: printed only. Touching a mound
+    // is no longer expected: the bots keep clear of them, M4-SURF part 2's F1.)
     check(
-      "surf over sockets: a lagged bot (80±10 ms) races the Surf Yard (belts, pools, dirt, mounds, the jump): both finish, it keeps a median reconciliation error below 0.5, no error > 50, at most 4 state mismatches",
-      rows.length === 2 && rows.every((x) => x.timeMs > 0) && met.belt > 0 && s.n > 500 && s.median < 0.5 && s.max <= 50 && st <= 4 && H.errors.length + S.errors.length === 0,
-      `belt ${met.belt}, water ${met.water}, dirt ${met.dirt}, mound ${met.mound}; median ${s.median.toFixed(3)}, max ${s.max.toFixed(2)}; state mismatches ${st}`,
+      "surf over sockets: a lagged bot (80±10 ms) races the Surf Yard: on the belts and in the pools, past every tyre mound and over the jump every lap; both finish, it keeps a median reconciliation error below 0.5, no error > 50, at most 4 state mismatches",
+      rows.length === 2 && rows.every((x) => x.timeMs > 0) && met.belt > 0 && met.water > 0 && met.passed === laps * r.track.tyres.length && met.jumps >= laps &&
+        s.n > 500 && s.median < 0.5 && s.max <= 50 && st <= 4 && H.errors.length + S.errors.length === 0,
+      `belt ${met.belt}, water ${met.water}, dirt ${met.dirt}; mounds passed ${met.passed} of ${laps * r.track.tyres.length}, touched ${met.mound}; take-offs ${met.jumps}; median ${s.median.toFixed(3)}, max ${s.max.toFixed(2)}; state mismatches ${st}`,
+    );
+  } finally {
+    if (room && tick) room.tick = tick;
+    for (const b of [H, S]) b.game.leave();
+    if (old === undefined) delete process.env.SCRAP_DEV_TRACK;
+    else process.env.SCRAP_DEV_TRACK = old;
+  }
+}
+
+// ---- split lanes (M4-SURF part 2, PLAN-M4.md 2.6 B and section 3, ClickUp 123jpnbffz4) ----
+
+// This section's imports (hoisted like the ones at the top).
+import { islandContact as splitIslandContact } from "../tools/debug/split-tune";
+
+/**
+ * A lagged socket bot (80±10 ms, line -24) races an unlagged one (line 24) on the Split Yard, the
+ * server started with the dev flag SCRAP_DEV_TRACK=split-yard (set for this section only): a new room
+ * starts on it, both clients build it, the two take different lanes of the plain split (by their
+ * lines) and the lagged bot's prediction keeps a median reconciliation error below 0.5 with the
+ * Surf Yard's lagged bounds (no error > 50, at most 4 state mismatches).
+ */
+async function runSplit(ctx: Ctx, bots: Bot[]): Promise<void> {
+  const old = process.env.SCRAP_DEV_TRACK;
+  process.env.SCRAP_DEV_TRACK = "split-yard";
+  const H = new Bot("Hotel4", ctx.url, 24);
+  const S = new Bot("Tango", ctx.url, -24, { lag: 80, jitter: 10 });
+  bots.push(H, S);
+  for (const b of [H, S]) b.weapons = false;
+  let room: ReturnType<typeof ctx.server.rooms.rooms.get> | undefined;
+  let tick: ((t: number, now: number) => void) | null = null;
+  try {
+    H.game.create(H.name);
+    await waitFor("split: H welcome", () => !!H.game.you, 3000);
+    S.game.join(H.game.code, S.name);
+    await waitFor("split: S in H's room", () => H.game.players.length === 2 && !!S.game.you, 3000);
+    room = ctx.server.rooms.rooms.get(H.game.code)!;
+    await waitFor("split: both clients on the Split Yard", () => H.game.trackId === "split-yard" && S.game.trackId === "split-yard", 3000);
+    const yard = surfTestTrack("split-yard")!;
+    check(
+      "split over sockets: with SCRAP_DEV_TRACK=split-yard a new room starts on the Split Yard, and both clients build that track",
+      room.trackId === "split-yard" && H.game.trackId === "split-yard" && S.game.track === yard && H.game.track === yard,
+      `room ${room.trackId}, clients ${H.game.trackId} / ${S.game.trackId}`,
+    );
+    const r = room;
+    tick = r.tick.bind(r);
+    // The lane each takes at every island's middle, and the lagged bot's island-contact ticks.
+    const lanes = new Map<string, string>([[H.game.you, ""], [S.game.you, ""]]);
+    const sPrev = new Map<string, number>();
+    let contacts = 0;
+    r.tick = (t: number, now: number) => {
+      tick!(t, now);
+      if (r.phase !== "racing") return;
+      for (const b of [H, S]) {
+        const p = r.players.get(b.game.you);
+        const c = p?.car;
+        if (!c || c.air > 0 || c.fall > 0 || p?.progress?.fin) continue;
+        const q = queryTrackNear(r.track, c.x, c.y, c.seg);
+        const s0 = sPrev.get(b.game.you);
+        if (s0 !== undefined && q.s > s0 && q.s - s0 < 50) for (const f of r.track.islands) if (s0 < (f.s0 + f.s1) / 2 && q.s >= (f.s0 + f.s1) / 2) lanes.set(b.game.you, lanes.get(b.game.you) + (q.lat < f.mid ? "L" : "R"));
+        sPrev.set(b.game.you, q.s);
+        if (b === S && splitIslandContact(r.track, c)) contacts++;
+      }
+    };
+    const e0 = S.game.recErrors.length, st0 = S.game.recStateErrors;
+    const rows = await runRace("split", bots, H, [H, S]);
+    const s = stats(S.game.recErrors.slice(e0));
+    const st = S.game.recStateErrors - st0;
+    const lh = lanes.get(H.game.you)!, ls = lanes.get(S.game.you)!;
+    console.log(
+      `      Tango (80±10 ms, line -24) and Hotel4 (line 24) on the Split Yard: lanes ${ls} / ${lh} (per island, lap by lap); Tango's island-contact ticks ${contacts}; ` +
+        `rec err n=${s.n} median=${s.median.toFixed(3)} p95=${s.p95.toFixed(3)} max=${s.max.toFixed(2)}; state mismatches ${st}; finish ${rows.map((x) => `${x.name} ${(x.timeMs / 1000).toFixed(2)}s`).join(", ")}`,
+    );
+    check(
+      "split over sockets: a lagged bot (80±10 ms) races the Split Yard against an unlagged one, the two in different lanes of the plain split (by their lines) and in the same inside lane of the bend: both finish, it keeps a median reconciliation error below 0.5, no error > 50, at most 4 state mismatches, no island contact",
+      rows.length === 2 && rows.every((x) => x.timeMs > 0) && ls.length === lh.length && ls.length >= 3 && ls.startsWith("L") && lh.startsWith("R") && ls[2] === "R" && lh[2] === "R" &&
+        s.n > 500 && s.median < 0.5 && s.max <= 50 && st <= 4 && contacts === 0 && H.errors.length + S.errors.length === 0,
+      `lanes ${ls} / ${lh}; contacts ${contacts}; median ${s.median.toFixed(3)}, max ${s.max.toFixed(2)}; state mismatches ${st}`,
     );
   } finally {
     if (room && tick) room.tick = tick;

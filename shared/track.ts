@@ -39,8 +39,9 @@ export interface Cell { k: "cell"; s: number; lat: number; air?: boolean }
 // ---- M4 surfaces, obstacles and split lanes (M4-SCHEMA, PLAN-M4.md 2.2-2.4, 2.6 B) ----------
 // buildTrack places them and validateTrack checks their layout. Water, dirt, belts and tyre mounds
 // act (M4-SURF part 1: shared/physics.ts stepCar reads the per-segment buckets below, the bots
-// cost their lanes by them, rivets die on mounds); barrels, trucks, presses, widens and islands are
-// still data only (M4-MOVE and M4-SURF part 2 add the behaviour).
+// cost their lanes by them, rivets die on mounds); widens and islands act (M4-SURF part 2: the walls
+// are per sample, halfOf / wallOf; islands are solid, shared/physics.ts collideIslands; the bots
+// pick a lane round each); barrels, trucks and presses are still data only (M4-MOVE adds them).
 // Track coordinates: s along the centerline, lat across it (+ = right of travel, as a hole's).
 
 /** Water (cars aquaplane on it, shared/physics.ts): a rectangle s0..s1 by lat0..lat1; felt inside tractionRect. */
@@ -99,6 +100,32 @@ export interface Widen { k: "widen"; s0: number; s1: number; left: number; right
  * and positions are unchanged: the shorter lane is simply faster.
  */
 export interface Island { k: "island"; s0: number; s1: number; lat0: number; lat1: number }
+
+/**
+ * An island placed by buildTrack (M4-SURF part 2). Solid for a car on the ground (shared/physics.ts
+ * collideIslands): its two long sides are a wall (the same bounce and scrape), each end a nose of
+ * tyre stacks that bounces a car as a tyre mound does. A nose's shape is the outline of its drawn
+ * stacks (client/gfx/world.ts: two rows of tyres of radius ISLAND_NOSE_ROUND across the island's
+ * width, ISLAND_NOSE deep): the box ISLAND_NOSE deep across the island with its corners rounded by
+ * ISLAND_NOSE_ROUND, i.e. every point within ISLAND_NOSE_ROUND of its core, the box that much
+ * smaller all round. head and tail: the cores' corners in world coordinates (in order round them),
+ * the head's at s0 + ISLAND_NOSE_ROUND and s0 + ISLAND_NOSE - ISLAND_NOSE_ROUND, the tail's the same
+ * from s1. outL / outR: the narrowest asphalt half-width beside it on the left / the right over
+ * s0..s1 (where its lanes end outside). lenL / lenR: the length of the path down the middle of each
+ * lane (the shorter lane is faster). surfL / surfR: the surfaces (Track.surfaces) in each lane
+ * beside it, for the bots' choice of lane.
+ */
+export interface PlacedIsland extends Island {
+  mid: number;
+  head: readonly Vec[];
+  tail: readonly Vec[];
+  outL: number;
+  outR: number;
+  lenL: number;
+  lenR: number;
+  surfL: readonly Surface[];
+  surfR: readonly Surface[];
+}
 
 export type Feature = Ramp | Gap | Hole | Cell | Water | Dirt | Belt | Tyres | Barrels | Truck | Press | Widen | Island;
 
@@ -180,7 +207,8 @@ export interface Track {
   halfR: number[];
   wallL: number[];
   wallR: number[];
-  // M4-SCHEMA features, each sorted by s (s0); data only so far (see Water and below).
+  // M4-SCHEMA features, each sorted by s (s0). Water, dirt, belts, tyre mounds, widens and islands act
+  // (M4-SURF); barrels, trucks and presses are data only so far (M4-MOVE).
   water: Water[];
   dirt: Dirt[];
   belts: Belt[];
@@ -189,7 +217,7 @@ export interface Track {
   trucks: PlacedTruck[];
   presses: PlacedPress[];
   widens: Widen[];
-  islands: Island[];
+  islands: PlacedIsland[];
   // M4-SURF: what a car feels, in per-segment buckets built once (no scan of every feature per tick).
   /** Water, dirt and belts where a car feels them (Surface), sorted by s0. */
   surfaces: Surface[];
@@ -201,6 +229,11 @@ export interface Track {
   tyresAt: readonly PlacedTyres[][];
   /** Per segment i: the first index in tyres whose far edge (s + r) is less than TYRES_BEHIND behind cum[i]. */
   tyresFrom: number[];
+  // M4-SURF part 2: split lanes, per segment.
+  /** Per segment i: the islands a car or a rivet whose nearest segment is i can touch (ISLAND_BUCKET_REACH). */
+  islandsAt: readonly PlacedIsland[][];
+  /** Per segment i: the first index in islands whose tail (s1) is less than ISLAND_BEHIND behind cum[i] (the bots look ahead from there). */
+  islandsFrom: number[];
 }
 
 /** What a surface does (Surface.kind). */
@@ -398,6 +431,13 @@ export const BELT_MAX = 200;
 export const WIDEN_TAPER = 120;
 /** A split lane's narrowest width (asphalt edge to island). */
 export const LANE_MIN = 72;
+/**
+ * An island's nose: the tyre stacks at either end, this deep along the track (client/gfx/world.ts
+ * NOSE, which draws them; sim-test checks the two). An island is at least this wide and twice as long.
+ */
+export const ISLAND_NOSE = 26;
+/** A nose's tyre stacks' radius (client/gfx/world.ts TYRE): its outline's corners are rounded by it. */
+export const ISLAND_NOSE_ROUND = 6.5;
 /** Solids keep at least this far from recovery points and from the grid's slots. */
 export const SOLID_CLEAR = 40;
 /** A pool in a bend leaves a dry lane at least this wide... */
@@ -450,6 +490,13 @@ export function tractionRect(f: PuddleRect): { s0: number; s1: number; lat0: num
 const TYRES_BUCKET_REACH = 30;
 /** The bots keep a tyre mound in view until it is this far behind the car (as a hole: botdrive's lane search). */
 const TYRES_BEHIND = 40;
+/**
+ * An island goes in the bucket of every segment within this of its s range: a car capsule's reach
+ * from its centre (15.5) plus a tick's travel, and a rivet's swept tick (~24 units) plus its radius.
+ */
+const ISLAND_BUCKET_REACH = 30;
+/** The bots keep an island in view until it is this far behind the car (botdrive's split lanes). */
+const ISLAND_BEHIND = 40;
 
 function catmull(p0: number, p1: number, p2: number, p3: number, t: number): number {
   const t2 = t * t;
@@ -504,6 +551,8 @@ export function buildTrack(def: TrackDef): Track {
     surfFrom: [],
     tyresAt: [],
     tyresFrom: [],
+    islandsAt: [],
+    islandsFrom: [],
   };
   const features = def.features ?? [];
   // The widens first: the per-sample walls, and the barrels' wall-to-wall run, depend on them.
@@ -569,7 +618,7 @@ export function buildTrack(def: TrackDef): Track {
       case "widen":
         break; // above
       case "island":
-        track.islands.push({ ...f });
+        track.islands.push(placeIsland(track, f));
         break;
     }
   }
@@ -593,6 +642,44 @@ export function buildTrack(def: TrackDef): Track {
 
 const NO_SURFACES: readonly Surface[] = Object.freeze([]) as readonly Surface[];
 const NO_TYRES: readonly PlacedTyres[] = Object.freeze([]) as readonly PlacedTyres[];
+const NO_ISLANDS: readonly PlacedIsland[] = Object.freeze([]) as readonly PlacedIsland[];
+
+/**
+ * An island as buildTrack places it (the widens are in already): its noses' axes, how far out its
+ * lanes end, and how long the middle of each lane is. Its lanes' surfaces come with the buckets.
+ */
+function placeIsland(track: Track, f: Island): PlacedIsland {
+  const r = ISLAND_NOSE_ROUND;
+  // A nose's core: from s (its end of the island) inward to s + dir * (ISLAND_NOSE - 2r), across lat0 + r .. lat1 - r.
+  const core = (s: number, dir: number): Vec[] => {
+    const a = s + dir * r, b = s + dir * (ISLAND_NOSE - r);
+    return [trackPoint(track, a, f.lat0 + r), trackPoint(track, a, f.lat1 - r), trackPoint(track, b, f.lat1 - r), trackPoint(track, b, f.lat0 + r)].map((p) => ({ x: p.x, y: p.y }));
+  };
+  const at = samplesIn(track, f.s0, f.s1);
+  // The asphalt's edge as drawn (halfOn on the segment each s is on).
+  const half = (s: number, side: number) => halfOn(track, pointAt(track, s).seg, s, side);
+  let outL = Infinity, outR = Infinity;
+  for (const s of at) {
+    outL = Math.min(outL, half(s, -1));
+    outR = Math.min(outR, half(s, 1));
+  }
+  // The middle of each lane (between the asphalt's edge and the island) as a polyline through the samples.
+  const laneLen = (side: number) => {
+    let len = 0, px = 0, py = 0;
+    at.forEach((s, k) => {
+      const lat = side < 0 ? (f.lat0 - half(s, -1)) / 2 : (f.lat1 + half(s, 1)) / 2;
+      const q = trackPoint(track, s, lat);
+      if (k > 0) len += Math.hypot(q.x - px, q.y - py);
+      px = q.x;
+      py = q.y;
+    });
+    return len;
+  };
+  return {
+    ...f, mid: (f.lat0 + f.lat1) / 2, head: core(f.s0, 1), tail: core(f.s1, -1), outL, outR, lenL: laneLen(-1), lenR: laneLen(1),
+    surfL: NO_SURFACES, surfR: NO_SURFACES,
+  };
+}
 
 /**
  * M4-SURF's per-segment buckets: the surfaces as a car feels them (Surface) and, per segment, the
@@ -643,6 +730,25 @@ function buildBuckets(track: Track): void {
   track.surfFrom = surfFrom;
   track.tyresAt = tyresAt;
   track.tyresFrom = tyresFrom;
+  // M4-SURF part 2: the islands by segment (by s: they lie on one section, and a car's or a rivet's
+  // nearest segment is on its own section), where the bots look ahead for them, and the surfaces in
+  // each island's lanes.
+  const islandsAt: PlacedIsland[][] = [], islandsFrom: number[] = [];
+  for (let i = 0; i < n; i++) {
+    const a = cum[i], b = cum[i + 1];
+    const isl = track.islands.filter((x) => x.s0 - ISLAND_BUCKET_REACH < b && x.s1 + ISLAND_BUCKET_REACH > a);
+    islandsAt.push(isl.length ? isl : (NO_ISLANDS as PlacedIsland[]));
+    const k = track.islands.findIndex((x) => x.s1 + ISLAND_BEHIND > a);
+    islandsFrom.push(k < 0 ? track.islands.length : k);
+  }
+  track.islandsAt = islandsAt;
+  track.islandsFrom = islandsFrom;
+  for (const isle of track.islands) {
+    const lane = (lat0: number, lat1: number) => surfaces.filter((f) => f.s0 < isle.s1 && f.s1 > isle.s0 && f.lat0 < lat1 && f.lat1 > lat0);
+    const l = lane(-isle.outL, isle.lat0), r = lane(isle.lat1, isle.outR);
+    isle.surfL = l.length ? l : NO_SURFACES;
+    isle.surfR = r.length ? r : NO_SURFACES;
+  }
 }
 
 /** Distance from (x, y) to a convex quad (0 inside it). */
@@ -683,23 +789,48 @@ export function surfaceAt(track: Track, seg: number, s: number, lat: number): Su
  * half a car) at s where a car facing along the track touches no tyre mound (clear by `margin`)
  * and stands on ground (no gap or hole): where a respawn or a recovery puts a car (M4-SURF, "the
  * nearest clear lane"). 0 when no mound is near (the centerline, as before M4-SURF).
+ * Split lanes (M4-SURF part 2): where an island is in the way the car (its 30 x 16 box, clear by
+ * `margin`) goes in a lane beside it, out to that lane's widened asphalt, on the side of the island
+ * that `prefer` (the car's own lateral offset) is on, the nearest the centerline there; on the
+ * other side only if that one has no room. Without an island in the way: exactly as before.
  */
-export function clearLaneAt(track: Track, s: number, margin = 4): number {
+export function clearLaneAt(track: Track, s: number, margin = 4, prefer = 0): number {
   const p = pointAt(track, s);
   const near = track.tyresAt[p.seg];
-  if (near === undefined || near.length === 0) return 0;
+  const isles = track.islandsAt[p.seg];
+  const boxed = (f: PlacedIsland, lat: number) =>
+    s + CAR_HALF_LEN + margin > f.s0 && s - CAR_HALF_LEN - margin < f.s1 && lat + CAR_HALF_WID + margin > f.lat0 && lat - CAR_HALF_WID - margin < f.lat1;
+  const isle = isles !== undefined && isles.length > 0 ? isles.find((f) => s + CAR_HALF_LEN + margin > f.s0 && s - CAR_HALF_LEN - margin < f.s1) : undefined;
+  if (isle === undefined && (near === undefined || near.length === 0)) return 0;
   const ux = Math.cos(p.h), uy = Math.sin(p.h);
   const clear = (lat: number) => {
     const x = p.x - uy * lat, y = p.y + ux * lat;
-    for (const m of near) {
-      const dx = m.x - x, dy = m.y - y;
-      const t = Math.max(-CAR_HALF_LEN / 2, Math.min(CAR_HALF_LEN / 2, dx * ux + dy * uy)); // CAPSULE_HALF 7.5
-      if (Math.hypot(dx - ux * t, dy - uy * t) < m.r + CAR_HALF_WID + margin) return false; // CAPSULE_R 8
+    if (near !== undefined) {
+      for (const m of near) {
+        const dx = m.x - x, dy = m.y - y;
+        const t = Math.max(-CAR_HALF_LEN / 2, Math.min(CAR_HALF_LEN / 2, dx * ux + dy * uy)); // CAPSULE_HALF 7.5
+        if (Math.hypot(dx - ux * t, dy - uy * t) < m.r + CAR_HALF_WID + margin) return false; // CAPSULE_R 8
+      }
     }
+    if (isle !== undefined && isles.some((f) => boxed(f, lat))) return false;
     return !overHazard(track, x, y, s);
   };
-  const max = track.def.halfWidth - CAR_HALF_WID;
-  for (let k = 0; k <= max; k += 2) for (const lat of k === 0 ? [0] : [-k, k]) if (clear(lat)) return lat;
+  if (isle === undefined) {
+    const max = track.def.halfWidth - CAR_HALF_WID;
+    for (let k = 0; k <= max; k += 2) for (const lat of k === 0 ? [0] : [-k, k]) if (clear(lat)) return lat;
+    return 0;
+  }
+  // An island in the way: the lanes either side, the car's own side first.
+  const maxL = halfOn(track, p.seg, s, -1) - CAR_HALF_WID, maxR = halfOn(track, p.seg, s, 1) - CAR_HALF_WID;
+  const side = prefer < isle.mid ? -1 : 1;
+  for (const pass of [side, -side]) {
+    for (let k = 0; k <= Math.max(maxL, maxR); k += 2) {
+      for (const lat of k === 0 ? [0] : [-k, k]) {
+        if ((lat - isle.mid) * pass <= 0 || lat < -maxL || lat > maxR) continue;
+        if (clear(lat)) return lat;
+      }
+    }
+  }
   return 0;
 }
 
@@ -731,6 +862,56 @@ export function halfAt(track: Track, s: number, side: number): number {
 /** The wall's distance from the centerline on `side` at s: the asphalt plus the verge. */
 export function wallAt(track: Track, s: number, side: number): number {
   return halfAt(track, s, side) + track.def.verge;
+}
+
+/**
+ * The per-sample walls where a track query is (M4-SURF part 2): the asphalt's half-width on the
+ * query's side (q.side) at its s, the per-sample half-widths (halfL / halfR) of its segment's two ends
+ * taken in a straight line between them at the query's place along the segment (halfOn). That is the
+ * road's edge, kerb, verge and barrier as the bake draws them (client/gfx/world.ts: each centreline
+ * piece's widening at its two ends, linear in the projection between them; client/gfx/actors.ts's
+ * dust the same), so a car meets the wall where it is drawn and leaves the asphalt at the drawn kerb.
+ * Without a widen on the track: def.halfWidth, exactly.
+ */
+export function halfOf(track: Track, q: TrackQuery): number {
+  return track.widens.length === 0 ? track.def.halfWidth : halfOn(track, q.seg, q.s, q.side);
+}
+
+/**
+ * The asphalt's half-width on `side` (-1 left, +1 right) at s on segment seg (cum[seg]..cum[seg + 1]):
+ * the segment's two per-sample half-widths, interpolated linearly in s (the bake's projection
+ * parameter). Where both ends are the same (a plain stretch, a widen's full width): that, exactly.
+ */
+export function halfOn(track: Track, seg: number, s: number, side: number): number {
+  const arr = side < 0 ? track.halfL : track.halfR;
+  const n = arr.length;
+  const a = arr[seg], b = arr[seg + 1 < n ? seg + 1 : 0];
+  if (a === b) return a;
+  const c0 = track.cum[seg], len = track.cum[seg + 1] - c0;
+  let d = wrapS(track, s) - c0;
+  if (d < -track.length / 2) d += track.length; // the last segment's end, wrapped to 0
+  const t = !(len > 0) || d <= 0 ? 0 : d >= len ? 1 : d / len;
+  const w0 = a - track.def.halfWidth, w1 = b - track.def.halfWidth; // the widening at either end, as the bake's wL0 / wL1
+  return track.def.halfWidth + (w0 + (w1 - w0) * t);
+}
+
+/** The wall's distance from the centerline where a query is (its side, its s): halfOf plus the verge; track.wall without a widen, exactly. */
+export function wallOf(track: Track, q: TrackQuery): number {
+  return track.widens.length === 0 ? track.wall : halfOf(track, q) + track.def.verge;
+}
+
+/**
+ * The island whose rectangle (s0..s1 by lat0..lat1, `pad` wider all round) holds the point (s, lat)
+ * on segment seg's section, or null: a look in that segment's bucket (empty without islands).
+ */
+export function islandAt(track: Track, seg: number, s: number, lat: number, pad = 0): PlacedIsland | null {
+  const list = track.islandsAt[seg];
+  if (list === undefined || list.length === 0) return null;
+  for (let i = 0; i < list.length; i++) {
+    const f = list[i];
+    if (s >= f.s0 - pad && s <= f.s1 + pad && lat >= f.lat0 - pad && lat <= f.lat1 + pad) return f;
+  }
+  return null;
 }
 
 /**
@@ -815,9 +996,12 @@ export function queryTrackNear(track: Track, x: number, y: number, hint: number)
   return nearest(track, x, y, hint - LOCAL_WINDOW, LOCAL_WINDOW * 2 + 1);
 }
 
-/** Further than 2 * wall from its own section: a car falls (see stepRaceCar). */
+/**
+ * Further than 2 * wall from its own section: a car falls (see stepRaceCar). The wall on the query's
+ * side at its s (wallOf, M4-SURF part 2: a widened road is lost further out); track.wall without a widen.
+ */
 export function isLost(track: Track, q: TrackQuery): boolean {
-  return q.dist > track.wall * 2;
+  return q.dist > wallOf(track, q) * 2;
 }
 
 /** Wrap a distance along the track into [0, length) (exactly s when already inside). */
@@ -1242,7 +1426,10 @@ function turnOver(track: Track, s0: number, s1: number): number {
  * - Overlaps: surfaces (water, dirt, belts) do not overlap each other; solids (tyre mounds, barrel
  *   rows, trucks, presses, islands) do not overlap each other, a hole, a gap, a ramp or its take-off
  *   zone, or a ground cell; widens do not overlap each other, a ramp (take-off zone included) or a gap.
- * - Split lanes: an island leaves a lane of at least LANE_MIN either side, at every s it covers.
+ * - Split lanes: an island leaves a lane of at least LANE_MIN either side, at every s it covers; it
+ *   is at least ISLAND_NOSE wide and 2 * ISLAND_NOSE long (its noses fit). The run-ups through a split
+ *   are driven once per lane (validateRunUps in shared/weapons.ts). Its noses lie inside its
+ *   rectangle, so the solids' clearances below hold for them too.
  * - Widen in a bend (PLAN-M4 advisor change 13): where a widen widens the inside of a bend, the
  *   farthest a car centre goes there (the wall less half a car's width, as physics wallLimit) stays
  *   below the local radius, or nearest() degenerates.
@@ -1333,6 +1520,9 @@ function validateSchema(track: Track, errors: string[], zone: (what: string, lo:
   for (const i of track.islands) {
     const what = `island ${span(i.s0, i.s1)}`;
     solids.push(rect(what, i));
+    // Its noses (M4-SURF part 2): ISLAND_NOSE deep at either end, across its whole width.
+    if (!(i.lat1 - i.lat0 >= ISLAND_NOSE)) errors.push(`${what}: ${f1(i.lat1 - i.lat0)} wide, narrower than its noses (${ISLAND_NOSE})`);
+    if (!(i.s1 - i.s0 >= 2 * ISLAND_NOSE)) errors.push(`${what}: ${f1(i.s1 - i.s0)} long, shorter than its two noses (${2 * ISLAND_NOSE})`);
     // Split lanes: asphalt edge to island, either side, at every s the island covers.
     for (const [side, name] of [[-1, "left"], [1, "right"]] as const) {
       for (const s of samplesIn(track, i.s0, i.s1)) {

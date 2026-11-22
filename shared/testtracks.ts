@@ -48,7 +48,7 @@ export const PREVIEW_YARD: TrackDef = {
 
 // The M4-SURF part 1 test track (water, dirt patches, conveyor belts and tyre mounds act; ClickUp
 // 123jpnbffyz): the Preview Yard's loop with only the features that do something today, so it can
-// be driven (the dev flag SCRAP_DEV_TRACKS, server/room.ts) and raced by bots without the barrels,
+// be driven (the dev flag SCRAP_DEV_TRACK, server/room.ts) and raced by bots without the barrels,
 // truck, press and split lanes that are still drawings. In order round the lap: on the top straight
 // a tyre-mound chicane, a dirt patch on the right half and a pool across the whole road (on a
 // straight: it costs little); round the right-hand side a belt drifting right, a pool on the
@@ -86,8 +86,36 @@ export const SURF_YARD: TrackDef = {
   recovery: [0, 3300, 5650],
 };
 
+// The M4-SURF part 2 test track (split lanes; ClickUp 123jpnbffz4): the Preview Yard's loop with
+// three splits and nothing else, plain road between them (the user found the Surf Yard "way too
+// packed"). The road widens round an island into two lanes, and narrows again past it:
+// - on the top straight a plain split: two equal lanes (the bots take the lane their seat's line is on);
+// - on the bottom straight a split with the left lane flooded and the right lane dirt (the truck
+//   takes the dirt, the Sport and the Racer the water: it keeps their speed on a straight);
+// - in the bend from the bottom straight into the left-hand side a split whose inside (right) lane
+//   is the shorter one (all the bots take it).
+// Picked with the dev flag SCRAP_DEV_TRACK=split-yard (server/room.ts).
+export const SPLIT_YARD: TrackDef = {
+  id: "split-yard",
+  name: "Split Yard",
+  control: PREVIEW_YARD.control,
+  halfWidth: 64,
+  verge: 44,
+  features: [
+    { k: "widen", s0: 650, s1: 1750, left: 48, right: 48 },
+    { k: "island", s0: 820, s1: 1580, lat0: -22, lat1: 22 },
+    { k: "widen", s0: 5750, s1: 7050, left: 60, right: 60 },
+    { k: "island", s0: 5900, s1: 6900, lat0: -28, lat1: 28 },
+    { k: "water", s0: 6050, s1: 6550, lat0: -124, lat1: -28 },
+    { k: "dirt", s0: 6050, s1: 6750, lat0: 28, lat1: 124 },
+    { k: "widen", s0: 7800, s1: 8700, left: 40, right: 40 },
+    { k: "island", s0: 7950, s1: 8550, lat0: -24, lat1: 24 },
+  ],
+  recovery: [0],
+};
+
 /** Every preview test track, in the order a preview lists them. */
-export const TEST_TRACKS: readonly TrackDef[] = [PREVIEW_YARD, SURF_YARD];
+export const TEST_TRACKS: readonly TrackDef[] = [PREVIEW_YARD, SURF_YARD, SPLIT_YARD];
 
 const built = new Map<string, Track>(); // built once per id; a Track is never mutated
 

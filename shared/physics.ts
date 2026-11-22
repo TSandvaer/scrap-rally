@@ -3,7 +3,23 @@
 // reconciliation absorbs tiny floating-point differences between JS engines.
 
 import { BOOST_ACCEL, BOOST_TOP, DRAFT_DRAG_CUT } from "./catchup";
-import { queryTrackNear, segDir, SURF_BELT, SURF_DIRT, SURF_WATER, surfaceAt, type PlacedTyres, type Track } from "./track";
+import {
+  halfOf,
+  ISLAND_NOSE,
+  ISLAND_NOSE_ROUND,
+  queryTrackNear,
+  segDir,
+  SURF_BELT,
+  SURF_DIRT,
+  SURF_WATER,
+  surfaceAt,
+  wallOf,
+  type PlacedIsland,
+  type PlacedTyres,
+  type Track,
+  type TrackQuery,
+  type Vec,
+} from "./track";
 
 export const TICK_HZ = 60;
 export const DT = 1 / TICK_HZ;
@@ -118,7 +134,7 @@ export function stepCar(c: CarState, input: Input, stats: CarStats, track: Track
   // The surface under the car's centre (M4-SURF; null on a track without any: exactly as before).
   const surf = surfaceAt(track, q.seg, q.s, q.lat);
   const wet = surf !== null && surf.kind === SURF_WATER;
-  const onRoad = q.dist <= track.def.halfWidth && !(surf !== null && surf.kind === SURF_DIRT);
+  const onRoad = q.dist <= halfOf(track, q) && !(surf !== null && surf.kind === SURF_DIRT);
   const boosted = c.boost > 0;
   const accel = boosted ? stats.accel * BOOST_ACCEL : stats.accel;
   let drag = (accel / (boosted ? stats.topSpeed * BOOST_TOP : stats.topSpeed)) * (wet ? WATER_FORCE : onRoad ? 1 : stats.dirtDrag);
@@ -200,15 +216,26 @@ export function collideTyres(c: CarState, tyres: readonly PlacedTyres[]): number
   return hit;
 }
 
-/** How far from the centerline a car's centre may go: its side touches the wall there. */
-export function wallLimit(track: Track): number {
-  return track.wall - CAR_WIDTH / 2;
+/**
+ * How far from the centerline a car's centre may go: its side touches the wall there. With a query:
+ * the per-sample wall on its side at its s (M4-SURF part 2, wallOf: a widened road's wall is
+ * further out); without one, or without a widen on the track: track.wall less half a car, exactly.
+ */
+export function wallLimit(track: Track, q?: TrackQuery): number {
+  return (q === undefined ? track.wall : wallOf(track, q)) - CAR_WIDTH / 2;
 }
 
+/**
+ * The walls of a driving car on its pose after the move: the islands in its segment's bucket first
+ * (collideIslands), then the track's wall on its side (wallLimit with the query), pushed back to it
+ * along the normal, the speed into it bounced back WALL_BOUNCE, and WALL_SCRAPE of the rest kept.
+ */
 function collideWalls(c: CarState, track: Track): void {
   const q = queryTrackNear(track, c.x, c.y, c.seg);
   c.seg = q.seg;
-  const limit = wallLimit(track);
+  const isles = track.islandsAt[q.seg];
+  if (isles !== undefined && isles.length > 0) collideIslands(c, q, isles);
+  const limit = wallLimit(track, q);
   if (q.dist <= limit) return;
   c.x -= q.nx * (q.dist - limit);
   c.y -= q.ny * (q.dist - limit);
@@ -219,6 +246,150 @@ function collideWalls(c: CarState, track: Track): void {
   }
   c.vx *= WALL_SCRAPE;
   c.vy *= WALL_SCRAPE;
+}
+
+// Islands (M4-SURF part 2, PLAN-M4.md 2.6 B; shared/track.ts PlacedIsland): solid for a car on the
+// ground (a flight passes over; a car that lands on one is put back in the nearer lane on its next
+// driving step, below). In track coordinates (s, lat) of the car's centre, from its query:
+// - Its long sides are a wall: a centre between the middles of its noses (s0 + NOSE_MID ..
+//   s1 - NOSE_MID) closer than half a car to the island (lat0 - CAR_WIDTH / 2 < lat < lat1 +
+//   CAR_WIDTH / 2), or anywhere on the island's rectangle (a landing), is pushed sideways out to the
+//   nearer side, and bounces and scrapes as at the track's wall (WALL_BOUNCE, WALL_SCRAPE): the
+//   same rule, the same constants.
+// - Each nose is a solid as a tyre mound is (the M4-SURF part 1 contact): the outline of its tyre
+//   stacks (PlacedIsland.head, tail: a core box, every point within ISLAND_NOSE_ROUND of it) against
+//   the car's capsule, pushed out along the line between their closest points, with the mound's
+//   bounce (TYRES_RESTITUTION, TYRES_MIN_OUT, TYRES_TANGENT). Its rounded corners turn a car that
+//   clips one into the lane.
+// Which applies by the centre's s: before the head's middle the head, past the tail's the tail,
+// else the sides. No damage.
+
+/** A nose's middle, from its end of the island (where the sides' wall rule takes over from it). */
+export const NOSE_MID = ISLAND_NOSE / 2;
+
+/**
+ * The island side a car centre at the query's (s, lat) is against or inside (between the noses'
+ * middles and within half a car of the island, or on its rectangle): -1 its left side (the car is
+ * in the left lane: pushed to lat0 - CAR_WIDTH / 2), +1 its right side, 0 none.
+ */
+export function islandSide(isle: PlacedIsland, q: TrackQuery): number {
+  const s = q.s, lat = q.lat;
+  const lo = isle.lat0 - CAR_WIDTH / 2, hi = isle.lat1 + CAR_WIDTH / 2;
+  const onIt = s >= isle.s0 && s <= isle.s1 && lat >= isle.lat0 && lat <= isle.lat1;
+  if (!onIt && !(s >= isle.s0 + NOSE_MID && s <= isle.s1 - NOSE_MID && lat > lo && lat < hi)) return 0;
+  return lat - lo < hi - lat ? -1 : 1;
+}
+
+/**
+ * Bounce a driving car off the islands it touches (see above), on its pose after the move; q is
+ * its query there. The sides move it along the right-of-travel normal at q (q.side x q.n), so its
+ * lateral offset becomes the side's limit exactly.
+ */
+function collideIslands(c: CarState, q: TrackQuery, isles: readonly PlacedIsland[]): void {
+  for (let i = 0; i < isles.length; i++) {
+    const isle = isles[i];
+    const side = islandSide(isle, q);
+    if (side !== 0) {
+      const push = side < 0 ? isle.lat0 - CAR_WIDTH / 2 - q.lat : isle.lat1 + CAR_WIDTH / 2 - q.lat; // + = to the right
+      const rx = q.side * q.nx, ry = q.side * q.ny; // the right of travel at the car
+      c.x += rx * push;
+      c.y += ry * push;
+      const ix = side < 0 ? rx : -rx, iy = side < 0 ? ry : -ry; // into the island
+      const vn = c.vx * ix + c.vy * iy;
+      if (vn > 0) {
+        c.vx -= (1 + WALL_BOUNCE) * vn * ix;
+        c.vy -= (1 + WALL_BOUNCE) * vn * iy;
+      }
+      c.vx *= WALL_SCRAPE;
+      c.vy *= WALL_SCRAPE;
+    } else if (q.s < isle.s0 + NOSE_MID) collideNose(c, isle.head);
+    else if (q.s > isle.s1 - NOSE_MID) collideNose(c, isle.tail);
+  }
+}
+
+// collideNose's closest points (no allocation per call): on the car's axis (CX, CY), on the core (QX, QY).
+let CX = 0, CY = 0, QX = 0, QY = 0;
+
+/**
+ * The closest points of the car's axis (centre (x, y), direction (ux, uy), half-length CAPSULE_HALF)
+ * and the segment a..b, into CX, CY and QX, QY; returns their distance.
+ */
+function axisToSegment(x: number, y: number, ux: number, uy: number, ax: number, ay: number, bx: number, by: number): number {
+  const ex = bx - ax, ey = by - ay;
+  const len2 = ex * ex + ey * ey;
+  const rx = x - ax, ry = y - ay;
+  const b = ux * ex + uy * ey, cc = ux * rx + uy * ry, f = ex * rx + ey * ry;
+  const denom = len2 - b * b; // |u| = 1
+  // On the segment: t in 0..1 (a + e t); on the axis: s in -CAPSULE_HALF..CAPSULE_HALF (centre + u s).
+  let t = denom > 1e-9 ? clamp((f - b * cc) / denom, 0, 1) : len2 > 0 ? clamp(f / len2, 0, 1) : 0;
+  let s = clamp(b * t - cc, -CAPSULE_HALF, CAPSULE_HALF);
+  t = len2 > 0 ? clamp((f + b * s) / len2, 0, 1) : 0;
+  s = clamp(b * t - cc, -CAPSULE_HALF, CAPSULE_HALF);
+  CX = x + ux * s;
+  CY = y + uy * s;
+  QX = ax + ex * t;
+  QY = ay + ey * t;
+  return Math.hypot(CX - QX, CY - QY);
+}
+
+/**
+ * A nose (its core box `core`, corners in order, every point within ISLAND_NOSE_ROUND of it) against
+ * the car's capsule: pushed straight out (the closest points of the car's axis and the core, the
+ * normal from the core's to the car's) with the tyre mound's bounce (collideTyres). Returns the
+ * speed into it (0 = no contact or moving out).
+ */
+export function collideNose(c: CarState, core: readonly Vec[]): number {
+  const reach = ISLAND_NOSE_ROUND + CAPSULE_R;
+  const ux = Math.cos(c.h), uy = Math.sin(c.h);
+  // Cheap reject: the car's centre further from every corner than the core's size plus both reaches.
+  const a = core[0], b = core[1], d2 = core[2], e = core[3];
+  const span = Math.hypot(b.x - a.x, b.y - a.y) + Math.hypot(e.x - a.x, e.y - a.y) + reach + CAPSULE_HALF;
+  if ((c.x - a.x) ** 2 + (c.y - a.y) ** 2 >= span * span) return 0;
+  let best = Infinity, cx = 0, cy = 0, qx = 0, qy = 0;
+  for (let k = 0; k < 4; k++) {
+    const p = core[k], q = core[(k + 1) & 3];
+    const d = axisToSegment(c.x, c.y, ux, uy, p.x, p.y, q.x, q.y);
+    if (d < best) {
+      best = d;
+      cx = CX;
+      cy = CY;
+      qx = QX;
+      qy = QY;
+    }
+  }
+  // The car's centre inside the core (deep; a landing is the sides' rule): out the way it came.
+  const inside = insideQuad(a, b, d2, e, c.x, c.y);
+  if (!inside && best >= reach) return 0;
+  let nx: number, ny: number, depth: number;
+  if (!inside && best > 1e-6) {
+    nx = (cx - qx) / best;
+    ny = (cy - qy) / best;
+    depth = reach - best;
+  } else {
+    nx = -ux;
+    ny = -uy;
+    depth = reach + best;
+  }
+  c.x += nx * depth;
+  c.y += ny * depth;
+  const vn = c.vx * nx + c.vy * ny;
+  if (vn < TYRES_MIN_OUT) {
+    const out = Math.max(-TYRES_RESTITUTION * vn, TYRES_MIN_OUT);
+    const tx = c.vx - vn * nx, ty = c.vy - vn * ny;
+    c.vx = tx * TYRES_TANGENT + nx * out;
+    c.vy = ty * TYRES_TANGENT + ny * out;
+    return Math.max(0, -vn);
+  }
+  return 0;
+}
+
+/** Is (x, y) inside the convex quad a, b, c, d (corners in order, either way round; an edge counts as inside)? */
+function insideQuad(a: Vec, b: Vec, c: Vec, d: Vec, x: number, y: number): boolean {
+  const k0 = (b.x - a.x) * (y - a.y) - (b.y - a.y) * (x - a.x);
+  const k1 = (c.x - b.x) * (y - b.y) - (c.y - b.y) * (x - b.x);
+  const k2 = (d.x - c.x) * (y - c.y) - (d.y - c.y) * (x - c.x);
+  const k3 = (a.x - d.x) * (y - d.y) - (a.y - d.y) * (x - d.x);
+  return (k0 >= 0 && k1 >= 0 && k2 >= 0 && k3 >= 0) || (k0 <= 0 && k1 <= 0 && k2 <= 0 && k3 <= 0);
 }
 
 /** The pose and velocity a car-car contact needs (CarState and snapshots both fit). */
