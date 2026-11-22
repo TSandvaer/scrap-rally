@@ -661,6 +661,8 @@ author: merge main, falls-0 on the 2 new tracks, both nits. Then merge.
 NOSELECT-1 done: 28b68ab (index.html + style.css; report tmp/noselect-1/NOSELECT-1-report.md). Opus reviewer ctx_f8c216751a4b
 (tmp/review-noselect-1.md). Active authors now: TH-LOOK-1, M4-TRACKS (flake fix), HARD-2 (final round), BR-SCHEMA (fix round) = 4, the
 three fix rounds short (cap rule allows a brief 4th).
+NOSELECT-1 review APPROVE (ctx_f8c216751a4b, released). MERGED c59d6f1; gate running (expect only the known breakers-mile flake).
+ClickUp ready for qa test; workspace removed. Note: the clipboard-failure fallback toast is unselectable (plain-http LAN or denied clipboard only).
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
