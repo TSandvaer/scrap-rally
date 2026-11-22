@@ -230,8 +230,6 @@ export interface Track {
   /** Per segment i: the first index in tyres whose far edge (s + r) is less than TYRES_BEHIND behind cum[i]. */
   tyresFrom: number[];
   // M4-SURF part 2: split lanes, per segment.
-  /** Per segment i: the widens over cum[i]..cum[i + 1] (the walls of a car whose nearest segment is i: halfOf, wallOf). */
-  widensAt: readonly Widen[][];
   /** Per segment i: the islands a car or a rivet whose nearest segment is i can touch (ISLAND_BUCKET_REACH). */
   islandsAt: readonly PlacedIsland[][];
   /** Per segment i: the first index in islands whose tail (s1) is less than ISLAND_BEHIND behind cum[i] (the bots look ahead from there). */
@@ -553,7 +551,6 @@ export function buildTrack(def: TrackDef): Track {
     surfFrom: [],
     tyresAt: [],
     tyresFrom: [],
-    widensAt: [],
     islandsAt: [],
     islandsFrom: [],
   };
@@ -645,7 +642,6 @@ export function buildTrack(def: TrackDef): Track {
 
 const NO_SURFACES: readonly Surface[] = Object.freeze([]) as readonly Surface[];
 const NO_TYRES: readonly PlacedTyres[] = Object.freeze([]) as readonly PlacedTyres[];
-const NO_WIDENS: readonly Widen[] = Object.freeze([]) as readonly Widen[];
 const NO_ISLANDS: readonly PlacedIsland[] = Object.freeze([]) as readonly PlacedIsland[];
 
 /**
@@ -660,16 +656,18 @@ function placeIsland(track: Track, f: Island): PlacedIsland {
     return [trackPoint(track, a, f.lat0 + r), trackPoint(track, a, f.lat1 - r), trackPoint(track, b, f.lat1 - r), trackPoint(track, b, f.lat0 + r)].map((p) => ({ x: p.x, y: p.y }));
   };
   const at = samplesIn(track, f.s0, f.s1);
+  // The asphalt's edge as drawn (halfOn on the segment each s is on).
+  const half = (s: number, side: number) => halfOn(track, pointAt(track, s).seg, s, side);
   let outL = Infinity, outR = Infinity;
   for (const s of at) {
-    outL = Math.min(outL, halfAt(track, s, -1));
-    outR = Math.min(outR, halfAt(track, s, 1));
+    outL = Math.min(outL, half(s, -1));
+    outR = Math.min(outR, half(s, 1));
   }
   // The middle of each lane (between the asphalt's edge and the island) as a polyline through the samples.
   const laneLen = (side: number) => {
     let len = 0, px = 0, py = 0;
     at.forEach((s, k) => {
-      const lat = side < 0 ? (f.lat0 - halfAt(track, s, -1)) / 2 : (f.lat1 + halfAt(track, s, 1)) / 2;
+      const lat = side < 0 ? (f.lat0 - half(s, -1)) / 2 : (f.lat1 + half(s, 1)) / 2;
       const q = trackPoint(track, s, lat);
       if (k > 0) len += Math.hypot(q.x - px, q.y - py);
       px = q.x;
@@ -732,20 +730,17 @@ function buildBuckets(track: Track): void {
   track.surfFrom = surfFrom;
   track.tyresAt = tyresAt;
   track.tyresFrom = tyresFrom;
-  // M4-SURF part 2: the widens and islands by segment (by s: both lie on one section, and a car's
-  // or a rivet's nearest segment is on its own section), where the bots look ahead for islands, and
-  // the surfaces in each island's lanes.
-  const widensAt: Widen[][] = [], islandsAt: PlacedIsland[][] = [], islandsFrom: number[] = [];
+  // M4-SURF part 2: the islands by segment (by s: they lie on one section, and a car's or a rivet's
+  // nearest segment is on its own section), where the bots look ahead for them, and the surfaces in
+  // each island's lanes.
+  const islandsAt: PlacedIsland[][] = [], islandsFrom: number[] = [];
   for (let i = 0; i < n; i++) {
     const a = cum[i], b = cum[i + 1];
-    const w = track.widens.filter((x) => x.s0 <= b && x.s1 >= a);
-    widensAt.push(w.length ? w : (NO_WIDENS as Widen[]));
     const isl = track.islands.filter((x) => x.s0 - ISLAND_BUCKET_REACH < b && x.s1 + ISLAND_BUCKET_REACH > a);
     islandsAt.push(isl.length ? isl : (NO_ISLANDS as PlacedIsland[]));
     const k = track.islands.findIndex((x) => x.s1 + ISLAND_BEHIND > a);
     islandsFrom.push(k < 0 ? track.islands.length : k);
   }
-  track.widensAt = widensAt;
   track.islandsAt = islandsAt;
   track.islandsFrom = islandsFrom;
   for (const isle of track.islands) {
@@ -826,7 +821,7 @@ export function clearLaneAt(track: Track, s: number, margin = 4, prefer = 0): nu
     return 0;
   }
   // An island in the way: the lanes either side, the car's own side first.
-  const maxL = halfAt(track, s, -1) - CAR_HALF_WID, maxR = halfAt(track, s, 1) - CAR_HALF_WID;
+  const maxL = halfOn(track, p.seg, s, -1) - CAR_HALF_WID, maxR = halfOn(track, p.seg, s, 1) - CAR_HALF_WID;
   const side = prefer < isle.mid ? -1 : 1;
   for (const pass of [side, -side]) {
     for (let k = 0; k <= Math.max(maxL, maxR); k += 2) {
@@ -871,26 +866,33 @@ export function wallAt(track: Track, s: number, side: number): number {
 
 /**
  * The per-sample walls where a track query is (M4-SURF part 2): the asphalt's half-width on the
- * query's side (q.side) at its s, halfAt's value, found through its segment's widens (Track.widensAt:
- * no scan of every widen). buildTrack's halfL / halfR are this function at the samples; the drawing
- * (client/gfx/world.ts) and the minimap read the same function, so a car meets the wall where it is
- * drawn. Without a widen on the track: def.halfWidth, exactly.
+ * query's side (q.side) at its s, the per-sample half-widths (halfL / halfR) of its segment's two ends
+ * taken in a straight line between them at the query's place along the segment (halfOn). That is the
+ * road's edge, kerb, verge and barrier as the bake draws them (client/gfx/world.ts: each centreline
+ * piece's widening at its two ends, linear in the projection between them; client/gfx/actors.ts's
+ * dust the same), so a car meets the wall where it is drawn and leaves the asphalt at the drawn kerb.
+ * Without a widen on the track: def.halfWidth, exactly.
  */
 export function halfOf(track: Track, q: TrackQuery): number {
   return track.widens.length === 0 ? track.def.halfWidth : halfOn(track, q.seg, q.s, q.side);
 }
 
-/** halfAt(track, s, side) for an s on segment seg (cum[seg]..cum[seg + 1]): through that segment's widens only. */
+/**
+ * The asphalt's half-width on `side` (-1 left, +1 right) at s on segment seg (cum[seg]..cum[seg + 1]):
+ * the segment's two per-sample half-widths, interpolated linearly in s (the bake's projection
+ * parameter). Where both ends are the same (a plain stretch, a widen's full width): that, exactly.
+ */
 export function halfOn(track: Track, seg: number, s: number, side: number): number {
-  const list = track.widensAt[seg];
-  if (list === undefined || list.length === 0) return track.def.halfWidth;
-  s = wrapS(track, s);
-  let extra = 0;
-  for (const w of list) {
-    if (s < w.s0 || s > w.s1) continue;
-    extra += (side < 0 ? w.left : w.right) * Math.min(1, (s - w.s0) / WIDEN_TAPER, (w.s1 - s) / WIDEN_TAPER);
-  }
-  return track.def.halfWidth + extra;
+  const arr = side < 0 ? track.halfL : track.halfR;
+  const n = arr.length;
+  const a = arr[seg], b = arr[seg + 1 < n ? seg + 1 : 0];
+  if (a === b) return a;
+  const c0 = track.cum[seg], len = track.cum[seg + 1] - c0;
+  let d = wrapS(track, s) - c0;
+  if (d < -track.length / 2) d += track.length; // the last segment's end, wrapped to 0
+  const t = !(len > 0) || d <= 0 ? 0 : d >= len ? 1 : d / len;
+  const w0 = a - track.def.halfWidth, w1 = b - track.def.halfWidth; // the widening at either end, as the bake's wL0 / wL1
+  return track.def.halfWidth + (w0 + (w1 - w0) * t);
 }
 
 /** The wall's distance from the centerline where a query is (its side, its s): halfOf plus the verge; track.wall without a widen, exactly. */

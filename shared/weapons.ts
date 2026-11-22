@@ -19,8 +19,8 @@ import {
 } from "./physics";
 import {
   gapAt,
-  halfAt,
   halfOf,
+  halfOn,
   isLost,
   LIP_ZONE,
   lipAt,
@@ -359,16 +359,21 @@ function shotIntoIslands(track: Track, q: TrackQuery, x0: number, y0: number, x1
 
 /** Does the segment (s0, l0)..(s1, l1) meet the island's rectangle `pad` wider (Liang-Barsky clip)? */
 function segmentHitsRect(s0: number, l0: number, s1: number, l1: number, f: PlacedIsland, pad: number): boolean {
+  const ds = s1 - s0, dl = l1 - l0;
   let lo = 0, hi = 1;
-  const clip = (p: number, d: number, min: number, max: number) => {
-    if (Math.abs(d) < 1e-12) return p >= min && p <= max;
-    let a = (min - p) / d, b = (max - p) / d;
-    if (a > b) [a, b] = [b, a];
-    lo = Math.max(lo, a);
-    hi = Math.min(hi, b);
-    return lo <= hi;
-  };
-  return clip(s0, s1 - s0, f.s0 - pad, f.s1 + pad) && clip(l0, l1 - l0, f.lat0 - pad, f.lat1 + pad);
+  // Along s.
+  if (Math.abs(ds) < 1e-12) {
+    if (s0 < f.s0 - pad || s0 > f.s1 + pad) return false;
+  } else {
+    const a = (f.s0 - pad - s0) / ds, b = (f.s1 + pad - s0) / ds;
+    lo = Math.max(lo, Math.min(a, b));
+    hi = Math.min(hi, Math.max(a, b));
+    if (lo > hi) return false;
+  }
+  // Across.
+  if (Math.abs(dl) < 1e-12) return l0 >= f.lat0 - pad && l0 <= f.lat1 + pad;
+  const a = (f.lat0 - pad - l0) / dl, b = (f.lat1 + pad - l0) / dl;
+  return Math.max(lo, Math.min(a, b)) <= Math.min(hi, Math.max(a, b));
 }
 
 /** Did a rivet moving from (x0, y0) to (x1, y1) this tick touch a tyre mound (M4-SURF: rivets die on solids)? */
@@ -444,7 +449,7 @@ function clearLane(track: Track, s: number, side = -1): number {
   const isle = track.islands.find((f) => ws >= f.s0 - DODGE_REACH && ws <= f.s1 + CAR_LENGTH);
   if (isle) {
     // The lane beside the island on `side`, kept inside the asphalt here (a taper is narrower).
-    const edge = halfAt(track, ws, side) - CAR_WIDTH / 2 - 4;
+    const edge = halfOn(track, pointAt(track, ws).seg, ws, side) - CAR_WIDTH / 2 - 4;
     const lo = side < 0 ? -edge : isle.lat1 + CAR_WIDTH;
     const hi = side < 0 ? isle.lat0 - CAR_WIDTH : edge;
     const middle = side < 0 ? (isle.lat0 - isle.outL) / 2 : (isle.lat1 + isle.outR) / 2;
@@ -481,7 +486,7 @@ function runUpInput(track: Track, c: CarState, through?: { s0: number; s1: numbe
   const t = pointAt(track, s);
   let lat = clearLane(track, s, side);
   if (through && q.s >= through.s0 - WATER_LEAD && q.s <= through.s1) {
-    lat = clamp((through.lat0 + through.lat1) / 2, -(halfAt(track, s, -1) - CAR_WIDTH / 2), halfAt(track, s, 1) - CAR_WIDTH / 2);
+    lat = clamp((through.lat0 + through.lat1) / 2, -(halfOn(track, t.seg, s, -1) - CAR_WIDTH / 2), halfOn(track, t.seg, s, 1) - CAR_WIDTH / 2);
   }
   const tx = t.x - Math.sin(t.h) * lat, ty = t.y + Math.cos(t.h) * lat;
   return { throttle: 1, steer: clamp(angleDiff(c.h, Math.atan2(ty - c.y, tx - c.x)) * 2.2, -1, 1) };

@@ -9,14 +9,17 @@
 //             interpolation of Track.wallL / wallR) is from the wall function the physics and the
 //             drawing use (halfAt / wallAt), the largest gap per widen of the test tracks.
 //
-//   npx tsx tools/debug/split-tune.ts --race | --mounds | --walls
+//   --drawn   the physics walls against the drawn ones (drawnGaps): the bake's rule re-done round every
+//             widen of the test tracks, the largest gap between the two, and the exact taper's.
+//
+//   npx tsx tools/debug/split-tune.ts --race | --mounds | --walls | --drawn
 
 import type { BotLevel } from "../../shared/botdrive";
 import { MOUNDS } from "../../shared/botdrive";
 import { CAPSULE_HALF, CAPSULE_R, clamp, NOSE_MID, type CarState } from "../../shared/physics";
 import type { ServerMsg } from "../../shared/protocol";
 import { SPLIT_YARD, TEST_TRACKS, testTrack } from "../../shared/testtracks";
-import { ISLAND_NOSE, ISLAND_NOSE_ROUND, queryTrackNear, wallAt, type PlacedIsland, type Track } from "../../shared/track";
+import { ISLAND_NOSE, ISLAND_NOSE_ROUND, pointAt, queryTrackNear, wallAt, wallOf, widenAt, type PlacedIsland, type Track } from "../../shared/track";
 import { CAR_HP } from "../../shared/weapons";
 import { wallHitSpeed } from "../../client/game";
 import { Room, type Conn, type Player, type Session } from "../../server/room";
@@ -164,6 +167,64 @@ export function moundRaces(commit: number, hold: number): Record<BotLevel, Retur
   }
 }
 
+/**
+ * Drawn against physics, per widen: points round both walls of every widen of the test tracks (from
+ * 60 before it to 60 past it, every 1.7 units along, from 6 inside each wall to 6 outside), each put
+ * through the bake's own rule (client/gfx/world.ts, re-done here: the nearest centreline piece over
+ * the whole track, its projection t and side, the widening at its two ends from widenAt linear in t,
+ * the barrier where the distance less that is past track.wall; the kerb the same at def.halfWidth)
+ * and through the physics (queryTrackNear, wallOf / halfOf). The largest difference between the two
+ * gaps (drawn wall to point, physics wall to point), and the same for the exact taper (wallAt at the
+ * query's s), which the physics used before the review.
+ */
+export function drawnGaps(): { track: string; widen: string; now: number; exact: number; points: number }[] {
+  const out: { track: string; widen: string; now: number; exact: number; points: number }[] = [];
+  for (const d of TEST_TRACKS) {
+    const t = testTrack(d.id)!;
+    const n = t.pts.length;
+    for (const w of t.widens) {
+      let now = 0, exact = 0, points = 0;
+      for (let s = w.s0 - 60; s <= w.s1 + 60; s += 1.7) {
+        const p = pointAt(t, s);
+        for (const side of [-1, 1]) {
+          for (let off = -6; off <= 6; off += 3) {
+            const lat = side * (wallAt(t, s, side) + off);
+            const x = p.x - Math.sin(p.h) * lat, y = p.y + Math.cos(p.h) * lat;
+            // The bake's rule: the nearest piece, its t, the side by its normal.
+            let best = Infinity, gi = -1, gt = 0;
+            for (let i = 0; i < n; i++) {
+              const a = t.pts[i], b = t.pts[(i + 1) % n];
+              const ex = b.x - a.x, ey = b.y - a.y;
+              let k = ((x - a.x) * ex + (y - a.y) * ey) / (ex * ex + ey * ey || 1);
+              k = k < 0 ? 0 : k > 1 ? 1 : k;
+              const d2 = (x - a.x - ex * k) ** 2 + (y - a.y - ey * k) ** 2;
+              if (d2 < best) {
+                best = d2;
+                gi = i;
+                gt = k;
+              }
+            }
+            const a = t.pts[gi], b = t.pts[(gi + 1) % n];
+            const len = Math.hypot(b.x - a.x, b.y - a.y) || 1;
+            const l = (x - a.x) * (-(b.y - a.y) / len) + (y - a.y) * ((b.x - a.x) / len);
+            const sd = l < 0 ? -1 : 1;
+            const w0 = widenAt(t, t.cum[gi], sd), w1 = widenAt(t, t.cum[gi + 1], sd);
+            const drawn = Math.sqrt(best) - (w0 + (w1 - w0) * gt) - t.wall; // + = past the drawn barrier line
+            const q = queryTrackNear(t, x, y, gi);
+            const phys = q.dist - wallOf(t, q);
+            const old = q.dist - wallAt(t, q.s, q.side);
+            now = Math.max(now, Math.abs(drawn - phys));
+            exact = Math.max(exact, Math.abs(drawn - old));
+            points++;
+          }
+        }
+      }
+      out.push({ track: d.id, widen: `${w.s0}..${w.s1} (left ${w.left}, right ${w.right})`, now, exact, points });
+    }
+  }
+  return out;
+}
+
 /** The largest gap between linear interpolation of the per-sample walls and the wall function, per widen. */
 export function wallGaps(): string[] {
   const out: string[] = [];
@@ -211,8 +272,10 @@ if (process.argv[1]?.endsWith("split-tune.ts")) {
       const mark = commit === MOUNDS.commit && hold === MOUNDS.hold ? "  <- the game's" : "";
       console.log(`commit ${commit} hold ${hold}: easy ${m.easy.mounds.join("/")}, normal ${m.normal.mounds.join("/")}, hard ${m.hard.mounds.join("/")} (sum ${sum(all.flatMap((r) => r.mounds))}); falls ${sum(all.flatMap((r) => r.falls))}; wall-hit ticks ${sum(all.flatMap((r) => r.walls))}${mark}`);
     }
+  } else if (process.argv.includes("--drawn")) {
+    for (const g of drawnGaps()) console.log(`${g.track} widen ${g.widen}: the physics wall and kerb are at most ${g.now.toFixed(4)} from the drawn ones (the exact taper: ${g.exact.toFixed(2)}) over ${g.points} points`);
   } else if (process.argv.includes("--walls")) {
     for (const l of wallGaps()) console.log(l);
     console.log(`ISLAND_NOSE ${ISLAND_NOSE}`);
-  } else console.log("Usage: npx tsx tools/debug/split-tune.ts --race | --mounds | --walls");
+  } else console.log("Usage: npx tsx tools/debug/split-tune.ts --race | --mounds | --walls | --drawn");
 }
