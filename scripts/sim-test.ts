@@ -11747,8 +11747,8 @@ function splitWalls(): void {
   const gaps = splitTune.drawnGaps();
   check(
     "split walls: on the test tracks halfOf / wallOf are the walls the bake draws (each segment's widening at its ends, linear along it; halfL / halfR / wallL / wallR the per-sample values), and round every widen the bake's own rule puts the wall and the kerb where the physics does (<= 0.01; the exact taper was further off)",
-    // THEME-SCHEMA: one per widen of the test tracks (5 before the theme yards, whose splits add one each).
-    off === 0 && arr === 0 && m > 2000 && gaps.length === TEST_TRACKS.reduce((k, d) => k + testTrack(d.id)!.widens.length, 0) && gaps.length >= 5 && gaps.every((g) => g.now <= 0.01 && g.points > 4000) && Math.max(...gaps.map((g) => g.exact)) > 2,
+    // THEME-SCHEMA: one per widen of the test tracks: 5 before the theme yards, whose splits add one each.
+    off === 0 && arr === 0 && m > 2000 && gaps.length === 5 + THEME_YARDS.length && gaps.every((g) => g.now <= 0.01 && g.points > 4000) && Math.max(...gaps.map((g) => g.exact)) > 2,
     `${m} queries round the widens, ${off} differ; ${arr} samples differ; drawn vs physics per widen: ${gaps.map((g) => `${g.track} ${g.widen.split(" ")[0]} ${g.now.toFixed(4)} (exact taper ${g.exact.toFixed(2)})`).join(", ")}`,
   );
   // Driven: a car steered into the left wall beside island A (widened 48) stops at the widened wall
