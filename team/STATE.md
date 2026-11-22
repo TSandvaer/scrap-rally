@@ -606,6 +606,10 @@ once PLAN-THEMES is approved. TASTE COPY :3009 = Move Yard: worktree ~/orca/work
 SCRAP_DEV_TRACK=move-yard, node pid 22388, npm pid 22367 (the split copy is stopped).
 TOUCH-6 done: eaf4a31 (R 67; 9720 point directions reach past the dead zone; DRIVE hint 134 px; 861/861 + 128/128 x2; touch-drive
 127/127; report tmp/touch-6/touch6-report.md). Opus reviewer ctx_46accd6d22e2 (tmp/review-touch-6.md). On APPROVE: merge, gate, push popup.
+MOVE gate green on 158a691 (893/893 + 133/133, build ok); ClickUp 123jpnbffz5 ready for qa test. TOUCH-6 review APPROVE (6 mutations
+caught; nits outside its files: style.css:1703 comment, tools/debug/README.md:29 entry). TOUCH-6 MERGED 4282640; gate running. MOVE and
+TOUCH-6 workers released, workspaces m4-move + touch-6 removed. Authors now: M4-TRACKS, BR-SCHEMA (1 slot free; nothing startable until
+PLAN-THEMES is approved or BR-SCHEMA merges). Next: push popup (MOVE + TOUCH-6) after the gate.
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).
