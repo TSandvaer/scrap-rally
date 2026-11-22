@@ -122,9 +122,10 @@ export interface StickParams {
  * R 60 was too sensitive; TOUCH-4: full lock 0.9 R and curve 3, as 0.7 and 1.4 still were). Point
  * mode (TOUCH-5, the default for every touch player since rate mode oversteered on the phone): a dead
  * zone as big as rate mode's gas dead zone, full lock at 35° off (the plan's value), brake or reverse
- * past 110° off. Back to rate mode for everyone: mode "rate" here, nothing else.
+ * past 110° off. Back to rate mode for everyone: mode "rate" here, nothing else. TOUCH-6: R 67, the
+ * user's point-mode tuning on the phone (the push area was too big at 95; the rest unchanged).
  */
-export const STICK_DEFAULTS: Readonly<StickParams> = { mode: "point", radius: 95, steerDead: 0.12, steerLock: 0.9, steerCurve: 3, throttleDead: 0.3, split: 0.5, pointDead: 0.3, aimFull: 35, brakeAngle: 110 };
+export const STICK_DEFAULTS: Readonly<StickParams> = { mode: "point", radius: 67, steerDead: 0.12, steerLock: 0.9, steerCurve: 3, throttleDead: 0.3, split: 0.5, pointDead: 0.3, aimFull: 35, brakeAngle: 110 };
 
 /**
  * Point mode's fixed thresholds (u/s are forward speed, vf; degrees are the heading error). Not on
