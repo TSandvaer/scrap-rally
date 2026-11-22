@@ -628,6 +628,29 @@ DEPLOYED (user): live index-CucohtTX.js (curl), bundle holds radius:67. QA12 liv
 tmp/spec-qa-live-12.md; report tmp/qa12-live-report.md): TOUCH-6 + M4-MOVE regression.
 QA12 live PASS (ctx_b97a15d62f9f, released): stick R 67 at 3 sizes, Crusher Run 3 bots 0 falls, 0 console errors. ClickUp complete:
 TOUCH-6, M4-MOVE.
+BR-SCHEMA done: 221beef (branch data, Branch Yard, 19 rule tests; 930/930 + 133/133 x2; shipped SAME; done text tmp/br-schema-done.md).
+Opus reviewer ctx_d7ef3257a313 (tmp/review-br-schema.md). Cap rule (user popup): idle authors in review do not count. TH-LOOK-1
+123jpnbfgj0 (Fable) in flight: ctx_79748d316f06 (~/orca/workspaces/scrap-rally/th-look-1, :3011; spec tmp/spec-th-look-1.md).
+Active authors: M4-TRACKS, HARD-2, TH-LOOK-1 (BR-SCHEMA idle in review).
+MARSHALS-1 123jpnbfgjb (Fable) on the board: two flag marshals at the start/finish line; starts after TH-LOOK-1 merges (render.ts),
+beside BR-BAKE; asks before touching client/main.ts or game.ts (HARD-2).
+M4-TRACKS done: 4d4e97b (Slag Harbour 19,324 / Breaker's Mile 20,426; Normal laps 51.8-59.0 s, 0 falls; density plain 89.4/90.6 %,
+shortest gaps 1041/1338, mud 330; census fixed: HUD allowance from trackList().length+1; 907/907 + 143/143 x2; report
+tmp/m4-tracks/m4-tracks-report.md). Conflicts with br-schema (sim-test, golden): second to merge resolves. Opus reviewer ctx_ca6629690be1
+(tmp/review-m4-tracks.md). TASTE COPY :3009 = M4-TRACKS 4d4e97b (worktree split-taste, no dev flag; node pid 16214, npm pid 16191);
+the Move Yard copy is stopped. Active authors: HARD-2, TH-LOOK-1 (M4-TRACKS + BR-SCHEMA idle in review). Nothing else startable yet.
+NOSELECT-1 123jpnbfgjj (Opus) in flight: ctx_2980deef1d34 (~/orca/workspaces/scrap-rally/noselect-1, :3013; spec tmp/spec-noselect-1.md;
+index.html, style.css, maybe input.ts). Active authors: HARD-2, TH-LOOK-1, NOSELECT-1.
+BR-SCHEMA review 1 REQUEST_CHANGES (ctx_d7ef3257a313 kept for re-review): branch roads get no self-crossing / close-sections check
+(reproduced). Fix round sent to ctx_d7d9decab927 (tmp/br-schema-review-1-fix.md; + 2 nits). Review notes for BR-PHYS added to its ticket.
+M4-TRACKS taste APPROVED by the user (both tracks; popup-confirmed). Merge on review APPROVE.
+User: merge M4-TRACKS when the review approves (popup; keep the gate). HARD-2 done: 7688eea (mistakes + SCRAP_DEV_BOTS Bot tune panel;
+rate 0 = goldens; falls 0; loss +0.08..+1.25 %, pace 0 lone lap 30.29 s vs Hard 29.22 vs Normal 30.71; 921/921 + 135/135 x2; report
+tmp/hard-2/HARD-2-report.md). Conflicts with m4-tracks + br-schema (appends). Opus reviewer ctx_8f7a8c933e4d (tmp/review-hard-2.md).
+TUNING COPY :3009 = HARD-2 7688eea (worktree split-taste, SCRAP_DEV_BOTS=1; node pid 63109, npm pid 63083); the tracks copy is stopped.
+M4-TRACKS review APPROVE (ctx_ca6629690be1, released; F1 bench.ts quick-look throws on tracks without SPOTS -> sent to TH-LOOK-1, it owns
+bench.ts). M4-TRACKS MERGED c90ee9c; gate running. BR-SCHEMA told to merge main in its fix round (sim-test + golden conflicts). HARD-2:
+after its review, the author merges main and re-runs falls-0 on the new tracks (advisor 9) before the merge.
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
 SND-3 123jpnbfa3a in flight in parallel: ctx_f56ecded07e9 (~/orca/workspaces/scrap-rally/snd3, TSandvaer/snd3, :3007; files audio.ts, index.html, style.css only).

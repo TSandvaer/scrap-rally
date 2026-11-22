@@ -2,6 +2,7 @@
 // track from here and the client builds the same one from the room's trackId, so both sides
 // run the same geometry. Add a track by adding its TrackDef (with an id) to SHIPPED.
 
+import { BREAKERS_MILE, SLAG_HARBOUR } from "./longtracks";
 import { buildTrack, CRUSHER_RUN, OVERPASS_KNOT, RUST_BOWL, type Track, type TrackDef } from "./track";
 
 export interface TrackEntry {
@@ -12,7 +13,8 @@ export interface TrackEntry {
 
 export const DEFAULT_TRACK_ID = "rust-bowl";
 
-const SHIPPED: TrackDef[] = [RUST_BOWL, CRUSHER_RUN, OVERPASS_KNOT];
+// M4-TRACKS: the two long tracks (shared/longtracks.ts) after the first three, so their order and ids stay.
+const SHIPPED: TrackDef[] = [RUST_BOWL, CRUSHER_RUN, OVERPASS_KNOT, SLAG_HARBOUR, BREAKERS_MILE];
 
 function entryOf(def: TrackDef): TrackEntry {
   return { id: def.id, name: def.name, def };
