@@ -25,6 +25,12 @@
 // with hints >= n (on the branch) and on the main road beside it, each query's road, global segment and
 // mainS; pointAt and recoveryAt / recoveryFor along each branch (clamped and past its ends). Bots and rooms
 // do not drive a branch yet (BR-PHYS, BR-BOTS): no botsDirect, room or walls part for these.
+// THEME-SCHEMA (PLAN-THEMES 2.5, ClickUp 123jpnbfgj1): the theme yards (Dune Yard, Block Yard, Canopy Yard)
+// are hashed separately, as `built` and `queries` (as above) and `features`: the track's theme, its theme
+// surfaces as declared (sand, oil, fords) and as felt (themeSurfaces, themeAt per segment), and the M4 lists
+// and buckets beside them (water, dirt, belts, mounds, barrels, the truck, the press, the split), so a later
+// change to a yard shows on its own line. The shipped tracks and Branch Yard are hashed exactly as before (a
+// theme is a def field; the hashes are of built arrays and behaviour).
 // --check prints SAME, DIFF, NEW (a part the golden file does not have yet) or GONE (one it has that is not
 // made any more); DIFF and GONE fail it, NEW does not (record it with --write).
 //
@@ -41,7 +47,8 @@ import { draftsFor } from "../../shared/catchup";
 import { BASE_STATS, collideCars, wallLimit, type CarState } from "../../shared/physics";
 import type { ServerMsg } from "../../shared/protocol";
 import { statsFor } from "../../shared/shop";
-import { BRANCH_YARD } from "../../shared/testtracks";
+import { BRANCH_YARD, THEME_YARDS } from "../../shared/testtracks";
+import { themeOf } from "../../shared/theme";
 import {
   buildTrack,
   gapAt,
@@ -174,6 +181,39 @@ function hashBranches(t: Track): string {
       h.f(p.x, p.y, p.h, p.seg, recoveryAt(r, u), rf.road, rf.s);
     }
     h.f(roadOf(t, r.roadNo).length);
+  }
+  return h.hex();
+}
+
+/**
+ * THEME-SCHEMA: a theme yard's features as buildTrack places them: its theme, the theme surfaces (declared
+ * and felt, per segment), and the M4 lists and per-segment buckets beside them.
+ */
+function hashFeatures(t: Track): string {
+  const h = new Hasher();
+  h.s(themeOf(t.def));
+  for (const x of t.sand) h.f(x.s0, x.s1, x.lat0, x.lat1);
+  h.s("oil");
+  for (const x of t.oil) h.f(x.s0, x.s1, x.lat0, x.lat1);
+  h.s("fords");
+  for (const x of t.fords) h.f(x.s0, x.s1, x.lat0, x.lat1, x.vx);
+  h.s("felt");
+  for (const x of t.themeSurfaces) h.f(x.kind, x.s0, x.s1, x.lat0, x.lat1, x.vx);
+  h.s("m4");
+  for (const x of [...t.water, ...t.dirt]) h.f(x.s0, x.s1, x.lat0, x.lat1);
+  for (const x of t.belts) h.f(x.s0, x.s1, x.lat0, x.lat1, x.vx);
+  for (const x of t.surfaces) h.f(x.kind, x.s0, x.s1, x.lat0, x.lat1, x.vx);
+  for (const x of t.tyres) h.f(x.s, x.lat, x.r, x.x, x.y, x.seg);
+  for (const x of t.barrels) h.f(x.s, x.n, x.period, x.speed, x.x, x.y, x.h, x.seg, x.lat0, x.lat1, x.roll, ...x.offsets);
+  for (const x of t.trucks) h.f(x.s, x.lat, x.len, x.x0, x.y0, x.x1, x.y1, x.lip, x.band0, x.band1);
+  for (const x of t.presses) h.f(x.s, x.lat0, x.lat1, x.period, x.down, x.x, x.y, x.h, x.seg);
+  for (const x of t.widens) h.f(x.s0, x.s1, x.left, x.right);
+  for (const x of t.islands) h.f(x.s0, x.s1, x.lat0, x.lat1, x.outL, x.outR, x.lenL, x.lenR, x.surfL.length, x.surfR.length, ...x.head.flatMap((p) => [p.x, p.y]), ...x.tail.flatMap((p) => [p.x, p.y]));
+  h.f(...t.halfL, ...t.halfR, ...t.wallL, ...t.wallR);
+  for (let i = 0; i < segCount(t); i++) {
+    h.f(i, t.surfAt[i].length, t.surfFrom[i], t.tyresAt[i].length, t.tyresFrom[i], t.islandsAt[i].length, t.islandsFrom[i], t.barrelsAt[i].length, t.pressesAt[i].length, t.trucksAt[i].length);
+    h.f(t.themeAt[i].length);
+    for (const x of t.themeAt[i]) h.f(x.kind, x.s0, x.s1, x.lat0, x.lat1, x.vx);
   }
   return h.hex();
 }
@@ -363,6 +403,15 @@ function run(): { hashes: Hashes; notes: string[]; stable: boolean } {
     stable &&= diff.length === 0;
     hashes[def.id] = Object.fromEntries(Object.entries(parts).map(([k, v]) => [k, v[0]]));
     notes.push(`${def.id}: ${t1.branches.length} branch(es); rerun ${diff.length === 0 ? "identical" : `DIFFERS (${diff.join(", ")})`}`);
+  }
+  // THEME-SCHEMA: the theme yards, each on its own lines.
+  for (const def of THEME_YARDS) {
+    const t1 = buildTrack(def), t2 = buildTrack(def);
+    const parts: Record<string, string[]> = { built: [hashBuilt(t1), hashBuilt(t2)], queries: [hashQueries(t1), hashQueries(t2)], features: [hashFeatures(t1), hashFeatures(t2)] };
+    const diff = Object.keys(parts).filter((k) => parts[k][0] !== parts[k][1]);
+    stable &&= diff.length === 0;
+    hashes[def.id] = Object.fromEntries(Object.entries(parts).map(([k, v]) => [k, v[0]]));
+    notes.push(`${def.id}: theme ${themeOf(t1.def)}, ${t1.sand.length} sand, ${t1.oil.length} oil, ${t1.fords.length} ford(s); rerun ${diff.length === 0 ? "identical" : `DIFFERS (${diff.join(", ")})`}`);
   }
   return { hashes, notes, stable };
 }
