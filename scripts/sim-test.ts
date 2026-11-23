@@ -14644,17 +14644,17 @@ function thTypes(): void {
   thClock.t0 = performance.now();
   // Criterion 1: shared/theme.ts, the field, buildTrack ignores it, validateTrack refuses an unknown one.
   const named = thTheme.THEMES.join(",");
-  const guard = [thTheme.isTheme("desert"), thTheme.isTheme("city"), thTheme.isTheme("jungle"), thTheme.isTheme("scrapyard"), thTheme.isTheme("beach"), thTheme.isTheme(undefined), thTheme.isTheme(3)];
+  const guard = [thTheme.isTheme("desert"), thTheme.isTheme("city"), thTheme.isTheme("jungle"), thTheme.isTheme("scrapyard"), thTheme.isTheme("harbour"), thTheme.isTheme("beach"), thTheme.isTheme(undefined), thTheme.isTheme(3)];
   check(
-    "theme types: THEMES is scrapyard, desert, city, jungle; isTheme knows exactly those; themeOf(def) is def.theme or the scrapyard",
-    named === "scrapyard,desert,city,jungle" && guard.join() === "true,true,true,true,false,false,false" &&
+    "theme types: THEMES is scrapyard, desert, city, jungle, harbour (HARBOUR-SCHEMA); isTheme knows exactly those; themeOf(def) is def.theme or the scrapyard",
+    named === "scrapyard,desert,city,jungle,harbour" && guard.join() === "true,true,true,true,true,false,false,false" &&
       thTheme.themeOf({}) === "scrapyard" && thTheme.themeOf({ theme: "city" }) === "city" && thTheme.themeOf(TH_RUST_BOWL) === "scrapyard",
     `${named}; isTheme ${guard.join(",")}`,
   );
   const originals = [TH_RUST_BOWL, TH_CRUSHER_RUN, TH_OVERPASS_KNOT];
   check(
-    "theme types: the three original tracks have no theme field (the scrapyard); Breaker's Mile is desert (shared/longtracks.ts, the field only) and Slag Harbour theme-less, the scrapyard (user, 2026-11-22: its own harbour theme comes with a later ticket); the registry serves those defs",
-    originals.every((d) => !("theme" in d) && thTheme.themeOf(d) === "scrapyard") && TH_BREAKERS_MILE.theme === "desert" && !("theme" in TH_SLAG_HARBOUR) && thTheme.themeOf(TH_SLAG_HARBOUR) === "scrapyard" &&
+    "theme types: the three original tracks have no theme field (the scrapyard); Breaker's Mile is desert and Slag Harbour harbour (shared/longtracks.ts, the field only; HARBOUR-SCHEMA, PLAN-THEMES Amendment 1); the registry serves those defs",
+    originals.every((d) => !("theme" in d) && thTheme.themeOf(d) === "scrapyard") && TH_BREAKERS_MILE.theme === "desert" && TH_SLAG_HARBOUR.theme === "harbour" && thTheme.themeOf(TH_SLAG_HARBOUR) === "harbour" &&
       trackById("breakers-mile").def === TH_BREAKERS_MILE && trackById("slag-harbour").def === TH_SLAG_HARBOUR && trackById("rust-bowl").def === TH_RUST_BOWL,
     trackList().map((e) => `${e.id}: ${thTheme.themeOf(e.def)}`).join(", "),
   );
@@ -14790,7 +14790,7 @@ function thRules(): void {
   ok("sand on a desert track, oil on a city track, a ford on a jungle track", [thErrs("desert", [sandA]), thErrs("city", [oilA]), thErrs("jungle", [fordA])].join(""));
   // Gating (advisor change 10): each kind only on its own theme's tracks.
   rule("sand on a track that is not desert (a scrapyard one) is refused", thErrs(undefined, [sandA]), "sand 800.0..1100.0: sand lies only on a desert track (this one is scrapyard)");
-  rule("oil on a track that is not city (a desert one) is refused", thErrs("desert", [oilA]), "oil 800.0..980.0: oil lies only on a city track (this one is desert)");
+  rule("oil on a track that is not city or harbour (a desert one) is refused", thErrs("desert", [oilA]), "oil 800.0..980.0: oil lies only on a city or harbour track (this one is desert)");
   rule("a ford on a track that is not jungle (a city one) is refused", thErrs("city", [fordA]), "ford 800.0..940.0: ford lies only on a jungle track (this one is city)");
   const [a] = TH_BRANCH_YARD.features!.filter((f): f is thT.Branch => f.k === "branch");
   rule("sand on a branch road of a track that is not desert (Branch Yard, the scrapyard) is refused",
@@ -14881,6 +14881,7 @@ function thYards(): void {
   const draft = thDraftTop(430), boost = thBoostTop(430);
   const want: Record<string, { theme: thTheme.Theme; list: "sand" | "oil" | "fords" }> = {
     "dune-yard": { theme: "desert", list: "sand" }, "block-yard": { theme: "city", list: "oil" }, "canopy-yard": { theme: "jungle", list: "fords" },
+    "quay-yard": { theme: "harbour", list: "oil" }, // HARBOUR-SCHEMA
   };
   const order = ["surface", "truck", "tyres,tyres", "water", "barrels", "press", "surface", "widen,island,dirt"];
   for (const def of THEME_YARDS) {
@@ -14948,7 +14949,7 @@ function thShipped(): void {
   const branch = ["built", "queries", "branches"].map((p) => `SAME  branch-yard ${p}`);
   const yards = THEME_YARDS.flatMap((d) => ["built", "queries", "features"].map((p) => `${d.id} ${p}`));
   check(
-    "theme shipped: schema-hash --check: every part of the five shipped tracks (Breaker's Mile desert now, Slag Harbour theme-less until its harbour theme) and of Branch Yard SAME; the three yards hashed on lines of their own (built, queries, features), none DIFF or GONE",
+    "theme shipped: schema-hash --check: every part of the five shipped tracks (Breaker's Mile desert, Slag Harbour harbour: a theme is not in a shipped track's hash) and of Branch Yard SAME; the theme yards hashed on lines of their own (built, queries, features), none DIFF or GONE",
     ok && [...shipped, ...branch].every((l) => lines.includes(l)) && yards.every((y) => lines.some((l) => l.endsWith(` ${y}`) && (l.startsWith("SAME") || l.startsWith("NEW ")))) && !lines.some((l) => /^(DIFF|GONE)/.test(l)),
     lines.filter((l) => !l.startsWith("SAME")).join("; ") || `${lines.length} parts SAME`,
   );
@@ -16437,7 +16438,7 @@ function tsRules(): void {
     }
   }
   check(
-    "theme surf run-ups: for every type at L0 and L3 the three yards pass validateRunUps and validateJumpSweep (at 537 u/s) with the surfaces acting; the sand run-up above is caught for the Sport and the Racer, and the Truck (least bogged: 323 u/s on sand) clears it",
+    "theme surf run-ups: for every type at L0 and L3 the theme yards (Quay Yard too: HARBOUR-SCHEMA) pass validateRunUps and validateJumpSweep (at 537 u/s) with the surfaces acting; the sand run-up above is caught for the Sport and the Racer, and the Truck (least bogged: 323 u/s on sand) clears it",
     all,
     per.join("; "),
   );
@@ -16489,8 +16490,8 @@ function tsBots(): void {
   console.log(`  ${races.map(tsTune.raceLine).join("\n  ")}`);
   const bad = races.filter((r) => !(r.a.phase === "results" && r.a.finished === 3 && r.a.falls.every((f) => f <= 1) && r.same));
   check(
-    `theme surf bots: 3 server bots per level (Easy, Normal, Hard) and car type (Sport, Racer, Truck) finish each theme yard (Dune, Block, Canopy) 3 laps, identically on a rerun, at most 1 fall per bot per race (${races.length} races)`,
-    races.length === 27 && bad.length === 0,
+    `theme surf bots: 3 server bots per level (Easy, Normal, Hard) and car type (Sport, Racer, Truck) finish each theme yard (Dune, Block, Canopy, Quay: HARBOUR-SCHEMA) 3 laps, identically on a rerun, at most 1 fall per bot per race (${races.length} races)`,
+    races.length === 9 * TS_YARDS.length && TS_YARDS.length === 4 && bad.length === 0,
     bad.map(tsTune.raceLine).join(" | ") || `${races.length} races, falls ${races.reduce((n, r) => n + r.a.falls.reduce((x, y) => x + y, 0), 0)} in all`,
   );
 }
@@ -16724,6 +16725,119 @@ function btRaces(): void {
 }
 
 for (const t of [btShape, btRecovery, btGain, btFall, btPlans, btDensity, btRaces]) {
+  console.log(`\n# ${t.name}`);
+  try {
+    t();
+  } catch (e) {
+    check(`${t.name} threw`, false, String((e as Error).stack ?? e));
+  }
+}
+
+// ---- the harbour theme as data (HARBOUR-SCHEMA, PLAN-THEMES.md Amendment 1, A1.1 and A1.3; ClickUp 123jpnbfgzv, 2026-11-23) ----
+// This section's imports (hoisted like the ones at the top).
+import * as hsT from "../shared/track";
+import * as hsTheme from "../shared/theme";
+import { BLOCK_YARD as HS_BLOCK_YARD, QUAY_YARD as HS_QUAY_YARD, TEST_TRACKS as HS_TEST_TRACKS, THEME_LOOP as HS_LOOP, THEME_YARDS as HS_YARDS, testTrack as hsTestTrack } from "../shared/testtracks";
+import { SLAG_HARBOUR as HS_SLAG_HARBOUR } from "../shared/longtracks";
+import { trackById as hsTrackById } from "../shared/tracks";
+import { sceneryFor as hsSceneryFor, sceneryOf as hsSceneryOf } from "../client/gfx/theme";
+
+const hsClock = { t0: 0 };
+/** THEME_LOOP with this theme (undefined = none: the scrapyard) and these features: validateTrack's errors, joined. */
+const hsErrs = (theme: hsTheme.Theme | undefined, features: Feature[]) =>
+  validateTrack(buildTrack({ id: "harbour-test", name: "Harbour Test", ...(theme ? { theme } : {}), control: HS_LOOP, halfWidth: 64, verge: 44, features, recovery: [0] })).join(" | ");
+
+function hsTypes(): void {
+  hsClock.t0 = performance.now();
+  // Criterion 1: "harbour" joins THEMES (last); isTheme and themeOf answer as before for every existing value.
+  const before: [unknown, boolean][] = [["scrapyard", true], ["desert", true], ["city", true], ["jungle", true], ["beach", false], ["Harbour", false], ["", false], [undefined, false], [null, false], [3, false]];
+  const same = before.every(([v, want]) => hsTheme.isTheme(v) === want);
+  const of = [hsTheme.themeOf({}), hsTheme.themeOf({ theme: undefined }), ...(["scrapyard", "desert", "city", "jungle", "harbour"] as const).map((th) => hsTheme.themeOf({ theme: th }))];
+  check(
+    "harbour types: THEMES is scrapyard, desert, city, jungle, harbour; isTheme(\"harbour\") is true and every value it knew before answers as before; themeOf is def.theme or the scrapyard (harbour too)",
+    hsTheme.THEMES.join() === "scrapyard,desert,city,jungle,harbour" && hsTheme.isTheme("harbour") && same && of.join() === "scrapyard,scrapyard,scrapyard,desert,city,jungle,harbour",
+    `THEMES ${hsTheme.THEMES.join(",")}; themeOf ${of.join(",")}`,
+  );
+}
+
+function hsRules(): void {
+  // Criterion 2: oil on city AND harbour tracks; sand and a ford keep one theme each. The whole table (every
+  // kind on every theme's track, on the theme yards' top straight), then one failing def per changed rule.
+  const sandA: Feature = { k: "sand", s0: 800, s1: 1100, lat0: -64, lat1: 64 };
+  const oilA: Feature = { k: "oil", s0: 800, s1: 980, lat0: -64, lat1: 64 };
+  const fordA: Feature = { k: "ford", s0: 800, s1: 940, lat0: -64, lat1: 64, vx: 60 };
+  const allowed: Record<string, readonly string[]> = { sand: ["desert"], oil: ["city", "harbour"], ford: ["jungle"] };
+  const table: string[] = [];
+  let tableOk = JSON.stringify(hsT.THEME_OF_SURFACE) === JSON.stringify(allowed);
+  for (const [kind, f] of [["sand", sandA], ["oil", oilA], ["ford", fordA]] as const) {
+    for (const th of hsTheme.THEMES) {
+      const errs = hsErrs(th === "scrapyard" ? undefined : th, [f]);
+      const valid = errs === "";
+      tableOk &&= valid === allowed[kind].includes(th) && (valid || errs.includes(`${kind} lies only on a ${allowed[kind].join(" or ")} track (this one is ${th})`));
+      table.push(`${kind} on ${th} ${valid ? "valid" : "refused"}`);
+    }
+  }
+  check("harbour rule: THEME_OF_SURFACE is sand desert, oil city or harbour, ford jungle; each kind on each theme's track is valid exactly there (15 defs), refused with the gate's text elsewhere", tableOk, table.join(", "));
+  const rule = (name: string, bad: string, want: string) => check(`harbour rule: ${name}`, bad.includes(want), bad.slice(0, 600) || "valid");
+  // The changed rule, allowed: oil on a harbour track (Block Yard's slicks and Quay Yard's), and still on a city one.
+  const quay = HS_QUAY_YARD.features!.filter((f) => f.k === "oil"), block = HS_BLOCK_YARD.features!.filter((f) => f.k === "oil");
+  const okH = [hsErrs("harbour", block), hsErrs("harbour", quay), hsErrs("city", quay)];
+  check("harbour rule (allowed): oil on a harbour track (Block Yard's two slicks, and Quay Yard's), and Quay Yard's on a city track", okH.every((e) => e === ""), okH.map((e) => e || "valid").join(" / ").slice(0, 600));
+  // ... and refused where it was refused before: a desert, a jungle and a scrapyard (theme-less) track.
+  rule("oil on a desert track is still refused", hsErrs("desert", [oilA]), "oil 800.0..980.0: oil lies only on a city or harbour track (this one is desert)");
+  rule("oil on a jungle track is still refused", hsErrs("jungle", [oilA]), "oil 800.0..980.0: oil lies only on a city or harbour track (this one is jungle)");
+  rule("oil on a scrapyard (theme-less) track is still refused", hsErrs(undefined, [oilA]), "oil 800.0..980.0: oil lies only on a city or harbour track (this one is scrapyard)");
+  // Sand and a ford keep one theme: neither lies on a harbour track.
+  rule("sand on a harbour track is refused", hsErrs("harbour", [sandA]), "sand 800.0..1100.0: sand lies only on a desert track (this one is harbour)");
+  rule("a ford on a harbour track is refused", hsErrs("harbour", [fordA]), "ford 800.0..940.0: ford lies only on a jungle track (this one is harbour)");
+}
+
+function hsSlag(): void {
+  // Criterion 4: Slag Harbour is a harbour track (the def field only); buildTrack ignores it; it validates.
+  const t = hsTrackById("slag-harbour");
+  const bare = { ...HS_SLAG_HARBOUR };
+  delete bare.theme;
+  const plain = (x: Track) => JSON.stringify(x, (k, v) => (k === "def" ? undefined : v === Infinity ? "Inf" : v));
+  check(
+    "harbour Slag Harbour: its theme is \"harbour\" (shared/longtracks.ts; the registry serves that def); built with it it equals the build without (the def aside); it validates; it carries no theme surface yet (THEME-TRACKS adds its oil)",
+    HS_SLAG_HARBOUR.theme === "harbour" && hsTheme.themeOf(t.def) === "harbour" && t.def === HS_SLAG_HARBOUR && plain(t) === plain(buildTrack(bare)) && validateTrack(t).length === 0 &&
+      t.sand.length + t.oil.length + t.fords.length === 0,
+    `theme ${t.def.theme}; ${validateTrack(t).join(" | ") || "valid"}`,
+  );
+  // Criterion 6 (Node side): the client's renderer takes a track's scenery from sceneryFor (client/render.ts); harbour has no art in
+  // LANDED, so Slag Harbour and Quay Yard get the scrapyard's very scenery (tools/debug/theme-sheet.ts --hash: their pixels).
+  const quay = hsTestTrack("quay-yard")!;
+  const scrap = hsSceneryOf("scrapyard");
+  check(
+    "harbour looks: the client draws Slag Harbour and Quay Yard as the scrapyard (sceneryFor gives the scrapyard's scenery: harbour's art has not landed, TH-LOOK-H)",
+    hsSceneryFor(t) === scrap && hsSceneryFor(quay) === scrap && scrap.theme === "scrapyard",
+    `Slag Harbour ${hsSceneryFor(t).theme}, Quay Yard ${hsSceneryFor(quay).theme}`,
+  );
+}
+
+function hsQuay(): void {
+  // Criterion 3: Quay Yard, the harbour's theme yard: themeYard's loop and obstacles (Block Yard's but for the oil), its two
+  // slicks placed differently from Block Yard's, each <= OIL_LEN_MAX and on a straight; in THEME_YARDS (so thYards checks its
+  // groups, run-ups and jump sweeps for every type at L0/L3 and SCRAP_DEV_TRACK=quay-yard; tsBots and tsCpu race it).
+  const t = hsTestTrack("quay-yard")!;
+  const key = (f: { s0: number; s1: number; lat0: number; lat1: number }) => `${f.s0}..${f.s1}/${f.lat0}..${f.lat1}`;
+  const blockOil = hsTestTrack("block-yard")!.oil.map(key);
+  const rows = t.oil.map((f) => {
+    const turn = Math.abs(angleDiff(pointAt(t, f.s0).h, pointAt(t, f.s1).h)); // wrapped: a heading near +-pi cannot fail it
+    return { f, turn, ok: f.s1 - f.s0 <= hsT.OIL_LEN_MAX && turn < hsT.POOL_STRAIGHT_TOLERANCE && !blockOil.includes(key(f)) };
+  });
+  const noOil = (d: typeof HS_QUAY_YARD) => JSON.stringify(d.features!.filter((f) => f.k !== "oil"));
+  const errs = validateTrack(t);
+  check(
+    "harbour Quay Yard: a harbour theme yard (themeYard: THEME_LOOP, Block Yard's obstacles but for the oil), in THEME_YARDS and TEST_TRACKS; two oil slicks, neither placed as one of Block Yard's, each <= 200 and on a straight; validateTrack passes",
+    HS_QUAY_YARD.id === "quay-yard" && HS_QUAY_YARD.name === "Quay Yard" && hsTheme.themeOf(t.def) === "harbour" && HS_QUAY_YARD.control === HS_LOOP && noOil(HS_QUAY_YARD) === noOil(HS_BLOCK_YARD) &&
+      HS_YARDS.includes(HS_QUAY_YARD) && HS_YARDS.length === 4 && HS_TEST_TRACKS.includes(HS_QUAY_YARD) && t.oil.length === 2 && t.sand.length + t.fords.length === 0 && rows.every((r) => r.ok) && errs.length === 0,
+    `oil ${rows.map((r) => `${key(r.f)} (${r.f.s1 - r.f.s0} long, the road turns ${r.turn.toFixed(4)} rad)`).join(", ")}; Block Yard's ${blockOil.join(", ")}; ${errs.join(" | ") || "valid"}`,
+  );
+  console.log(`  HARBOUR-SCHEMA sim-test sections' runtime (hsTypes .. hsQuay): ${((performance.now() - hsClock.t0) / 1000).toFixed(1)} s`);
+}
+
+for (const t of [hsTypes, hsRules, hsSlag, hsQuay]) {
   console.log(`\n# ${t.name}`);
   try {
     t();

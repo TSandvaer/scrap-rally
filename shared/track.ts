@@ -62,7 +62,8 @@ export interface Belt { k: "belt"; s0: number; s1: number; lat0: number; lat1: n
 
 // ---- theme surfaces (THEME-SCHEMA, PLAN-THEMES.md 2.3, advisor changes 6, 7, 10) ----------------
 // One per theme, each only on its own theme's tracks (validateTrack): sand on a desert track, oil
-// on a city one, a ford on a jungle one. Shaped like water and dirt: a rectangle s0..s1 by lat0..lat1
+// on a city or a harbour one (HARBOUR-SCHEMA, PLAN-THEMES.md Amendment 1: the harbour has no surface of
+// its own), a ford on a jungle one. Shaped like water and dirt: a rectangle s0..s1 by lat0..lat1
 // in track coordinates, inside the asphalt; the declared rectangle is what is drawn (the bounds the
 // puddle is painted in, as water's: TH-LOOK-2, TH-LOOK-3) and a car feels it inside tractionRect.
 // buildTrack places them in their own lists (Track.sand, oil, fords, Track.themeSurfaces / themeAt:
@@ -73,7 +74,7 @@ export interface Belt { k: "belt"; s0: number; s1: number; lat0: number; lat1: n
 /** Sand (desert): "bogs you, keeps your line" (THEME-SURF). At most SAND_LEN_MAX long, and with the dirt it runs into (LOOSE_JOIN) too. */
 export interface Sand { k: "sand"; s0: number; s1: number; lat0: number; lat1: number }
 
-/** An oil slick (city): "steering goes, brakes stay" (THEME-SURF). At most OIL_LEN_MAX long; a dry lane beside it, or on a straight (water's rule). */
+/** An oil slick (city, and harbour: HARBOUR-SCHEMA): "steering goes, brakes stay" (THEME-SURF). At most OIL_LEN_MAX long; a dry lane beside it, or on a straight (water's rule). */
 export interface Oil { k: "oil"; s0: number; s1: number; lat0: number; lat1: number }
 
 /**
@@ -657,8 +658,12 @@ export const FORD_VX_MIN = 20;
 export const FORD_VX_MAX = 100;
 /** No solid lies within this far past a ford (along the track, edge to edge, across the whole road), nor beside it: the drift carries a car out of it sideways. */
 export const FORD_CLEAR = 80;
-/** Which theme each theme surface belongs to (validateTrack's gating, advisor change 10). */
-export const THEME_OF_SURFACE: Readonly<Record<"sand" | "oil" | "ford", Theme>> = { sand: "desert", oil: "city", ford: "jungle" };
+/**
+ * The themes whose tracks may carry each theme surface (validateTrack's gating, advisor change 10):
+ * sand and a ford one theme each; oil a city or a harbour track (HARBOUR-SCHEMA, PLAN-THEMES.md
+ * Amendment 1, amending user decision 3).
+ */
+export const THEME_OF_SURFACE: Readonly<Record<"sand" | "oil" | "ford", readonly Theme[]>> = { sand: ["desert"], oil: ["city", "harbour"], ford: ["jungle"] };
 
 // ---- the traction area of a puddle (M4-WORLD; moved here from client/gfx/puddle-shape.ts by M4-SURF, unchanged) ----
 // User decisions 2026-11-21: "dirt and water puddles should not be square, it should read as a
@@ -1956,7 +1961,7 @@ function sideGap(track: Track, s0: number, s1: number, lat0: number, lat1: numbe
  * - A pool leaves a dry lane of at least DRY_LANE_MIN at every s it covers, or lies on a straight
  *   (the road turns less than POOL_STRAIGHT_TOLERANCE over it).
  * - THEME-SCHEMA (PLAN-THEMES 2.3, advisor changes 6 and 10), the theme surfaces: each only on its own
- *   theme's tracks (sand desert, oil city, ford jungle; themeOf, a branch's road its track's); inside
+ *   theme's tracks (sand desert, oil city or harbour, ford jungle; themeOf, a branch's road its track's); inside
  *   the asphalt (the declared rectangle, at every sample: the verge rule); one surface at a time with
  *   the others; water's rules (off take-off zones and recovery points); sand <= SAND_LEN_MAX, and so is
  *   a stretch of sand and dirt less than LOOSE_JOIN apart; oil <= OIL_LEN_MAX with water's dry-lane-or-
@@ -2001,8 +2006,9 @@ function validateSchema(track: Track, errors: string[], zone: (what: string, lo:
     surfaces.push(rect(what, b));
   }
   // THEME-SCHEMA (PLAN-THEMES 2.3, advisor changes 6 and 10): the theme surfaces. Each only on its own
-  // theme's tracks (themeOf: a branch's road carries its track's theme; the theme-less yards and the
-  // shipped tracks are the scrapyard, which has none). The verge rule (advisor change 6): the declared
+  // theme's tracks, oil on a city or a harbour one (THEME_OF_SURFACE; HARBOUR-SCHEMA, Amendment 1) (themeOf:
+  // a branch's road carries its track's theme; the theme-less yards and the shipped tracks are the
+  // scrapyard, which has none). The verge rule (advisor change 6): the declared
   // rectangle lies inside the asphalt at every sample, so a car only ever feels one on the asphalt (its
   // traction rectangle is PUDDLE_TRACTION_INSET further in) and it never stacks with the verge's dirt
   // drag. One surface at a time with water, dirt and belts (the overlap check below). Their lengths
@@ -2010,7 +2016,7 @@ function validateSchema(track: Track, errors: string[], zone: (what: string, lo:
   const theme = themeOf(track.def);
   const themed = (kind: keyof typeof THEME_OF_SURFACE, what: string, f: Sand | Oil | Ford) => {
     const want = THEME_OF_SURFACE[kind];
-    if (theme !== want) errors.push(`${what}: ${kind} lies only on a ${want} track (this one is ${theme})`);
+    if (!want.includes(theme)) errors.push(`${what}: ${kind} lies only on a ${want.join(" or ")} track (this one is ${theme})`);
     for (const s of samplesIn(track, f.s0, f.s1)) {
       if (f.lat0 < -halfAt(track, s, -1) || f.lat1 > halfAt(track, s, 1)) {
         errors.push(`${what}: reaches past the asphalt at s=${f1(s)} (a theme surface lies inside the asphalt, lat ${f1(-halfAt(track, s, -1))}..${f1(halfAt(track, s, 1))} there)`);
