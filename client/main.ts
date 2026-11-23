@@ -405,7 +405,10 @@ function updatePanels(): void {
   ui.lobby.classList.toggle("hidden", !garage);
   ui.results.classList.toggle("hidden", !inRoom || game.phase !== "results" || !game.results);
   chat.setMode(!inRoom ? "off" : garage ? "docked" : "overlay", debug);
-  if (!inRoom) return;
+  if (!inRoom) {
+    hideLinkToast(); // out of the room (Leave, or the connection lost): its invite link is stale
+    return;
+  }
 
   ui.lobbyCode.textContent = game.code;
   const hostLobby = game.isHost() && game.phase === "lobby";
@@ -656,8 +659,8 @@ function swatch(color: string): HTMLSpanElement {
  * A short message at the top of the stage, gone after 2.6 s. `selectable` is for the one toast the
  * player copies from by hand, copyInvite's fallback link (NOSELECT-2): its text can be selected and
  * long-pressed (client/style.css .toast.selectable; index.html's context-menu guard lets its menu
- * through), it comes up already selected, and it stays until a tap or click outside it, the next
- * toast, or 30 s.
+ * through), it comes up already selected, and it stays until a tap or click outside it, Esc,
+ * leaving the room (updatePanels), the next toast, or 30 s.
  */
 function toast(text: string, opts: { selectable?: boolean } = {}): void {
   const selectable = opts.selectable === true;
@@ -677,11 +680,24 @@ function hideToast(): void {
   ui.toast.classList.remove("selectable");
 }
 
-// The link toast goes on a tap or click anywhere else (capture: before any handler can stop it).
+/** Put the invite-link toast away; a plain toast keeps its own 2.6 s. */
+function hideLinkToast(): void {
+  if (ui.toast.classList.contains("selectable")) hideToast();
+}
+
+// The link toast goes on a tap or click anywhere else, and on Esc, whatever else Esc closes or
+// opens (capture: before any handler can stop either).
 document.addEventListener(
   "pointerdown",
   (e) => {
-    if (ui.toast.classList.contains("selectable") && !ui.toast.contains(e.target as Node)) hideToast();
+    if (!ui.toast.contains(e.target as Node)) hideLinkToast();
+  },
+  true,
+);
+window.addEventListener(
+  "keydown",
+  (e) => {
+    if (e.key === "Escape" && !e.isComposing) hideLinkToast();
   },
   true,
 );
