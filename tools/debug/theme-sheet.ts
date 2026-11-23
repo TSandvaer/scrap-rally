@@ -225,14 +225,14 @@ if (args.includes("--hash")) {
 
 // ---- the themes' own code ----------------------------------------------------------------------
 
-const { bakeTileIndices, bakeTileKinds, bakeTileMarked, clearMarks, KIND, MARK, scorch, skid, TILE, VIEW_H, VIEW_W, World, ZOOM } = await import("../../client/gfx/world");
+const { artLayout, bakeTileIndices, bakeTileKinds, bakeTileMarked, clearMarks, KIND, MARK, scorch, skid, TILE, VIEW_H, VIEW_W, World, ZOOM } = await import("../../client/gfx/world");
 const { BARREL, obstacleIndexSheet, ROLL } = await import("../../client/gfx/obstacles");
 const { CAR_COLORS, FIXED, LIT, P, PALETTE, rgbOf, SCRAPYARD, SHADE } = await import("../../client/gfx/palette");
 const { FX_SHADOW, OBST_W } = await import("../../client/gfx/sprites");
 const { FONT_LETTERS, SMALL } = await import("../../client/gfx/font");
 const { COLOURS, hasArt, isTheme, KEEP_OFF, sceneryFor, sceneryOf, themedTrack, themeOf, THEMES } = await import("../../client/gfx/theme");
 const { testTrack } = await import("../../shared/testtracks");
-const { pointAt } = await import("../../shared/track");
+const { pointAt, queryTrack } = await import("../../shared/track");
 const { trackById } = await import("../../shared/tracks");
 const { sheetYard } = await import("./world-sheet/yard");
 type Track = import("../../shared/track").Track;
@@ -352,6 +352,16 @@ function skidAt(track: Track, x: number, y: number, h: number, len: number): voi
 function propSpots(track: Track, want: number): { x: number; y: number }[] {
   const out: { x: number; y: number }[] = [];
   const sc = sceneryFor(track);
+  if (sc.theme === "city") {
+    // A town's roofs are props too (the same kind of pixel): its heaps by the art's own list, a heap being the pieces within 50 pixels of its first.
+    const heaps: { x: number; y: number; n: number }[] = [];
+    for (const j of artLayout(track).junk) {
+      const h = heaps.find((o) => Math.hypot(o.x - j.x, o.y - j.y) < 50);
+      if (h) h.n++;
+      else heaps.push({ x: j.x, y: j.y, n: 1 });
+    }
+    return heaps.filter((h) => h.n >= 3).slice(0, want).map((h) => ({ x: h.x / ZOOM, y: h.y / ZOOM }));
+  }
   for (let s = 0; s < track.length && out.length < want; s += 60) {
     for (const side of [-1, 1]) {
       const p = at(track, s, side * (track.wall + 110));
@@ -379,32 +389,42 @@ function propSpots(track: Track, want: number): { x: number; y: number }[] {
   return out;
 }
 
+interface Section {
+  title: string;
+  note: string;
+  shots: Shot[];
+}
+
+const shot = (label: string, track: Track, s: number, lat: number, w: number, h: number, zoom = 2, marks?: Shot["marks"]): Shot => ({ label, track, ...at(track, s, lat), w, h, zoom, marks });
+
+/** The yard a theme has of its own (shared/testtracks.ts THEME_YARDS), in its own theme. */
+const YARD_OF: Partial<Record<Theme, string>> = { desert: "dune-yard", city: "block-yard" };
+
 function sheet(theme: Theme): Picture {
   const sc = sceneryOf(theme);
   const crusher = themedTrack(trackById("crusher-run"), theme), knot = themedTrack(trackById("overpass-knot"), theme);
   const yard = themedTrack(sheetYard(), theme), preview = themedTrack(testTrack("preview-yard")!, theme), rust = themedTrack(trackById("rust-bowl"), theme);
-  const shot = (label: string, track: Track, s: number, lat: number, w: number, h: number, zoom = 2, marks?: Shot["marks"]): Shot => ({ label, track, ...at(track, s, lat), w, h, zoom, marks });
   const gap = crusher.gaps.find((g) => !g.scrap)!, scrap = crusher.gaps.find((g) => g.scrap)!, hole = knot.holes[0];
-  const props = propSpots(rust, 6);
-  const sections: { title: string; note: string; shots: Shot[] }[] = [
+  const props = propSpots(rust, theme === "city" ? 9 : 6);
+  const sections: Section[] = [
     {
       title: "THE ROAD'S BANDS",
-      note: "ground, drift, barrier (blocks, a post every 60 units), verge, kerb, tarmac with its centre line; a straight at 4x, the start line, a bend and a tight bend at 2x",
+      note: "ground, barrier (desert: sandstone blocks; city: concrete in lengths, an amber reflector stud where a post stands), verge (city: a sidewalk's slabs), kerb (city: grey and white stones), tarmac with its centre line; a straight at 4x, the start line, a bend and a tight bend at 2x",
       shots: [shot("a straight, 4x", rust, 700, -70, 170, 110, 4), shot("start line and grid", rust, 6, 0, 300, 220), shot("a bend", rust, 2300, 0, 300, 220), shot("a tight bend", yard, 2800, 0, 300, 220)],
     },
     {
       title: "THE GROUND",
-      note: "outside the walls: its plain tone, specks, dune crests and wind ripples (desert), stains and wheel ruts; at 2x and at 1x",
+      note: "outside the walls. scrapyard: packed earth, stains and wheel ruts; desert: sand, dune crests and wind ripples; city: old paving and the roofs of the town (clay tiles, slate, zinc; gabled, hipped, flat with vents), their shadows in the alleys; at 2x and at 1x",
       shots: [shot("ground, 2x", rust, 1200, -420, 330, 220), shot("ground, 2x", crusher, 2000, 400, 330, 220), shot("ground, 1x", rust, 1200, -520, 640, 360, 1)],
     },
     {
       title: "PROPS OUTSIDE THE WALLS",
-      note: "desert: rock outcrops (two stones), dry scrub, round succulents, half-buried car shells; 3x",
+      note: "at the yard's junk sites. desert: rock outcrops (two stones), dry scrub, round succulents, half-buried car shells; city: planter trees, crates, traffic cones, parked cars in wine, moss, petrol and grey (no car's colour); 3x",
       shots: props.map((p, k) => ({ label: `heap ${k + 1}`, track: rust, x: p.x, y: p.y, h: 0, w: 150, zoom: 3, ...{ h: 110 } })),
     },
     {
       title: "GAPS AND PITS",
-      note: "a gap's void (soot, layered rock near the rim in the desert) with its ramp, hazard ends and broken edge; a gap filled with scrap (desert: boulders); a pit",
+      note: "a gap's void (soot; desert: layered rock near the rim; city: a concrete coping and a street below, all of it soot) with its ramp, hazard ends and broken edge; a gap filled with scrap (desert: boulders; city: rubble and crates); a pit",
       shots: [
         shot("chasm: ramp, void, far end", crusher, (gap.s0 + gap.s1) / 2 - 40, 0, 400, 300),
         shot("the void's rim, 4x", crusher, gap.s0 + 14, crusher.wall - 30, 150, 110, 4),
@@ -414,7 +434,7 @@ function sheet(theme: Theme): Picture {
     },
     {
       title: "THE ROAD'S FURNITURE",
-      note: "water (unchanged blue-grey; desert: a rim of dried, cracked mud), a dirt patch (desert: red clay), a belt, the barrels' lane with hatch and gutter, a press's bed, mounds (desert: sandbags), an island with its noses, the ramp truck (desert: a sand hauler)",
+      note: "water (blue-grey in every theme; desert: a rim of dried, cracked mud; city: a rain puddle over its drain grate), a dirt patch (desert: red clay; city: roadworks, taped off), a belt, the barrels' lane with hatch and gutter, a press's bed, mounds (desert: sandbags; city: a strapped tyre bundle), an island with its noses, the ramp truck (desert: a sand hauler; city: a car carrier)",
       shots: [
         shot("pool on tarmac", yard, 1225, -2, 220, 190, 3),
         shot("pool over kerb and verge", yard, 1365, 63, 220, 190, 3),
@@ -460,15 +480,71 @@ function sheet(theme: Theme): Picture {
       ],
     },
   ];
+  // The theme's own yard, as a race shows it (a whole view at 1x): its theme surface twice and every obstacle on the way round.
+  const own = YARD_OF[theme];
+  if (own) {
+    const t = testTrack(own)!;
+    const view = (label: string, s: number, lat = 0): Shot => shot(label, t, s, lat, 640, 360, 1);
+    sections.push({
+      title: `${t.def.name.toUpperCase()}: THE THEME'S OWN YARD`,
+      note: `${t.def.id} (shared/testtracks.ts), whole views at 1x round the lap: its theme surface (${theme === "city" ? "an oil slick" : "sand"}) across the road and on half of it, the truck, the mounds, the pool in the bend, the barrels' lane, the press, the split with its dirt lane`,
+      shots: [view("the start", 0), view("slot A", 950), view("the truck", 1800), view("the mounds", 2790), view("the pool in the bend", 4150), view("the barrels' lane", 5000), view("the press", 6300), view("slot B", 7270), view("the split", 8300), view("the dirt lane", 8700)],
+    });
+  }
+  const sprites = spriteStrip(preview);
+  return compose(`THEME SHEET: ${theme}${hasArt(theme) ? "" : " (NO ART YET: DRAWN AS THE SCRAPYARD)"}`, sc, sections, sprites, sc);
+}
 
+/**
+ * The theme surfaces on paper (TH-LOOK-2): sand as Dune Yard has it and an oil slick as Block
+ * Yard has it, each whole, at its edge, with track marks made across its edge (the surface
+ * takes none, the tarmac beside it does), and beside what it must not be taken for: sand
+ * beside the desert's red clay dirt, oil beside a pool and beside a pit.
+ */
+function surfaces(): Picture {
+  const dune = testTrack("dune-yard")!, block = testTrack("block-yard")!;
+  const knot = themedTrack(trackById("overpass-knot"), "city");
+  const marks = (s: number, lat: number) => (t: Track) => {
+    for (const [ds, dl] of [[-30, -14], [40, 12]]) {
+      const p = at(t, s + ds, lat + dl);
+      scorchAt(t, p.x, p.y);
+    }
+    const q = at(t, s - 70, lat + 30);
+    skidAt(t, q.x, q.y, q.h - 0.22, 150);
+  };
+  const part = (t: Track, what: string, a: { s0: number; s1: number; lat0: number; lat1: number }, b: { s0: number; s1: number; lat0: number; lat1: number }): Shot[] => [
+    shot(`${what} across the road (${a.s1 - a.s0} x ${a.lat1 - a.lat0} units), 2x`, t, (a.s0 + a.s1) / 2, 0, Math.ceil((a.s1 - a.s0) * ZOOM) + 90, 230),
+    shot(`its edge, 4x`, t, a.s0 + 26, -30, 150, 110, 4),
+    shot(`${what} on half the road (${b.s1 - b.s0} x ${b.lat1 - b.lat0} units), 2x`, t, (b.s0 + b.s1) / 2, 0, Math.ceil((b.s1 - b.s0) * ZOOM) + 90, 230),
+    shot("scorches and a tyre mark across its edge, 3x", t, a.s0 + 10, 0, 250, 150, 3, marks(a.s0 + 10, 0)),
+    shot("as a race shows it, 1x", t, (a.s0 + a.s1) / 2, 0, 640, 360, 1),
+  ];
+  const hole = knot.holes[0];
+  const sections: Section[] = [
+    {
+      title: "SAND (DESERT; DUNE YARD)",
+      note: "loose sand on the asphalt, drawn where Track.sand has a patch: a puddle's outline inside the declared rectangle (the traction rectangle is all sand), deeper than the bleached ground so that a rivet shows on it, wind ripples (a light crest over a dark trough), grains blown past its edge; it takes no track marks. Beside it for comparison: the desert's red clay dirt",
+      shots: [...part(dune, "sand", dune.sand[0], dune.sand[1]), shot("for comparison: red clay dirt (the dirt lane), 2x", dune, (dune.dirt[0].s0 + dune.dirt[0].s1) / 2, (dune.dirt[0].lat0 + dune.dirt[0].lat1) / 2, 330, 190)],
+    },
+    {
+      title: "OIL (CITY; BLOCK YARD)",
+      note: "an oil slick on the asphalt, drawn where Track.oil has one: a puddle's outline with a hard edge, a violet black in slow swirls with a gloss on some, a sheen at its edge in three thin bands (teal, violet, amber); it takes no track marks. The city's tarmac has no cosmetic oil blots. Beside it for comparison: a pool (a rain puddle over its drain grate) and a pit",
+      shots: [...part(block, "oil", block.oil[0], block.oil[1]), shot("for comparison: a pool, 2x", block, (block.water[0].s0 + block.water[0].s1) / 2, -32, 330, 190), shot("for comparison: a pit, 2x", knot, hole.s, hole.lat, 200, 190)],
+    },
+  ];
+  return compose("THEME SURFACES: SAND AND OIL", null, sections, null, null);
+}
+
+/** A sheet: its title, a theme's table (or none), the sections' shots in rows, and the strip of what moves (or none). A shot is in its own track's colours. */
+function compose(title: string, table: Scenery | null, sections: Section[], sprites: Picture | null, strip: Scenery | null): Picture {
   const W = 1560, PAD = 16, GAP = 12, LABEL = 12;
   // Lay out: rows of shots, wrapped.
-  let H = 60 + swatchesHeight(sc) + 30;
+  let H = 60 + (table ? swatchesHeight(table) + 30 : 0);
   const placed: { sec: number; shot: Shot; x: number; y: number }[] = [];
   const heads: { y: number; title: string; note: string }[] = [];
   sections.forEach((sec, k) => {
     heads.push({ y: H, title: sec.title, note: sec.note });
-    H += 34;
+    H += 34 + 10 * Math.floor((sec.note.length * 6) / (W - 2 * PAD));
     let x = PAD, rowH = 0;
     for (const sh of sec.shots) {
       const w = sh.w * sh.zoom, h = sh.h * sh.zoom;
@@ -483,30 +559,33 @@ function sheet(theme: Theme): Picture {
     }
     H += rowH + LABEL + 26;
   });
-  const sprites = spriteStrip(preview);
   const spritesY = H;
-  H += 34 + (sprites ? sprites.h : 0) + 30;
+  if (strip) H += 34 + (sprites ? sprites.h : 0) + 30;
 
   const pic = blank(W, H, ...rgb(P.soot1));
-  text(pic, `THEME SHEET: ${theme}${hasArt(theme) ? "" : " (NO ART YET: DRAWN AS THE SCRAPYARD)"}`, PAD, 14, P.bone2, 3);
+  text(pic, title, PAD, 14, P.bone2, 3);
   text(pic, "TILES AS THE GAME'S BAKE MAKES THEM (client/gfx/world.ts), IN THE THEME'S OWN COLOURS. tools/debug/theme-sheet.ts", PAD, 42, P.bone0, 1);
-  swatches(pic, sc, PAD, 60);
+  if (table) swatches(pic, table, PAD, 60);
   for (const h of heads) {
     text(pic, h.title, PAD, h.y, P.haz1, 2);
-    text(pic, h.note, PAD, h.y + 18, P.bone0, 1);
+    // A long note runs on to a second line (and a third).
+    const per = Math.floor((W - 2 * PAD) / 6);
+    for (let k = 0; k * per < h.note.length; k++) text(pic, h.note.slice(k * per, (k + 1) * per), PAD, h.y + 18 + 10 * k, P.bone0, 1);
   }
   for (const pl of placed) {
     const sh = pl.shot;
     clearMarks();
     sh.marks?.(sh.track);
     const idx = windowOf(sh.track, sh.x, sh.y, sh.w, sh.h, !!sh.marks);
-    paste(pic, picture(idx, sh.w, sh.h, sc), pl.x, pl.y, 0, 0, sh.w, sh.h, sh.zoom);
+    paste(pic, picture(idx, sh.w, sh.h, sceneryFor(sh.track)), pl.x, pl.y, 0, 0, sh.w, sh.h, sh.zoom);
     text(pic, sh.label, pl.x, pl.y - LABEL + 2, P.bone1, 1);
   }
   clearMarks();
-  text(pic, "WHAT MOVES: THE OBSTACLE SHEET'S SPRITES IN THE THEME'S TONES", PAD, spritesY, P.haz1, 2);
-  text(pic, "one row of barrels (the eight frames of a turn) and a press's slab with its silhouette, on the theme's tarmac; the global 32 colours (they are sprites, not baked tiles); 4x", PAD, spritesY + 18, P.bone0, 1);
-  if (sprites) paste(pic, sprites, PAD, spritesY + 34);
+  if (strip) {
+    text(pic, "WHAT MOVES: THE OBSTACLE SHEET'S SPRITES IN THE THEME'S TONES", PAD, spritesY, P.haz1, 2);
+    text(pic, "one row of barrels (the eight frames of a turn; desert: scoured drums; city: orange-white traffic drums) and a press's slab with its silhouette (desert: an ore stamp; city: a pile driver), on the theme's tarmac; the global 32 colours (sprites, not baked tiles); 4x", PAD, spritesY + 18, P.bone0, 1);
+    if (sprites) paste(pic, sprites, PAD, spritesY + 34);
+  }
   return pic;
 }
 
@@ -591,9 +670,13 @@ function surfacesOf(theme: Theme): Surface[] {
     { name: "tarmac", kind: KIND.tarmac, driven: true },
     { name: "dirt patch", kind: KIND.dirt, driven: true },
     { name: "water", kind: KIND.water, driven: true },
+    // The theme's surface (TH-LOOK-2): sand on the desert's yard, an oil slick on the city's. The scrapyard has neither.
+    { name: "sand", kind: KIND.sand, driven: true },
+    { name: "oil", kind: KIND.oil, driven: true },
   ];
   const counts = kinds.map(() => new Float64Array(COLOURS));
-  for (const track of [themedTrack(sheetYard(), theme), themedTrack(trackById("crusher-run"), theme)]) {
+  const own = YARD_OF[theme];
+  for (const track of [themedTrack(sheetYard(), theme), themedTrack(trackById("crusher-run"), theme), ...(own ? [testTrack(own)!] : [])]) {
     const seen = new Set<string>();
     for (let s = 0; s < track.length; s += 200) {
       const p = at(track, s, 0);
@@ -680,9 +763,13 @@ function contrastTable(say: (good: boolean, what: string) => void): void {
       for (const s of surfaces) {
         const here = best.get(`${theme}/${sp.name}/${s.name}`)!, there = best.get(`scrapyard/${sp.name}/${s.name}`);
         if (there && here.mean < Math.min(MIN_CONTRAST, there.mean * 0.8)) slips.push(`${sp.name} on ${s.name} ${here.mean.toFixed(2)} against ${there.mean.toFixed(2)}`);
+        // A surface the scrapyard has not (sand, oil) has no figure to fall back on: the mean reaches the floor itself.
+        if (!there && here.mean < MIN_CONTRAST - 0.005) slips.push(`${sp.name} on ${s.name} ${here.mean.toFixed(2)} (the scrapyard has none)`);
       }
     }
-    say(slips.length === 0, `${theme}: over a surface's pixels (its specks and shadows counted by their share) no sprite's mean contrast is under ${MIN_CONTRAST}:1 and under four fifths of the scrapyard's${slips.length ? `: ${slips.join(", ")}` : ""}`);
+    say(slips.length === 0, `${theme}: over a surface's pixels (its specks and shadows counted by their share) no sprite's mean contrast is under ${MIN_CONTRAST}:1 and under four fifths of the scrapyard's (on a surface the scrapyard has not, under ${MIN_CONTRAST}:1)${slips.length ? `: ${slips.join(", ")}` : ""}`);
+    const mine = surfaces.filter((s) => s.name === "sand" || s.name === "oil");
+    if (mine.length) say(true, `${theme}: its theme surface is in the table above (${mine.map((s) => `${s.name}, plain tone ${s.plain}: ${SPRITES.map((sp) => `${sp.name} ${best.get(`${theme}/${sp.name}/${s.name}`)!.plain.toFixed(2)}`).join(", ")}`).join("; ")})`);
     // The tarmac against a mine and a rivet (PLAN-THEMES.md 2.2: tarmac may only be tinted).
     const tar = ["mine", "rivet"].map((n) => ({ n, here: best.get(`${theme}/${n}/tarmac`)!.plain, there: best.get(`scrapyard/${n}/tarmac`)!.plain }));
     say(tar.every((t) => t.here >= t.there * 0.95), `${theme}: a mine and a rivet stand out from the tarmac as in the scrapyard (within 5%): ${tar.map((t) => `${t.n} ${t.here.toFixed(2)} against ${t.there.toFixed(2)}`).join(", ")}`);
@@ -736,7 +823,8 @@ function check(): boolean {
     }
     say(bad === 0, `scrapyard: its tables are the constants gfx/world.ts had before themes (the pixels of the 33 colours, SHADE and LIT, the 128 marked tones, what all 256 bytes show; ${bad} entries differ)`);
     say(yardSc.plain === P.dirt2 && yardSc.dust[0] === P.bone1 && yardSc.dust[1] === P.bone0, `scrapyard: the placeholder is dirt2 (${yardSc.plain}), the dust bone1 and bone0 (${yardSc.dust.join(", ")})`);
-    say(sceneryOf("city") === yardSc && sceneryOf("jungle") === yardSc, "a theme whose art has not landed (city, jungle) has the scrapyard's scenery");
+    const waiting = THEMES.filter((t) => !hasArt(t));
+    say(waiting.every((t) => sceneryOf(t) === yardSc), `a theme whose art has not landed (${waiting.join(", ") || "none"}) has the scrapyard's scenery; landed: ${THEMES.filter((t) => hasArt(t)).join(", ")}`);
     const plain = trackById("rust-bowl");
     say(themeOf(plain) === "scrapyard" && sceneryFor(plain) === yardSc, "a track that names no theme is the scrapyard (Rust Bowl)");
     const odd = Object.assign({}, plain, { def: Object.assign({}, plain.def, { theme: "moon" }) });
@@ -792,7 +880,8 @@ function check(): boolean {
     const used = new Uint32Array(COLOURS);
     let pixels = 0, outside = 0, wideMarkable = 0, waterWrong = 0, markedOutside = 0, markedLighter = 0, markedPx = 0, propsSeen = 0;
     const SOOTS = [sc.index.soot0, sc.index.soot1, sc.index.soot2, sc.index.soot3];
-    for (const base of [trackById("crusher-run"), trackById("overpass-knot"), sheetYard(), testTrack("preview-yard")!]) {
+    const ownYard = YARD_OF[theme];
+    for (const base of [trackById("crusher-run"), trackById("overpass-knot"), sheetYard(), testTrack("preview-yard")!, ...(ownYard ? [testTrack(ownYard)!] : [])]) {
       const track = themedTrack(base, theme);
       clearMarks();
       for (let s = 30; s < track.length; s += 170) {
@@ -828,7 +917,7 @@ function check(): boolean {
     }
     clearMarks();
     const unused = sc.names.slice(0, sc.count).filter((_, i) => !used[i]);
-    say(outside === 0, `${theme}: every pixel of ${pixels} baked (laps of Crusher Run, Overpass Knot, the furniture's yard and Preview Yard) holds a colour of the theme's table (${outside} do not); ${sc.count - unused.length} of its ${sc.count} colours are used${unused.length ? ` (not on these tiles: ${unused.join(", ")})` : ""}`);
+    say(outside === 0, `${theme}: every pixel of ${pixels} baked (laps of Crusher Run, Overpass Knot, the furniture's yard and Preview Yard${ownYard ? `, and of its own yard, ${ownYard}` : ""}) holds a colour of the theme's table (${outside} do not); ${sc.count - unused.length} of its ${sc.count} colours are used${unused.length ? ` (not on these tiles: ${unused.join(", ")})` : ""}`);
     say(wideMarkable === 0, `${theme}: a pixel that takes marks holds one of the 32 (${wideMarkable} hold water or an extra)`);
     say(waterWrong === 0, `${theme}: the colour water is on water pixels only (${waterWrong} elsewhere)`);
     say(markedPx > 0 && markedOutside === 0 && markedLighter === 0, `${theme}: with a scorch every 170 units, the ${markedPx} marked pixels show a colour of the table (${markedOutside} do not), never a lighter one (${markedLighter} are)`);
@@ -874,22 +963,154 @@ function check(): boolean {
   sameRoad(say);
   mixedPool(say);
   contrastTable(say);
+  propColours(say);
+  themeSurfaces(say);
   return ok;
+}
+
+// ---- colours apart (TH-LOOK-2) -------------------------------------------------------------------
+
+/** CIE L*a*b* of a colour (D65). */
+function labOf(hex: string): [number, number, number] {
+  const [r, g, b] = rgb(hex).map((v) => {
+    const c = v / 255;
+    return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+  });
+  const f = (t: number) => (t > 0.008856 ? Math.cbrt(t) : 7.787 * t + 16 / 116);
+  const x = f((0.4124 * r + 0.3576 * g + 0.1805 * b) / 0.95047), y = f(0.2126 * r + 0.7152 * g + 0.0722 * b), z = f((0.0193 * r + 0.1192 * g + 0.9505 * b) / 1.08883);
+  return [116 * y - 16, 500 * (x - y), 200 * (y - z)];
+}
+
+/** How far apart two colours are to the eye: CIE76 delta E (about 2 is just seen side by side, 10 is another colour at a glance). */
+function deltaE(a: string, b: string): number {
+  const p = labOf(a), q = labOf(b);
+  return Math.hypot(p[0] - q[0], p[1] - q[1], p[2] - q[2]);
+}
+
+/** A prop's tone that makes up this share of all prop pixels or more is one of its body tones; under it, an accent (a cone's white ring, a glint, a lit edge). */
+const PROP_BODY = 0.005;
+/**
+ * A body tone of a prop is at least this far (delta E) from every car colour: the floor every
+ * landed theme is held to, another colour at a glance (the desert's provisional art, which
+ * TH-LOOK-1 held to "not exactly a car's colour", comes to 17.5; the city's to 27.1). A parked
+ * car's paint (a thing in the shape of a car) is held to the second figure.
+ */
+const PROP_APART = 15, PARKED_APART = 40;
+
+/**
+ * No prop is taken for a car (PLAN-THEMES.md 2.2 item 4; the advisor's readability rule): per
+ * theme, every colour on its prop pixels (a lap of Rust Bowl, Crusher Run and the theme's own
+ * yard) with its share of them and its distance from the nearest of the six car colours.
+ */
+function propColours(say: (good: boolean, what: string) => void): void {
+  for (const theme of THEMES.filter((t) => hasArt(t) && t !== "scrapyard")) {
+    const sc = sceneryOf(theme);
+    const counts = new Float64Array(COLOURS);
+    let total = 0;
+    const own = YARD_OF[theme];
+    for (const track of [themedTrack(trackById("rust-bowl"), theme), themedTrack(trackById("crusher-run"), theme), ...(own ? [testTrack(own)!] : [])]) {
+      const seen = new Set<string>();
+      for (let s = 0; s < track.length; s += 120) {
+        for (const lat of [-track.wall - 150, track.wall + 150]) {
+          const p = at(track, s, lat);
+          const tx = Math.floor((p.x * ZOOM) / TILE), ty = Math.floor((p.y * ZOOM) / TILE);
+          if (seen.has(`${tx},${ty}`)) continue;
+          seen.add(`${tx},${ty}`);
+          const idx = bakeTileIndices(track, tx, ty), cls = bakeTileKinds(track, tx, ty);
+          for (let i = 0; i < idx.length; i++) {
+            if (cls[i] !== KIND.prop) continue;
+            counts[idx[i]]++;
+            total++;
+          }
+        }
+      }
+    }
+    const rows = Array.from(counts, (n, i) => ({ i, share: n / total })).filter((r) => r.share > 0).sort((a, b) => b.share - a.share)
+      .map((r) => ({ ...r, name: sc.names[r.i], hex: sc.hex[r.i], near: Math.min(...CAR_COLORS.map((c) => deltaE(sc.hex[r.i], c))), car: CAR_COLORS.reduce((best, c) => (deltaE(sc.hex[r.i], c) < deltaE(sc.hex[r.i], best) ? c : best)) }));
+    console.log(`\n### ${theme}: the colours of its props (${total} prop pixels) against the six car colours\n`);
+    console.log("| colour | share of the prop pixels | delta E to the nearest car colour | that car |");
+    console.log("|---|---:|---:|---|");
+    for (const r of rows) console.log(`| ${r.name} ${r.hex} | ${(100 * r.share).toFixed(2)} % | ${r.near.toFixed(1)} | ${r.car} |`);
+    const body = rows.filter((r) => r.share >= PROP_BODY), near = body.filter((r) => r.near < PROP_APART);
+    say(total > 0 && near.length === 0, `${theme}: every body tone of its props (${body.length} colours of ${(100 * PROP_BODY).toFixed(1)} % of the prop pixels or more) is at least delta E ${PROP_APART} from every car colour (the nearest: ${body.reduce((a, b) => (b.near < a.near ? b : a)).name}, ${Math.min(...body.map((r) => r.near)).toFixed(1)})${near.length ? `; nearer: ${near.map((r) => `${r.name} ${r.near.toFixed(1)}`).join(", ")}` : ""}; the accents under that share: ${rows.filter((r) => r.share < PROP_BODY).map((r) => `${r.name} ${r.near.toFixed(0)}`).join(", ") || "none"}`);
+    // A parked car is a thing in the shape of a car: its paints (the extras a theme has for them; steel1 is the fourth).
+    const paints = sc.palette.extras.filter((e) => /^(wine|moss|petrol)/.test(e.name));
+    if (paints.length) {
+      const least = paints.map((e) => ({ name: e.name, near: Math.min(...CAR_COLORS.map((c) => deltaE(e.hex, c))) }));
+      say(least.every((e) => e.near >= PARKED_APART), `${theme}: a parked car's paints are at least delta E ${PARKED_APART} from every car colour (${least.map((e) => `${e.name} ${e.near.toFixed(1)}`).join(", ")})`);
+    }
+  }
+}
+
+/** An oil slick's body is at least this far (delta E) from the tarmac's plain tone and from the water's; and sand from the dirt patch's. */
+const OIL_FROM_TARMAC = 15, OIL_FROM_WATER = 25, SAND_FROM_DIRT = 25;
+
+/**
+ * The theme surfaces are told from what lies beside them (TH-LOOK-2): on the theme's own yard,
+ * an oil slick's colours are none of the tarmac's and none of a pool's, its body is far from
+ * both and its outermost sheen stands out from the tarmac; sand's colours are none of a dirt
+ * patch's and its plain tone is far from the patch's. Counted on baked tiles.
+ */
+function themeSurfaces(say: (good: boolean, what: string) => void): void {
+  for (const theme of THEMES.filter((t) => hasArt(t) && YARD_OF[t])) {
+    const sc = sceneryOf(theme), track = testTrack(YARD_OF[theme]!)!;
+    const kinds = [KIND.tarmac, KIND.water, KIND.dirt, KIND.sand, KIND.oil] as number[];
+    const counts = kinds.map(() => new Float64Array(COLOURS));
+    const seen = new Set<string>();
+    for (let s = 0; s < track.length; s += 100) {
+      const p = at(track, s, 0);
+      const tx = Math.floor((p.x * ZOOM) / TILE), ty = Math.floor((p.y * ZOOM) / TILE);
+      if (seen.has(`${tx},${ty}`)) continue;
+      seen.add(`${tx},${ty}`);
+      const idx = bakeTileIndices(track, tx, ty), cls = bakeTileKinds(track, tx, ty);
+      for (let i = 0; i < idx.length; i++) {
+        const k = kinds.indexOf(cls[i]);
+        if (k >= 0) counts[k][idx[i]]++;
+      }
+    }
+    const tones = (k: number) => Array.from(counts[k], (n, i) => ({ n, i })).filter((o) => o.n > 0).sort((a, b) => b.n - a.n);
+    const names = (k: number) => tones(k).map((o) => sc.names[o.i]);
+    const plain = (k: number) => sc.hex[tones(k)[0].i];
+    const [tarmac, water, dirt, sand, oil] = [0, 1, 2, 3, 4].map((k) => tones(k));
+    if (oil.length) {
+      const shared = names(4).filter((n) => names(0).includes(n) || names(1).includes(n));
+      const fromTar = deltaE(plain(4), plain(0)), fromWater = deltaE(plain(4), plain(1));
+      // Its edge: the brightest of its tones against the tarmac's plain tone.
+      const rim = Math.max(...oil.map((o) => contrast(sc.hex[o.i], plain(0))));
+      say(tarmac.length > 0 && water.length > 0 && shared.length === 0 && fromTar >= OIL_FROM_TARMAC && fromWater >= OIL_FROM_WATER && rim >= MIN_CONTRAST,
+        `${theme}: an oil slick on ${track.def.name} (${oil.reduce((a, o) => a + o.n, 0)} pixels in ${names(4).join(", ")}): none of its colours is the tarmac's or a pool's (${shared.length ? shared.join(", ") : "none shared"}); its body ${plain(4)} is delta E ${fromTar.toFixed(1)} from the tarmac ${plain(0)} (at least ${OIL_FROM_TARMAC}) and ${fromWater.toFixed(1)} from the water ${plain(1)} (at least ${OIL_FROM_WATER}); contrast ${contrast(plain(4), plain(0)).toFixed(2)}:1 against the tarmac and ${contrast(plain(4), plain(1)).toFixed(2)}:1 against the water; its sheen stands out from the tarmac ${rim.toFixed(2)}:1 (at least ${MIN_CONTRAST}:1)`);
+    }
+    if (sand.length) {
+      // (Its grains lie on the tarmac round it, so the tarmac's pixels hold its crests' tone too: sand is held against the dirt patch.)
+      const shared = names(3).filter((n) => names(2).includes(n));
+      const fromDirt = deltaE(plain(3), plain(2)), fromTar = contrast(plain(3), plain(0));
+      say(dirt.length > 0 && shared.length === 0 && fromDirt >= SAND_FROM_DIRT && fromTar >= MIN_CONTRAST,
+        `${theme}: sand on ${track.def.name} (${sand.reduce((a, o) => a + o.n, 0)} pixels in ${names(3).join(", ")}): none of its colours is a dirt patch's (${shared.length ? shared.join(", ") : "none shared"}); its plain tone ${plain(3)} is delta E ${fromDirt.toFixed(1)} from the dirt patch's ${plain(2)} (at least ${SAND_FROM_DIRT}) and stands out from the tarmac ${fromTar.toFixed(2)}:1 (at least ${MIN_CONTRAST}:1)`);
+    }
+  }
 }
 
 /**
  * A theme changes what is painted, never where, and puts nothing on the tarmac: on the shipped
- * tracks without furniture every pixel is the same kind in every theme, a tarmac pixel holds the
- * same palette index (so the road's wear, paint and shadows are the scrapyard's, only tinted;
- * but for a pit's far wall inside its mouth, which is the theme's), and the hazard stripes at a
- * gap's end are the same pixels.
+ * tracks without furniture every pixel is the same kind in every theme (a prop outside the
+ * walls aside: it stands where the scrapyard has plain ground, never on a band of the road), a
+ * tarmac pixel holds the same palette index (so the road's wear, paint and shadows are the
+ * scrapyard's, only tinted; but for a pit's far wall inside its mouth, which is the theme's),
+ * and the hazard stripes at a gap's end are the same pixels. A theme may leave the scrapyard's
+ * cosmetic oil blots out (the city: an oil slick is a surface there): then a tarmac pixel under
+ * a blot holds a tone of the plain tarmac instead, and no other differs. And on the furniture's
+ * yards (the contact sheet's and Preview Yard) the tarmac between the features is the
+ * scrapyard's too, but for a pool's rim (the desert's dried mud), the earth thrown past a dirt
+ * patch's edge (the patch's own tones) and the shadow of a mound (which falls as it is heaped).
  */
 function sameRoad(say: (good: boolean, what: string) => void): void {
-  const HAZ1 = sceneryOf("scrapyard").index.haz1;
+  const yardSc = sceneryOf("scrapyard");
+  const HAZ1 = yardSc.index.haz1, TAR0 = yardSc.index.tar0, TAR3 = yardSc.index.tar3;
   for (const theme of THEMES.filter((t) => hasArt(t) && t !== "scrapyard")) {
-    let pixels = 0, kinds = 0, tarmac = 0, tarmacOther = 0, pitWall = 0, stripes = 0, stripesOther = 0;
+    let pixels = 0, kinds = 0, onRoad = 0, tarmac = 0, tarmacOther = 0, pitWall = 0, blots = 0, stripes = 0, stripesOther = 0;
     for (const id of ["rust-bowl", "crusher-run", "overpass-knot"]) {
       const yard = trackById(id), themed = themedTrack(yard, theme);
+      const spots = artLayout(yard).blots;
       const seen = new Set<string>();
       for (let s = 0; s < yard.length; s += 120) {
         const p = at(yard, s, 0);
@@ -901,12 +1122,15 @@ function sameRoad(say: (good: boolean, what: string) => void): void {
           pixels++;
           // (A theme's props are their own kind of pixel; the scrapyard's junk is plain ground.)
           if (ak[i] !== bk[i] && bk[i] !== KIND.prop) kinds++;
+          if (bk[i] === KIND.prop && ak[i] !== 0) onRoad++;
           if (ak[i] === KIND.tarmac) {
             tarmac++;
             if (a[i] !== b[i]) {
               // A pit is cut into the tarmac and its far wall is the theme's (dark rock for dark earth): inside a pit's mouth it is no decoration.
-              const wx = (tx * TILE + (i % TILE) + 0.5) / ZOOM, wy = (ty * TILE + Math.floor(i / TILE) + 0.5) / ZOOM;
-              if (yard.holes.some((h) => Math.hypot(wx - h.x, wy - h.y) <= h.r)) pitWall++;
+              const px = tx * TILE + (i % TILE) + 0.5, py = ty * TILE + Math.floor(i / TILE) + 0.5;
+              if (yard.holes.some((h) => Math.hypot(px / ZOOM - h.x, py / ZOOM - h.y) <= h.r)) pitWall++;
+              // A blot the theme leaves out: the scrapyard has its dark tone there, the theme the plain tarmac's.
+              else if (a[i] === TAR0 && b[i] >= TAR0 && b[i] <= TAR3 && spots.some((o) => Math.abs(px - o.x) <= o.r * 1.3 + 1 && Math.abs(py - o.y) <= o.r + 1)) blots++;
               else tarmacOther++;
             }
             if (a[i] === HAZ1) stripes++;
@@ -915,8 +1139,41 @@ function sameRoad(say: (good: boolean, what: string) => void): void {
         }
       }
     }
-    say(kinds === 0, `${theme}: on Rust Bowl, Crusher Run and Overpass Knot every one of ${pixels} pixels is the same kind as in the scrapyard (the bands, the features, a void: ${kinds} differ, a prop outside the walls aside)`);
-    say(tarmacOther === 0 && stripesOther === 0, `${theme}: nothing is put on the tarmac: all ${tarmac} tarmac pixels hold the scrapyard's palette index (${tarmacOther} do not; the ${pitWall} of a pit's far wall, inside its mouth, aside: that wall is the theme's), the ${stripes} hazard-stripe pixels at the gaps' ends among them (${stripesOther} differ)`);
+    say(kinds === 0 && onRoad === 0, `${theme}: on Rust Bowl, Crusher Run and Overpass Knot every one of ${pixels} pixels is the same kind as in the scrapyard (the bands, the features, a void: ${kinds} differ, a prop outside the walls aside; ${onRoad} prop pixels lie on a band of the road)`);
+    say(tarmacOther === 0 && stripesOther === 0, `${theme}: nothing is put on the tarmac: all ${tarmac} tarmac pixels hold the scrapyard's palette index (${tarmacOther} do not; aside: the ${pitWall} of a pit's far wall, inside its mouth, which is the theme's${blots ? `, and the ${blots} under a cosmetic oil blot of the scrapyard's, which the ${theme} leaves out: plain tarmac there` : ""}), the ${stripes} hazard-stripe pixels at the gaps' ends among them (${stripesOther} differ)`);
+    // The furniture's yards: the tarmac between the features.
+    let between = 0, other = 0, rim = 0, thrown = 0, shadow = 0, lost = 0;
+    const shadeI = yardSc.shadeI; // (the 32 have the same links by index in every theme's table but for a few, and these are the scrapyard's tarmac tones)
+    for (const yard of [sheetYard(), testTrack("preview-yard")!]) {
+      const themed = themedTrack(yard, theme);
+      const spots = artLayout(yard).blots;
+      const seen = new Set<string>();
+      for (let s = 0; s < yard.length; s += 120) {
+        const p = at(yard, s, 0);
+        const tx = Math.floor((p.x * ZOOM) / TILE), ty = Math.floor((p.y * ZOOM) / TILE);
+        if (seen.has(`${tx},${ty}`)) continue;
+        seen.add(`${tx},${ty}`);
+        const a = bakeTileIndices(yard, tx, ty), ak = bakeTileKinds(yard, tx, ty), b = bakeTileIndices(themed, tx, ty), bk = bakeTileKinds(themed, tx, ty);
+        for (let i = 0; i < a.length; i++) {
+          if (ak[i] !== KIND.tarmac || bk[i] !== KIND.tarmac) continue;
+          between++;
+          if (a[i] === b[i]) continue;
+          const px = tx * TILE + (i % TILE) + 0.5, py = ty * TILE + Math.floor(i / TILE) + 0.5;
+          if (a[i] === TAR0 && b[i] >= TAR0 && b[i] <= TAR3 && spots.some((o) => Math.abs(px - o.x) <= o.r * 1.3 + 1 && Math.abs(py - o.y) <= o.r + 1)) lost++;
+          else {
+            // Round a pool: within its declared rectangle and 6 units more.
+            const q = queryTrack(yard, px / ZOOM, py / ZOOM);
+            if (yard.water.some((w) => q.s >= w.s0 - 6 && q.s <= w.s1 + 6 && q.lat >= w.lat0 - 6 && q.lat <= w.lat1 + 6)) rim++;
+            // The earth thrown past a dirt patch's edge is the patch's own (the desert's red clay): within its declared rectangle, and in the barrels' lane across it.
+            else if (yard.dirt.some((w) => q.s >= w.s0 - 3 && q.s <= w.s1 + 3 && q.lat >= w.lat0 - 3 && q.lat <= w.lat1 + 3)) thrown++;
+            // A mound's shadow falls as the mound is heaped (sandbags lie closer than tyres): the same tarmac a shade step or two apart (two where two pieces' shadows cross), beside a mound or an island's nose.
+            else if ((shadeI[a[i]] === b[i] || shadeI[b[i]] === a[i] || shadeI[shadeI[a[i]]] === b[i] || shadeI[shadeI[b[i]]] === a[i]) && (yard.tyres.some((m) => Math.hypot(px / ZOOM - m.x, py / ZOOM - m.y) <= m.r + 12) || yard.islands.some((m) => q.s >= m.s0 - 12 && q.s <= m.s1 + 12 && q.lat >= m.lat0 - 12 && q.lat <= m.lat1 + 12))) shadow++;
+            else other++;
+          }
+        }
+      }
+    }
+    say(other === 0, `${theme}: on the furniture's yards (the contact sheet's and Preview Yard) the ${between} tarmac pixels between the features hold the scrapyard's palette index (${other} do not; aside: ${rim} at a pool's rim, ${thrown} of the earth thrown past a dirt patch's edge, ${shadow} a shade step or two apart in a mound's shadow${lost ? `, ${lost} under a blot the ${theme} leaves out` : ""})`);
   }
 }
 
@@ -1284,6 +1541,11 @@ if (args.includes("--check")) {
   if (!isTheme(theme)) throw new Error(`unknown theme ${theme}`);
   await shots(theme, path.resolve(arg("--out") ?? path.join(ROOT, "tmp", "th-look", "shots")), Number(arg("--port") ?? 3011));
   process.exit(process.exitCode ?? 0);
+} else if (args.includes("--surfaces")) {
+  const out = path.resolve(arg("--out") ?? path.join(ROOT, "tmp", "th-look", "surfaces-sheet.png"));
+  mkdirSync(path.dirname(out), { recursive: true });
+  savePng(out, surfaces());
+  console.log(out);
 } else {
   const theme = arg("--theme") ?? "desert";
   if (!isTheme(theme)) throw new Error(`unknown theme ${theme}`);

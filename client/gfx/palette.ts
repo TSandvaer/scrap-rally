@@ -224,8 +224,78 @@ export const DESERT_PALETTE: ThemePalette = {
     { name: "cactus2", hex: "#8fa868", shade: "cactus1", lit: "bag2" },
     { name: "char0", hex: "#3b2e23", shade: "soot3", lit: "char1" },
     { name: "char1", hex: "#4e3e2c", shade: "char0", lit: "gravel0" },
+    // Loose sand on the road (a sand patch, TH-LOOK-2): deeper than the bleached ground, so that
+    // a rivet shows on it; its ripples' crests are the ground's own sand (dirt2).
+    { name: "sand0", hex: "#7f6238", shade: "gravel0", lit: "sand1" },
+    { name: "sand1", hex: "#9e804e", shade: "sand0", lit: "dirt2" },
   ],
   burn: { singed: ["soot2", "soot3", "char0", "char1"], charred: ["soot1", "soot2", "soot3", "char0"] },
+};
+
+/**
+ * The city, "old town quarter" (TH-LOOK-2; PLAN-THEMES.md 2.2 and Amendment 1: a town, nothing
+ * of a harbour). Our own colours. The ground between the houses is old paving, a brown-grey
+ * (`dirt`); the verge a sidewalk of lighter slabs (`gravel`, its darkest tone the joints); the
+ * kerb's stones are grey and white (steel2 and bone1); the tarmac the scrapyard's with a cool
+ * tint and as dark. Steel and rust stay as they are: ramps, plates and belts are the same
+ * metal here, and the water keeps its edge and its glints. The extras, all for pixels that take
+ * no marks: concrete (the barrier), three roofs (clay tiles, slate, zinc), leaves (a planter's
+ * tree), wood (crates, planters), three paints for parked cars (wine, moss, petrol: muted, and
+ * none near a car's colour), and an oil slick's (a violet black, its gloss, the sheen at its edge).
+ */
+export const CITY_PALETTE: ThemePalette = {
+  colours: {
+    ...P,
+    // Old paving. dirt0 is paving in a cast shadow: an alley.
+    dirt0: "#2c2825",
+    dirt1: "#413b36",
+    dirt2: "#534c44",
+    dirt3: "#676056",
+    // The sidewalk: its joints, its slabs, a lighter slab.
+    gravel0: "#56534c",
+    gravel1: "#7c786e",
+    gravel2: "#8f8b80",
+    // Tarmac, tinted cool.
+    tar0: "#28292b",
+    tar1: "#37393c",
+    tar2: "#44464a",
+    tar3: "#5f6266",
+  },
+  shade: SHADE,
+  lit: LIT,
+  extras: [
+    { name: "conc0", hex: "#4a4a48", shade: "soot3", lit: "conc1" },
+    { name: "conc1", hex: "#6e6d68", shade: "conc0", lit: "conc2" },
+    { name: "conc2", hex: "#a3a199", shade: "conc1", lit: "conc3" },
+    { name: "conc3", hex: "#cfccc1", shade: "conc2", lit: "conc3" },
+    { name: "tile0", hex: "#5c382d", shade: "soot3", lit: "tile1" },
+    { name: "tile1", hex: "#7a4b3a", shade: "tile0", lit: "tile2" },
+    { name: "tile2", hex: "#93604a", shade: "tile1", lit: "tile2" },
+    { name: "slate0", hex: "#3b3c46", shade: "soot3", lit: "slate1" },
+    { name: "slate1", hex: "#50525e", shade: "slate0", lit: "slate2" },
+    { name: "slate2", hex: "#696b78", shade: "slate1", lit: "slate2" },
+    { name: "zinc0", hex: "#535b56", shade: "dirt0", lit: "zinc1" },
+    { name: "zinc1", hex: "#69726c", shade: "zinc0", lit: "zinc2" },
+    { name: "zinc2", hex: "#858d86", shade: "zinc1", lit: "zinc2" },
+    { name: "leaf0", hex: "#2f4a2c", shade: "soot3", lit: "leaf1" },
+    { name: "leaf1", hex: "#446638", shade: "leaf0", lit: "leaf2" },
+    { name: "leaf2", hex: "#5f8346", shade: "leaf1", lit: "leaf2" },
+    { name: "wood0", hex: "#5a4026", shade: "soot3", lit: "wood1" },
+    { name: "wood1", hex: "#80603a", shade: "wood0", lit: "wood2" },
+    { name: "wood2", hex: "#a5824f", shade: "wood1", lit: "wood2" },
+    { name: "wine0", hex: "#5e2a34", shade: "soot3", lit: "wine1" },
+    { name: "wine1", hex: "#7d3a45", shade: "wine0", lit: "wine1" },
+    { name: "moss0", hex: "#4d5233", shade: "soot3", lit: "moss1" },
+    { name: "moss1", hex: "#686e45", shade: "moss0", lit: "moss1" },
+    { name: "petrol0", hex: "#2c4f52", shade: "soot3", lit: "petrol1" },
+    { name: "petrol1", hex: "#3f6c6e", shade: "petrol0", lit: "petrol1" },
+    { name: "oil0", hex: "#0e0c14", shade: "soot0", lit: "oil1" },
+    { name: "oil1", hex: "#1a1726", shade: "oil0", lit: "oil2" },
+    { name: "oil2", hex: "#3b3556", shade: "oil1", lit: "oilv" },
+    { name: "oilv", hex: "#9466b8", shade: "oil2", lit: "oilv" },
+    { name: "oilt", hex: "#38a8a0", shade: "oil2", lit: "oilt" },
+  ],
+  burn: { singed: ["soot2", "soot3", "dirt0", "dirt1"], charred: ["soot1", "soot2", "soot3", "dirt0"] },
 };
 
 /**
