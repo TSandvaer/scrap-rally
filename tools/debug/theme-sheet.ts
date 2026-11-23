@@ -558,7 +558,7 @@ const STRIP_NOTE = "one row of barrels (the eight frames of a turn; desert: scou
 /** A sheet: its title, a theme's table (or none), the sections' shots in rows, and the strip of what moves (or none). A shot is in its own track's colours. */
 function compose(title: string, table: Scenery | null, sections: Section[], sprites: Picture | null, strip: Scenery | null): Picture {
   const W = 1560, PAD = 16, GAP = 12, LABEL = 12;
-  const PER = Math.floor((W - 2 * PAD) / 6); // letters a line of a note holds
+  const PER = Math.floor((W - 2 * PAD) / SMALL.cw); // letters a line of a note holds
   // Lay out: rows of shots, wrapped.
   let H = 60 + (table ? swatchesHeight(table) + 30 : 0);
   const placed: { sec: number; shot: Shot; x: number; y: number }[] = [];
@@ -982,6 +982,7 @@ function check(): boolean {
     say(frames.size === ROLL && offSheet === 0, `${theme}: Preview Yard's obstacle sheet: every pixel one of the global 32 or the cast shadow (${offSheet} others), the ${ROLL} frames of a barrel's turn ${frames.size} different pictures`);
   }
   sameRoad(say);
+  sameSites(say);
   mixedPool(say);
   contrastTable(say);
   propColours(say);
@@ -1195,6 +1196,33 @@ function sameRoad(say: (good: boolean, what: string) => void): void {
       }
     }
     say(other === 0, `${theme}: on the furniture's yards (the contact sheet's and Preview Yard) the ${between} tarmac pixels between the features hold the scrapyard's palette index (${other} do not; aside: ${rim} at a pool's rim, ${thrown} of the earth thrown past a dirt patch's edge, ${shadow} a shade step or two apart in a mound's shadow${lost ? `, ${lost} under a blot the ${theme} leaves out` : ""})`);
+  }
+}
+
+/**
+ * A theme's props stand at the scrapyard's junk sites and nowhere else (a theme changes what is
+ * painted, never where): piece for piece the same centre and the same size as the yard's junk,
+ * on shipped tracks, on Preview Yard and on the theme's own yard (held against that yard in the
+ * scrapyard's look). The posts stand where they stood, too. (A town's roofs are no props in
+ * this sense but the city's ground, as the dunes are the desert's: gfx/world.ts layTown lays
+ * them out clear of the road, of every prop and of the marshals.)
+ */
+function sameSites(say: (good: boolean, what: string) => void): void {
+  for (const theme of THEMES.filter((t) => hasArt(t) && t !== "scrapyard")) {
+    const own = YARD_OF[theme];
+    let pieces = 0, moved = 0, posts = 0, postsMoved = 0;
+    const names: string[] = [];
+    for (const base of [trackById("rust-bowl"), trackById("crusher-run"), testTrack("preview-yard")!, ...(own ? [testTrack(own)!] : [])]) {
+      const a = artLayout(themedTrack(base, "scrapyard")), b = artLayout(themedTrack(base, theme));
+      names.push(base.def.name);
+      pieces += a.junk.length;
+      if (a.junk.length !== b.junk.length) moved += Math.abs(a.junk.length - b.junk.length);
+      for (let k = 0; k < Math.min(a.junk.length, b.junk.length); k++) if (a.junk[k].x !== b.junk[k].x || a.junk[k].y !== b.junk[k].y || a.junk[k].r !== b.junk[k].r) moved++;
+      posts += a.posts.length / 2;
+      if (a.posts.length !== b.posts.length) postsMoved++;
+      for (let k = 0; k < Math.min(a.posts.length, b.posts.length); k++) if (a.posts[k] !== b.posts[k]) postsMoved++;
+    }
+    say(pieces > 0 && moved === 0 && postsMoved === 0, `${theme}: its props stand at the scrapyard's junk sites, piece for piece the same centre and size (${pieces} pieces on ${names.join(", ")}: ${moved} differ), and its ${posts} posts where the scrapyard's stand (${postsMoved} differ)`);
   }
 }
 

@@ -2041,12 +2041,48 @@ function town(): void {
   houses(from, from + rows, false);
   // Costed as ground() is, and the rest with the second half (measured: tools/debug/world-bench.ts --units).
   if (from + rows >= S) {
+    manholes();
     houses(0, S, true);
     next();
     COST[0] = 170 + TOWN_MORE;
   } else {
     job.sub++;
     COST[0] = 170;
+  }
+}
+
+const MANHOLES = 104; // a cell of the grid the manhole covers lie on, view pixels: one in three holds one
+
+/**
+ * Manhole covers in the paving, on a grid of cells over the plane as the desert's dunes are (a
+ * cell's hash says whether it holds one, and where): a round cover of cast iron, a dark rim, a
+ * slot across it. On open paving alone: not under a roof, and not at the wall's foot.
+ */
+function manholes(): void {
+  const art = job.art!, b = buffers();
+  const { bx, by } = job;
+  const { idx, cls, dist } = b;
+  const clear = art.track.wall + BARRIER + 3;
+  for (let gy = Math.floor((by - 4) / MANHOLES), gy1 = Math.floor((by + S + 4) / MANHOLES); gy <= gy1; gy++) {
+    for (let gx = Math.floor((bx - 4) / MANHOLES), gx1 = Math.floor((bx + S + 4) / MANHOLES); gx <= gx1; gx++) {
+      let h = Math.imul(gx, 374761393) ^ Math.imul(gy, 668265263) ^ Math.imul(61, 1442695041);
+      h = Math.imul(h ^ (h >>> 13), 1274126177);
+      h ^= h >>> 16;
+      if ((h & 255) >= 86) continue; // no cover in this cell
+      // Its middle pixel, in the buffer.
+      const cx = gx * MANHOLES + 4 + (((h >>> 8) & 255) * (MANHOLES - 8) >> 8) - bx, cy = gy * MANHOLES + 4 + (((h >>> 16) & 255) * (MANHOLES - 8) >> 8) - by;
+      for (let j = -3; j <= 3; j++) {
+        const y = cy + j;
+        if (y < 0 || y >= S) continue;
+        for (let i = -3; i <= 3; i++) {
+          const x = cx + i, d2 = i * i + j * j;
+          if (x < 0 || x >= S || d2 > 10) continue;
+          const p = y * S + x;
+          if (cls[p] === C_PROP || !(dist[p] > clear)) continue;
+          idx[p] = d2 > 5 ? DIRT0 : j === 0 && i >= -1 && i <= 1 ? SOOT3 : STEEL1;
+        }
+      }
+    }
   }
 }
 
