@@ -16110,7 +16110,7 @@ function bbRaces(): void {
   }
   console.log(`  ${rows.join("\n  ")}`);
   check(
-    "branch bots races: on Branch Yard 3 Easy, 3 Normal, 3 Hard and the mixed 5 (Hard, Normal, Easy, Hard, Normal by seat: M4-TRACKS' long-track field) finish 3 laps with weapons on (the race kept open until all have: whether each made the game's 30 s grace is printed), identically on a rerun, <= 1 fall per bot per race; each bot's route its seat's plan (Easy never the jump or holes cut, the dirt cut only in the Truck; Normal on even seats only), driven: > 900 ticks on each cut it takes, < 300 (mouths) on the others",
+    "branch bots races: on Branch Yard 3 Easy, 3 Normal, 3 Hard and the mixed 5 (Hard, Normal, Easy, Hard, Normal by seat: M4-TRACKS' long-track field) finish 3 laps with weapons on (the race kept open until all have: whether each made the game's finish grace, finishGraceMs: 30 s scaled with the winner's lap, is printed), identically on a rerun, <= 1 fall per bot per race; each bot's route its seat's plan (Easy never the jump or holes cut, the dirt cut only in the Truck; Normal on even seats only), driven: > 900 ticks on each cut it takes, < 300 (mouths) on the others",
     ok,
     rows.filter((r) => r.startsWith("BAD")).join(" | ") || "8 races as specified",
   );
