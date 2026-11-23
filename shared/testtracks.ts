@@ -204,9 +204,10 @@ export const BRANCH_YARD: TrackDef = {
 // - bottom straight: the theme surface again (slot B, s 7150), then a split round an island whose right
 //   lane has 340 units of dirt (the mud rule, <= 350);
 // - left-hand side and the start: plain road.
-// The theme surfaces do nothing yet (THEME-SURF makes them act; TH-LOOK-2 and TH-LOOK-3 draw them):
-// today each yard races as its theme-less twin. Picked with the dev flag SCRAP_DEV_TRACK=dune-yard,
-// block-yard or canopy-yard (server/room.ts).
+// The theme surfaces act (THEME-SURF: shared/physics.ts stepCar bogs a car on sand, takes its grip and
+// steering on oil and drifts it in a ford; the bots cost them and aim a ford upstream, shared/botdrive.ts);
+// TH-LOOK-2 and TH-LOOK-3 draw them. Picked with the dev flag SCRAP_DEV_TRACK=dune-yard, block-yard or
+// canopy-yard (server/room.ts).
 
 /** The theme yards' loop: the Preview Yard's, its top and bottom straights 1200 longer. */
 export const THEME_LOOP: [number, number][] = [

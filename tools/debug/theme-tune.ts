@@ -233,8 +233,8 @@ export interface FordBot {
 /**
  * A server bot (botStep, seat 2: racing line 0) made to cross a ford: THEME_LOOP (jungle, not validated) with a
  * ford 800-940 drifting vx declared wider than the asphalt (lat -80..80: its traction rectangle covers every
- * lane, so the lane search has no dry edge to go round it on). With FORD_AIM.gain (1: the bots' upstream aim,
- * 0: none).
+ * lane, so the lane search has no dry edge to go round it on). `gain` is set as FORD_AIM.gain for the run (the
+ * bots' shipped upstream aim is FORD_AIM.gain, 1.5; 0: none) and put back after.
  */
 export function fordBot(type: CarType, vx: number, gain: number): FordBot {
   const t = loopWith("jungle", [
@@ -277,7 +277,7 @@ export function fordBotLines(): string[] {
   const out: string[] = [];
   for (const vx of [60, -100]) {
     for (const type of CAR_TYPES) {
-      const on = fordBot(type, vx, 1), off = fordBot(type, vx, 0);
+      const on = fordBot(type, vx, FORD_AIM.gain), off = fordBot(type, vx, 0); // the shipped aim against none
       out.push(`bot through a ford (vx ${vx}): ${CARS[type].name.padEnd(5)} at ${f1(on.vIn)} u/s: aim upstream lat ${f1(on.entry)} -> ${f1(on.exit)} (widest off its entry ${f1(on.widest)}); no aim ${f1(off.entry)} -> ${f1(off.exit)} (widest ${f1(off.widest)})`);
     }
   }
