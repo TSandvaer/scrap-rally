@@ -796,7 +796,10 @@ lines; speed gate PASS; census 14,085,784 B; 1092/1092 + 174/174 x2; report + 12
 :3018, tmp/review-br-tracks.md; also the Mile socket-bot reconcile max 5.89). Merge into main: README conflict only (keep both).
 TASTE COPY :3012 now = ~/orca/workspaces/scrap-rally/br-tracks-taste detached at c35a856 (SCRAP_DEV_BOTS=1 PORT=3012 nohup npm start, node
 pid 3189, log tmp/br-tracks-taste-3012.log); the Branch Yard copy (pid 27353, branch-taste) stopped + removed. The user drives Slag
-Harbour + Breaker's Mile (taste gate 9). TH-LOOK-2 waits for
+Harbour + Breaker's Mile (taste gate 9).
+TH-LOOK-2 asked (Slag Harbour still city on main): BR-TRACKS' theme-removal commit 7c30a8e cherry-picked onto main as 4b6e9b6; gate GREEN
+(1085/1085, 166/166, build index-CXjr0vIx.js, schema-hash 37 SAME). TH-LOOK-2 told to merge main + final gate. NOSELECT-2: whole-link
+selection (user-select: all) chosen. TH-LOOK-2 waits for
 MARSHALS-1 (shares render.ts + canvas-census.ts). Ford direction cue moved from THEME-SURF to TH-LOOK-3 (drawing = world.ts, Fable).
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
