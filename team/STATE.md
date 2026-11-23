@@ -831,7 +831,15 @@ TH-LOOK-2 round done e1bbba5 (5 fixed; world.ts <-> marshals.ts import each othe
 GREEN (1092/1092, 174/174, build, schema-hash all match). Build now splits render-*.js (151 kB) + weapons-*.js chunks out of index (bench.ts
 imports them); chunk graph has no cycle (index -> render, weapons -> physics). ClickUp ready for qa test; workers released; workspace +
 thl2-taste copies (:3012 pid 34398, :3009 pid 34397) stopped/removed; sheets in tmp/th-look-2/sheets/. TH-LOOK-H spec ready
-(tmp/spec-th-look-h.md, Fable, :3017): dispatch when HARBOUR-SCHEMA merges. TH-LOOK-2 waits for
+(tmp/spec-th-look-h.md, Fable, :3017): dispatch when HARBOUR-SCHEMA merges.
+DEPLOYED (user Manual Deploy 2026-11-23): live serves index-DV6ew2Qs.js + physics-DAIDLMqM.js (curl) = origin/main 39266cb. QA15 live
+worker ctx_49f5d08ac0f7 (tmp/spec-qa-live-15.md; marshals, both shortcuts, NOSELECT-2, track list, frame times).
+HARBOUR-SCHEMA review APPROVE (ctx_da8f608615ce); nits fixed 7f662a1. MERGED 3f27544; gate GREEN (1105/1105, 178/178, build
+index-DGA6TMuw.js, schema-hash all match). ClickUp ready for qa test; workers released; workspace removed.
+TH-LOOK-H 123jpnbfgzw in flight: ctx_e453b89d2d75 (Fable, ~/orca/workspaces/scrap-rally/th-look-h, :3017, tmp/spec-th-look-h.md).
+THEME-TRACKS 123jpnbfgj5 in flight: ctx_2d2d39d14cd1 (Opus, ~/orca/workspaces/scrap-rally/theme-tracks, :3010, tmp/spec-theme-tracks.md).
+HOLD: THEME-TRACKS merges only AFTER TH-LOOK-H if Slag Harbour's oil is invisible in the scrapyard look (no oil colours there).
+Active authors: TH-LOOK-H, THEME-TRACKS (1 free; TH-LOOK-3 waits for TH-LOOK-H; nothing else startable). TH-LOOK-2 waits for
 MARSHALS-1 (shares render.ts + canvas-census.ts). Ford direction cue moved from THEME-SURF to TH-LOOK-3 (drawing = world.ts, Fable).
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
