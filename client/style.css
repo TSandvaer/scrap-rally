@@ -77,14 +77,21 @@ textarea,
 /* NOSELECT-2: and the one message the player copies from by hand, the invite link copyInvite
    (client/main.ts) shows when the clipboard is refused (or on plain http). "all": a click, drag,
    double-click or a single long press takes the whole link, not one word of it; where "all" is
-   not supported the "text" before it stands. index.html's guard lets its context menu (Copy)
+   not supported, "text". (The fallback sits outside @supports because the build's minifier drops
+   an overridden declaration in the same rule.) index.html's guard lets its context menu (Copy)
    through. Every other toast stays unselectable. */
 .toast.selectable {
   -webkit-user-select: text;
-  -webkit-user-select: all;
-  user-select: all;
+  user-select: text;
   -webkit-touch-callout: default;
   cursor: text;
+}
+
+@supports (user-select: all) or (-webkit-user-select: all) {
+  .toast.selectable {
+    -webkit-user-select: all;
+    user-select: all;
+  }
 }
 
 /* The stage follows the visual viewport (client/chat.ts fitViewport), so a phone's on-screen
