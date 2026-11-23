@@ -8,6 +8,12 @@
 // Each has one shortcut road (BR-TRACKS, ClickUp 123jpnbfghe; PLAN-BRANCH.md user decisions 1, 2 and 6):
 // shorter than the main road, risky, a clean run on it about 1.5-2.5 s a lap quicker, a fall on it dearer
 // than that; tools/debug/br-tracks.ts measures both per level and car type.
+// Each has its theme's surface (THEME-TRACKS, ClickUp 123jpnbfgj5; PLAN-THEMES.md 2.3, 2.6, section 3):
+// Breaker's Mile sand drifts, Slag Harbour an oil slick. Each patch covers half the road where the line
+// runs and leaves the other half firm, a way round a driver can read; they come in groups spaced like the
+// obstacles (track-density counts them on a shipped track), and none lies on a shortcut, a jump's run-up or
+// landing, a take-off zone or a recovery point. tools/debug/theme-tune.ts --tracks measures how often the
+// bots touch each one and what it costs a clean lap per car type, round it and through it.
 
 import type { TrackDef } from "./track";
 
@@ -32,7 +38,7 @@ import type { TrackDef } from "./track";
 export const SLAG_HARBOUR: TrackDef = {
   id: "slag-harbour",
   name: "Slag Harbour",
-  // HARBOUR-SCHEMA (PLAN-THEMES Amendment 1): a container port, its own theme; looks only (the client draws it as the scrapyard until TH-LOOK-H lands the harbour's art; its oil slick comes with THEME-TRACKS).
+  // HARBOUR-SCHEMA (PLAN-THEMES Amendment 1): a container port, its own theme; looks only (the client draws it as the scrapyard until TH-LOOK-H lands the harbour's art). Its oil slick: THEME-TRACKS, below.
   theme: "harbour",
   control: [
     [1800, 3700], [2400, 3650], [2900, 3450], [3400, 3420], [3900, 3580], [4500, 3700], [5200, 3700],
@@ -70,6 +76,11 @@ export const SLAG_HARBOUR: TrackDef = {
     { k: "tyres", s: 14650, lat: -26, r: 22 },
     // The left side: a conveyor belt across the asphalt.
     { k: "belt", s0: 17230, s1: 17480, lat0: -64, lat1: 64, vx: -70 },
+    // THEME-TRACKS: an oil slick on the quay, on the outside half of the bottom-left corner's exit (the last
+    // corner, a left-hander of ~34 degrees per 200 at ~325 u/s, onto the start straight): "steering goes,
+    // brakes stay": a car that runs wide out of the corner on it slides on, wide, toward the wall; held tight
+    // on the inside, the dry half (64 wide), it goes round. 1000 past the belt, clear of the grid.
+    { k: "oil", s0: 18500, s1: 18700, lat0: 0, lat1: 64 },
   ],
   recovery: [0, 4000, 8000, 9900, 12600, 16000],
 };
@@ -95,7 +106,7 @@ export const SLAG_HARBOUR: TrackDef = {
 export const BREAKERS_MILE: TrackDef = {
   id: "breakers-mile",
   name: "Breaker's Mile",
-  // THEME-SCHEMA (PLAN-THEMES 2.6): its straights a desert highway, the chasm a canyon; looks only (its sand comes with THEME-TRACKS).
+  // THEME-SCHEMA (PLAN-THEMES 2.6): its straights a desert highway, the chasm a canyon; looks only. Its sand drifts: THEME-TRACKS, below.
   theme: "desert",
   control: [
     [2100, 800], [2700, 800], [3300, 800], [3900, 800], [4400, 860], [4720, 1120], [4850, 1550], [4850, 2050],
@@ -124,10 +135,19 @@ export const BREAKERS_MILE: TrackDef = {
     { k: "ramp", s: 10900, len: 80 },
     { k: "gap", s0: 10980, s1: 11200 },
     { k: "cell", s: 11120, lat: 34, air: true },
+    // THEME-TRACKS: sand drifts, half the road each (the other half firm), in two groups. The bottom-left
+    // sweeper and the right-hander at its end: a drift on the sweeper's inside, then one on the corner's
+    // inside at its apex (the way round is the outside, longer).
+    { k: "sand", s0: 12450, s1: 12750, lat0: 0, lat1: 64 },
+    { k: "sand", s0: 13130, s1: 13400, lat0: 0, lat1: 64 },
     // The finger: the pit pair, then a cell on its hairpin's inside kerb.
     { k: "hole", s: 14450, lat: -30, r: 28 },
     { k: "hole", s: 14750, lat: 30, r: 28 },
     { k: "cell", s: 15905, lat: -58 },
+    // THEME-TRACKS: the right-hander after the finger: a drift on its outside at the entry, then one on its
+    // inside at the apex (in by the inside, out by the outside, or through one).
+    { k: "sand", s0: 17650, s1: 17950, lat0: -64, lat1: 0 },
+    { k: "sand", s0: 18100, s1: 18400, lat0: 0, lat1: 64 },
   ],
   recovery: [0, 4900, 5600, 10200, 13950, 17000],
 };
