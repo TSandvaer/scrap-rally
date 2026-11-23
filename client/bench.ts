@@ -23,6 +23,10 @@
 // well (gfx/theme.ts themedTrack: the benchmark's and the preview's switch, never the game's);
 // without it every cell is what it was. Under metric A a cell also notes the tiles baked and the
 // cost units spent on them while it was measured (gfx/world.ts worldStats).
+// &scene=S7&track=<dune-yard|block-yard|canopy-yard> runs S7 on a theme's own yard instead
+// (TH-LOOK-2; shared/testtracks.ts THEME_YARDS): three views of its own furniture (its theme
+// surface across the road, the truck, the barrels' lane), then the lap, in the yard's own theme
+// (its theme surface drawn); `&theme=scrapyard` gives the same frames on the scrapyard's look.
 // &scene=S8 is a cell of its own as well (BR-BAKE; PLAN-BRANCH.md 3): a lap of the Branch Yard
 // test track at 430 u/s that takes every shortcut (the main road to a fork, down the shortcut,
 // on from its merge), whatever &track says. &plain=1 draws a cell's frames on the same road
@@ -35,7 +39,7 @@
 // Results: window.scrapBench and the panel on screen.
 
 import { BASE_STATS } from "../shared/physics";
-import { testTrack } from "../shared/testtracks";
+import { testTrack, THEME_YARDS } from "../shared/testtracks";
 import { buildTrack, gridSlot, pointAt, recoveryAt, type Track } from "../shared/track";
 import { trackById, trackList } from "../shared/tracks";
 import { airTicksFor, FALL_TICKS, GHOST_TICKS, RIVET_RANGE, RIVET_SPEED } from "../shared/weapons";
@@ -77,7 +81,7 @@ const TITLES: Record<SceneId, string> = {
   S4: "lap at 430 u/s, 6 cars",
   S5: "recovery teleport, 3 leader cuts",
   S6: "Preview Yard: 6 cars, barrels, press, truck, pools, 3 cells",
-  S7: "Preview Yard in a theme: S6's views, then a lap at 430 u/s",
+  S7: "Preview Yard in a theme (or a theme's own yard): three views of the furniture, then a lap at 430 u/s",
   S8: "Branch Yard: a lap at 430 u/s that takes every shortcut",
 };
 
@@ -432,6 +436,49 @@ function yardScene(track: Track, n: number, rnd: () => number): Frame[] {
   return out;
 }
 
+/** Is the track one of the theme yards (shared/testtracks.ts THEME_YARDS; a themed copy of one too)? */
+function themeYard(track: Track): boolean {
+  return THEME_YARDS.some((d) => d.id === track.def.id);
+}
+
+/**
+ * S7's views on a theme's own yard (TH-LOOK-2): as S6's on the Preview Yard (yardScene: three
+ * fixed views, a third of the frames each, six cars and three lightning cells in every one, the
+ * race tick running a tick a frame), at the places these yards have their furniture: the theme
+ * surface right across the road (the pack drives through it); the ramp truck (one car up its
+ * ramp and over the cab); the row of barrels. The cars are scripted: nothing pushes them.
+ */
+function themeYardScene(track: Track, n: number, rnd: () => number): Frame[] {
+  const each = Math.max(1, Math.floor(n / 3));
+  const truck = track.trucks[0];
+  const v = 380, flight = (v * airTicksFor(v)) / FPS;
+  const cell = (s: number, lat: number, air: boolean): CellView => {
+    const p = pointAt(track, s);
+    return { x: p.x - Math.sin(p.h) * lat, y: p.y + Math.cos(p.h) * lat, air, state: 0 };
+  };
+  const views = [
+    { cam: 950, from: 600, dist: 720, lanes: [-52, 12, 34, 54, -40, 22], cells: [cell(700, -56, false), cell(1040, 56, false), cell(1200, 18, false)] },
+    { cam: 1900, from: 1560, dist: 720, lanes: [truck.lat, -40, -24, -48, -30, -16], cells: [cell(truck.lip + flight / 2, truck.lat + 28, true), cell(2100, -30, false), cell(1640, 56, false)] },
+    { cam: 5000, from: 4640, dist: 720, lanes: [-50, 14, 36, 54, -30, 24], cells: [cell(4800, -56, false), cell(5120, 56, false), cell(5240, 12, false)] },
+  ].map((w) => ({ ...w, at: pointAt(track, w.cam), lanes: w.lanes.map((lat, k) => (k ? lat + (rnd() - 0.5) * 6 : lat)), pace: [300, 280, 320, 260, 340, 290] }));
+  const out: Frame[] = [];
+  for (let i = 0; i < n; i++) {
+    const k = Math.min(2, Math.floor(i / each)), w = views[k];
+    const cars = w.lanes.map((lat, c) => {
+      const s = w.from + ((i * (w.pace[c] / FPS) + (c * w.dist) / 6) % w.dist);
+      // The first car of the second view takes the truck's ramp, and flies from its lip.
+      if (k === 1 && c === 0) {
+        const at = w.from + ((i * (v / FPS)) % w.dist);
+        const u = (at - truck.lip) / flight;
+        return carAt(track, c, at, lat, { height: u > 0 && u < 1 ? 4 * u * (1 - u) : 0 });
+      }
+      return carAt(track, c, s, lat, { car: (["sport", "racer", "truck"] as const)[c % 3] });
+    });
+    out.push({ cx: w.at.x, cy: w.at.y, snap: i % each === 0 && i < 3 * each, shake: 0, cars, fx: { shots: [], mines: [], sparks: [], cells: w.cells, rt: i }, hud: raceHud(i) });
+  }
+  return out;
+}
+
 /** The scripted frames of a scene on a track (the same on every call: fixed seed). */
 function script(scene: SceneId, track: Track, n: number): Frame[] {
   const rnd = mulberry32(SEED);
@@ -452,7 +499,7 @@ function script(scene: SceneId, track: Track, n: number): Frame[] {
       // S6's frames (its three views), then S4's lap of the same track: the furniture standing
       // in view, then every tile of the yard baked on the way round.
       const views = Math.min(n, FRAMES);
-      return [...yardScene(track, views, rnd), ...lapScene(track, n - views, rnd)];
+      return [...(themeYard(track) ? themeYardScene(track, views, rnd) : yardScene(track, views, rnd)), ...lapScene(track, n - views, rnd)];
     }
     case "S8":
       // The way is Branch Yard's own, whatever the frames are drawn on (&plain=1: its road without the shortcuts).
@@ -876,8 +923,10 @@ export async function runBench(view: HTMLCanvasElement, params: URLSearchParams)
     if (one && !yard && !(SCENES as readonly string[]).includes(one)) throw new Error(`unknown scene ${one}`);
     const scenes: SceneId[] = one ? [one] : metric === "A" ? [...SCENES] : [metric === "B" ? "S4" : "S3"];
     const named = params.get("track");
+    // S7 on a theme's own yard (&track=): in the yard's own theme unless &theme= says another.
+    const ownYard = one === THEME_SCENE && named !== null && THEME_YARDS.some((d) => d.id === named) ? named : null;
     // The look of another theme on the cell's track: asked for with &theme=, and S7's by default.
-    const asked = params.get("theme") ?? (one === THEME_SCENE ? "desert" : null);
+    const asked = params.get("theme") ?? (one === THEME_SCENE && !ownYard ? "desert" : null);
     if (asked !== null && !isTheme(asked)) throw new Error(`unknown theme ${asked}`);
     // &plain=1: the cell's road without its shortcut roads (a track that has none is itself).
     const plain = params.get("plain") === "1";
@@ -887,7 +936,7 @@ export async function runBench(view: HTMLCanvasElement, params: URLSearchParams)
     };
     // Without &track: every track the scenes have their spots on (SPOTS). A track without them
     // (the long ones, M4-TRACKS) is left out of the quick look, not an error; asked for by name it still is one.
-    const tracks = (yard ? [testTrack(branch ? BRANCH_TRACK : YARD_TRACK)!] : named ? [testTrack(named) ?? trackById(named)] : trackList().filter((e) => SPOTS[e.id]).map((e) => trackById(e.id))).map(themed);
+    const tracks = (yard ? [testTrack(branch ? BRANCH_TRACK : ownYard ?? YARD_TRACK)!] : named ? [testTrack(named) ?? trackById(named)] : trackList().filter((e) => SPOTS[e.id]).map((e) => trackById(e.id))).map(themed);
     const hold = num("hold");
     if (hold !== null) {
       const frames = framesFor(scenes[0], tracks[0], opts);

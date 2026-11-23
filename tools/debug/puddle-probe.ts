@@ -21,6 +21,11 @@
 // And the three original shipped tracks have no pixel of water or of a dirt patch at all (M4-TRACKS: the
 // two long shipped tracks, Slag Harbour and Breaker's Mile, have puddles: they are probed like the test
 // tracks).
+// The theme surfaces (TH-LOOK-2; PLAN-THEMES.md 2.3) are puddles as well and are held to the same
+// promise: a sand patch (a desert track's, Track.sand) and an oil slick (a city track's, Track.oil),
+// each drawn inside its declared rectangle with all of its traction rectangle the surface's own
+// pixels. A track is probed in its own theme, as the game draws it; a ford (a jungle track's) has no
+// look yet (TH-LOOK-3) and is not probed.
 // Exit code 1 if a pixel breaks a promise.
 
 import { PUDDLE_TRACTION_INSET, tractionRect, type PuddleRect } from "../../client/gfx/puddle-shape";
@@ -61,8 +66,10 @@ function probe(track: Track): void {
   const puddles: { what: string; kind: number; rect: PuddleRect }[] = [
     ...track.water.map((w) => ({ what: "water", kind: KIND.water as number, rect: w })),
     ...track.dirt.map((d) => ({ what: "dirt", kind: KIND.dirt as number, rect: d })),
+    ...track.sand.map((d) => ({ what: "sand", kind: KIND.sand as number, rect: d })),
+    ...track.oil.map((d) => ({ what: "oil", kind: KIND.oil as number, rect: d })),
   ];
-  console.log(`\n## ${track.def.name}: ${track.water.length} pools, ${track.dirt.length} dirt patches\n`);
+  console.log(`\n## ${track.def.name}: ${track.water.length} pools, ${track.dirt.length} dirt patches${track.sand.length || track.oil.length ? `, ${track.sand.length} sand patches, ${track.oil.length} oil slicks` : ""}\n`);
   if (!puddles.length) return;
   console.log("| puddle (s0..s1 x lat0..lat1) | declared | puddle fills | traction rect | of the puddle | traction pixels | not the puddle's | nearest the edge comes | puddle pixels outside its bounds |");
   console.log("|---|---:|---:|---:|---:|---:|---:|---:|---:|");
