@@ -16804,13 +16804,14 @@ function hsSlag(): void {
       t.sand.length + t.oil.length + t.fords.length === 0,
     `theme ${t.def.theme}; ${validateTrack(t).join(" | ") || "valid"}`,
   );
-  // Criterion 6 (Node side): the client's renderer takes a track's scenery from sceneryFor (client/render.ts); harbour has no art in
-  // LANDED, so Slag Harbour and Quay Yard get the scrapyard's very scenery (tools/debug/theme-sheet.ts --hash: their pixels).
+  // Criterion 6 (Node side): the client's renderer takes a track's scenery from sceneryFor (client/render.ts). HARBOUR-SCHEMA held
+  // here that harbour had no art in LANDED and both tracks got the scrapyard's very scenery; TH-LOOK-H (ClickUp 123jpnbfgzw) landed
+  // the harbour's art, so both get the harbour's own now, and it is not the scrapyard's (tools/debug/theme-sheet.ts --hash: their pixels).
   const quay = hsTestTrack("quay-yard")!;
-  const scrap = hsSceneryOf("scrapyard");
+  const scrap = hsSceneryOf("scrapyard"), port = hsSceneryOf("harbour");
   check(
-    "harbour looks: the client draws Slag Harbour and Quay Yard as the scrapyard (sceneryFor gives the scrapyard's scenery: harbour's art has not landed, TH-LOOK-H)",
-    hsSceneryFor(t) === scrap && hsSceneryFor(quay) === scrap && scrap.theme === "scrapyard",
+    "harbour looks: the client draws Slag Harbour and Quay Yard in the harbour's look (sceneryFor gives the harbour's scenery, not the scrapyard's: its art landed with TH-LOOK-H)",
+    hsSceneryFor(t) === port && hsSceneryFor(quay) === port && port.theme === "harbour" && port !== scrap && scrap.theme === "scrapyard",
     `Slag Harbour ${hsSceneryFor(t).theme}, Quay Yard ${hsSceneryFor(quay).theme}`,
   );
 }

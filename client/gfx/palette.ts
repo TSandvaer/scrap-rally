@@ -299,6 +299,93 @@ export const CITY_PALETTE: ThemePalette = {
 };
 
 /**
+ * The harbour, "working container port" (TH-LOOK-H; PLAN-THEMES.md Amendment 1, A1.2). Our own
+ * colours. The ground is a quay of light concrete (`dirt`: its slabs, the joints between them a
+ * tone down); the verge the apron beside the road, the same concrete worn darker (`gravel`); the
+ * tarmac the scrapyard's with a blue-grey tint and as dark. Four greys, then, and each a clear
+ * step from the next (tools/debug/theme-sheet.ts --check holds the numbers). `rust` is no rust
+ * here but old yellow road paint: the kerb's painted slabs (rust2: faded, far less of a colour
+ * than the hazard's amber, and none of the fixed hazard colours), its shade and its sunlit edge,
+ * and darkest of it the brown of old timber (rust0: a rail sleeper, a belt's slats). Steel
+ * stays steel: the kerb's bare slabs, ramps, plates and rails are the same metal and stone
+ * grey here, and the water keeps its edge and its glints. Nothing in it is blue but the water.
+ * The extras, all for pixels that take no marks: concrete (the jersey barrier), four paints of
+ * containers and port machines (oxide red, green, ochre, and a reefer's white, which is a cool
+ * grey: none near a car's colour), wood (pallets, and a hawser's hemp), the two warm chars of a
+ * burn (concrete has no dark tone of its own to burn to), and the oil slick's, which are the
+ * city's (PLAN-THEMES Amendment 1: oil lies on city and harbour tracks, and looks the same on both).
+ */
+export const HARBOUR_PALETTE: ThemePalette = {
+  colours: {
+    ...P,
+    // Quay concrete. dirt0 is concrete in a cast shadow; dirt1 a joint, a dark speck.
+    dirt0: "#5c5e5b",
+    dirt1: "#7b7d77",
+    dirt2: "#93948d",
+    dirt3: "#a5a69e",
+    // The apron: its pockets and dark specks, its plain tone, a light speck.
+    gravel0: "#52524d",
+    gravel1: "#72716a",
+    gravel2: "#888780",
+    // Tarmac, tinted blue-grey.
+    tar0: "#27292c",
+    tar1: "#363a3e",
+    tar2: "#43484c",
+    tar3: "#5e6468",
+    // Old yellow paint (and under it, old timber).
+    rust0: "#4f4126",
+    rust1: "#8c7438",
+    rust2: "#bfae72",
+    rust3: "#d6c68e",
+  },
+  // The scrapyard's links run through its earth tones, which are darker than its gravel; here the
+  // ground is the lightest of the greys, so a shadow steps down through the apron and the tarmac.
+  shade: {
+    ...SHADE,
+    dirt0: "tar1", dirt1: "tar2", dirt2: "dirt0", dirt3: "dirt0",
+    gravel0: "tar1", gravel1: "tar2", gravel2: "gravel0",
+    haz0: "rust0",
+    blast: "haz0", red: "rust0",
+  },
+  lit: {
+    ...LIT,
+    soot3: "tar2",
+    dirt3: "steel3",
+    gravel2: "dirt2",
+    rust3: "bone1",
+  },
+  extras: [
+    { name: "conc0", hex: "#5a5b57", shade: "soot3", lit: "conc1" },
+    { name: "conc1", hex: "#8e8f89", shade: "conc0", lit: "conc2" },
+    { name: "conc2", hex: "#c4c5bd", shade: "conc1", lit: "conc3" },
+    { name: "conc3", hex: "#dadbd3", shade: "conc2", lit: "conc3" },
+    { name: "ox0", hex: "#5a2a22", shade: "soot3", lit: "ox1" },
+    { name: "ox1", hex: "#80382b", shade: "ox0", lit: "ox2" },
+    { name: "ox2", hex: "#a04c38", shade: "ox1", lit: "ox2" },
+    { name: "grn0", hex: "#2c4a36", shade: "soot3", lit: "grn1" },
+    { name: "grn1", hex: "#3f6b4a", shade: "grn0", lit: "grn2" },
+    { name: "grn2", hex: "#58875f", shade: "grn1", lit: "grn2" },
+    { name: "och0", hex: "#5f4a1c", shade: "soot3", lit: "och1" },
+    { name: "och1", hex: "#8f6f24", shade: "och0", lit: "och2" },
+    { name: "och2", hex: "#b08c38", shade: "och1", lit: "och2" },
+    { name: "reef0", hex: "#66727a", shade: "steel0", lit: "reef1" },
+    { name: "reef1", hex: "#9aa5ab", shade: "reef0", lit: "reef2" },
+    { name: "reef2", hex: "#bcc6ca", shade: "reef1", lit: "reef2" },
+    { name: "wood0", hex: "#5f4a2c", shade: "soot3", lit: "wood1" },
+    { name: "wood1", hex: "#8a6f44", shade: "wood0", lit: "wood2" },
+    { name: "wood2", hex: "#b09468", shade: "wood1", lit: "wood2" },
+    { name: "char0", hex: "#3b2e23", shade: "soot3", lit: "char1" },
+    { name: "char1", hex: "#4e3e2c", shade: "char0", lit: "gravel0" },
+    { name: "oil0", hex: "#0e0c14", shade: "soot0", lit: "oil1" },
+    { name: "oil1", hex: "#1a1726", shade: "oil0", lit: "oil2" },
+    { name: "oil2", hex: "#3b3556", shade: "oil1", lit: "oilv" },
+    { name: "oilv", hex: "#9466b8", shade: "oil2", lit: "oilv" },
+    { name: "oilt", hex: "#38a8a0", shade: "oil2", lit: "oilt" },
+  ],
+  burn: { singed: ["soot2", "soot3", "char0", "char1"], charred: ["soot1", "soot2", "soot3", "char0"] },
+};
+
+/**
  * style.css :root mirrored: the palette entry each CSS variable takes. Six equal today's CSS
  * value exactly; --line (#4a3a2b), --panel (rgba(22,17,13,0.92)) and --err (#ff8b6b) move
  * onto the palette when GFX-3 applies the mirror (red on soot1 is 4.8:1; GFX-3 judges it).

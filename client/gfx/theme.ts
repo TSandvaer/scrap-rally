@@ -16,7 +16,7 @@
 
 import { isTheme, themeOf as themeOfDef, THEMES, type Theme } from "../../shared/theme";
 import type { Track } from "../../shared/track";
-import { CITY_PALETTE, DESERT_PALETTE, P, PALETTE, rgbOf, SCRAPYARD, SCRAPYARD_PALETTE, type PaletteName, type ThemePalette } from "./palette";
+import { CITY_PALETTE, DESERT_PALETTE, HARBOUR_PALETTE, P, PALETTE, rgbOf, SCRAPYARD, SCRAPYARD_PALETTE, type PaletteName, type ThemePalette } from "./palette";
 
 export { isTheme, THEMES, type Theme };
 
@@ -39,8 +39,12 @@ export type Tones = readonly [PaletteName, PaletteName, PaletteName, PaletteName
 /** What moves on the road, in a theme's choice of the global 32 (the obstacle sheet is no baked tile: it has the effects' palette). */
 export interface ObstacleTones {
   barrel: { rims: Tones; hoops: Tones; label: Tones; seam: Tones; body: Tones };
-  /** A press's slab: its outline, its edge in the sun and away from it, the two stripes of its top. */
-  slab: { outline: PaletteName; lit: PaletteName; dark: PaletteName; stripeA: PaletteName; stripeB: PaletteName };
+  /**
+   * A press's slab: its outline, its edge in the sun and away from it, the two stripes of its top.
+   * `corner` (a theme may name one): a block in that tone on each of the top's four corners, a
+   * container spreader's twistlock housings (the stripes stay all over the rest).
+   */
+  slab: { outline: PaletteName; lit: PaletteName; dark: PaletteName; stripeA: PaletteName; stripeB: PaletteName; corner?: PaletteName };
 }
 
 export interface Scenery {
@@ -109,11 +113,26 @@ const CITY_OBSTACLES: ObstacleTones = {
   slab: { outline: "soot1", lit: "bone1", dark: "tar3", stripeA: "haz1", stripeB: "soot2" },
 };
 
+// The harbour's: chemical drums (pale steel, black hoops, a yellow hazard label that goes round
+// as one rolls) and a container spreader (a frame in signal orange with a twistlock housing on
+// each corner; its top keeps the hazard stripes).
+const HARBOUR_OBSTACLES: ObstacleTones = {
+  barrel: {
+    rims: ["soot2", "soot3", "soot3", "dirt0"],
+    hoops: ["soot1", "soot2", "soot2", "soot3"],
+    label: ["haz0", "haz0", "haz1", "haz2"],
+    seam: ["soot3", "soot3", "steel0", "steel1"],
+    body: ["steel1", "steel2", "steel3", "bone2"],
+  },
+  slab: { outline: "soot1", lit: "rust3", dark: "rust1", stripeA: "haz1", stripeB: "soot2", corner: "steel3" },
+};
+
 /** The themes whose art has landed, in the order of their ids. */
 const LANDED: readonly { theme: Theme; palette: ThemePalette; dust: readonly [PaletteName, PaletteName]; obstacles: ObstacleTones }[] = [
   { theme: "scrapyard", palette: SCRAPYARD_PALETTE, dust: ["bone1", "bone0"], obstacles: SCRAPYARD_OBSTACLES },
   { theme: "desert", palette: DESERT_PALETTE, dust: ["dirt3", "dirt1"], obstacles: DESERT_OBSTACLES },
   { theme: "city", palette: CITY_PALETTE, dust: ["gravel2", "gravel1"], obstacles: CITY_OBSTACLES },
+  { theme: "harbour", palette: HARBOUR_PALETTE, dust: ["dirt3", "gravel2"], obstacles: HARBOUR_OBSTACLES },
 ];
 
 function build(id: number): Scenery {

@@ -402,7 +402,7 @@ interface Section {
 const shot = (label: string, track: Track, s: number, lat: number, w: number, h: number, zoom = 2, marks?: Shot["marks"]): Shot => ({ label, track, ...at(track, s, lat), w, h, zoom, marks });
 
 /** The yard a theme has of its own (shared/testtracks.ts THEME_YARDS), in its own theme. */
-const YARD_OF: Partial<Record<Theme, string>> = { desert: "dune-yard", city: "block-yard" };
+const YARD_OF: Partial<Record<Theme, string>> = { desert: "dune-yard", city: "block-yard", harbour: "quay-yard" };
 
 function sheet(theme: Theme): Picture {
   const sc = sceneryOf(theme);
