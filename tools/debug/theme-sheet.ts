@@ -65,7 +65,10 @@
 // crossing and holes, and the Preview Yard scenes. Each as the whole window in the theme, and
 // for the shipped tracks also as a pair, the track's own look beside it: `pair-<name>-<size>.png`.
 // And the theme's own yard as the game draws it (no switch: its own theme, its theme surface
-// drawn), the tour held at ten places round the lap: `<theme>-<yard>-<place>-<size>.png`.
+// drawn), the tour held at ten places round the lap: `<theme>-<yard>-<place>-<size>.png`; for
+// the harbour also Slag Harbour, the shipped track that has the theme, at ten places round its
+// lap and down its shortcut (its start, the split's island, a pool, the pier cut's fork, pit and
+// merge among them): `harbour-slag-harbour-<place>-<size>.png`.
 // For every themed shot at 390x844@3 it also holds the screen against the game canvas: every
 // device pixel inside the canvas's box must have one of the colours the 640 x 360 canvas itself
 // holds (the canvas is scaled without smoothing, so no colour is mixed on the way and the
@@ -229,14 +232,14 @@ if (args.includes("--hash")) {
 
 // ---- the themes' own code ----------------------------------------------------------------------
 
-const { artLayout, bakeTileIndices, bakeTileKinds, bakeTileMarked, clearMarks, KIND, MARK, scorch, skid, TILE, VIEW_H, VIEW_W, World, ZOOM } = await import("../../client/gfx/world");
+const { artLayout, bakeTileIndices, bakeTileKinds, bakeTileMarked, clearMarks, KIND, MARK, PROP, scorch, skid, TILE, VIEW_H, VIEW_W, World, ZOOM } = await import("../../client/gfx/world");
 const { BARREL, obstacleIndexSheet, ROLL } = await import("../../client/gfx/obstacles");
 const { CAR_COLORS, FIXED, LIT, P, PALETTE, rgbOf, SCRAPYARD, SHADE } = await import("../../client/gfx/palette");
 const { FX_SHADOW, OBST_W } = await import("../../client/gfx/sprites");
 const { FONT_LETTERS, SMALL } = await import("../../client/gfx/font");
 const { COLOURS, hasArt, isTheme, KEEP_OFF, sceneryFor, sceneryOf, themedTrack, themeOf, THEMES } = await import("../../client/gfx/theme");
 const { testTrack } = await import("../../shared/testtracks");
-const { pointAt, queryTrack } = await import("../../shared/track");
+const { BARREL_R, pointAt, queryTrack } = await import("../../shared/track");
 const { trackById } = await import("../../shared/tracks");
 const { sheetYard } = await import("./world-sheet/yard");
 type Track = import("../../shared/track").Track;
@@ -404,41 +407,88 @@ const shot = (label: string, track: Track, s: number, lat: number, w: number, h:
 /** The yard a theme has of its own (shared/testtracks.ts THEME_YARDS), in its own theme. */
 const YARD_OF: Partial<Record<Theme, string>> = { desert: "dune-yard", city: "block-yard", harbour: "quay-yard" };
 
+/** The harbour's props on a track, a close-up of each kind: the largest piece of it, and of the containers a second one. */
+function harbourProps(track: Track): Shot[] {
+  const junk = artLayout(track).junk;
+  const out: Shot[] = [];
+  for (const [name, kind] of Object.entries(PROP)) {
+    if (name === "empty") continue;
+    // The pieces of the kind that stand most apart from the others (so that one is seen whole), the largest of those first.
+    const apart = (j: (typeof junk)[number]) => Math.min(...junk.filter((o) => o !== j && o.kind !== PROP.empty).map((o) => Math.hypot(o.x - j.x, o.y - j.y) - o.reach - j.reach));
+    const list = junk.filter((j) => j.kind === kind).map((j) => ({ ...j, apart: Math.min(6, apart(j)) })).sort((a, b) => b.apart - a.apart || b.reach - a.reach);
+    const picks = name === "container" ? [list[0], list[1]] : [list[0]];
+    for (const j of picks) if (j) out.push({ label: `${name}${name === "crane" ? "'s base, on its rails" : name === "straddle" ? " carrier" : name === "bollards" ? " with a mooring rope" : name === "hawser" ? ", coiled" : ""}, 4x`, track, x: j.x / ZOOM, y: j.y / ZOOM, w: 120, h: 86, zoom: 4 });
+  }
+  return out;
+}
+
+/** The harbour's ground art on a track (gfx/world.ts layStacks, layRails): its largest block of containers lying each way, its longest pair of crane rails, and a whole view. */
+function harbourYard(track: Track): Shot[] {
+  const art = artLayout(track), out: Shot[] = [];
+  const blocks: { x: number; y: number; w: number; h: number }[] = [];
+  for (let k = 0; k < art.blocks.length; k += 4) if (art.blocks[k + 2] > art.blocks[k]) blocks.push({ x: (art.blocks[k] + art.blocks[k + 2]) / 2, y: (art.blocks[k + 1] + art.blocks[k + 3]) / 2, w: art.blocks[k + 2] - art.blocks[k], h: art.blocks[k + 3] - art.blocks[k + 1] });
+  const largest = (list: typeof blocks) => list.sort((a, b) => b.w * b.h - a.w * a.h)[0];
+  for (const [what, b] of [["a block, its rows along x", largest(blocks.filter((b) => b.w >= b.h))], ["a block, its rows along y", largest(blocks.filter((b) => b.w < b.h))]] as const) {
+    if (b) out.push({ label: `${what} (${b.w} x ${b.h} pixels), 3x`, track, x: b.x / ZOOM, y: b.y / ZOOM, w: 170, h: 150, zoom: 3 });
+  }
+  let best = -1;
+  for (let k = 0; k < art.rails.length; k += 6) if (best < 0 || art.rails[k + 5] - art.rails[k + 4] > art.rails[best + 5] - art.rails[best + 4]) best = k;
+  if (best >= 0) {
+    const r = art.rails, mid = (r[best + 4] + r[best + 5]) / 2, len = r[best + 5] - r[best + 4];
+    out.push({ label: `a crane's rails, ${len} pixels of them, buffer stops at their ends, 3x`, track, x: (r[best + 2] ? r[best] : mid) / ZOOM, y: (r[best + 2] ? mid : r[best + 1]) / ZOOM, w: r[best + 2] ? 150 : 250, h: r[best + 2] ? 250 : 150, zoom: 3 });
+  }
+  const p = at(track, 300, -track.wall - 190);
+  out.push({ label: "the quay beside the road, 1x", track, x: p.x, y: p.y, w: 640, h: 360, zoom: 1 });
+  return out;
+}
+
 function sheet(theme: Theme): Picture {
   const sc = sceneryOf(theme);
   const crusher = themedTrack(trackById("crusher-run"), theme), knot = themedTrack(trackById("overpass-knot"), theme);
   const yard = themedTrack(sheetYard(), theme), preview = themedTrack(testTrack("preview-yard")!, theme), rust = themedTrack(trackById("rust-bowl"), theme);
   const gap = crusher.gaps.find((g) => !g.scrap)!, scrap = crusher.gaps.find((g) => g.scrap)!, hole = knot.holes[0];
-  const props = propSpots(rust, theme === "city" ? 9 : 6);
+  const port = theme === "harbour", slag = trackById("slag-harbour");
+  const props = port ? [] : propSpots(rust, theme === "city" ? 9 : 6);
+  // The basin's ladder is on the wall the sun is on: the flank of the chasm that holds steel.
+  const ladderSide = [-1, 1].map((side) => {
+    const p = at(crusher, gap.s0 + (gap.s1 - gap.s0) / 3, side * (crusher.wall - 6));
+    return { side, n: port ? windowOf(crusher, p.x, p.y, 60, 60).filter((v) => v === sc.index.steel2).length : 0 };
+  }).sort((a, b) => b.n - a.n)[0].side;
   const sections: Section[] = [
     {
       title: "THE ROAD'S BANDS",
-      note: "ground, barrier (desert: sandstone blocks; city: concrete in lengths, an amber reflector stud where a post stands), verge (city: a sidewalk's slabs), kerb (city: grey and white stones), tarmac with its centre line; a straight at 4x, the start line, a bend and a tight bend at 2x",
+      note: "ground, barrier (desert: sandstone blocks; city: concrete in lengths, an amber reflector stud where a post stands; harbour: a jersey barrier in lengths, a lashing ring where a post stands), verge (city: a sidewalk's slabs; harbour: the quay's apron, tie-down rings in it, nothing painted or hatched on it), kerb (city: grey and white stones; harbour: bare grey slabs and slabs in a yellow long faded), tarmac with its centre line; a straight at 4x, the start line, a bend and a tight bend at 2x",
       shots: [shot("a straight, 4x", rust, 700, -70, 170, 110, 4), shot("start line and grid", rust, 6, 0, 300, 220), shot("a bend", rust, 2300, 0, 300, 220), shot("a tight bend", yard, 2800, 0, 300, 220)],
     },
     {
       title: "THE GROUND",
-      note: "outside the walls. scrapyard: packed earth, stains and wheel ruts; desert: sand, dune crests and wind ripples; city: old paving and the roofs of the town (clay tiles, slate, zinc; gabled, hipped, flat with vents), their shadows in the alleys; at 2x and at 1x",
+      note: "outside the walls. scrapyard: packed earth, stains and wheel ruts; desert: sand, dune crests and wind ripples; city: old paving and the roofs of the town (clay tiles, slate, zinc; gabled, hipped, flat with vents), their shadows in the alleys; harbour: a quay of concrete slabs, an expansion joint between them (no line painted on it), a lighter pour and an old stained one now and then, drains; at 2x and at 1x",
       shots: [shot("ground, 2x", rust, 1200, -420, 330, 220), shot("ground, 2x", crusher, 2000, 400, 330, 220), shot("ground, 1x", rust, 1200, -520, 640, 360, 1)],
     },
     {
       title: "PROPS OUTSIDE THE WALLS",
-      note: "at the yard's junk sites. desert: rock outcrops (two stones), dry scrub, round succulents, half-buried car shells; city: planter trees, crates, traffic cones, parked cars in wine, moss, petrol and grey (no car's colour); 3x",
-      shots: props.map((p, k) => ({ label: `heap ${k + 1}`, track: rust, x: p.x, y: p.y, h: 0, w: 150, zoom: 3, ...{ h: 110 } })),
+      note: "at the yard's junk sites. desert: rock outcrops (two stones), dry scrub, round succulents, half-buried car shells; city: planter trees, crates, traffic cones, parked cars in wine, moss, petrol and grey (no car's colour); 3x. harbour (on Slag Harbour, a close-up of each kind): containers in oxide red, green, ochre and slate, one on another; a reefer with its machinery at one end (a row of them where a heap is reefers); a crane's base (two sills on their rails, the portal's girders, the slewing column: no boom); a straddle carrier over its container; a pair of bollards with a mooring rope; a coiled hawser; pallets; a forklift",
+      shots: port ? harbourProps(slag) : props.map((p, k) => ({ label: `heap ${k + 1}`, track: rust, x: p.x, y: p.y, h: 0, w: 150, zoom: 3, ...{ h: 110 } })),
     },
+    ...(port ? [{
+      title: "THE CONTAINER YARD AND THE CRANE RAILS: GROUND ART, LAID OUT PER TRACK",
+      note: "not props (those stand at the junk's sites alone) but the harbour's ground, laid out once per track as a town's roofs are: blocks of container stacks on the slabs' own grid, their rows end to end; and under every crane's base its pair of rails, which run across the nearest road's way and never along a road. Both keep clear of every road (the barrier and 13 units of open quay; a rail 10), of the props, of each other and of the two flag marshals",
+      shots: harbourYard(slag),
+    }] : []),
     {
       title: "GAPS AND PITS",
-      note: "a gap's void (soot; desert: layered rock near the rim; city: a concrete coping and a street below, all of it soot) with its ramp, hazard ends and broken edge; a gap filled with scrap (desert: boulders; city: rubble and crates); a pit",
+      note: "a gap's void (soot; desert: layered rock near the rim; city: a concrete coping and a street below, all of it soot; harbour: a dock basin, its wall sheet piling in steps of soot and nothing else, no water down there and no blue; a steel ladder down the wall the sun is on) with its ramp, hazard ends and broken edge; a gap filled with scrap (desert: boulders; city: rubble and crates; harbour: containers as they fell, and pallets); a pit",
       shots: [
         shot("chasm: ramp, void, far end", crusher, (gap.s0 + gap.s1) / 2 - 40, 0, 400, 300),
         shot("the void's rim, 4x", crusher, gap.s0 + 14, crusher.wall - 30, 150, 110, 4),
+        ...(port ? [shot("the basin's ladder, 4x", crusher, gap.s0 + (gap.s1 - gap.s0) / 3, ladderSide * (crusher.wall - 12), 150, 110, 4)] : []),
         shot("a gap filled with scrap", crusher, (scrap.s0 + scrap.s1) / 2, 0, 330, 300),
         shot("a pit, 4x", knot, hole.s, hole.lat, 130, 110, 4),
       ],
     },
     {
       title: "THE ROAD'S FURNITURE",
-      note: "water (blue-grey in every theme; desert: a rim of dried, cracked mud; city: a rain puddle over its drain grate), a dirt patch (desert: red clay; city: roadworks, taped off), a belt, the barrels' lane with hatch and gutter, a press's bed, mounds (desert: sandbags; city: a strapped tyre bundle), an island with its noses, the ramp truck (desert: a sand hauler; city: a car carrier)",
+      note: "water (blue-grey in every theme; desert: a rim of dried, cracked mud; city: a rain puddle over its drain grate; harbour: a rain puddle on the concrete), a dirt patch (desert: red clay; city: roadworks, taped off; harbour: ballast with old rail sleepers in it), a belt, the barrels' lane with hatch and gutter, a press's bed, mounds (desert: sandbags; city: a strapped tyre bundle; harbour: stacked dock fenders), an island with its noses, the ramp truck (desert: a sand hauler; city: a car carrier; harbour: a container chassis trailer behind a terminal tractor)",
       shots: [
         shot("pool on tarmac", yard, 1225, -2, 220, 190, 3),
         shot("pool over kerb and verge", yard, 1365, 63, 220, 190, 3),
@@ -491,8 +541,22 @@ function sheet(theme: Theme): Picture {
     const view = (label: string, s: number, lat = 0): Shot => shot(label, t, s, lat, 640, 360, 1);
     sections.push({
       title: `${t.def.name.toUpperCase()}: THE THEME'S OWN YARD`,
-      note: `${t.def.id} (shared/testtracks.ts), whole views at 1x round the lap: its theme surface (${theme === "city" ? "an oil slick" : "sand"}) across the road and on half of it, the truck, the mounds, the pool in the bend, the barrels' lane, the press, the split with its dirt lane`,
-      shots: [view("the start", 0), view("slot A", 950), view("the truck", 1800), view("the mounds", 2790), view("the pool in the bend", 4150), view("the barrels' lane", 5000), view("the press", 6300), view("slot B", 7270), view("the split", 8300), view("the dirt lane", 8700)],
+      note: `${t.def.id} (shared/testtracks.ts), whole views at 1x round the lap: its theme surface (${t.oil.length ? "an oil slick" : "sand"}) ${port ? "on the right half of the road and down its middle" : "across the road and on half of it"}, the truck, the mounds, the pool in the bend, the barrels' lane, the press, the split with its dirt lane`,
+      shots: [view("the start", 0), view("slot A", 950), view("the truck", 1800), view("the mounds", 2790), view("the pool in the bend", 4150), view("the barrels' lane", 5000), view("the press", 6300), view("slot B", port ? 7340 : 7270), view("the split", 8300), view("the dirt lane", 8700)],
+    });
+  }
+  // The shipped track that has the theme (the harbour's: Slag Harbour), as a race shows it.
+  if (port) {
+    const cut = slag.branches[0], pit = cut.road.holes[0];
+    const view = (label: string, s: number, lat = 0): Shot => shot(label, slag, s, lat, 640, 360, 1);
+    sections.push({
+      title: "SLAG HARBOUR: THE SHIPPED TRACK IN ITS THEME",
+      note: "slag-harbour (shared/longtracks.ts), whole views at 1x round the lap: the start, the quay straight's barrels, the split round its island with the flooded lane, the ramp truck, the pier's shortcut (its fork, the pit on its hairpin, its merge), the fenders' chicane, the belt",
+      shots: [
+        view("the start", 0), view("the quay straight: the barrels' lane", 2700), view("the split: the island's nose", 4440), view("the split: the flooded lane", 4760, -40), view("the ramp truck", 8620),
+        view("the pier's shortcut: the fork", cut.s0 + 60, 40), { label: "the shortcut: the pit on its hairpin", track: slag, x: pit.x, y: pit.y, w: 640, h: 360, zoom: 1 }, view("the shortcut: the merge", cut.s1 - 60, 40),
+        view("the fenders' chicane", 14450), view("the belt", 17355),
+      ],
     });
   }
   const sprites = spriteStrip(preview);
@@ -506,7 +570,7 @@ function sheet(theme: Theme): Picture {
  * beside the desert's red clay dirt, oil beside a pool and beside a pit.
  */
 function surfaces(): Picture {
-  const dune = testTrack("dune-yard")!, block = testTrack("block-yard")!;
+  const dune = testTrack("dune-yard")!, block = testTrack("block-yard")!, quay = testTrack("quay-yard")!;
   const knot = themedTrack(trackById("overpass-knot"), "city");
   const marks = (s: number, lat: number) => (t: Track) => {
     for (const [ds, dl] of [[-30, -14], [40, 12]]) {
@@ -518,9 +582,9 @@ function surfaces(): Picture {
   };
   const part = (t: Track, what: string, a: { s0: number; s1: number; lat0: number; lat1: number }, b: { s0: number; s1: number; lat0: number; lat1: number }): Shot[] => [
     shot(`${what} across the road (${a.s1 - a.s0} x ${a.lat1 - a.lat0} units), 2x`, t, (a.s0 + a.s1) / 2, 0, Math.ceil((a.s1 - a.s0) * ZOOM) + 90, 230),
-    shot(`its edge, 4x`, t, a.s0 + 26, -30, 150, 110, 4),
+    shot(`its edge, 4x`, t, a.s0 + 26, (a.lat0 + a.lat1) / 2 - 30, 150, 110, 4),
     shot(`${what} on half the road (${b.s1 - b.s0} x ${b.lat1 - b.lat0} units), 2x`, t, (b.s0 + b.s1) / 2, 0, Math.ceil((b.s1 - b.s0) * ZOOM) + 90, 230),
-    shot("scorches and a tyre mark across its edge, 3x", t, a.s0 + 10, 0, 250, 150, 3, marks(a.s0 + 10, 0)),
+    shot("scorches and a tyre mark across its edge, 3x", t, a.s0 + 10, (a.lat0 + a.lat1) / 2, 250, 150, 3, marks(a.s0 + 10, (a.lat0 + a.lat1) / 2)),
     shot("as a race shows it, 1x", t, (a.s0 + a.s1) / 2, 0, 640, 360, 1),
   ];
   const hole = knot.holes[0];
@@ -534,6 +598,14 @@ function surfaces(): Picture {
       title: "OIL (CITY; BLOCK YARD)",
       note: "an oil slick on the asphalt, drawn where Track.oil has one: a puddle's outline with a hard edge, a violet black in slow swirls with a gloss on some, a sheen at its edge in three thin bands (teal, violet, amber); it takes no track marks. The city's tarmac has no cosmetic oil blots. Beside it for comparison: a pool (a rain puddle over its drain grate) and a pit",
       shots: [...part(block, "oil", block.oil[0], block.oil[1]), shot("for comparison: a pool, 2x", block, (block.water[0].s0 + block.water[0].s1) / 2, -32, 330, 190), shot("for comparison: a pit, 2x", knot, hole.s, hole.lat, 200, 190)],
+    },
+    {
+      title: "OIL (HARBOUR; QUAY YARD)",
+      note: "the same slick on a harbour track (PLAN-THEMES.md Amendment 1: oil lies on city and harbour tracks): the city's colours on the harbour's tarmac, on the right half of the road and down its middle. The harbour's tarmac has no cosmetic oil blots either. Beside it for comparison: a pool (a rain puddle on the concrete) and the pit of Slag Harbour's shortcut",
+      shots: [...part(quay, "oil", quay.oil[0], quay.oil[1]), shot("for comparison: a pool, 2x", quay, (quay.water[0].s0 + quay.water[0].s1) / 2, -32, 330, 190), ((): Shot => {
+        const slag = trackById("slag-harbour"), pit = slag.branches[0].road.holes[0];
+        return { label: "for comparison: a pit (Slag Harbour's shortcut), 2x", track: slag, x: pit.x, y: pit.y, w: 200, h: 190, zoom: 2 };
+      })()],
     },
   ];
   return compose("THEME SURFACES: SAND AND OIL", null, sections, null, null);
@@ -553,7 +625,7 @@ function lines(note: string, per: number): string[] {
   return out;
 }
 
-const STRIP_NOTE = "one row of barrels (the eight frames of a turn; desert: scoured drums; city: orange-white traffic drums) and a press's slab with its silhouette (desert: an ore stamp; city: a pile driver), on the theme's tarmac; the global 32 colours (sprites, not baked tiles); 4x";
+const STRIP_NOTE = "one row of barrels (the eight frames of a turn; desert: scoured drums; city: orange-white traffic drums; harbour: chemical drums, pale steel with black hoops and a yellow hazard label) and a press's slab with its silhouette (desert: an ore stamp; city: a pile driver; harbour: a container spreader, a twistlock housing on each corner), on the theme's tarmac; the global 32 colours (sprites, not baked tiles); 4x";
 
 /** A sheet: its title, a theme's table (or none), the sections' shots in rows, and the strip of what moves (or none). A shot is in its own track's colours. */
 function compose(title: string, table: Scenery | null, sections: Section[], sprites: Picture | null, strip: Scenery | null): Picture {
@@ -987,6 +1059,7 @@ function check(): boolean {
   contrastTable(say);
   propColours(say);
   themeSurfaces(say);
+  harbourRules(say);
   return ok;
 }
 
@@ -1017,7 +1090,7 @@ const PROP_BODY = 0.005;
  * TH-LOOK-1 held to "not exactly a car's colour", comes to 17.5; the city's to 27.1). A parked
  * car's paint (a thing in the shape of a car) is held to the second figure.
  */
-const PROP_APART = 15, PARKED_APART = 40;
+const PROP_APART = 15, PARKED_APART = 40, REEFER_APART = 25;
 
 /**
  * No prop is taken for a car (PLAN-THEMES.md 2.2 item 4; the advisor's readability rule): per
@@ -1030,7 +1103,8 @@ function propColours(say: (good: boolean, what: string) => void): void {
     const counts = new Float64Array(COLOURS);
     let total = 0;
     const own = YARD_OF[theme];
-    for (const track of [themedTrack(trackById("rust-bowl"), theme), themedTrack(trackById("crusher-run"), theme), ...(own ? [testTrack(own)!] : [])]) {
+    // (The harbour is a shipped track's theme: Slag Harbour is lapped as well, as the game draws it.)
+    for (const track of [themedTrack(trackById("rust-bowl"), theme), themedTrack(trackById("crusher-run"), theme), ...(own ? [testTrack(own)!] : []), ...(theme === "harbour" ? [trackById("slag-harbour")] : [])]) {
       const seen = new Set<string>();
       for (let s = 0; s < track.length; s += 120) {
         for (const lat of [-track.wall - 150, track.wall + 150]) {
@@ -1060,6 +1134,16 @@ function propColours(say: (good: boolean, what: string) => void): void {
     if (paints.length) {
       const least = paints.map((e) => ({ name: e.name, near: Math.min(...CAR_COLORS.map((c) => deltaE(e.hex, c))) }));
       say(least.every((e) => e.near >= PARKED_APART), `${theme}: a parked car's paints are at least delta E ${PARKED_APART} from every car colour (${least.map((e) => `${e.name} ${e.near.toFixed(1)}`).join(", ")})`);
+    }
+    if (theme === "harbour") {
+      // The harbour (PLAN-THEMES.md Amendment 1: "every prop colour, containers too"): no accent is let off, every colour
+      // on its prop pixels keeps the floor; and a container's or a port machine's paint, a box about a car's size in one
+      // flat colour, is held as a parked car's is. A reefer's white is the one light paint: it is held to REEFER_APART.
+      const all = rows.filter((r) => r.near < PROP_APART);
+      say(all.length === 0, `${theme}: every colour on its prop pixels, the accents too (${rows.length} colours), is at least delta E ${PROP_APART} from every car colour (the nearest: ${rows.reduce((a, b) => (b.near < a.near ? b : a)).name}, ${Math.min(...rows.map((r) => r.near)).toFixed(1)})${all.length ? `; nearer: ${all.map((r) => `${r.name} ${r.near.toFixed(1)}`).join(", ")}` : ""}`);
+      const of = (names: string[]) => names.map((n) => ({ name: n, hex: sc.hex[sc.index[n]], near: Math.min(...CAR_COLORS.map((c) => deltaE(sc.hex[sc.index[n]], c))) }));
+      const boxes = of(["ox1", "grn1", "och1", "steel1"]), reefer = of(["reef1"]);
+      say(boxes.every((e) => e.near >= PARKED_APART) && reefer.every((e) => e.near >= REEFER_APART), `${theme}: a container's and a port machine's paints (oxide, green, ochre, slate) are at least delta E ${PARKED_APART} from every car colour (${boxes.map((e) => `${e.name} ${e.hex} ${e.near.toFixed(1)}`).join(", ")}), a reefer's white at least ${REEFER_APART} (${reefer.map((e) => `${e.name} ${e.hex} ${e.near.toFixed(1)}`).join(", ")})`);
     }
   }
 }
@@ -1110,6 +1194,216 @@ function themeSurfaces(say: (good: boolean, what: string) => void): void {
         `${theme}: sand on ${track.def.name} (${sand.reduce((a, o) => a + o.n, 0)} pixels in ${names(3).join(", ")}): none of its colours is a dirt patch's (${shared.length ? shared.join(", ") : "none shared"}); its plain tone ${plain(3)} is delta E ${fromDirt.toFixed(1)} from the dirt patch's ${plain(2)} (at least ${SAND_FROM_DIRT}) and stands out from the tarmac ${fromTar.toFixed(2)}:1 (at least ${MIN_CONTRAST}:1)`);
     }
   }
+}
+
+// ---- the harbour's own rules (TH-LOOK-H; PLAN-THEMES.md Amendment 1, A1.2) ------------------------
+
+/** The four greys of a harbour track: the tarmac against the ground and against the verge reaches this contrast (WCAG) and this step of lightness (CIE L*); any two of the four are this far apart (delta E). */
+const GREY_CONTRAST = 2, GREY_STEP = 20, GREY_APART = 8;
+/** Water against the harbour's ground and its verge (delta E), and against the ground in contrast. */
+const WATER_FROM_GROUND = 25, WATER_FROM_VERGE = 20, WATER_GROUND_CONTRAST = 2;
+/** The kerb's yellow is at least this far (delta E) from each of the fixed hazard colours. */
+const YELLOW_FROM_HAZARD = 20;
+/** A crane's rails lie no nearer a road's heading than this where a road's centreline is within RAILS_NEAR units: 35 degrees is what gfx/world.ts lays them by (its cosine 0.82), a sample's own rounding aside. */
+const RAILS_ACROSS = 34, RAILS_NEAR = 300;
+/** Ground art keeps this far outside every barrier (world units; gfx/world.ts lays a block 13 off and a rail 10, on a grid of 4 pixels: 2.5 units of slack for a cell). */
+const BLOCK_CLEAR = 13 - 2.5, RAIL_OFF = 10 - 1.5;
+
+/**
+ * What Amendment 1 asks of the harbour and no other check holds: on Quay Yard and Slag Harbour
+ * as the game draws them.
+ * - Paint: the kerb's two paints are a bare slab's grey and a yellow that is none of the fixed
+ *   hazard colours and far from each; a kerb pixel holds a hazard colour only where every theme
+ *   has one (a row of barrels crossing, a gap's end); nothing is painted on the quay or on the
+ *   apron (no bay line, no hatching): no pixel of either holds bone, a hazard colour or the
+ *   kerb's yellow.
+ * - Props: every prop pixel lies in a block of the container yard or within its own piece's
+ *   reach at a junk site (so nothing of a crane spans the yard), and that reach is within the
+ *   junk's own (1.5 r + 6 pixels).
+ * - Ground art (the yard's blocks, the crane rails): clear of every road's barrier, of the
+ *   props, of each other and of the two flag marshals; and no rail lies along a road.
+ * - A gap is a dock basin: soot, and a ladder's steel; no water, no hazard colour, no bone
+ *   (counted on Crusher Run and Overpass Knot with the theme switched: no harbour track has a gap).
+ * - The four greys: the tarmac against the ground and against the verge, and every pair of the
+ *   four; water against the ground and the verge.
+ */
+function harbourRules(say: (good: boolean, what: string) => void): void {
+  const theme: Theme = "harbour";
+  if (!hasArt(theme)) return;
+  const sc = sceneryOf(theme), x = sc.index;
+  const HAZ = new Set([x.haz0, x.haz1, x.haz2]), BONE = new Set([x.bone0, x.bone1, x.bone2]), YELLOW = new Set([x.rust1, x.rust2, x.rust3]);
+  const paint = (v: number) => HAZ.has(v) || BONE.has(v) || YELLOW.has(v);
+  const kinds = { ground: 0, verge: KIND.verge as number, kerb: KIND.kerb as number, tarmac: KIND.tarmac as number, water: KIND.water as number };
+  const tones: Record<string, Float64Array> = Object.fromEntries(Object.keys(kinds).map((k) => [k, new Float64Array(COLOURS)]));
+  let kerbHaz = 0, kerbHazFixed = 0, groundPaint = 0, vergePaint = 0, propPx = 0, propLoose = 0, inBlocks = 0, pieces = 0, overReach = 0;
+  let blocks = 0, blockNear = Infinity, blockProp = Infinity, blockMarshal = Infinity, blockRail = Infinity, rails = 0, railLen = 0, railNear = Infinity, railProp = Infinity, railMarshal = Infinity, railAngle = 90;
+  const names: string[] = [];
+  console.log("");
+  for (const track of [testTrack("quay-yard")!, trackById("slag-harbour")]) {
+    names.push(track.def.name);
+    const roads = [track, ...track.branches.map((b) => b.road)];
+    const art = artLayout(track);
+    // How far outside the nearest road's barrier a point is (world units), and that road's heading there.
+    const off = (wx: number, wy: number): { out: number; h: number; dist: number } => {
+      let out = Infinity, h = 0, dist = Infinity;
+      for (const r of roads) {
+        const q = queryTrack(r, wx, wy);
+        const wall = q.side < 0 ? r.wallL[q.seg] : r.wallR[q.seg];
+        if (q.dist - wall - 7 < out) {
+          out = q.dist - wall - 7;
+          h = pointAt(r, q.s).h;
+          dist = q.dist;
+        }
+      }
+      return { out, h, dist };
+    };
+    const line = pointAt(track, 0);
+    const marshals = [-1, 1].map((side) => {
+      const lat = side * ((side < 0 ? track.wallL[0] : track.wallR[0]) + 7 + 11); // gfx/marshals.ts: BARRIER + STAND outside the wall
+      return { x: (line.x - Math.sin(line.h) * lat) * ZOOM, y: (line.y + Math.cos(line.h) * lat) * ZOOM };
+    });
+    const props = art.junk.filter((j) => j.kind !== PROP.empty);
+    pieces += props.length;
+    for (const j of props) if (j.reach > j.r * 1.5 + 6 + 1e-9) overReach++;
+    // The blocks and the rails, against the road, the props, the marshals and each other (view pixels but for the road's units).
+    const B = art.blocks, Rl = art.rails;
+    const railBox = (q: number) => (Rl[q + 2] ? [Rl[q] - Rl[q + 3], Rl[q + 4], Rl[q] + Rl[q + 3] + 2, Rl[q + 5]] : [Rl[q + 4], Rl[q + 1] - Rl[q + 3], Rl[q + 5], Rl[q + 1] + Rl[q + 3] + 2]);
+    const gap = (a: number[], b: number[]) => Math.hypot(Math.max(0, a[0] - b[2], b[0] - a[2]), Math.max(0, a[1] - b[3], b[1] - a[3]));
+    for (let k = 0; k < B.length; k += 4) {
+      if (B[k + 2] <= B[k]) continue;
+      blocks++;
+      const box = [B[k], B[k + 1], B[k + 2], B[k + 3]];
+      for (let px = box[0]; px <= box[2]; px += 4) for (let py = box[1]; py <= box[3]; py += 4) blockNear = Math.min(blockNear, off(Math.min(px, box[2]) / ZOOM, Math.min(py, box[3]) / ZOOM).out);
+      for (const j of props) blockProp = Math.min(blockProp, gap(box, [j.x, j.y, j.x, j.y]) - j.reach);
+      for (const m of marshals) blockMarshal = Math.min(blockMarshal, gap(box, [m.x, m.y, m.x, m.y]) / ZOOM);
+      for (let q = 0; q < Rl.length; q += 6) blockRail = Math.min(blockRail, gap(box, railBox(q)));
+    }
+    for (let q = 0; q < Rl.length; q += 6) {
+      rails++;
+      railLen += Rl[q + 5] - Rl[q + 4];
+      const box = railBox(q);
+      // The crane that stands on them is the one prop they pass under.
+      for (const j of props) if (!(j.kind === PROP.crane && Math.floor(j.x) === Rl[q] && Math.floor(j.y) === Rl[q + 1])) railProp = Math.min(railProp, gap(box, [j.x, j.y, j.x, j.y]) - j.reach);
+      for (const m of marshals) railMarshal = Math.min(railMarshal, gap(box, [m.x, m.y, m.x, m.y]) / ZOOM);
+      for (let a = Rl[q + 4]; a < Rl[q + 5]; a += 2) {
+        for (const side of [-Rl[q + 3], Rl[q + 3] + 1]) {
+          const px = Rl[q + 2] ? Rl[q] + side : a, py = Rl[q + 2] ? a : Rl[q + 1] + side;
+          const o = off((px + 0.5) / ZOOM, (py + 0.5) / ZOOM);
+          railNear = Math.min(railNear, o.out);
+          if (o.dist < RAILS_NEAR) railAngle = Math.min(railAngle, (Math.acos(Math.min(1, Math.abs(Rl[q + 2] ? Math.sin(o.h) : Math.cos(o.h)))) * 180) / Math.PI);
+        }
+      }
+    }
+    // The tiles: the road and either side of it, every road of the track.
+    const seen = new Set<string>();
+    for (const r of roads) {
+      for (let s = 0; s < r.length; s += 120) {
+        for (const lat of [0, -r.wall - 150, r.wall + 150]) {
+          const p = at(r, s, lat);
+          const tx = Math.floor((p.x * ZOOM) / TILE), ty = Math.floor((p.y * ZOOM) / TILE);
+          if (seen.has(`${tx},${ty}`)) continue;
+          seen.add(`${tx},${ty}`);
+          const idx = bakeTileIndices(track, tx, ty), cls = bakeTileKinds(track, tx, ty);
+          // What of the props and the blocks can reach into this tile.
+          const x0 = tx * TILE, y0 = ty * TILE;
+          const near = props.filter((j) => j.x + j.reach >= x0 && j.x - j.reach <= x0 + TILE && j.y + j.reach >= y0 && j.y - j.reach <= y0 + TILE);
+          const rects: number[] = [];
+          for (let k = 0; k < B.length; k += 4) if (B[k + 2] > B[k] && B[k + 2] > x0 && B[k] < x0 + TILE && B[k + 3] > y0 && B[k + 1] < y0 + TILE) rects.push(B[k], B[k + 1], B[k + 2], B[k + 3]);
+          for (let i = 0; i < idx.length; i++) {
+            const v = idx[i], k = cls[i];
+            if (k === kinds.verge) {
+              tones.verge[v]++;
+              if (paint(v)) vergePaint++;
+            } else if (k === kinds.tarmac) tones.tarmac[v]++;
+            else if (k === kinds.water) tones.water[v]++;
+            else if (k === 0) {
+              tones.ground[v]++;
+              if (paint(v)) groundPaint++;
+            } else if (k === kinds.kerb) {
+              tones.kerb[v]++;
+              if (HAZ.has(v)) {
+                // Where every theme has hazard stripes on a kerb: a row of barrels crossing it, a gap's end.
+                const wx = (x0 + (i % TILE) + 0.5) / ZOOM, wy = (y0 + Math.floor(i / TILE) + 0.5) / ZOOM;
+                const fixed = roads.some((road) => {
+                  const q = queryTrack(road, wx, wy);
+                  return road.barrels.some((b) => Math.abs(q.s - b.s) <= BARREL_R + 1) || road.gaps.some((g) => Math.abs(q.s - g.s0) <= 8 || Math.abs(q.s - g.s1) <= 8);
+                });
+                if (fixed) kerbHazFixed++;
+                else kerbHaz++;
+              }
+            } else if (k === KIND.prop) {
+              propPx++;
+              const px = x0 + (i % TILE), py = y0 + Math.floor(i / TILE);
+              let home = false;
+              for (let q = 0; q < rects.length && !home; q += 4) if (px >= rects[q] && px < rects[q + 2] && py >= rects[q + 1] && py < rects[q + 3]) home = true;
+              if (home) inBlocks++;
+              else if (!near.some((j) => Math.hypot(px + 0.5 - j.x, py + 0.5 - j.y) <= j.reach)) propLoose++;
+            }
+          }
+        }
+      }
+    }
+  }
+  const order = (k: string) => Array.from(tones[k], (n, i) => ({ n, i })).filter((o) => o.n > 0).sort((a, b) => b.n - a.n);
+  const plain = (k: string) => sc.hex[order(k)[0].i];
+  // The kerb's two paints: its two commonest tones.
+  const [slab, yellow] = order("kerb").slice(0, 2).map((o) => o.i);
+  const fromHaz = ["haz0", "haz1", "haz2"].map((n) => ({ n, d: deltaE(sc.hex[yellow], P[n as "haz0"]) }));
+  say(sc.names[slab] === "steel2" && sc.names[yellow] === "rust2" && !(FIXED as readonly string[]).includes(sc.names[yellow]) && fromHaz.every((e) => e.d >= YELLOW_FROM_HAZARD),
+    `${theme}: the kerb is bare grey slabs (${sc.names[slab]} ${sc.hex[slab]}) and slabs in a faded yellow (${sc.names[yellow]} ${sc.hex[yellow]}), which is none of the fixed colours and at least delta E ${YELLOW_FROM_HAZARD} from each hazard colour (${fromHaz.map((e) => `${e.n} ${e.d.toFixed(1)}`).join(", ")})`);
+  say(kerbHaz === 0, `${theme}: a kerb pixel holds a hazard colour only where every theme has hazard stripes on a kerb (a row of barrels crossing it, a gap's end: ${kerbHazFixed} pixels on ${names.join(" and ")}); ${kerbHaz} elsewhere`);
+  say(groundPaint === 0 && vergePaint === 0, `${theme}: nothing is painted on the quay or on the apron (no bay line, no hatching): ${groundPaint} ground pixels and ${vergePaint} verge pixels hold bone, a hazard colour or the kerb's yellow; the ground's tones are ${order("ground").map((o) => sc.names[o.i]).join(", ")}, the apron's ${order("verge").map((o) => sc.names[o.i]).join(", ")}`);
+  say(propPx > 0 && propLoose === 0 && overReach === 0, `${theme}: every one of its ${propPx} prop pixels lies in a block of the container yard (${inBlocks}) or within its own piece's reach at a junk site (${propPx - inBlocks}; ${propLoose} lie elsewhere), and each of the ${pieces} pieces' reach, its shadow counted, is within the junk's own 1.5 r + 6 pixels (${overReach} are not): nothing of a crane or a carrier spans the yard`);
+  say(blocks > 0 && blockNear >= BLOCK_CLEAR && blockProp >= 0 && blockMarshal >= 20 - 2.5 && blockRail > 0,
+    `${theme}: the container yard's ${blocks} blocks (ground art, laid out per track) keep clear: the nearest comes ${blockNear.toFixed(1)} units to a barrier's outside (at least ${BLOCK_CLEAR}), ${blockProp.toFixed(1)} pixels to a prop's reach (at least 0), ${blockRail.toFixed(1)} pixels to a crane's rails (more than 0), ${Number.isFinite(blockMarshal) ? blockMarshal.toFixed(1) : "-"} units to a flag marshal's spot (at least 17.5)`);
+  say(rails > 0 && railNear >= RAIL_OFF && railProp >= 0 && railMarshal >= 20 - 2.5 && railAngle >= RAILS_ACROSS,
+    `${theme}: the ${rails} pairs of crane rails (${railLen} pixels of them) keep clear too: ${railNear.toFixed(1)} units to a barrier's outside (at least ${RAIL_OFF}), ${railProp.toFixed(1)} pixels to another prop's reach (at least 0), ${Number.isFinite(railMarshal) ? railMarshal.toFixed(1) : "-"} units to a marshal's spot (at least 17.5); and none lies along a road: within ${RAILS_NEAR} units of a road's centreline the least angle between a rail and the road's heading is ${railAngle.toFixed(1)} degrees (at least ${RAILS_ACROSS})`);
+  // A gap is a dock basin.
+  let voidPx = 0, voidOther = 0, ladder = 0;
+  const SOOT = new Set([x.soot0, x.soot1, x.soot2, x.soot3]), STEEL = new Set([x.steel0, x.steel1, x.steel2]);
+  const voidTones = new Set<string>();
+  for (const base of [trackById("crusher-run"), trackById("overpass-knot")]) {
+    const track = themedTrack(base, theme);
+    for (const g of track.gaps) {
+      if (g.scrap) continue;
+      const mid = at(track, (g.s0 + g.s1) / 2), w = Math.ceil((g.s1 - g.s0 + 2 * track.wall + 60) * ZOOM);
+      const idx = windowOf(track, mid.x, mid.y, w, w), cls = windowOf(track, mid.x, mid.y, w, w, false, true);
+      for (let i = 0; i < idx.length; i++) {
+        if (cls[i] !== KIND.void) continue;
+        voidPx++;
+        voidTones.add(sc.names[idx[i]]);
+        if (STEEL.has(idx[i])) ladder++;
+        else if (!SOOT.has(idx[i])) voidOther++;
+      }
+    }
+  }
+  say(voidPx > 0 && voidOther === 0 && ladder > 0, `${theme}: a gap is a dock basin of soot: the ${voidPx} void pixels of the gaps without scrap (Crusher Run and Overpass Knot in the theme) hold soot0-soot3 or a ladder's steel (${ladder} pixels of steel0-steel2) and nothing else (${voidOther} do): no water, no blue, no hazard colour, no bone (its tones: ${[...voidTones].join(", ")})`);
+  // The four greys.
+  const greys = [{ n: "tarmac", hex: plain("tarmac") }, { n: "ground", hex: plain("ground") }, { n: "verge", hex: plain("verge") }, { n: "kerb slab", hex: sc.hex[slab] }];
+  const yard = surfacesOf("scrapyard"), yardOf = (n: string) => yard.find((e) => e.name === n)!.plain;
+  console.log(`\n### ${theme}: its four greys, every pair: delta E (CIE76) / contrast (WCAG) / step of lightness (L*)\n`);
+  console.log(`| | ${greys.map((g) => `${g.n} ${g.hex}`).join(" | ")} |`);
+  console.log(`|---|${greys.map(() => "---:").join("|")}|`);
+  for (const a of greys) console.log(`| ${a.n} ${a.hex} | ${greys.map((b) => (a === b ? "-" : `${deltaE(a.hex, b.hex).toFixed(1)} / ${contrast(a.hex, b.hex).toFixed(2)} / ${Math.abs(labOf(a.hex)[0] - labOf(b.hex)[0]).toFixed(1)}`)).join(" | ")} |`);
+  console.log("");
+  const tar = greys[0];
+  const held = [greys[1], greys[2]].map((g) => ({ n: g.n, c: contrast(tar.hex, g.hex), step: Math.abs(labOf(tar.hex)[0] - labOf(g.hex)[0]), there: contrast(yardOf("tarmac"), yardOf(g.n)) }));
+  let least = Infinity, leastOf = "";
+  for (let a = 0; a < greys.length; a++) {
+    for (let b = a + 1; b < greys.length; b++) {
+      const d = deltaE(greys[a].hex, greys[b].hex);
+      if (d < least) {
+        least = d;
+        leastOf = `${greys[a].n} and ${greys[b].n}`;
+      }
+    }
+  }
+  say(held.every((h) => h.c >= GREY_CONTRAST && h.c >= h.there && h.step >= GREY_STEP) && least >= GREY_APART,
+    `${theme}: the four greys are told apart: the tarmac ${tar.hex} against ${held.map((h) => `the ${h.n} ${h.c.toFixed(2)}:1, ${h.step.toFixed(1)} of lightness (the scrapyard's tarmac against its ${h.n}: ${h.there.toFixed(2)}:1)`).join(" and against ")} (at least ${GREY_CONTRAST}:1, no less than the scrapyard's, and ${GREY_STEP} of lightness); the nearest two of the four are ${leastOf}, delta E ${least.toFixed(1)} (at least ${GREY_APART})`);
+  const water = plain("water");
+  const w = [{ n: "ground", hex: plain("ground"), floor: WATER_FROM_GROUND }, { n: "verge", hex: plain("verge"), floor: WATER_FROM_VERGE }, { n: "tarmac", hex: tar.hex, floor: 0 }].map((e) => ({ ...e, d: deltaE(water, e.hex), c: contrast(water, e.hex) }));
+  say(water === P.water && w.every((e) => e.d >= e.floor) && w[0].c >= WATER_GROUND_CONTRAST,
+    `${theme}: water ${water} against the ground ${w[0].hex}: delta E ${w[0].d.toFixed(1)} (at least ${WATER_FROM_GROUND}), ${w[0].c.toFixed(2)}:1 (at least ${WATER_GROUND_CONTRAST}:1); against the verge ${w[1].hex}: delta E ${w[1].d.toFixed(1)} (at least ${WATER_FROM_VERGE}), ${w[1].c.toFixed(2)}:1; against the tarmac ${w[2].hex}: delta E ${w[2].d.toFixed(1)}, ${w[2].c.toFixed(2)}:1 (the scrapyard's water against its tarmac: delta E ${deltaE(P.water, yardOf("tarmac")).toFixed(1)}, ${contrast(P.water, yardOf("tarmac")).toFixed(2)}:1; the city's ${deltaE(P.water, surfacesOf("city").find((e) => e.name === "tarmac")!.plain).toFixed(1)})`);
 }
 
 /**
@@ -1319,6 +1613,12 @@ const SHOTS: { name: string; query: Record<string, string>; pair: boolean }[] = 
 /** The tour of a theme's own yard, held at these places (the distance along it). */
 const YARD_PLACES: [string, number][] = [["start", 0], ["slot-a", 950], ["truck", 1800], ["mounds", 2790], ["pool", 4150], ["barrels", 5000], ["press", 6300], ["slot-b", 7270], ["split", 8300], ["dirt-lane", 8700]];
 
+/** The tour of Slag Harbour (the shipped track that has the harbour's theme), held at these places: its distance along the main road, or along its shortcut road (&road=1). */
+const SLAG_PLACES: [string, Record<string, string>][] = [
+  ["start", { s: "0" }], ["quay-barrels", { s: "2640" }], ["split-island", { s: "4380" }], ["pool", { s: "4700" }], ["truck", { s: "8540" }],
+  ["pier-fork", { s: "10240" }], ["pier-pit", { road: "1", s: "960" }], ["pier-merge", { s: "13230" }], ["fenders", { s: "14380" }], ["belt", { s: "17290" }],
+];
+
 async function shots(theme: Theme, out: string, port: number): Promise<void> {
   const run = promisify(execFile);
   const cleanups: (() => unknown)[] = [];
@@ -1379,6 +1679,8 @@ async function shots(theme: Theme, out: string, port: number): Promise<void> {
     const list: { name: string; query: Record<string, string>; pair: boolean; own?: boolean }[] = [
       ...SHOTS,
       ...(ownYard ? YARD_PLACES.map(([place, s]) => ({ name: `${ownYard}-${place}`, query: { scene: "tour", track: ownYard, s: String(s) }, pair: false, own: true })) : []),
+      // The harbour is a shipped track's theme: Slag Harbour as the game draws it, the tour held round its lap and down its shortcut.
+      ...(theme === "harbour" ? SLAG_PLACES.map(([place, q]) => ({ name: `slag-harbour-${place}`, query: { scene: "tour", track: "slag-harbour", ...q }, pair: false, own: true })) : []),
     ].filter((sh) => !only || sh.name.startsWith(only));
     for (const size of SIZES) {
       await ab(["set", "viewport", String(size.w), String(size.h), String(size.scale)]);

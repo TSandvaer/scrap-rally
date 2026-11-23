@@ -21,7 +21,7 @@
 // A held moment pins performance.now() too while it draws (smoke and the mine blink read it),
 // so the same URL gives the same pixels on every load.
 //
-// &theme=<scrapyard|desert|city|jungle> draws every scene in that theme instead of the track's
+// &theme=<scrapyard|desert|city|jungle|harbour> draws every scene in that theme instead of the track's
 // own (PLAN-THEMES.md 2.5: the looks alone, on the same road; a theme without art is the
 // scrapyard). The preview's switch only: in the game a track's theme is its definition's.
 // &scene=tour is a drive round any track, to see one whole in a theme: &track=<id> (a shipped

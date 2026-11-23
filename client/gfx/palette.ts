@@ -302,7 +302,7 @@ export const CITY_PALETTE: ThemePalette = {
  * The harbour, "working container port" (TH-LOOK-H; PLAN-THEMES.md Amendment 1, A1.2). Our own
  * colours. The ground is a quay of light concrete (`dirt`: its slabs, the joints between them a
  * tone down); the verge the apron beside the road, the same concrete worn darker (`gravel`); the
- * tarmac the scrapyard's with a blue-grey tint and as dark. Four greys, then, and each a clear
+ * tarmac the scrapyard's without its warmth, a neutral grey as dark. Four greys, then, and each a clear
  * step from the next (tools/debug/theme-sheet.ts --check holds the numbers). `rust` is no rust
  * here but old yellow road paint: the kerb's painted slabs (rust2: faded, far less of a colour
  * than the hazard's amber, and none of the fixed hazard colours), its shade and its sunlit edge,
@@ -327,11 +327,11 @@ export const HARBOUR_PALETTE: ThemePalette = {
     gravel0: "#52524d",
     gravel1: "#72716a",
     gravel2: "#888780",
-    // Tarmac, tinted blue-grey.
-    tar0: "#27292c",
-    tar1: "#363a3e",
-    tar2: "#43484c",
-    tar3: "#5e6468",
+    // Tarmac: a neutral grey (no blue in it: the water is the one blue thing on the road).
+    tar0: "#2a2b2b",
+    tar1: "#393a3a",
+    tar2: "#464848",
+    tar3: "#616464",
     // Old yellow paint (and under it, old timber).
     rust0: "#4f4126",
     rust1: "#8c7438",

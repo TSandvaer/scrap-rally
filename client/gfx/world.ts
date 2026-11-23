@@ -190,7 +190,9 @@ interface Dress {
   kerbWorn: number;
   // The wear the yard has: stains and wheel ruts in the ground, oil blots on the tarmac. (A theme
   // with an oil slick for a surface has no blots: a dark patch on its road is always the slick.)
+  // `tracks`: the wheel ruts alone, where a theme has those without the rest (tyre marks on a quay).
   wear: boolean;
+  tracks: boolean;
   // A gap's void (VOID_*): steps of soot; or layered rock near its rim (`rock`, four tones, dark
   // to light); or masonry (`rock`'s first two) and a street below. Soot fills it in every one.
   void: number;
@@ -251,7 +253,7 @@ function dressOf(sc: Scenery): Dress {
       wall: x.stone0, rail: x.stone2, railLit: x.stone3, block: 15, joint: x.stone1, postLit: RUST3, postMid: RUST2, postDark: RUST0,
       vergeLight: 28, vergeDark: 224, vergeFleck: 219, slabs: false, rings: false, // grit: coarser than gravel
       kerbPeriod: 32, kerbOn: 16, kerbA: RUST2, kerbB: BONE1, kerbJoint: 0, kerbWorn: 0,
-      wear: true,
+      wear: true, tracks: true,
       void: VOID_CANYON, rock: [x.canyon0, x.canyon1, x.canyon2, x.canyon3], pitWall: x.canyon1, rubble: [x.canyon0, SOOT1, x.canyon1, SOOT3],
       patch: RUST1, patchLight: RUST2, patchDark: RUST0, patchPebble: GRAVEL1, tape: false, sleepers: 0, // red clay hardpan, never the sand's colour
       mud: GRAVEL2, grate: false,
@@ -269,7 +271,7 @@ function dressOf(sc: Scenery): Dress {
       wall: x.conc0, rail: x.conc2, railLit: x.conc3, block: 30, joint: x.conc1, postLit: HAZ2, postMid: HAZ1, postDark: HAZ0,
       vergeLight: 0, vergeDark: 0, vergeFleck: 0, slabs: true, rings: false, // a sidewalk
       kerbPeriod: 24, kerbOn: 12, kerbA: STEEL2, kerbB: BONE1, kerbJoint: STEEL1, kerbWorn: 0, // kerb stones, grey and white
-      wear: false,
+      wear: false, tracks: false,
       void: VOID_STREET, rock: [x.conc0, x.conc1, SOOT2, SOOT3], pitWall: DIRT0, rubble: [DIRT0, SOOT1, TAR3, SOOT3],
       patch: DIRT2, patchLight: DIRT3, patchDark: DIRT1, patchPebble: GRAVEL2, tape: true, sleepers: 0, // roadworks: the road's bed laid open
       mud: 0, grate: true,
@@ -287,7 +289,7 @@ function dressOf(sc: Scenery): Dress {
       wall: x.conc0, rail: x.conc2, railLit: x.conc3, block: 20, joint: x.conc1, postLit: STEEL3, postMid: SOOT2, postDark: STEEL1,
       vergeLight: 10, vergeDark: 244, vergeFleck: 256, slabs: false, rings: true, // the apron: worn concrete, tie-down rings in it
       kerbPeriod: 40, kerbOn: 26, kerbA: STEEL2, kerbB: RUST2, kerbJoint: GRAVEL0, kerbWorn: 38, // kerb slabs: bare, and painted a yellow long faded
-      wear: false,
+      wear: false, tracks: true, // no stains and no oil blots (an oil slick is a surface here), but tyre marks on the quay where the yard has its ruts
       void: VOID_BASIN, rock: [SOOT0, SOOT1, SOOT2, SOOT3], pitWall: DIRT0, rubble: [DIRT0, SOOT1, TAR3, SOOT3],
       patch: DIRT1, patchLight: DIRT3, patchDark: GRAVEL0, patchPebble: BONE0, tape: false, sleepers: RUST0, // ballast: grey stone, old sleepers in it
       mud: 0, grate: false,
@@ -305,7 +307,7 @@ function dressOf(sc: Scenery): Dress {
       wall: STEEL0, rail: STEEL2, railLit: STEEL3, block: 0, joint: STEEL0, postLit: STEEL3, postMid: STEEL1, postDark: STEEL0,
       vergeLight: 19, vergeDark: 239, vergeFleck: 236, slabs: false, rings: false,
       kerbPeriod: 44, kerbOn: 22, kerbA: RUST2, kerbB: BONE1, kerbJoint: 0, kerbWorn: 0,
-      wear: true,
+      wear: true, tracks: true,
       void: VOID_PIT, rock: [SOOT0, SOOT1, SOOT2, SOOT3], pitWall: DIRT0, rubble: [DIRT0, SOOT1, TAR3, SOOT3],
       patch: DIRT2, patchLight: DIRT3, patchDark: DIRT1, patchPebble: GRAVEL0, tape: false, sleepers: 0,
       mud: 0, grate: false,
@@ -795,26 +797,40 @@ const RAIL_NEAR = 300; // within this of a road's centreline (world units) a rai
 const RAIL_ALONG = 0.82; // ... it stops where it would lie nearer the road's heading than 35 degrees (this is the cosine)
 const RAIL_STEP = 4; // a rail is laid in steps of this, view pixels
 
-/** How far a harbour's prop and its shadow reach from the piece's middle, view pixels (as harbourProp() sizes them: a little over). */
+// How far a harbour's prop reaches from its piece's middle, view pixels: the middle of the
+// furthest pixel it or its shadow can fall on, with the pixel its own middle is rounded to (the
+// piece is drawn on whole pixels, from the pixel its middle lies in) and the way it lies, along
+// x or along y. harbourProp() sizes a piece by these, so that all of it lies within the junk's
+// own reach (yard(): 1.5 r + 6) and short of the barrier; tools/debug/theme-sheet.ts --check
+// holds every prop pixel against them.
+/** A container `len` pixels long (ten wide), its shadow three right and four down, another on it a pixel left and two up of it. */
+const boxReach = (len: number): number => Math.max(Math.hypot(len / 2 + 2.5, 8.5), Math.hypot(len / 2 + 3.5, 7.5));
+/** A crane's base `half` pixels either way of its middle: its sills, the girders across them, their shadows. */
+const craneReach = (half: number): number => Math.hypot(half + 1.5, half + 3.5);
+/** A straddle carrier `hl` pixels either way along (fourteen wide), its shadow four right and five down. */
+const straddleReach = (hl: number): number => Math.max(Math.hypot(hl + 3.5, 11.5), Math.hypot(hl + 4.5, 10.5));
+const BOLLARDS_REACH = 11.6, PALLETS_REACH = 10, FORK_REACH = 12.4, HAWSER_MORE = 3.5; // (a hawser: its radius and that)
+
+/** How far a harbour's prop and its shadow reach from the piece's middle, view pixels (0: a site left empty). */
 function propReach(d: Junk): number {
   switch (d.kind) {
     case K_BOX:
     case K_REEFER:
-      return Math.hypot((d.n & 63) / 2 + 2, 8) + 5;
+      return boxReach(d.n & 63);
     case K_CRANE:
-      return d.n * 1.42 + 9.2;
+      return craneReach(d.n);
     case K_STRADDLE:
-      return Math.hypot(d.n & 31, 7) + 7.6;
+      return straddleReach(d.n & 31);
     case K_FORK:
-      return 14;
+      return FORK_REACH;
     case K_HAWSER:
-      return d.n / 4 + 3.5;
+      return d.n / 4 + HAWSER_MORE;
     case K_PALLETS:
-      return 11.5;
-    case K_EMPTY:
-      return 0;
+      return PALLETS_REACH;
+    case K_BOLLARD:
+      return BOLLARDS_REACH;
     default:
-      return 13.5;
+      return 0;
   }
 }
 
@@ -1270,7 +1286,7 @@ function buildArt(track: Track, scenery: Scenery): Art {
      * road's centreline, less that road's extra width; world units), and off the marshals' spots.
      * Long things lie along the plane's axes, a heap's all the same way.
      */
-    let craneHeap = -1; // the heap whose first piece became a crane
+    let craneHeap = -1; // the heap whose first piece became a crane or a straddle carrier
     const harbourProp = (heap: number, j: number, pick: number, x: number, y: number, rad: number, c: number, far: number): Junk => {
       let h = Math.imul(heap + 1, 0x9e3779b1) ^ Math.imul(71, 1442695041);
       h = Math.imul(h ^ (h >>> 13), 1274126177);
@@ -1283,38 +1299,46 @@ function buildArt(track: Track, scenery: Scenery): Art {
       const type = h & 15, axis = (h >> 4) & 1;
       const box = dress.boxes[c === RUST1 || c === HAZ0 ? 0 : c === RUST2 || c === STEEL2 ? 1 : c === RUST0 ? 2 : 3];
       const piece = (kind: number, paint: number, n: number, a = axis): Junk => ({ kind, x: x * ZOOM, y: y * ZOOM, r, a: a ? Math.PI / 2 : 0, c: paint, n });
-      // A container as long as there is room for: 36, 28 or 20 pixels by 10, which with its shadow (3 right, 4 down) and a pixel for
-      // where its middle falls takes 24.7, 20.9 and 17.2 from the piece's middle. Three in four have another standing on them (it
-      // lies a pixel left and two up, and its longer shadow ends inside the lower one's: no more room is needed).
+      // A container as long as there is room for: 36, 28 or 20 pixels by 10 (boxReach: 22.8, 19.0 and 15.4 from the piece's
+      // middle with its shadow). Three in four have another standing on them (it lies a pixel left and two up, and its longer
+      // shadow ends inside the lower one's: no more room is needed).
       const container = (reefer: boolean): Junk | null => {
-        const len = fit >= 24.7 ? 36 : fit >= 20.9 ? 28 : fit >= 17.2 ? 20 : 0;
+        const len = boxReach(36) <= fit ? 36 : boxReach(28) <= fit ? 28 : boxReach(20) <= fit ? 20 : 0;
         if (!len) return null;
         if (reefer) return piece(K_REEFER, dress.reefer, len);
         return piece(K_BOX, box, len | ((q & 3) !== 0 ? 64 | (((q >> 2) & 3) << 7) : 0));
       };
-      // What has room nearly anywhere: a pair of bollards with their rope (13.5 pixels from the piece's middle), pallets (11.5), a
-      // coiled hawser (its radius and 3.5: as large as the junk and no larger than the room); and where there is none at all, nothing.
-      const hawser = (): Junk => (fit >= 7 ? piece(K_HAWSER, 0, Math.floor(Math.min(r * 0.7, fit - 3.5) * 4)) : piece(K_EMPTY, 0, 0));
-      const pallets = (): Junk => (fit >= 11.5 ? piece(K_PALLETS, 0, q & 1) : hawser());
-      const bollards = (): Junk => (fit >= 13.5 ? piece(K_BOLLARD, 0, 0) : pallets());
+      // What has room nearly anywhere: a pair of bollards with their rope, pallets, a coiled hawser (as large as the junk and no
+      // larger than the room); and where there is none at all, nothing.
+      const hawser = (): Junk => (fit >= 3.5 + HAWSER_MORE ? piece(K_HAWSER, 0, Math.floor(Math.min(r * 0.7, fit - HAWSER_MORE) * 4)) : piece(K_EMPTY, 0, 0));
+      const pallets = (): Junk => (fit >= PALLETS_REACH ? piece(K_PALLETS, 0, q & 1) : hawser());
+      const bollards = (): Junk => (fit >= BOLLARDS_REACH ? piece(K_BOLLARD, 0, 0) : pallets());
       const small = (): Junk => (pick < 0.4 ? pallets() : pick < 0.72 ? bollards() : hawser());
       if (type < 6) return container(false) ?? small();
       if (type < 9) return container(true) ?? small();
       if (type < 11) {
         // A crane's base: the rails it stands on run across the nearest road's way, never along it (layRails).
         // It stands alone: the heap's other sites are left empty, so its rails have their run.
-        if (j === 0 && fit >= 22.5) {
+        if (j === 0 && fit >= craneReach(9)) {
           craneHeap = heap;
-          return piece(K_CRANE, dress.crane, Math.min(13, Math.floor((fit - 9.2) / 1.42)), acrossAt(x, y));
+          let half = 9;
+          while (half < 15 && craneReach(half + 1) <= fit) half++;
+          return piece(K_CRANE, dress.crane, half, acrossAt(x, y));
         }
         return craneHeap === heap ? piece(K_EMPTY, 0, 0) : small();
       }
       if (type < 13) {
-        if (j === 0 && fit >= 22.5) return piece(K_STRADDLE, dress.carrier, Math.min(17, Math.floor(Math.sqrt((fit - 7.6) * (fit - 7.6) - 49))) | (((q >> 4) & 3) << 5));
-        return container(false) ?? small();
+        // A straddle carrier with the container it carries: it stands alone too, in the open where it works.
+        if (j === 0 && fit >= straddleReach(12)) {
+          craneHeap = heap;
+          let hl = 12;
+          while (hl < 17 && straddleReach(hl + 1) <= fit) hl++;
+          return piece(K_STRADDLE, dress.carrier, hl | (((q >> 4) & 3) << 5));
+        }
+        return craneHeap === heap ? piece(K_EMPTY, 0, 0) : container(false) ?? small();
       }
       if (type < 14) return pick < 0.55 ? bollards() : hawser();
-      if (j === 0 && fit >= 14) return piece(K_FORK, dress.crane, q & 1);
+      if (j === 0 && fit >= FORK_REACH) return piece(K_FORK, dress.crane, q & 1);
       return pick < 0.62 ? small() : container(false) ?? small();
     };
     roads.forEach((r, k) => {
@@ -1360,7 +1384,7 @@ function buildArt(track: Track, scenery: Scenery): Art {
             if (away(q.x, q.y) < R + 14) break;
             line.push(q.x * ZOOM, q.y * ZOOM);
           }
-          if (line.length >= 8 && dress.wear) art.ruts.push(Float32Array.from(line));
+          if (line.length >= 8 && dress.tracks) art.ruts.push(Float32Array.from(line));
         }
       }
     });
@@ -2840,7 +2864,7 @@ function quayMarks(): void {
 function yard(): void {
   const art = job.art!, b = buffers(), N = noiseTable();
   const { bx, by, o2 } = job;
-  const { idx, dist } = b;
+  const { idx, cls, dist } = b;
   const R = art.track.wall + BARRIER;
   let cost = 8;
   const stains = art.stains, ruts = art.ruts, heaps = art.junk;
@@ -2874,7 +2898,7 @@ function yard(): void {
         const x = Math.floor(xa + ((xb - xa) * j) / steps), y = Math.floor(ya + ((yb - ya) * j) / steps);
         if (x < 0 || y < 0 || x >= S || y >= S) continue;
         const p = y * S + x;
-        if (dist[p] <= R) continue;
+        if (dist[p] <= R || cls[p] === C_PROP) continue; // (not on a theme's ground art: a quay's container blocks stand on the tyre marks)
         // A broken line: the rut shows where the ground is soft.
         if (N[(((((by + y) >> 2) + (o2 >> 8)) & 255) << 8) | ((((bx + x) >> 2) + o2 + 37) & 255)] < 170) idx[p] = DIRT1;
       }
@@ -5805,12 +5829,23 @@ export function bakePeaks(reset = false): { near: number; nearRoom: number; cand
  * size, view pixels), the ruts' points (x, y pairs, view pixels), and how many mouths have paint.
  * `blots`: where the scrapyard's cosmetic oil blots lie on the tarmac (centre and radius, view
  * pixels), whether the track's theme paints them or leaves them out. `houses`: a town's houses
- * (Town.rect: x0, y0, x1, y1 each, view pixels; empty in a theme without a town).
+ * (Town.rect: x0, y0, x1, y1 each, view pixels; empty in a theme without a town). A piece of
+ * junk also tells its `kind` (PROP names the harbour's) and `reach`: how far a harbour's prop and
+ * its shadow reach from its middle, view pixels (0 in another theme). `rails`: a quay's crane
+ * rails (Art.rails: six numbers a pair) and `blocks`: its container yard's blocks (Stacks.rect:
+ * x0, y0, x1, y1 each); both empty in a theme without a quay.
  */
-export function artLayout(track: Track): { posts: Int32Array; junk: readonly { x: number; y: number; r: number }[]; ruts: readonly Float32Array[]; mouths: number; blots: readonly { x: number; y: number; r: number }[]; houses: Int32Array } {
+export function artLayout(track: Track): { posts: Int32Array; junk: readonly { x: number; y: number; r: number; kind: number; reach: number }[]; ruts: readonly Float32Array[]; mouths: number; blots: readonly { x: number; y: number; r: number }[]; houses: Int32Array; rails: Int32Array; blocks: Int32Array } {
   const a = artOf(track);
-  return { posts: a.posts, junk: a.junk, ruts: a.ruts, mouths: a.mouths.length, blots: a.blots, houses: a.town ? a.town.rect : new Int32Array(0) };
+  const quay = a.dress.props === PROPS_HARBOUR;
+  return {
+    posts: a.posts, junk: a.junk.map((j) => ({ x: j.x, y: j.y, r: j.r, kind: j.kind, reach: quay ? propReach(j) : 0 })), ruts: a.ruts, mouths: a.mouths.length, blots: a.blots,
+    houses: a.town ? a.town.rect : new Int32Array(0), rails: a.rails, blocks: a.stacks ? a.stacks.rect : new Int32Array(0),
+  };
 }
+
+/** The harbour's props, as artLayout() names a piece's kind. */
+export const PROP = { container: K_BOX, reefer: K_REEFER, crane: K_CRANE, straddle: K_STRADDLE, bollards: K_BOLLARD, hawser: K_HAWSER, pallets: K_PALLETS, forklift: K_FORK, empty: K_EMPTY } as const;
 
 /** What a pixel of a baked tile is, as bakeTileKinds() tells it. */
 export const KIND = { tarmac: C_TARMAC, kerb: C_KERB, verge: C_VERGE, barrier: C_BARRIER, rail: C_RAIL, dirt: C_DIRT, bed: C_BED, water: C_WATER, belt: C_BELT, isle: C_ISLE, solid: C_SOLID, plate: C_PLATE, void: C_VOID, prop: C_PROP, sand: C_SAND, oil: C_OIL } as const;

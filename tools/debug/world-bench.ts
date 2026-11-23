@@ -8,8 +8,9 @@
 //   npx tsx tools/debug/world-bench.ts --quick    one run: a look, no verdict
 //   npx tsx tools/debug/world-bench.ts --theme <name>   S7's theme (default: the desert on Preview Yard, and on a theme's
 //                                                       own yard that yard's own theme)
-//   npx tsx tools/debug/world-bench.ts --yard <id>      S7 on a theme's own yard (dune-yard, block-yard, canopy-yard:
+//   npx tsx tools/debug/world-bench.ts --yard <id>      S7 on a theme's own yard (dune-yard, block-yard, canopy-yard, quay-yard:
 //                                                       TH-LOOK-2) instead of Preview Yard, in its own theme
+//   npx tsx tools/debug/world-bench.ts --shortcut <id>  a themed shipped track's shortcut alone (TH-LOOK-H: slag-harbour): see below
 //   npx tsx tools/debug/world-bench.ts --session <name> the browser session's name (default world-bench-<pid>)
 //   npx tsx tools/debug/world-bench.ts --units    the bake units per tile alone (no browser, no lock)
 //
@@ -59,6 +60,15 @@
 // frames without shortcuts, which S7 holds a theme to: a theme bakes the same road, a shortcut
 // is a second one (1.19 times the bake units, 1.19 times the mean): more road to bake, not
 // slower drawing.
+//
+// --shortcut <track> (TH-LOOK-H; PLAN-THEMES.md Amendment 1): a shipped track that has a theme
+// and a shortcut road (Slag Harbour, the harbour's) is driven down its shortcut, bench scene S8
+// on that track with &cut=1 (client/bench.ts: the way that takes the shortcut, 420 units of the
+// main road before it and after it: every frame the shortcut is in view, baked on the way), in
+// the track's own theme and, the same frames, in the scrapyard's look (&theme=scrapyard), one
+// right after the other in every run. S7's rule: the theme at or below 1.05 times the scrapyard
+// on the mean of the frames and on the mean of their faster half, each the median of the
+// per-run ratios; the numbers of both are printed. Nothing else is measured (exit code as below).
 //
 // It takes the benchmark's machine-wide lock (scrap-rally-bench.lock in the temp directory), so
 // it never runs beside `npm run bench`, and waits while a live benchmark holds it.
@@ -215,8 +225,8 @@ interface CellA {
   checksum: string;
 }
 
-async function load(url: string, scene: string, track: string, theme = ""): Promise<{ cell: CellA; isolated: boolean; ua: string }> {
-  await ab(["open", `${url}/?${new URLSearchParams({ debug: "1", bench: "1", metric: "A", scene, track, ...(theme ? { theme } : {}) })}`]);
+async function load(url: string, scene: string, track: string, theme = "", more: Record<string, string> = {}): Promise<{ cell: CellA; isolated: boolean; ua: string }> {
+  await ab(["open", `${url}/?${new URLSearchParams({ debug: "1", bench: "1", metric: "A", scene, track, ...(theme ? { theme } : {}), ...more })}`]);
   const deadline = Date.now() + 90_000;
   for (;;) {
     if ((await ab(["eval", "window.scrapBench && window.scrapBench.done ? 1 : 0"])) === "1") break;
@@ -349,6 +359,62 @@ async function main(): Promise<number> {
   return ok6 && ok7 ? 0 : 1;
 }
 
+/** --shortcut: a themed shipped track's shortcut frames in its own theme against the same frames in the scrapyard's look. */
+async function shortcut(id: string): Promise<number> {
+  const { trackById } = await import("../../shared/tracks");
+  const { themeOf } = await import("../../shared/theme");
+  const track = trackById(id);
+  if (!track.branches.length) throw new Error(`--shortcut ${id}: the track has no shortcut road`);
+  const theme = themeOf(track.def);
+  await acquireLock();
+  const dist = mkdtempSync(path.join(os.tmpdir(), "world-bench-dist-"));
+  cleanups.push(() => rmSync(dist, { recursive: true, force: true }));
+  console.error("building the working tree ...");
+  await run(VITE, ["build", "--outDir", dist, "--emptyOutDir", "--logLevel", "warn"], { cwd: ROOT, maxBuffer: 16 << 20 });
+  const url = await serve(dist);
+  cleanups.push(() => ab(["close"]));
+  await ab(["--args", CHROME_ARGS, "open", "about:blank"]);
+  await ab(["set", "viewport", "1280", "720", "1"]);
+  const looks = [theme, "scrapyard"];
+  const got: CellA[][] = looks.map(() => []);
+  let isolated = true, ua = "";
+  for (let r = 0; r < RUNS; r++) {
+    for (const k of r % 2 ? [1, 0] : [0, 1]) {
+      const o = await load(url, "S8", id, looks[k], { cut: "1" });
+      if (o.cell.theme !== looks[k]) throw new Error(`the cell was drawn in ${o.cell.theme}, not ${looks[k]}`);
+      got[k].push(o.cell);
+      isolated &&= o.isolated;
+      ua = o.ua;
+      console.error(`run ${r + 1}/${RUNS}  S8 ${id} cut (${looks[k]})`.padEnd(48) + ` mean ${o.cell.mean.toFixed(4)}  faster half ${(o.cell.lowMean ?? NaN).toFixed(4)}  median ${o.cell.p50.toFixed(3)}  p95 ${o.cell.p95.toFixed(3)}  ${o.cell.checksum}`);
+    }
+  }
+  const f = (x: number) => x.toFixed(3), f4 = (x: number) => x.toFixed(4);
+  const cut = track.branches[0];
+  console.log(`# ${track.def.name}'s shortcut in its theme against the scrapyard's look (${new Date().toISOString().slice(0, 16).replace("T", " ")} UTC)\n`);
+  console.log(`Bench scene S8 on ${id} with &cut=1: the way down its shortcut (${cut.road.length.toFixed(0)} units, off the main road at s ${cut.s0} and back at s ${cut.s1}) with 420 units of the main road before and after, ${got[0][0].n} frames at 430 u/s. Metric A at 1280x720 (CPU raster: every frame once, a 1x1 read-back after each, 300 warm-up frames), ${RUNS} run${RUNS > 1 ? "s" : ""}, the two looks one right after the other, the order turned round from run to run. ms a frame.${isolated ? "" : " WARNING: the page was not cross-origin isolated (a 100 us timer)."}\n`);
+  console.log("| look | frames | mean, run by run | median | the faster half's mean, run by run | median | median of the frames (whole timer steps) | p95 | p99 | frames over 4 ms | tiles baked while measured | bake units | checksums |");
+  console.log("|---|---:|---|---:|---|---:|---:|---:|---:|---:|---:|---:|---|");
+  looks.forEach((look, k) => {
+    const c = got[k];
+    console.log(`| ${look} | ${c[0].n} | ${c.map((x) => f4(x.mean)).join(" ")} | ${f4(median(c.map((x) => x.mean)))} | ${c.map((x) => f4(x.lowMean ?? NaN)).join(" ")} | ${f4(median(c.map((x) => x.lowMean ?? NaN)))} | ${f(median(c.map((x) => x.p50)))} | ${f(median(c.map((x) => x.p95)))} | ${f(median(c.map((x) => x.p99)))} | ${median(c.map((x) => x.over))} | ${median(c.map((x) => x.baked ?? 0))} | ${median(c.map((x) => x.bakeUnits ?? 0)).toFixed(0)} | ${[...new Set(c.map((x) => x.checksum))].join(" ")} |`);
+  });
+  const rMean = got[0].map((x, r) => x.mean / got[1][r].mean), rLow = got[0].map((x, r) => (x.lowMean ?? NaN) / (got[1][r].lowMean ?? NaN));
+  const mMean = median(rMean), mLow = median(rLow);
+  console.log(`\n| the ${theme} against the scrapyard's look (the same frames) | run by run | median ratio | budget ${THEME_BUDGET.toFixed(2)} |`);
+  console.log("|---|---|---:|---|");
+  console.log(`| the mean of the frames | ${rMean.map(f).join(" ")} | ${f(mMean)} | ${mMean <= THEME_BUDGET ? "within" : "OVER"} |`);
+  console.log(`| the mean of their faster half | ${rLow.map(f).join(" ")} | ${f(mLow)} | ${mLow <= THEME_BUDGET ? "within" : "OVER"} |`);
+  console.log(`| the p95 (information) | ${got[0].map((x, r) => f(x.p95 / got[1][r].p95)).join(" ")} | ${f(median(got[0].map((x, r) => x.p95 / got[1][r].p95)))} | |`);
+  console.log(`\n${ua}`);
+  if (RUNS < 5) {
+    console.log(`\nNo verdict: ${RUNS} run${RUNS > 1 ? "s" : ""} (five make one). The means ${f(mMean)}, the faster halves ${f(mLow)}.`);
+    return 2;
+  }
+  const ok = mMean <= THEME_BUDGET && mLow <= THEME_BUDGET;
+  console.log(`\n${track.def.name}'s shortcut (${theme}): ${ok ? "WITHIN" : "OVER"} the budget (at most ${THEME_BUDGET.toFixed(2)} times the same frames in the scrapyard's look, on the mean of the frames and on the mean of their faster half): ${f(mMean)} and ${f(mLow)}.`);
+  return ok ? 0 : 1;
+}
+
 /**
  * What a tile costs to bake, per theme (no browser): every tile S7's lap of Preview Yard has in
  * view, baked to the end with the bake's own trace; the cost units of its steps summed (the
@@ -399,7 +465,7 @@ if (args.includes("--units")) {
   process.exit(0);
 }
 try {
-  code = await main();
+  code = args.includes("--shortcut") ? await shortcut(args[args.indexOf("--shortcut") + 1]) : await main();
 } finally {
   await cleanup();
 }
