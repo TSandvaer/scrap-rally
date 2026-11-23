@@ -68,7 +68,9 @@
 // mouthOutline, rebuilt here), which mouthPockets gives the line's tone on purpose; they are counted beside
 // it. "One line of the main road's width" no longer caps one line across at 3.25 px (a correct line reads
 // 3.5 at 15 degrees) but the line's mean width over the stretch (lineWidth) at WIDE_SLACK over a 2 px
-// line's sweep at its heading. To see either of them work:
+// line's sweep at its heading; both it and the line across read the shortcut's own line only (a pixel or a
+// sample nearer another line of the map is that line's: on the long tracks a shortcut runs 4-6 px from the
+// main road, and Slag Harbour's hairpin from itself). To see either of them work:
 //   --turns <deg,...>      ... and Branch Yard turned by each of those angles (e.g. 7.5,15,22.5,37.5,52.5,60)
 //   --plant blob|wide      a control: before the checks, plant a fault in every track's first shortcut (blob:
 //                          a 2 x 2 of the road's tone 4 px beside its line, halfway along; wide: its line a
@@ -536,13 +538,48 @@ async function child(root: string, out: string): Promise<void> {
          * of the road's tone whose middle is within 4 px of the stretch and whose nearest point of it is not one of its two ends,
          * per px of its length. A stamped line of 2 px sweeps 2 (|cos h| + |sin h|) px across at heading h; a line across the
          * road at one point reads that give or take its steps.
+         * Only the stretch's own pixels: a pixel nearer another line of the map (the main road, another shortcut, or this one
+         * more than 6 px along it: `others`) is that line's (on the long tracks a shortcut runs 4-6 px from the main road on the map).
          */
-        const lineWidth = (r: any, u: number): number => {
+        const ownStretch = (r: any, u: number): [number, number][] => {
           const half = Math.min(2.5 / sc, 150), pts: [number, number][] = [];
           for (let w = u - half; w <= u + half + 1e-9; w += 0.05 / sc) {
             const p = pointAt(r, w);
             pts.push(at(p.x, p.y));
           }
+          return pts;
+        };
+        /** Every other line's centreline on the map, a point every quarter pixel: the main road, the other shortcuts, this one away from u. */
+        const others = (r: any, u: number): [number, number][] => {
+          const out: [number, number][] = [], half = Math.min(2.5 / sc, 150) + 6 / sc;
+          for (const road of [track, ...brs.map((x) => x.road)]) {
+            for (let w = 0; w <= road.length; w += 0.25 / sc) {
+              if (road === r && Math.abs(w - u) <= half) continue;
+              const p = pointAt(road, w);
+              out.push(at(p.x, p.y));
+            }
+          }
+          return out;
+        };
+        const nearest = (list: [number, number][], X: number, Y: number): number => {
+          let d = Infinity;
+          for (const [x, y] of list) d = Math.min(d, Math.hypot(X - x, Y - y));
+          return d;
+        };
+        /** The tones across the line at u as `across` reads them, but "" where a sample lies nearer another line than this stretch (runsOf stops there). */
+        const acrossOwn = (r: any, u: number): string[] => {
+          const own = ownStretch(r, u), other = others(r, u), p = pointAt(r, u);
+          const [cx, cy] = at(p.x, p.y);
+          const tones = across(u, r, at);
+          let k = 0;
+          for (let t = -8; t <= 8; t += 0.25, k++) {
+            const X = cx - Math.sin(p.h) * t, Y = cy + Math.cos(p.h) * t;
+            if (nearest(other, X, Y) < nearest(own, X, Y)) tones[k] = "";
+          }
+          return tones;
+        };
+        const lineWidth = (r: any, u: number): number => {
+          const half = Math.min(2.5 / sc, 150), pts = ownStretch(r, u), other = others(r, u);
           let n = 0;
           const xs = pts.map((p) => p[0]), ys = pts.map((p) => p[1]);
           for (let v = Math.floor(Math.min(...ys) - 5); v <= Math.ceil(Math.max(...ys) + 5); v++) {
@@ -556,7 +593,7 @@ async function child(root: string, out: string): Promise<void> {
                   at0 = i;
                 }
               });
-              if (best < 4 && at0 > 0 && at0 < pts.length - 1) n++;
+              if (best < 4 && at0 > 0 && at0 < pts.length - 1 && best <= nearest(other, w + 0.5, v + 0.5)) n++;
             }
           }
           return n / (2 * half * sc);
@@ -570,7 +607,7 @@ async function child(root: string, out: string): Promise<void> {
         const [probes, onLine, touching] = dotsAlong(r);
         return {
           no: bi + 1, long: L * sc, samples, off, gaps, mouths: [mouth("fork"), mouth("merge")], probes, onLine, touching,
-          plain: plains.length ? runsOf(across(plainU, r, at)) : "", plainU, plainH: plains.length ? pointAt(r, plainU).h : NaN, plainW: plains.length ? lineWidth(r, plainU) : NaN,
+          plain: plains.length ? runsOf(acrossOwn(r, plainU)) : "", plainU, plainH: plains.length ? pointAt(r, plainU).h : NaN, plainW: plains.length ? lineWidth(r, plainU) : NaN,
           islands: r.islands.map((i: any) => ({ s: (i.s0 + i.s1) / 2, runs: runsOf(across((i.s0 + i.s1) / 2, r, at)) })),
         };
       });

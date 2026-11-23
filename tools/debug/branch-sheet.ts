@@ -8,6 +8,9 @@
 //   npx tsx tools/debug/branch-sheet.ts --alloc      rule 1 on Branch Yard, no browser
 //   npx tsx tools/debug/branch-sheet.ts --units      what a tile costs to bake with and without the shortcuts, no browser
 //   (--out <dir>: default tmp/br-bake, --port <n>: default 3011, --runs <n>, --detail)
+//   --track <id>     BR-TRACKS: the probe and the checks (no flag, or --tiles) on that track, a test track or a
+//                    shipped one (e.g. slag-harbour, breakers-mile); default branch-yard. --shots, --bench, --alloc,
+//                    --units and the movers check stay Branch Yard's.
 //
 // The probe, per mouth from BRANCH_GUIDE before it to 12 segments past its gore: every pixel of
 // the baked tiles there is put back in the world (its centre) and asked two ways whether it lies
@@ -1147,15 +1150,17 @@ function alloc(): void {
 
 // ---- main -----------------------------------------------------------------------------------------
 
-const track = testTrack("branch-yard")!;
+const yard = testTrack("branch-yard")!;
+const trackId = arg("--track") ?? "branch-yard"; // BR-TRACKS: the probe and the checks on another track
+const track = testTrack(trackId) ?? trackById(trackId);
 const PORT = Number(arg("--port") ?? 3011);
 for (const sig of ["SIGINT", "SIGTERM"] as const) process.on(sig, () => void cleanup().then(() => process.exit(130)));
 let code = 0;
 try {
-  if (args.includes("--alloc-one")) await allocOne(track, arg("--alloc-one") as Theme);
+  if (args.includes("--alloc-one")) await allocOne(yard, arg("--alloc-one") as Theme);
   else if (args.includes("--alloc")) alloc();
-  else if (args.includes("--units")) units(track);
-  else if (args.includes("--shots")) await shots(track, PORT);
+  else if (args.includes("--units")) units(yard);
+  else if (args.includes("--shots")) await shots(yard, PORT);
   else if (args.includes("--bench")) {
     if (args.includes(LOCK_WORD)) code = await bench(PORT);
     else code = spawnSync(process.execPath, [...process.execArgv, fileURLToPath(import.meta.url), ...args, LOCK_WORD], { stdio: "inherit" }).status ?? 1;
