@@ -74,6 +74,17 @@ textarea,
   -webkit-touch-callout: default;
 }
 
+/* NOSELECT-2: and the one message the player copies from by hand, the invite link copyInvite
+   (client/main.ts) shows when the clipboard is refused (or on plain http). Drag, double-click and a
+   long press select it; index.html's guard lets its context menu (Copy) through. Every other toast
+   stays unselectable. */
+.toast.selectable {
+  user-select: text;
+  -webkit-user-select: text;
+  -webkit-touch-callout: default;
+  cursor: text;
+}
+
 /* The stage follows the visual viewport (client/chat.ts fitViewport), so a phone's on-screen
    keyboard shrinks it instead of covering the chat input. */
 #stage {

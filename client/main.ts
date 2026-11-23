@@ -256,7 +256,7 @@ async function copyInvite(): Promise<void> {
     await navigator.clipboard.writeText(link);
     toast("Invite link copied");
   } catch {
-    toast(link);
+    toast(link, { selectable: true }); // no clipboard (refused, or plain http): the player copies it by hand
   }
 }
 function leaveRoom(): void {
@@ -652,12 +652,39 @@ function swatch(color: string): HTMLSpanElement {
   return s;
 }
 
-function toast(text: string): void {
+/**
+ * A short message at the top of the stage, gone after 2.6 s. `selectable` is for the one toast the
+ * player copies from by hand, copyInvite's fallback link (NOSELECT-2): its text can be selected and
+ * long-pressed (client/style.css .toast.selectable; index.html's context-menu guard lets its menu
+ * through), it comes up already selected, and it stays until a tap or click outside it, the next
+ * toast, or 30 s.
+ */
+function toast(text: string, opts: { selectable?: boolean } = {}): void {
+  const selectable = opts.selectable === true;
   ui.toast.textContent = text;
+  ui.toast.classList.toggle("selectable", selectable);
   ui.toast.classList.remove("hidden");
   clearTimeout(toastTimer);
-  toastTimer = window.setTimeout(() => ui.toast.classList.add("hidden"), 2600);
+  toastTimer = window.setTimeout(hideToast, selectable ? 30000 : 2600);
+  if (selectable) window.getSelection()?.selectAllChildren(ui.toast);
 }
+
+function hideToast(): void {
+  clearTimeout(toastTimer);
+  const sel = window.getSelection();
+  if (sel?.anchorNode && ui.toast.contains(sel.anchorNode)) sel.removeAllRanges(); // no hidden selection left to copy
+  ui.toast.classList.add("hidden");
+  ui.toast.classList.remove("selectable");
+}
+
+// The link toast goes on a tap or click anywhere else (capture: before any handler can stop it).
+document.addEventListener(
+  "pointerdown",
+  (e) => {
+    if (ui.toast.classList.contains("selectable") && !ui.toast.contains(e.target as Node)) hideToast();
+  },
+  true,
+);
 
 function flashText(text: string, ms = 1500): void {
   flash = { text, until: performance.now() + ms };
