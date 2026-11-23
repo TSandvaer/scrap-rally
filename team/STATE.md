@@ -804,7 +804,15 @@ HARD-3 POSTPONED (user 2026-11-23); :3009 tuning copy stopped (pid 96649) + spli
 BR-TRACKS drive on :3012 only (+ a push question when NOSELECT-2 lands).
 BR-TRACKS: user taste APPROVED ("all approved"); review APPROVE (ctx_c8ebf124332a; tmp/br-tracks/BR-TRACKS-review.md): Mile socket
 spike pre-existing (server input-underrun repeat, base 6.15 vs branch 6.19). Short round sent (br-tracks --shots mute toggle; branch-sheet
---track scoped checks exit 0; 2 stale texts; merge main): ctx_fea79a6ece53. Merge after it (no re-review if only those). TH-LOOK-2 waits for
+--track scoped checks exit 0; 2 stale texts; merge main): ctx_fea79a6ece53. Merge after it (no re-review if only those).
+BR-TRACKS round done 54c9549 (tools + 2 texts only). MERGED 9da2cb3. Gate run 1: 1091/1092 (FAIL 'retire client: the room message drops
+our car...' car back true); run 2 on the identical tree GREEN (1092/1092, 174/174, build index-B9lUXWgz.js, schema-hash all match) ->
+flake, parked (~/.claude/parking/scrap-rally/adhoc-2026-11-23.md). ClickUp ready for qa test; workers released; workspace + branch removed;
+:3012 taste copy stopped (pid 3189) + removed.
+NOSELECT-2 review 1 REQUEST_CHANGES (stale link toast after leaving the room); fix 3f597f3 (hide on out-of-room + Escape); confirm by
+ctx_7f10f4a11ec8. PUSH (user popup): "After both merge" -> push when NOSELECT-2 is merged + gate green, then the user's Manual Deploy + live QA.
+HARBOUR-SCHEMA 123jpnbfgzv in flight: ctx_33dfae154ede (Opus, ~/orca/workspaces/scrap-rally/harbour-schema, :3010, tmp/spec-harbour-schema.md).
+Active authors: TH-LOOK-2 (final gate), HARBOUR-SCHEMA, NOSELECT-2 (idle in review). TH-LOOK-2 waits for
 MARSHALS-1 (shares render.ts + canvas-census.ts). Ford direction cue moved from THEME-SURF to TH-LOOK-3 (drawing = world.ts, Fable).
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
