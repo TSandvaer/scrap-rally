@@ -13,13 +13,14 @@ import { AudioEngine, SoundControls } from "./audio";
 import { ChatPanel, fitViewport } from "./chat";
 import { Game, lostMessage, NO_CONTROLS, type Controls, type TokenStore } from "./game";
 import { driving, Effects } from "./gfx/actors";
+import { raceView } from "./gfx/marshals";
 import { clearMarks } from "./gfx/world";
 import { Keyboard, mergeControls, TouchPad, type PadCar } from "./input";
 import { JerkMeter } from "./jerk";
 import { GameMenu } from "./menu";
 import { MusicPlayer, songById } from "./music";
 import { connectWs } from "./net";
-import { Renderer, type CarView, type CellView, type DrawPose, type HudView } from "./render";
+import { Renderer, type CarView, type CellView, type DrawPose, type HudView, type RaceView } from "./render";
 import { RaceSounds } from "./sfx";
 
 const STEP_MS = 1000 / 60;
@@ -960,6 +961,9 @@ function touchFrame(): void {
   touchPad.setAmmo(rivets, mines);
 }
 
+/** Where the race stands, for the marshals at the line (render.ts WorldFx.race): kept, and filled every frame by gfx/marshals.ts raceView(). */
+const raceOut: RaceView = { phase: 0, lastLap: false, finished: 0, paused: false };
+
 /** A new room track gets a new Renderer; the camera tour restarts at its start line. */
 function syncRenderer(): void {
   if (game.track === rendererTrack) return;
@@ -1057,6 +1061,7 @@ function draw(alpha: number, elapsed: number): void {
   // What moves (M4-MOVE: barrels, presses, belts' arrows) at the race tick the own car's drawn step ran
   // at, a spectator's at the latest snapshot's (Game.drawTick); none before a snapshot: a still picture.
   fx.rt = game.drawTick();
+  fx.race = raceView(game, raceOut);
   driving(game.car, game.smooth, game.contact, others); // tyre marks: by the cars' driving, not by what the prediction does to them on screen
   renderer.frame(cars, fx, hudView());
 }

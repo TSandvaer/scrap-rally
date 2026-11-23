@@ -773,7 +773,15 @@ to re-scope 5 branch checks to brPlainShippedIds. TH-LOOK-2 hold LIFTED (accept 
 MARSHALS-1 fix done 13a2273 (75 ok / 0 FAIL; 1064 + 154); reviewer confirm: ctx_32b9038272b3.
 THEME-SURF DONE 7eb64c2 (sim 1085/1085, bots 166/166 x2; numbers match 2.3; report tmp/theme-surf/theme-surf-report.md). Finding: bots
 skirt full-width theme surfaces on the 12-unit dry edge. Reviewer ctx_2e888ff0a56f (Opus, :3018, spec tmp/review-theme-surf.md).
-NOTE: the client does not draw sand/oil/fords yet (TH-LOOK-2 sand+oil, TH-LOOK-3 ford), so THEME-SURF's drive gate is with the looks. TH-LOOK-2 waits for
+NOTE: the client does not draw sand/oil/fords yet (TH-LOOK-2 sand+oil, TH-LOOK-3 ford), so THEME-SURF's drive gate is with the looks.
+THEME-SURF review APPROVE (ctx_2e888ff0a56f; 2 nits fixed in b6d0a06). MERGED 9861b7d; gate GREEN (check, 1085/1085, 166/166, build
+index-BjyCpqVp.js); ClickUp ready for qa test (drive pending with the looks, user); workers released; workspace removed.
+MARSHALS-1 r3 confirm REQUEST_CHANGES (ctx_32b9038272b3; tmp/review-marshals-1-fix-verdict.md): race-ending burst 4/8 live (snapshot every
+2nd tick). User: one more round -> ctx_f7b069f0e20b (tmp/fix-marshals-1-r4.md; probes in tmp/marshals-probes/).
+BR-TRACKS allowed: branch-sheet --track option (msg_d64cb0279cad).
+TH-LOOK-2 123jpnbfgj2 in flight: ctx_4fb51550582c (Fable, ~/orca/workspaces/scrap-rally/th-look-2, :3017, spec tmp/spec-th-look-2.md; base 9861b7d).
+Active authors: BR-TRACKS, MARSHALS-1 (r4), TH-LOOK-2 (cap full). Next free slot: NOSELECT-2 (after MARSHALS-1 merges, main.ts);
+HARBOUR-SCHEMA after BR-TRACKS merges. TH-LOOK-2 waits for
 MARSHALS-1 (shares render.ts + canvas-census.ts). Ford direction cue moved from THEME-SURF to TH-LOOK-3 (drawing = world.ts, Fable).
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).

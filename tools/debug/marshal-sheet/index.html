@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>MARSHALS-1 shots</title>
+    <!-- The game's own stage and view (client/style.css #stage, #view): the canvas fills the window as in the game. -->
+    <style>
+      html, body { margin: 0; background: #120e0b; overflow: hidden; }
+      #stage { position: fixed; left: 0; top: 0; width: 100vw; height: 100dvh; display: grid; place-items: center; }
+      #view { width: min(100vw, calc(100dvh * 16 / 9)); height: auto; aspect-ratio: 16 / 9; image-rendering: pixelated; image-rendering: crisp-edges; display: block; }
+    </style>
+  </head>
+  <body>
+    <main id="stage"><canvas id="view" width="640" height="360"></canvas></main>
+    <script type="module" src="./page.ts"></script>
+  </body>
+</html>

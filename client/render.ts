@@ -6,6 +6,7 @@
 import type { Track } from "../shared/track";
 import { Actors } from "./gfx/actors";
 import { Hud } from "./gfx/hud";
+import { Marshals } from "./gfx/marshals";
 import { sceneryFor } from "./gfx/theme";
 import { VIEW_H, VIEW_W, World, ZOOM } from "./gfx/world";
 
@@ -138,6 +139,25 @@ export interface WorldFx {
    * shipped one today) is the same picture with it and without.
    */
   rt?: number;
+  /**
+   * Where the race stands, for the two marshals at the start/finish line (MARSHALS-1;
+   * gfx/marshals.ts): they hold their flags up in the countdown, wave them the way the race
+   * goes from GO, show another flag on the last lap and the chequered one at the finish. The
+   * caller keeps the object and changes it in place. Absent = no race: they stand at ease.
+   */
+  race?: RaceView;
+}
+
+/** Where the race stands, as the frame's WorldFx hands it over (WorldFx.race). */
+export interface RaceView {
+  /** 0 = no race is on (the lobby, the menu's tour); 1 = the countdown; 2 = the race is on, from GO; 3 = it is over (the results). */
+  phase: number;
+  /** The leader has started the last lap. */
+  lastLap: boolean;
+  /** How many cars have finished. */
+  finished: number;
+  /** The host has paused the race (phase 2): the flags are held up and still until it goes on, the 3-2-1 that ends the pause included. Absent or false = not paused. */
+  paused?: boolean;
 }
 
 export interface HudView {
@@ -162,6 +182,7 @@ export class Renderer {
   private readonly ctx: CanvasRenderingContext2D;
   private readonly world: World;
   private readonly actors: Actors;
+  private readonly marshals: Marshals;
   private readonly hud: Hud;
   readonly cam = { x: 0, y: 0 };
   // Following a car (follow): its id ("" = none) and, per axis, as drawn in the frame before
@@ -185,6 +206,7 @@ export class Renderer {
     const scenery = sceneryFor(track);
     this.world = new World(this.ctx, track, scenery);
     this.actors = new Actors(this.ctx, track, scenery);
+    this.marshals = new Marshals(this.ctx, track); // the same uniform in every theme
     this.hud = new Hud(this.ctx, track);
   }
 
@@ -280,6 +302,8 @@ export class Renderer {
     }
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     this.world.draw(vx - VIEW_W / 2, vy - VIEW_H / 2, cars);
+    // The marshals at the line: on the world, under everything that drives and flies.
+    this.marshals.draw(vx - VIEW_W / 2, vy - VIEW_H / 2, now, fx.race);
 
     // Cars and effects: sprites in view space, at whole pixels.
     this.actors.draw(cars, fx, vx - VIEW_W / 2, vy - VIEW_H / 2, now, lead, this.carAt[0], this.carAt[1]);

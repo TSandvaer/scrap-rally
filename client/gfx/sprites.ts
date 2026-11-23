@@ -1030,10 +1030,25 @@ export function obstacleSheet(): { canvas: HTMLCanvasElement; ctx: CanvasRenderi
   return obstacles ?? (obstacles = sheetCanvas(OBST_W, OBST_H));
 }
 
+/** The marshal sheet's size: the two flag marshals at the start/finish line and their flags (gfx/marshals.ts lays them out and paints them). */
+export const MARSHAL_W = 132;
+export const MARSHAL_H = 66;
+
+let marshals: { canvas: HTMLCanvasElement; ctx: CanvasRenderingContext2D } | null = null;
+
+/**
+ * The marshal sheet's canvas: one, whatever the track. Made in the first frame that draws a
+ * marshal, never with the Renderer: the first sheet made settles where every sheet lives
+ * (spritesFor), and a Renderer may be built on a view the page never draws on.
+ */
+export function marshalSheet(): { canvas: HTMLCanvasElement; ctx: CanvasRenderingContext2D } {
+  return marshals ?? (marshals = sheetCanvas(MARSHAL_W, MARSHAL_H));
+}
+
 /** Canvas memory the sprite sheets hold right now, in bytes. */
 export function spriteBytes(): number {
   return bytes;
 }
 
-/** The most the sprite sheets can ever hold: every car sheet, a silhouette a look, the effects, the catch-up sheet, the obstacle sheet. */
-export const SPRITE_BYTES_MAX = (MAX_CAR_SHEETS + LOOKS.length) * SHEET_W * SHEET_H * 4 + FX_W * FX_H * 4 + CATCH_W * CATCH_H * 4 + OBST_W * OBST_H * 4;
+/** The most the sprite sheets can ever hold: every car sheet, a silhouette a look, the effects, the catch-up sheet, the obstacle sheet, the marshal sheet. */
+export const SPRITE_BYTES_MAX = (MAX_CAR_SHEETS + LOOKS.length) * SHEET_W * SHEET_H * 4 + FX_W * FX_H * 4 + CATCH_W * CATCH_H * 4 + OBST_W * OBST_H * 4 + MARSHAL_W * MARSHAL_H * 4;
