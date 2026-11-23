@@ -9,8 +9,10 @@
 //   npx tsx tools/debug/theme-sheet.ts --contrast         the readability table alone (part of --check)
 //   npx tsx tools/debug/theme-sheet.ts --hash [--root d]  the scrapyard's identity: a sha256 per track over what the
 //                                                         bake and the obstacle sheet come to (see below)
-//   npx tsx tools/debug/theme-sheet.ts --shots            the override's screenshots, in headless Chrome -> tmp/th-look/shots/
-//                                                         (--theme, --out <dir>, --port <n>: default 3011)
+//   npx tsx tools/debug/theme-sheet.ts --surfaces         the theme surfaces' sheet: sand and oil -> tmp/th-look/surfaces-sheet.png
+//   npx tsx tools/debug/theme-sheet.ts --shots            the override's screenshots and the theme's own yard's, in headless
+//                                                         Chrome -> tmp/th-look/shots/ (--theme, --out <dir>, --port <n>:
+//                                                         default 3017, --session <name>, --only <start of a shot's name>)
 //   npx tsx tools/debug/theme-sheet.ts --alloc            rule 1 per theme: bytes a frame allocates, no browser
 //                                                         (--warm 30000, --frames 6000, --interval 128)
 //
@@ -56,12 +58,14 @@
 // the scrapyard's; a mine and a rivet stand out from the tarmac as in the scrapyard.
 //
 // --shots: the working tree is built into a temp directory and served on 127.0.0.1 (--port), one
-// browser session (thl1-shots-<pid>, muted, closed at the end). The preview's scenes with
+// browser session (theme-shots-<pid>, or --session's; muted, closed at the end). The preview's scenes with
 // `&theme=` (client/preview.ts: the looks of a theme on the same roads, never in the game) held
 // at their key moment, at 1280x720 and at 390x844@3: Rust Bowl (its preview scenes and the tour),
 // Crusher Run (the tour: grid, a bend, the scrap-filled gap, the chasm), the figure-eight's
 // crossing and holes, and the Preview Yard scenes. Each as the whole window in the theme, and
 // for the shipped tracks also as a pair, the track's own look beside it: `pair-<name>-<size>.png`.
+// And the theme's own yard as the game draws it (no switch: its own theme, its theme surface
+// drawn), the tour held at ten places round the lap: `<theme>-<yard>-<place>-<size>.png`.
 // For every themed shot at 390x844@3 it also holds the screen against the game canvas: every
 // device pixel inside the canvas's box must have one of the colours the 640 x 360 canvas itself
 // holds (the canvas is scaled without smoothing, so no colour is mixed on the way and the
@@ -1267,6 +1271,9 @@ const SHOTS: { name: string; query: Record<string, string>; pair: boolean }[] = 
   { name: "yard-belt", query: { scene: "yard-belt" }, pair: false },
 ];
 
+/** The tour of a theme's own yard, held at these places (the distance along it). */
+const YARD_PLACES: [string, number][] = [["start", 0], ["slot-a", 950], ["truck", 1800], ["mounds", 2790], ["pool", 4150], ["barrels", 5000], ["press", 6300], ["slot-b", 7270], ["split", 8300], ["dirt-lane", 8700]];
+
 async function shots(theme: Theme, out: string, port: number): Promise<void> {
   const run = promisify(execFile);
   const cleanups: (() => unknown)[] = [];
@@ -1322,13 +1329,19 @@ async function shots(theme: Theme, out: string, port: number): Promise<void> {
     const table = new Set(sc.hex.slice(0, sc.count).map((h) => parseInt(h.slice(1), 16)));
     const lines: string[] = [];
     let mixed = 0, held = 0;
+    // The override's pictures, then the theme's own yard as it is (`own`: no switch in the query).
+    const ownYard = YARD_OF[theme], only = arg("--only");
+    const list: { name: string; query: Record<string, string>; pair: boolean; own?: boolean }[] = [
+      ...SHOTS,
+      ...(ownYard ? YARD_PLACES.map(([place, s]) => ({ name: `${ownYard}-${place}`, query: { scene: "tour", track: ownYard, s: String(s) }, pair: false, own: true })) : []),
+    ].filter((sh) => !only || sh.name.startsWith(only));
     for (const size of SIZES) {
       await ab(["set", "viewport", String(size.w), String(size.h), String(size.scale)]);
-      for (const sh of SHOTS) {
+      for (const sh of list) {
         const file = path.join(out, `${theme}-${sh.name}-${size.name}.png`);
         // No caption over the picture: the world is what is to be judged (a HUD scene keeps its own HUD).
         const query = { ...sh.query, hud: "0" };
-        const themed = await shot({ ...query, theme }, file);
+        const themed = await shot(sh.own ? query : { ...query, theme }, file);
         lines.push(file);
         if (size.scale === 3) {
           // The world's colours on that screen: how many of the canvas's colours are the theme's table's.
@@ -1363,7 +1376,7 @@ async function shots(theme: Theme, out: string, port: number): Promise<void> {
       }
     }
     console.log(lines.join("\n"));
-    console.log(`\n${mixed === 0 && held > 0 ? "ok  " : "FAIL"}  at 390x844@3 every device pixel inside the game canvas's box has a colour the canvas itself holds: ${held} pixels in ${SHOTS.length} shots, ${mixed} of another colour (the canvas is scaled without smoothing: a contrast figure of the palette is that screen's)`);
+    console.log(`\n${mixed === 0 && held > 0 ? "ok  " : "FAIL"}  at 390x844@3 every device pixel inside the game canvas's box has a colour the canvas itself holds: ${held} pixels in ${list.length} shots, ${mixed} of another colour (the canvas is scaled without smoothing: a contrast figure of the palette is that screen's)`);
     if (mixed !== 0 || held === 0) process.exitCode = 1;
   } finally {
     await cleanup();
@@ -1540,7 +1553,7 @@ if (args.includes("--check")) {
 } else if (args.includes("--shots")) {
   const theme = arg("--theme") ?? "desert";
   if (!isTheme(theme)) throw new Error(`unknown theme ${theme}`);
-  await shots(theme, path.resolve(arg("--out") ?? path.join(ROOT, "tmp", "th-look", "shots")), Number(arg("--port") ?? 3011));
+  await shots(theme, path.resolve(arg("--out") ?? path.join(ROOT, "tmp", "th-look", "shots")), Number(arg("--port") ?? 3017));
   process.exit(process.exitCode ?? 0);
 } else if (args.includes("--surfaces")) {
   const out = path.resolve(arg("--out") ?? path.join(ROOT, "tmp", "th-look", "surfaces-sheet.png"));

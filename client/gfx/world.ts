@@ -4835,6 +4835,9 @@ export function bakePeaks(reset = false): { near: number; nearRoom: number; cand
  * For checks: what a track's art lays out beside and on its roads. Barrier posts (x, y of each
  * one's top-left view pixel: a post is 3 x 3), the junk or props outside the walls (centre and
  * size, view pixels), the ruts' points (x, y pairs, view pixels), and how many mouths have paint.
+ * `blots`: where the scrapyard's cosmetic oil blots lie on the tarmac (centre and radius, view
+ * pixels), whether the track's theme paints them or leaves them out. `houses`: a town's houses
+ * (Town.rect: x0, y0, x1, y1 each, view pixels; empty in a theme without a town).
  */
 export function artLayout(track: Track): { posts: Int32Array; junk: readonly { x: number; y: number; r: number }[]; ruts: readonly Float32Array[]; mouths: number; blots: readonly { x: number; y: number; r: number }[]; houses: Int32Array } {
   const a = artOf(track);
