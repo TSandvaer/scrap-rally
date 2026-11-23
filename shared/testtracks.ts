@@ -196,7 +196,7 @@ export const BRANCH_YARD: TrackDef = {
 // obstacle, in spaced groups with plain road between them (the user's density rule; at least 600 units
 // between two groups, sim-test). The loop is the Preview Yard's with its top and bottom straights 1200
 // longer (12596 round; the straights s ~700-3050 and ~7050-9350), so that a ford, which lies on a
-// straight, and a ramp truck's landing have room. In order round the lap, the same on all three:
+// straight, and a ramp truck's landing have room. In order round the lap, the same on all four:
 // - top straight: the theme surface (slot A, s 800, across the whole road), then a parked ramp truck
 //   right of centre (s 1750) with room for a boosted flight, then a tyre-mound pair (s 2700, 2880);
 // - right-hand side: a pool on the outside half of its tightest bend (s 4000-4300; the inside stays dry,
@@ -206,8 +206,9 @@ export const BRANCH_YARD: TrackDef = {
 // - left-hand side and the start: plain road.
 // The theme surfaces act (THEME-SURF: shared/physics.ts stepCar bogs a car on sand, takes its grip and
 // steering on oil and drifts it in a ford; the bots cost them and aim a ford upstream, shared/botdrive.ts);
-// TH-LOOK-2 and TH-LOOK-3 draw them. Picked with the dev flag SCRAP_DEV_TRACK=dune-yard, block-yard or
-// canopy-yard (server/room.ts).
+// TH-LOOK-2 and TH-LOOK-3 draw them. Picked with the dev flag SCRAP_DEV_TRACK=dune-yard, block-yard,
+// canopy-yard or quay-yard (server/room.ts). Quay Yard (HARBOUR-SCHEMA, PLAN-THEMES.md Amendment 1) is the
+// harbour's: oil, as on Block Yard, but placed where Block Yard has none (see QUAY_YARD); TH-LOOK-H draws it.
 
 /** The theme yards' loop: the Preview Yard's, its top and bottom straights 1200 longer. */
 export const THEME_LOOP: [number, number][] = [
@@ -257,8 +258,19 @@ export const CANOPY_YARD: TrackDef = themeYard("canopy-yard", "Canopy Yard", "ju
   { k: "ford", s0: 800, s1: 940, lat0: -64, lat1: 64, vx: 60 },
   { k: "ford", s0: 7150, s1: 7290, lat0: -64, lat1: 64, vx: -60 });
 
-/** The theme yards, one per theme but the scrapyard (PLAN-THEMES 2.5). */
-export const THEME_YARDS: readonly TrackDef[] = [DUNE_YARD, BLOCK_YARD, CANOPY_YARD];
+/**
+ * Harbour (HARBOUR-SCHEMA, ClickUp 123jpnbfgzv; PLAN-THEMES.md Amendment 1: oil on city and harbour
+ * tracks): two oil slicks placed differently from Block Yard's, so its bot runs test something new: 180
+ * on the right half, later on the top straight (s 900-1080; the bots go left of it, then back right of
+ * centre for the truck), and 180 down the middle of the bottom straight (s 7250-7430, lat -32..32; a
+ * clear lane 32 wide either side, so a bot picks a side). Each <= 200 and on a straight.
+ */
+export const QUAY_YARD: TrackDef = themeYard("quay-yard", "Quay Yard", "harbour",
+  { k: "oil", s0: 900, s1: 1080, lat0: 0, lat1: 64 },
+  { k: "oil", s0: 7250, s1: 7430, lat0: -32, lat1: 32 });
+
+/** The theme yards, one per theme but the scrapyard (PLAN-THEMES 2.5, Amendment 1). */
+export const THEME_YARDS: readonly TrackDef[] = [DUNE_YARD, BLOCK_YARD, CANOPY_YARD, QUAY_YARD];
 
 /** Every preview test track, in the order a preview lists them. */
 export const TEST_TRACKS: readonly TrackDef[] = [PREVIEW_YARD, SURF_YARD, SPLIT_YARD, MOVE_YARD, BRANCH_YARD, ...THEME_YARDS];
