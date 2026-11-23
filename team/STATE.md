@@ -846,7 +846,12 @@ DNF 2/2 on Breaker's Mile (grace). User: GRACE-1 123jpnbfkch -> in flight ctx_5a
 GRACE-1 nudged once (idled on its own test). THEME-TRACKS DONE c5375b3 (4 half-width sand drifts on Mile, 1 oil slick on Slag s 18500-18700;
 bots skirt; through costs 0.2-1.6 s; 1113/1113 + 186/186 x2; report tmp/theme-tracks/). Reviewer ctx_b0f85f68f6fa (Opus, :3018,
 tmp/review-theme-tracks.md). MERGE HELD until TH-LOOK-H merges (then: author merges main + re-shoots the slick; the user drives both
-tracks). Active authors: TH-LOOK-H, GRACE-1 (1 free; nothing startable: TH-LOOK-3 waits for TH-LOOK-H). TH-LOOK-2 waits for
+tracks). Active authors: TH-LOOK-H, GRACE-1 (1 free; nothing startable: TH-LOOK-3 waits for TH-LOOK-H).
+GRACE-1 DONE 026334e (finishGraceMs; Mile 38.93 s, Easy in; short tracks 30 s; 1112/1112 + 178/178 x2; no golden moved). Reviewer
+ctx_ecfce8ba55b2 (Opus, :3014, tmp/review-grace-1.md). Merges clean into main; with THEME-TRACKS only sim-test/README appends.
+THEME-SND 123jpnbfkeg (PLAN-THEMES "Later", user decision 6; ticket written now, approved plan) in flight: ctx_f4bf5cfb7322 (Opus,
+~/orca/workspaces/scrap-rally/theme-snd, :3010, tmp/spec-theme-snd.md; WAV renders early for the user's ear).
+Active authors: TH-LOOK-H, THEME-SND (GRACE-1 + THEME-TRACKS in review). TH-LOOK-2 waits for
 MARSHALS-1 (shares render.ts + canvas-census.ts). Ford direction cue moved from THEME-SURF to TH-LOOK-3 (drawing = world.ts, Fable).
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
