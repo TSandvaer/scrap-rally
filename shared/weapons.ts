@@ -661,6 +661,7 @@ function hazardsAhead(track: Track, r: number): { start: number; end: number } |
  * back to the recovery point the run started from). Water in a run-up (M4-SURF, PLAN-M4 2.2): the
  * run is driven again for every pool between the recovery point and the last hazard, on a lane
  * through the pool's middle (it costs the car speed: a pool before a jump can leave it short).
+ * THEME-SURF (PLAN-THEMES 2.3): and so for every sand patch, oil slick and ford (throughRuns).
  * Split lanes (M4-SURF part 2, PLAN-M4 2.6 B): with an island in the run-up it is driven once per
  * lane, all the islands' left lanes and then all their right ones (a run through a pool only in the
  * lane the pool is in, when the pool lies beside an island). Empty = every run-up works.
@@ -680,7 +681,7 @@ export function validateRunUps(track: Track, stats: CarStats = BASE_STATS): stri
       const problem = runUp(track, r, hz.end, stats, undefined, side);
       if (problem) errors.push(`${what}${isles.length ? ` through ${name(side)} of the split` : ""}: ${problem}`);
     }
-    for (const w of track.water) {
+    for (const { w, kind } of throughRuns(track)) {
       const a = ahead(w.s0);
       if (a >= hz.end) continue; // not in this run-up
       const pool = tractionRect(w);
@@ -690,12 +691,25 @@ export function validateRunUps(track: Track, stats: CarStats = BASE_STATS): stri
       const mid = (pool.lat0 + pool.lat1) / 2;
       for (const side of by ? [mid < by.mid ? -1 : 1] : sides) {
         const wet = runUp(track, r, hz.end, stats, pool, side);
-        if (wet) errors.push(`${what}, driven through the water ${w.s0.toFixed(1)}..${w.s1.toFixed(1)} at lat ${mid.toFixed(1)}${isles.length ? ` (${name(side)} of the split)` : ""}: ${wet}`);
+        if (wet) errors.push(`${what}, driven through ${kind} ${w.s0.toFixed(1)}..${w.s1.toFixed(1)} at lat ${mid.toFixed(1)}${isles.length ? ` (${name(side)} of the split)` : ""}: ${wet}`);
       }
     }
   }
   if (track.branches.length > 0) branchRunUps(track, stats, errors);
   return errors;
+}
+
+/**
+ * The surfaces validateRunUps drives a run through the middle of (as it does a pool): the water, then
+ * (THEME-SURF, PLAN-THEMES 2.3) the sand, the oil and the fords, each as named in its message. Only the
+ * water on a track without theme surfaces (as before).
+ */
+function throughRuns(r: Track): { w: { s0: number; s1: number; lat0: number; lat1: number }; kind: string }[] {
+  const out: { w: { s0: number; s1: number; lat0: number; lat1: number }; kind: string }[] = r.water.map((w) => ({ w, kind: "the water" }));
+  for (const w of r.sand) out.push({ w, kind: "the sand" });
+  for (const w of r.oil) out.push({ w, kind: "the oil" });
+  for (const w of r.fords) out.push({ w, kind: "the ford" });
+  return out;
 }
 
 // ---- run-ups through the branches (BR-PHYS, PLAN-BRANCH 2.8, advisor change 3, user decision 6) ----
@@ -827,13 +841,13 @@ function courseRuns(track: Track, legs: readonly Leg[], d0: number, end: number,
       const a = onCourse(track, legs, k, f.s0);
       if (inRun(a)) isles.push({ road: k, d0: a, d1: a + (f.s1 - f.s0), mid: f.mid });
     }
-    for (const w of r.water) {
+    for (const { w, kind } of throughRuns(r)) {
       const a = onCourse(track, legs, k, w.s0);
       if (!inRun(a)) continue;
       const pool = tractionRect(w);
       if (!(pool.s1 > pool.s0 && pool.lat1 > pool.lat0)) continue; // no area a car feels
       const at = k === 0 ? `s` : `u`;
-      pools.push({ road: k, d0: a + (pool.s0 - w.s0), d1: a + (pool.s1 - w.s0), lat0: pool.lat0, lat1: pool.lat1, what: `the water ${at} ${w.s0.toFixed(1)}..${w.s1.toFixed(1)}${k === 0 ? "" : ` on branch ${k}`}` });
+      pools.push({ road: k, d0: a + (pool.s0 - w.s0), d1: a + (pool.s1 - w.s0), lat0: pool.lat0, lat1: pool.lat1, what: `${kind} ${at} ${w.s0.toFixed(1)}..${w.s1.toFixed(1)}${k === 0 ? "" : ` on branch ${k}`}` });
     }
   }
   const sides = isles.length ? [-1, 1] : [-1];

@@ -14,6 +14,10 @@
 // cheapest lane round a pool or a patch when one is free. With none of them ahead it is exactly
 // the hole lane (the shipped tracks drive as before).
 //
+// Theme surfaces (THEME-SURF, PLAN-THEMES 2.3): sand and fords cost their drag factor - 1, oil as water
+// with OIL_COST (laneCost); a ford ahead or under the car moves its aim point upstream by the drift it will
+// pick up on the way there (fordAim), so it crabs across and comes out on its line.
+//
 // Split lanes (M4-SURF part 2, PLAN-M4 2.6 B and advisor change 2): an island ahead or beside the bot
 // (splitFor) makes it take one lane round it, the cheaper one for its car type (lane length plus the
 // water or dirt filling it: the truck takes the dirt lane), the side of its seat's racing line on a tie
@@ -83,7 +87,7 @@
 // and level, never the random id): see ROUTE. Without branches none of it runs (the ring is the track).
 
 import { CARS, DEFAULT_CAR, type CarType } from "./cars";
-import { angleDiff, CAR_LENGTH, CAR_RADIUS, CAR_WIDTH, clamp, DT, speedOf, type CarState, type CarStats } from "./physics";
+import { angleDiff, CAR_LENGTH, CAR_RADIUS, CAR_WIDTH, clamp, DT, speedOf, themeDrag, type CarState, type CarStats } from "./physics";
 import {
   BARREL_R,
   barrelLat,
@@ -100,6 +104,9 @@ import {
   roadOfSeg,
   segCount,
   SURF_DIRT,
+  SURF_FORD,
+  SURF_OIL,
+  SURF_SAND,
   SURF_WATER,
   TRUCK_BAND,
   TRUCK_HALF,
@@ -563,6 +570,18 @@ export function holeLane(track: Track, s: number, look: number, pref: number, ha
 
 /** A water pool's lane cost per unit of it ahead for the Sport (laneCost); a type with less grip on it pays more. */
 export const WATER_COST = 1.5;
+/** THEME-SURF: an oil slick's (PLAN-THEMES 2.3), the same way. */
+export const OIL_COST = 1.8;
+/** THEME-SURF: below this speed the ford's upstream aim (fordAim) reckons with this one (a car at rest would aim at the wall). */
+const FORD_AIM_MIN_SPEED = 80;
+/**
+ * THEME-SURF: the upstream aim's gain over the drift picked up on the way to the aim point (fordAim; 0: no aim).
+ * 1 would be exact for a car whose velocity follows its heading at once; the heading and then the velocity lag
+ * (~0.3 s at a ford's grip), so 1 takes out ~35-40 % of a ford's drift and 1.5 more than half, with no swing
+ * upstream past the line (tools/debug/theme-tune.ts --ford, a bot made to cross). An object so the tuner can
+ * switch it; the game never changes it.
+ */
+export const FORD_AIM = { gain: 1.5 };
 /** A lane counts as on a surface when the car's centre passes within this of its rectangle. */
 const SURFACE_MARGIN = 4;
 /** A tyre mound is a blocker in the lane search until the car's centre is this far past its edge (half a car + 1). */
@@ -586,11 +605,46 @@ const VERGE_LANE_MARGIN = 10;
  * drag over asphalt's (dirtDrag - 1: Sport 1.9, Racer 2.6, Truck 0.6), a pool WATER_COST times
  * sqrt(Sport's dirt grip / the type's) (its grip on water is a third of the dirt grip: Sport 1.5,
  * Racer 1.67, Truck 1.18). A belt costs nothing (the bot steers against its drift).
+ * THEME-SURF (PLAN-THEMES 2.3): sand and a ford their drag factor - 1 (physics themeDrag: sand Sport 1.05,
+ * Racer 1.43, Truck 0.33; a ford 0.57, 0.78, 0.18), an oil slick OIL_COST times sqrt(Sport's dirt grip /
+ * the type's), as water (its grip on oil is a quarter of the dirt grip: Sport 1.8, Racer 2.0, Truck 1.41).
  */
 export function laneCost(kind: number, stats: CarStats): number {
   if (kind === SURF_DIRT) return stats.dirtDrag - 1;
   if (kind === SURF_WATER) return WATER_COST * Math.sqrt(CARS.sport.base.dirtGrip / stats.dirtGrip);
+  if (kind === SURF_SAND || kind === SURF_FORD) return themeDrag(kind, stats) - 1;
+  if (kind === SURF_OIL) return OIL_COST * Math.sqrt(CARS.sport.base.dirtGrip / stats.dirtGrip);
   return 0;
+}
+
+/**
+ * THEME-SURF, a ford ("aim upstream", PLAN-THEMES 2.3): how far across the road to move the aim point,
+ * against the drift, for the fords between the car (s) and the aim point (s + look) on `ring` that it
+ * crosses (its lane over the ford, within SURFACE_MARGIN, as laneFor costs a lane: a bot whose lane is the
+ * dry edge a ford's traction rectangle leaves goes round it, and brushing past it is no reason to turn
+ * upstream onto the verge): each one's drift times the time the car
+ * spends on it on the way there (that stretch over its speed v, at least FORD_AIM_MIN_SPEED), against it,
+ * times FORD_AIM.gain. Pure pursuit to the moved point then ends near the lane: the car crabs upstream
+ * through the ford and comes out near its line. 0 with no ford ahead (every track without one).
+ */
+export function fordAim(ring: Track, s: number, seg: number, look: number, v: number, lane = 0): number {
+  const surfaces = ring.surfaces, nS = surfaces.length;
+  if (nS === 0) return 0;
+  const L = ring.length, end = s + look;
+  const k0 = ring.surfFrom[seg] ?? nS;
+  let shift = 0;
+  for (let j = 0; j < nS; j++) {
+    const k = k0 + j;
+    const f = surfaces[k % nS];
+    const lap = k >= nS ? L : 0; // the ones past the finish line, a lap on
+    if (f.s0 + lap >= end) break; // sorted by s0 round the lap from surfFrom
+    if (f.kind !== SURF_FORD) continue;
+    const lo = f.lat0 - SURFACE_MARGIN, hi = f.lat1 + SURFACE_MARGIN;
+    if (!(lane > lo && lane < hi)) continue; // round it, not through it
+    const on = Math.min(f.s1 + lap, end) - Math.max(f.s0 + lap, s);
+    if (on > 0) shift -= (FORD_AIM.gain * f.vx * on) / Math.max(v, FORD_AIM_MIN_SPEED);
+  }
+  return shift;
 }
 
 /** A blocked spot ahead: a hole or a tyre mound (lateral offset, radius), d = how far until it is behind the car (M4-MOVE: a barrel, a press, a truck: moverBlockers). */
@@ -2066,8 +2120,11 @@ export function botControls(view: BotView, mem: BotMem): BotControls {
       lane = clamp(lane, -m, m);
     }
   }
-  const tx = t.x - Math.sin(t.h) * lane;
-  const ty = t.y + Math.cos(t.h) * lane;
+  // THEME-SURF: a ford ahead or under the car: the aim point upstream of the lane (fordAim), inside the walls.
+  const up = fordAim(ring, q.s, q.seg, aim - q.s, v, lane);
+  const aimLat = up === 0 ? lane : clamp(lane + up, -(wall - CAR_WIDTH / 2), wall - CAR_WIDTH / 2);
+  const tx = t.x - Math.sin(t.h) * aimLat;
+  const ty = t.y + Math.cos(t.h) * aimLat;
   let steer = clamp(angleDiff(c.h, Math.atan2(ty - c.y, tx - c.x)) * 2.2, -1, 1);
   // HARD-2 wobble: over-correcting steer after a landing, decaying over the mistake's steps.
   if (err !== null && err.kind === "wobble") {
