@@ -781,7 +781,25 @@ MARSHALS-1 r3 confirm REQUEST_CHANGES (ctx_32b9038272b3; tmp/review-marshals-1-f
 BR-TRACKS allowed: branch-sheet --track option (msg_d64cb0279cad).
 TH-LOOK-2 123jpnbfgj2 in flight: ctx_4fb51550582c (Fable, ~/orca/workspaces/scrap-rally/th-look-2, :3017, spec tmp/spec-th-look-2.md; base 9861b7d).
 Active authors: BR-TRACKS, MARSHALS-1 (r4), TH-LOOK-2 (cap full). Next free slot: NOSELECT-2 (after MARSHALS-1 merges, main.ts);
-HARBOUR-SCHEMA after BR-TRACKS merges. TH-LOOK-2 waits for
+HARBOUR-SCHEMA after BR-TRACKS merges.
+MARSHALS-1 r4 DONE caf289f (fix 02199f7: raceView moved into marshals.ts, results from the first results snapshot; --check 82 ok / 0 FAIL,
+old mapping 78/4; --live 8/8 fast, 0 furled; 1085 + 166; census 14,120,632 B). Reviewer confirm: ctx_68c47f8cbab6 (tmp/review-marshals-1-r4.md).
+2026-11-23 09:55: session restarted; run rebound; BR-TRACKS, TH-LOOK-2 and the reviewer live; the Mac slept at 08:02 on battery during a
+worker test run (caffeinate now holds); :3012 Branch Yard copy still up (pid 27353).
+MARSHALS-1 r4 confirm APPROVE (ctx_68c47f8cbab6; tmp/marshals/REVIEW-marshals-1-round4.md). MERGED a46cad5; gate GREEN (check, 1085/1085,
+166/166, build index-CARM5PoL.js); ClickUp ready for qa test; workers released; workspace + branch removed; TH-LOOK-2 told (merge main later).
+NOSELECT-2 123jpnbfgvn in flight: ctx_2b8d184a1ef5 (Opus, ~/orca/workspaces/scrap-rally/noselect-2, :3016, spec tmp/spec-noselect-2.md).
+Active authors: BR-TRACKS, TH-LOOK-2, NOSELECT-2 (cap full). Player-visible on local main now: the marshals -> ask about a push when
+NOSELECT-2 lands (batch).
+BR-TRACKS DONE c35a856 (Slag narrow cut + pit, Mile jump cut; gains 1.6-2.1 s, a fall costs more; 0 falls; only the two tracks' golden
+lines; speed gate PASS; census 14,085,784 B; 1092/1092 + 174/174 x2; report + 12 shots tmp/br-tracks/). Reviewer ctx_c8ebf124332a (Opus,
+:3018, tmp/review-br-tracks.md; also the Mile socket-bot reconcile max 5.89). Merge into main: README conflict only (keep both).
+TASTE COPY :3012 now = ~/orca/workspaces/scrap-rally/br-tracks-taste detached at c35a856 (SCRAP_DEV_BOTS=1 PORT=3012 nohup npm start, node
+pid 3189, log tmp/br-tracks-taste-3012.log); the Branch Yard copy (pid 27353, branch-taste) stopped + removed. The user drives Slag
+Harbour + Breaker's Mile (taste gate 9).
+TH-LOOK-2 asked (Slag Harbour still city on main): BR-TRACKS' theme-removal commit 7c30a8e cherry-picked onto main as 4b6e9b6; gate GREEN
+(1085/1085, 166/166, build index-CXjr0vIx.js, schema-hash 37 SAME). TH-LOOK-2 told to merge main + final gate. NOSELECT-2: whole-link
+selection (user-select: all) chosen. TH-LOOK-2 waits for
 MARSHALS-1 (shares render.ts + canvas-census.ts). Ford direction cue moved from THEME-SURF to TH-LOOK-3 (drawing = world.ts, Fable).
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).

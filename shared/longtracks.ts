@@ -24,8 +24,6 @@ import type { TrackDef } from "./track";
 export const SLAG_HARBOUR: TrackDef = {
   id: "slag-harbour",
   name: "Slag Harbour",
-  // THEME-SCHEMA (PLAN-THEMES 2.6): the dockside becomes a harbour quarter; looks only (its oil slick comes with THEME-TRACKS).
-  theme: "city",
   control: [
     [1800, 3700], [2400, 3650], [2900, 3450], [3400, 3420], [3900, 3580], [4500, 3700], [5200, 3700],
     [5900, 3700], [6400, 3550], [6600, 3100], [6500, 2600], [6250, 2150], [6300, 1650], [6500, 1200], [6300, 700], [5800, 500],
