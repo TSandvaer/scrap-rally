@@ -846,7 +846,19 @@ DNF 2/2 on Breaker's Mile (grace). User: GRACE-1 123jpnbfkch -> in flight ctx_5a
 GRACE-1 nudged once (idled on its own test). THEME-TRACKS DONE c5375b3 (4 half-width sand drifts on Mile, 1 oil slick on Slag s 18500-18700;
 bots skirt; through costs 0.2-1.6 s; 1113/1113 + 186/186 x2; report tmp/theme-tracks/). Reviewer ctx_b0f85f68f6fa (Opus, :3018,
 tmp/review-theme-tracks.md). MERGE HELD until TH-LOOK-H merges (then: author merges main + re-shoots the slick; the user drives both
-tracks). Active authors: TH-LOOK-H, GRACE-1 (1 free; nothing startable: TH-LOOK-3 waits for TH-LOOK-H). TH-LOOK-2 waits for
+tracks). Active authors: TH-LOOK-H, GRACE-1 (1 free; nothing startable: TH-LOOK-3 waits for TH-LOOK-H).
+GRACE-1 DONE 026334e (finishGraceMs; Mile 38.93 s, Easy in; short tracks 30 s; 1112/1112 + 178/178 x2; no golden moved). Reviewer
+ctx_ecfce8ba55b2 (Opus, :3014, tmp/review-grace-1.md). Merges clean into main; with THEME-TRACKS only sim-test/README appends.
+THEME-SND 123jpnbfkeg (PLAN-THEMES "Later", user decision 6; ticket written now, approved plan) in flight: ctx_f4bf5cfb7322 (Opus,
+~/orca/workspaces/scrap-rally/theme-snd, :3010, tmp/spec-theme-snd.md; WAV renders early for the user's ear).
+Active authors: TH-LOOK-H, THEME-SND (GRACE-1 + THEME-TRACKS in review).
+THEME-SND first WAVs (tmp/theme-snd/wavs/): user picked sand fine, ford brook, oil thin hiss (relayed).
+THEME-TRACKS review APPROVE (ctx_b0f85f68f6fa; tmp/theme-tracks/THEME-TRACKS-review.md). Play: going round costs <= 0.26 s/lap, through
+0.16-1.56 s, so the patches are cheap-to-avoid traps for a wide line, not a risk/reward choice -> for the user's drive. Nits for the
+post-TH-LOOK-H round: sim-test.ts:16983 comment (max 51 ticks), :16910 pitDist ignores lat 18, longtracks.ts:139-142 'apex' wording.
+GRACE-1 review APPROVE (ctx_ecfce8ba55b2); 2 text nits fixed 224bd58. MERGED 45fe3e6; gate GREEN (1112/1112, 178/178, build, schema-hash);
+PLAN.md:127 updated (finishGraceMs). ClickUp ready for qa test; workers released; workspace removed. Player-visible on local main vs live:
+GRACE-1 (long-track race end) only -> next push question when THEME-SND / TH-LOOK-H land (unless the user wants it sooner). TH-LOOK-2 waits for
 MARSHALS-1 (shares render.ts + canvas-census.ts). Ford direction cue moved from THEME-SURF to TH-LOOK-3 (drawing = world.ts, Fable).
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).

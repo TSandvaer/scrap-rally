@@ -124,7 +124,8 @@ shake (150 ms cooldown; replays never fire it). There is no server bump event.
 - `lap` = completed laps. Race distance `rd = lap*L + s`, with `s − L` while `cp == 0` and
   `s > L/2` (cars on the grid sit just behind the line).
 - Finish at `LAPS`; the race ends when every racer still on the field has finished (retired
-  players are not waited for) or `FINISH_GRACE_MS` after the winner → results for
+  players are not waited for) or the finish grace after the winner (GRACE-1, 2026-11-23:
+  `finishGraceMs` = max(`FINISH_GRACE_MS` 30 s, 0.75 × the winner's average lap)) → results for
   `RESULTS_MS` → lobby. A finished car keeps driving.
 
 ## Rooms and players
