@@ -5,8 +5,9 @@
 // yard have way to many to closely packed"); no dirt stretch is longer than ~350 units (user,
 // 2026-11-22). tools/debug/track-density.ts measures both: the plain-road share, the gaps between
 // the obstacle groups, the dirt stretches, the straights and the bots' laps.
-// Each leaves room for one later shortcut road (PLAN-BRANCH.md), plain road with open ground beside
-// it; none is built here.
+// Each has one shortcut road (BR-TRACKS, ClickUp 123jpnbfghe; PLAN-BRANCH.md user decisions 1, 2 and 6):
+// shorter than the main road, risky, a clean run on it about 1.5-2.5 s a lap quicker, a fall on it dearer
+// than that; tools/debug/br-tracks.ts measures both per level and car type.
 
 import type { TrackDef } from "./track";
 
@@ -19,8 +20,15 @@ import type { TrackDef } from "./track";
 // the band at 272 u/s or more takes it); the pier, a finger of road with a right-hand hairpin, plain
 // but for a kerb cell on the hairpin's apex; a tyre-mound chicane on the top-left straight; a
 // conveyor belt on the left side drifting cars to the left; the bottom-left corner onto the grid.
-// Shortcut room (a hole or narrow one, PLAN-BRANCH): the pier, s ~9700-14000, is plain road with
-// open ground between its two legs (800 apart, centre to centre) and round its tip.
+// The shortcut (BR-TRACKS): a narrow cut across the pier (80 wide, half-width 40, the main road's 64),
+// off the right of its down leg at s 10300 and onto the right of its up leg at s 13335: down between the
+// legs, a hairpin of its own above the pier's tip, flat at the bottom, with a pit on its inside halfway
+// round (u 1068, lat 18, r 20: swing wide or drop in), and back up. 2137 long against the main road's
+// 3035; its pit 346 from the main centreline. A recovery point on it before the pit (u 700), and the main
+// road's at s 9900, 400 before the fork (a fall on the cut before u 700 goes back there: user decision 6).
+// Six control points, no more: buildTrack samples each control segment 16 times, and a hairpin drawn with
+// more overfills the bake's list of pieces near a block (client/gfx/world.ts `near`, 64; the main road's
+// widen makes every block reach 203 units here): tools/debug/branch-sheet.ts --track slag-harbour.
 export const SLAG_HARBOUR: TrackDef = {
   id: "slag-harbour",
   name: "Slag Harbour",
@@ -47,6 +55,13 @@ export const SLAG_HARBOUR: TrackDef = {
     { k: "cell", s: 8840, lat: 34, air: true },
     // The pier's hairpin (a right-hander): a cell on the inside kerb at its apex.
     { k: "cell", s: 11830, lat: 58 },
+    // The pier's shortcut (BR-TRACKS): the narrow cut with the pit at its hairpin's apex.
+    {
+      k: "branch", s0: 10300, s1: 13335, side: 1, halfWidth: 40,
+      control: [[3820, 1200], [3750, 1620], [3680, 1810], [3520, 1810], [3450, 1620], [3380, 1200]],
+      features: [{ k: "hole", s: 1068, lat: 18, r: 20 }],
+      recovery: [700],
+    },
     // The top-left straight: a tyre-mound chicane, 200 apart.
     { k: "tyres", s: 14250, lat: -30, r: 24 },
     { k: "tyres", s: 14450, lat: 30, r: 24 },
@@ -54,7 +69,7 @@ export const SLAG_HARBOUR: TrackDef = {
     // The left side: a conveyor belt across the asphalt.
     { k: "belt", s0: 17230, s1: 17480, lat0: -64, lat1: 64, vx: -70 },
   ],
-  recovery: [0, 4000, 8000, 12600, 16000],
+  recovery: [0, 4000, 8000, 9900, 12600, 16000],
 };
 
 // A breaker's yard round a mile of straights, run clockwise on the map (mostly right-handers). The
@@ -68,8 +83,13 @@ export const SLAG_HARBOUR: TrackDef = {
 // with an air cell over it right of centre; the bottom-left corner into the finger, a pit pair on its
 // first leg (left, then right), a kerb cell on the inside of its hairpin's apex; up the left side to
 // the grid.
-// Shortcut room (a jump, PLAN-BRANCH): the east lobe, s ~5300-8300, is plain road round open ground
-// that a cut across it could jump.
+// The shortcut (BR-TRACKS): a jump cut across the east lobe (112 wide, half-width 56), off the right of
+// the top straight at s 5300, round a right-hander and down the lobe's middle, then a long straight run
+// down to the bottom straight with a ramp (u 1510) and a chasm of 140 (u 1590-1730; the bots take off
+// at 292 u/s or more there, shared/botdrive.ts takeoffSpeedFor), onto the bottom straight at s 8803.
+// 2706 long against the main road's 3503; the chasm 247 from the main centreline. A recovery point 300
+// before the ramp (u 1210), and the main road's at s 4900, 400 before the fork (user decision 6). Eight
+// control points (see Slag Harbour's: the bake's `near` list).
 export const BREAKERS_MILE: TrackDef = {
   id: "breakers-mile",
   name: "Breaker's Mile",
@@ -91,6 +111,13 @@ export const BREAKERS_MILE: TrackDef = {
     { k: "dirt", s0: 2560, s1: 2890, lat0: 28, lat1: 124 },
     // The crusher press gate: down 1 s in every 3, the right third open.
     { k: "press", s: 4800, lat0: -108, lat1: 30, period: 180, down: 60 },
+    // The east lobe's shortcut (BR-TRACKS): the jump cut.
+    {
+      k: "branch", s0: 5300, s1: 8803, side: 1, halfWidth: 56,
+      control: [[6220, 2920], [6363, 2983], [6506, 3048], [6671, 3326], [6648, 3634], [6370, 3795], [5916, 3964], [5499, 4133]],
+      features: [{ k: "ramp", s: 1510, len: 80 }, { k: "gap", s0: 1590, s1: 1730 }],
+      recovery: [1210],
+    },
     // The chasm at the end of the bottom straight, an air cell over it.
     { k: "ramp", s: 10900, len: 80 },
     { k: "gap", s0: 10980, s1: 11200 },
@@ -100,5 +127,5 @@ export const BREAKERS_MILE: TrackDef = {
     { k: "hole", s: 14750, lat: 30, r: 28 },
     { k: "cell", s: 15905, lat: -58 },
   ],
-  recovery: [0, 5600, 10200, 13950, 17000],
+  recovery: [0, 4900, 5600, 10200, 13950, 17000],
 };

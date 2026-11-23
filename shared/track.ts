@@ -369,7 +369,7 @@ export interface Track {
    * and stops (m - 1 segments, cum[m-1] = length, per-segment lists m - 1 long); s never wraps on it.
    */
   roadNo: number;
-  /** The track's branches (empty on every shipped track, and on a branch's road). */
+  /** The track's branches (empty on a branch's road; Slag Harbour and Breaker's Mile have one each, BR-TRACKS). */
   branches: PlacedBranch[];
   /**
    * Per global segment (the main road's, then each branch's from its base): the global segment of

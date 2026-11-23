@@ -401,6 +401,7 @@ async function run(ctx: Ctx, bots: Bot[]): Promise<void> {
   await runBranch(ctx, bots);
   await runBranchBots(ctx, bots);
   await runThemeSurf(ctx, bots);
+  await runBrTracks(ctx, bots);
 }
 
 const lost = new Map<string, (ConnReason | undefined)[]>();
@@ -2794,5 +2795,78 @@ async function runThemeSurf(ctx: Ctx, bots: Bot[]): Promise<void> {
   } finally {
     if (old === undefined) delete process.env.SCRAP_DEV_TRACK;
     else process.env.SCRAP_DEV_TRACK = old;
+  }
+}
+
+// ---- the long tracks' shortcuts over sockets (BR-TRACKS, PLAN-BRANCH.md 3, ClickUp 123jpnbfghe, 2026-11-22) ----------
+// This section's imports (hoisted like the ones at the top).
+import { roadOfSeg as btRoadOfSeg } from "../shared/track";
+
+/**
+ * Slag Harbour's narrow cut and Breaker's Mile's jump cut over a lagged link, on the shipped tracks (no dev flag: the host
+ * picks each): a lagged (80±10 ms) Hard socket bot on lane 0 (seat 2 by its lane: its plan takes the shortcut) races an
+ * unlagged Normal socket bot on lane 24 (seat 1: Normal on an odd seat keeps the main road), weapons off, one lap. The Hard
+ * bot drives the shortcut (server ticks on it), no fall, and keeps a median reconciliation error below 0.5, no error above
+ * 50 and at most 4 state mismatches; the Normal one keeps the main road (only mouth ticks on the shortcut); both finish.
+ */
+async function runBrTracks(ctx: Ctx, bots: Bot[]): Promise<void> {
+  for (const [id, n] of [["slag-harbour", 9], ["breakers-mile", 10]] as const) {
+    const N = new Bot(`November${n}`, ctx.url, 24);
+    const S = new Bot(`Sierra${n}`, ctx.url, 0, { lag: 80, jitter: 10 }, undefined, "hard");
+    bots.push(N, S);
+    for (const b of [N, S]) b.weapons = false;
+    let room: ReturnType<typeof ctx.server.rooms.rooms.get> | undefined;
+    let tick: ((t: number, now: number) => void) | null = null;
+    try {
+      N.game.create(N.name);
+      await waitFor(`${id} shortcut: N welcome`, () => !!N.game.you, 3000);
+      S.game.join(N.game.code, S.name);
+      await waitFor(`${id} shortcut: S in N's room`, () => N.game.players.length === 2 && !!S.game.you, 3000);
+      room = ctx.server.rooms.rooms.get(N.game.code)!;
+      N.game.pickTrack(id);
+      await waitFor(`${id} shortcut: both clients on it`, () => N.game.trackId === id && S.game.trackId === id, 3000);
+      const t = S.game.track;
+      const r = room;
+      tick = r.tick.bind(r);
+      const on = { s: 0, n: 0, sFalls: 0 };
+      let sFall = false;
+      r.tick = (tk: number, now: number) => {
+        tick!(tk, now);
+        if (r.phase !== "racing") return;
+        const sp = r.players.get(S.game.you), np = r.players.get(N.game.you);
+        const sc = sp?.car, nc = np?.car;
+        if (sc && !sp?.progress?.fin) {
+          if (btRoadOfSeg(t, sc.seg) === 1) on.s++;
+          if (sc.fall > 0 && !sFall) on.sFalls++;
+          sFall = sc.fall > 0;
+        }
+        if (nc && !np?.progress?.fin && btRoadOfSeg(t, nc.seg) === 1) on.n++;
+      };
+      const sMem = (S.driver as unknown as { mem: BotMem }).mem, nMem = (N.driver as unknown as { mem: BotMem }).mem;
+      const plan = { s: -1, n: -1 };
+      S.afterStep = () => void (S.game.phase === "racing" && sMem.plan >= 0 && (plan.s = sMem.plan));
+      N.afterStep = () => void (N.game.phase === "racing" && nMem.plan >= 0 && (plan.n = nMem.plan));
+      const e0 = S.game.recErrors.length, st0 = S.game.recStateErrors, n0 = N.game.recErrors.length;
+      const rows = await runRace(`${id} shortcut`, bots, N, [N, S]);
+      const s = stats(S.game.recErrors.slice(e0)), sn = stats(N.game.recErrors.slice(n0));
+      const st = S.game.recStateErrors - st0;
+      console.log(
+        `      ${S.name} (Hard socket bot, lane 0 = seat ${sMem.seat}, 80±10 ms) plan ${plan.s}, server ticks on the shortcut ${on.s}, falls ${on.sFalls}; ${N.name} (Normal, lane 24 = seat ${nMem.seat}) plan ${plan.n}, ticks on it ${on.n} (mouths); ` +
+          `${S.name} rec err n=${s.n} median=${s.median.toFixed(3)} p95=${s.p95.toFixed(3)} max=${s.max.toFixed(2)}, state mismatches ${st}, rtt=${S.game.rtt.toFixed(1)}ms; ${N.name} rec err n=${sn.n} median=${sn.median.toFixed(3)} max=${sn.max.toFixed(2)}; ` +
+          `finish ${rows.map((x) => `${x.name} ${(x.timeMs / 1000).toFixed(2)}s`).join(", ")}`,
+      );
+      check(
+        `${id} shortcut over sockets: on the shipped track (picked by the host, no dev flag) a lagged (80±10 ms) Hard socket bot on lane 0 (seat 2) takes the shortcut (plan 1; server ticks on it), does not fall, and keeps a median reconciliation error below 0.5, no error above 50, at most 4 state mismatches; a Normal socket bot on lane 24 (seat 1) keeps the main road (plan 0, only mouth ticks on it) with its median below 0.5; both finish`,
+        room.trackId === id && rows.length === 2 && rows.every((x) => x.timeMs > 0) && sMem.seat === 2 && plan.s === 1 && on.s > 300 && on.sFalls === 0 && s.n > 500 && s.median < 0.5 && s.max <= 50 && st <= 4 &&
+          nMem.seat === 1 && plan.n === 0 && on.n < 300 && sn.n > 500 && sn.median < 0.5 && N.errors.length + S.errors.length === 0,
+        `${S.name} plan ${plan.s}, on the shortcut ${on.s}, falls ${on.sFalls}; median ${s.median.toFixed(3)}, max ${s.max.toFixed(2)}, state mismatches ${st}; ${N.name} plan ${plan.n}, on it ${on.n}, median ${sn.median.toFixed(3)}`,
+      );
+    } finally {
+      if (room && tick) room.tick = tick;
+      for (const b of [N, S]) {
+        b.afterStep = null;
+        b.game.leave();
+      }
+    }
   }
 }

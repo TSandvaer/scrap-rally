@@ -30,6 +30,13 @@
 // - the straights: runs where the heading stays within STRAIGHT_TOL of where the run began (the
 //   drafting straights), the longest three, and what lies on each.
 //
+// - BR-TRACKS (ClickUp 123jpnbfghe): a track with shortcut roads gets a section per shortcut after its
+//   main road's (a track without one prints exactly as before): the main road it cuts (s0..s1) against
+//   its own length; its features' footprints along it (u), their groups (as above; an open road does not
+//   wrap), the plain road from its fork gore to its first footprint and from its last to its merge gore,
+//   its plain share and dirt stretches; and the gaps along the route through it: from the main road's last
+//   group before the fork to its first group, and from its last group to the main road's first after the
+//   merge. --png draws it too; --race adds each bot's ticks on each shortcut to its row.
 // --race (the two long tracks): server bots in a Room on the sim clock, the host retired at GO,
 // 3 laps, three bots per level (Easy, Normal, Hard; Sport, Racer, Truck by add order) with weapons
 // off and on, and five mixed bots with weapons (Hard, Normal, Easy, Hard, Normal); every race run
@@ -46,7 +53,7 @@ import type { CarState } from "../../shared/physics";
 import type { ServerMsg } from "../../shared/protocol";
 import { TEST_TRACKS, testTrack } from "../../shared/testtracks";
 import { trackById, trackList } from "../../shared/tracks";
-import { LIP_ZONE, pointAt, queryTrackNear, SURF_DIRT, SURF_WATER, surfaceAt, tractionRect, type Track } from "../../shared/track";
+import { LIP_ZONE, pointAt, queryTrackNear, roadOfSeg, SURF_DIRT, SURF_WATER, surfaceAt, tractionRect, type Track } from "../../shared/track";
 import { CAR_HP } from "../../shared/weapons";
 import { wallHitSpeed } from "../../client/game";
 import { Room, type Conn, type Player, type Session } from "../../server/room";
@@ -114,6 +121,26 @@ export interface Density {
   longestPlain: number;
   mud: Mud[];
   straights: Straight[];
+  /** BR-TRACKS: one per shortcut road (present only on a track that has some). */
+  shortcuts?: ShortcutDensity[];
+}
+
+/** BR-TRACKS: a shortcut road's density (its distances are its own, u). */
+export interface ShortcutDensity {
+  no: number; // 1..
+  s0: number; // the main road it cuts: fork ..
+  s1: number; // .. merge
+  length: number; // its own
+  halfWidth: number;
+  footprints: Footprint[];
+  groups: Group[]; // in u, not wrapped
+  plainIn: number; // from its fork gore to its first footprint (to its merge gore if it has none)
+  plainOut: number; // from its last footprint to its merge gore
+  plain: number; // share of it with no footprint
+  mud: Mud[];
+  /** Along the route through it: from the main road's last group ending before the fork to its first group, and from its last group to the main road's first group starting after the merge. */
+  routeIn: { gap: number; from: string };
+  routeOut: { gap: number; to: string };
 }
 
 const f0 = (v: number) => v.toFixed(0);
@@ -162,8 +189,8 @@ export function groupsOf(t: Track, list: Footprint[]): Group[] {
       g.members.push(f.what);
     } else groups.push({ s0: f.s0, s1: f.s1, kinds: [f.kind], members: [f.what] });
   }
-  // Over the start line: the last group joins the first one when they are that close round the lap.
-  if (groups.length > 1) {
+  // Over the start line: the last group joins the first one when they are that close round the lap (not on an open road: a shortcut's, BR-TRACKS).
+  if (groups.length > 1 && t.roadNo === 0) {
     const last = groups[groups.length - 1], first = groups[0];
     const same = first.kinds.length === 1 && last.kinds.length === 1 && first.kinds[0] === last.kinds[0];
     if (first.s0 + L - last.s1 < (same ? SAME_JOIN : GROUP_JOIN)) {
@@ -271,11 +298,41 @@ export function densityOf(t: Track): Density {
       splitLane: t.islands.some((i) => d.s0 < i.s1 && d.s1 > i.s0 && (d.lat0 >= i.lat1 || d.lat1 <= i.lat0)),
     };
   });
-  return {
+  const out: Density = {
     id: t.def.id, name: t.def.name, length: L, footprints: list, groups, gaps,
     shortestGap: gaps.length > 1 ? Math.min(...gaps) : gaps.length ? gaps[0] : L, breather,
     mixed: groups.filter((g) => g.kinds.length > 1),
     plain: 1 - all.length / L, clear: 1 - obs.length / L, longestPlain: all.longestFree, mud, straights: straightsOf(t, list),
+  };
+  if (t.branches.length > 0) out.shortcuts = t.branches.map((b, k) => shortcutDensity(t, k, groups));
+  return out;
+}
+
+/** BR-TRACKS: shortcut k's density (see the top of this file); mainGroups: the main road's obstacle groups. */
+function shortcutDensity(t: Track, k: number, mainGroups: Group[]): ShortcutDensity {
+  const b = t.branches[k], r = b.road, L = t.length;
+  // Its own features only: the widens buildTrack adds for its mouths (the mouth width, shared/track.ts) are road, not a split.
+  const declared = (r.def.features ?? []).filter((f) => f.k === "widen");
+  const list = footprints({ ...r, widens: r.widens.filter((w) => declared.some((f) => f.k === "widen" && f.s0 === w.s0 && f.s1 === w.s1)) });
+  const obstacles = list.filter((f) => f.obstacle);
+  const groups = groupsOf(r, obstacles);
+  const fu = b.forkGore ? b.forkGore.u : 0, mu = b.mergeGore ? b.mergeGore.u : r.length;
+  const first = obstacles.length ? Math.min(...obstacles.map((f) => f.s0)) : mu, last = obstacles.length ? Math.max(...obstacles.map((f) => f.s1)) : fu;
+  // The main road's last group ending before the fork, and its first group starting after the merge (round the lap).
+  const before = (g: Group) => (((b.s0 - g.s1) % L) + L) % L, after = (g: Group) => (((g.s0 - b.s1) % L) + L) % L;
+  const prev = mainGroups.length ? mainGroups.reduce((a, g) => (before(g) < before(a) ? g : a)) : null;
+  const next = mainGroups.length ? mainGroups.reduce((a, g) => (after(g) < after(a) ? g : a)) : null;
+  const gIn = groups.length ? groups[0].s0 : r.length, gOut = groups.length ? r.length - groups[groups.length - 1].s1 : r.length;
+  const name = (g: Group | null) => (g ? `${g.kinds.join("+")} ${f0(g.s0)}..${f0(g.s1)}` : "none");
+  return {
+    no: k + 1, s0: b.s0, s1: b.s1, length: r.length, halfWidth: r.def.halfWidth, footprints: list, groups,
+    plainIn: Math.max(0, first - fu), plainOut: Math.max(0, mu - last), plain: 1 - covered(r, list).length / r.length,
+    mud: r.dirt.map((d) => {
+      const tr = tractionRect(d);
+      return { s0: d.s0, s1: d.s1, length: d.s1 - d.s0, traction: Math.max(0, tr.s1 - tr.s0), lat0: d.lat0, lat1: d.lat1, splitLane: false };
+    }),
+    routeIn: { gap: (prev ? before(prev) : L) + gIn, from: name(prev) },
+    routeOut: { gap: gOut + (next ? after(next) : L), to: name(next) },
   };
 }
 
@@ -290,6 +347,12 @@ export function densityReport(d: Density): string[] {
   });
   out.push(`dirt stretches (rule: <= ~350 declared): ${d.mud.length ? d.mud.map((m) => `${f0(m.s0)}..${f0(m.s1)} = ${f0(m.length)} (traction ${f0(m.traction)}), lat ${f0(m.lat0)}..${f0(m.lat1)}${m.splitLane ? ", a split lane" : ""}`).join("; ") : "none"}`);
   out.push(`longest straights (heading within ${(STRAIGHT_TOL * 180 / Math.PI).toFixed(0)} deg): ${d.straights.map((s) => `${f0(s.s0)}..${f0(s.s1)} = ${f0(s.length)}${s.on.length ? ` (on it: ${s.on.join(", ")}; its longest plain run ${f0(s.plain)})` : " (plain)"}`).join("; ")}`);
+  for (const c of d.shortcuts ?? []) {
+    out.push(`shortcut ${c.no}: main s ${f0(c.s0)}..${f0(c.s1)} (${f0(c.s1 - c.s0)}) cut by ${f0(c.length)} of road (${f0(c.s1 - c.s0 - c.length)} shorter), half-width ${c.halfWidth}; plain ${pc(c.plain)} of it; from its fork gore ${f0(c.plainIn)} of plain road to its first footprint, from its last ${f0(c.plainOut)} to its merge gore`);
+    c.groups.forEach((g, i) => out.push(`  shortcut ${c.no} group ${i + 1}: u ${f0(g.s0)}..${f0(g.s1)} (${f0(g.s1 - g.s0)} long) ${g.kinds.join("+")}: ${g.members.join(", ")}`));
+    out.push(`  shortcut ${c.no} along the route: ${f0(c.routeIn.gap)} of road with no obstacle from the main road's group before the fork (${c.routeIn.from}), ${f0(c.routeOut.gap)} to its group after the merge (${c.routeOut.to}); mixed groups on it: ${c.groups.some((g) => g.kinds.length > 1) ? "yes" : "none"}`);
+    out.push(`  shortcut ${c.no} dirt stretches (rule: <= ~350 declared): ${c.mud.length ? c.mud.map((m) => `u ${f0(m.s0)}..${f0(m.s1)} = ${f0(m.length)} (traction ${f0(m.traction)})`).join("; ") : "none"}`);
+  }
   return out;
 }
 
@@ -358,6 +421,29 @@ export function densityPng(t: Track, file: string, W = 1100): void {
   for (const p of t.presses) fill(p.s - 12, p.s + 12, p.lat0, p.lat1, KIND_RGB.press);
   for (const k of t.trucks) fill(k.s, k.s + k.len, k.lat - 20, k.lat + 20, KIND_RGB.truck);
   for (const c of t.cells) disc(c.s, c.lat, 14, c.air ? [255, 255, 255] : KIND_RGB["kerb cell"]);
+  // BR-TRACKS: each shortcut road, its corridor, its features and its recovery points (u), over the main road's map.
+  for (const b of t.branches) {
+    const r = b.road;
+    const bat = (u: number, lat: number) => {
+      const p = pointAt(r, u);
+      return { x: p.x - Math.sin(p.h) * lat, y: p.y + Math.cos(p.h) * lat };
+    };
+    for (let u = 0; u < r.length; u += step) {
+      const i = pointAt(r, u).seg;
+      for (let lat = -r.wallL[i]; lat <= r.wallR[i]; lat += step) {
+        const p = bat(u, lat);
+        put(p.x, p.y, lat >= -r.halfL[i] && lat <= r.halfR[i] ? [70, 70, 76] : [112, 92, 62]);
+      }
+    }
+    const bfill = (u0: number, u1: number, l0: number, l1: number, c: readonly number[]) => {
+      for (let u = u0; u <= u1; u += step) for (let lat = l0; lat <= l1; lat += step) { const p = bat(u, lat); put(p.x, p.y, c); }
+    };
+    for (const d of r.dirt) bfill(d.s0, d.s1, d.lat0, d.lat1, KIND_RGB.dirt);
+    for (const g of r.gaps) bfill(g.s0, g.s1, -r.wall, r.wall, [0, 0, 0]);
+    for (const x of r.ramps) bfill(x.s, x.s + x.len, -r.def.halfWidth, r.def.halfWidth, KIND_RGB.jump);
+    for (const h of r.holes) for (let du = -h.r; du <= h.r; du += step) for (let dl = -h.r; dl <= h.r; dl += step) if (du * du + dl * dl <= h.r * h.r) { const p = bat(h.s + du, h.lat + dl); put(p.x, p.y, [0, 0, 0]); }
+    for (const u of r.recovery) { const p = bat(u, 0); put(p.x, p.y, [0, 255, 0], 3); }
+  }
   for (let s = 0; s < t.length; s += 1000) { const p = at(s, 0); put(p.x, p.y, s % 5000 === 0 ? [255, 0, 0] : [255, 255, 255], s % 5000 === 0 ? 4 : 2); }
   for (const r of t.recovery) { const p = at(r, 0); put(p.x, p.y, [0, 255, 0], 3); }
   savePng(file, pic);
@@ -396,6 +482,7 @@ export interface LongRace {
   dirt: number[]; // ticks on dirt
   water: number[]; // ticks on water
   lanes: string[][]; // per bot, per island: "L"/"R" lap by lap
+  shortcuts: number[][]; // BR-TRACKS: per bot, per shortcut road: the ticks it is on it (empty on a track without one)
   digest: string;
 }
 
@@ -426,7 +513,8 @@ export function longRace(trackId: string, levels: BotLevel[], laps = 3, weapons 
   const out: LongRace = {
     track: trackId, phase: "", ticks: 0, finish: [], cars: bots.map((b) => b.carType), laps: bots.map(() => []), falls: zero(), wrecks: zero(),
     walls: zero(), mounds: zero(), sides: zero(), noses: zero(), barrels: zero(), presses: zero(), trucks: zero(), truckJumps: zero(),
-    rampJumps: zero(), cells: zero(), waits: zero(), dirt: zero(), water: zero(), lanes: bots.map(() => t.islands.map(() => "")), digest: "",
+    rampJumps: zero(), cells: zero(), waits: zero(), dirt: zero(), water: zero(), lanes: bots.map(() => t.islands.map(() => "")),
+    shortcuts: bots.map(() => t.branches.map(() => 0)), digest: "",
   };
   const prev = bots.map((b) => ({ ...b.car! }));
   const lapAt = bots.map(() => 0);
@@ -446,6 +534,8 @@ export function longRace(trackId: string, levels: BotLevel[], laps = 3, weapons 
         lapRt[k] = rt;
       }
       if (c.fall > 0 && p.fall === 0) out.falls[k]++;
+      const road = t.branches.length ? roadOfSeg(t, c.seg) : 0;
+      if (road > 0 && !b.progress?.fin) out.shortcuts[k][road - 1]++;
       if (c.wreck > 0 && p.wreck === 0) out.wrecks[k]++;
       if (c.boost > p.boost + 1) out.cells[k]++;
       const q = queryTrackNear(t, c.x, c.y, c.seg);
@@ -490,7 +580,7 @@ export function longRace(trackId: string, levels: BotLevel[], laps = 3, weapons 
 export function longRow(name: string, r: LongRace): string {
   const j = (a: number[]) => a.join("/");
   const laps = r.laps.map((l) => l.map((x) => x.toFixed(2)).join(",")).join(" | ");
-  return `${name.padEnd(18)} ${r.phase} ${(r.ticks / 60).toFixed(1)} s | cars ${r.cars.join("/")} | laps ${laps} | falls ${j(r.falls)} wrecks ${j(r.wrecks)} walls ${j(r.walls)} | mound ${j(r.mounds)} side ${j(r.sides)} nose ${j(r.noses)} barrel ${j(r.barrels)} press ${j(r.presses)} truck ${j(r.trucks)} | truck jumps ${j(r.truckJumps)} ramp jumps ${j(r.rampJumps)} | cells ${j(r.cells)} press waits ${j(r.waits)} | dirt ${j(r.dirt)} water ${j(r.water)} | lanes ${r.lanes.map((l) => l.join(":")).join(" ")} | ${r.digest}`;
+  return `${name.padEnd(18)} ${r.phase} ${(r.ticks / 60).toFixed(1)} s | cars ${r.cars.join("/")} | laps ${laps} | falls ${j(r.falls)} wrecks ${j(r.wrecks)} walls ${j(r.walls)} | mound ${j(r.mounds)} side ${j(r.sides)} nose ${j(r.noses)} barrel ${j(r.barrels)} press ${j(r.presses)} truck ${j(r.trucks)} | truck jumps ${j(r.truckJumps)} ramp jumps ${j(r.rampJumps)} | cells ${j(r.cells)} press waits ${j(r.waits)} | dirt ${j(r.dirt)} water ${j(r.water)} | lanes ${r.lanes.map((l) => l.join(":")).join(" ")}${r.shortcuts.some((x) => x.length) ? ` | on shortcuts ${r.shortcuts.map((x) => x.join(":")).join("/")}` : ""} | ${r.digest}`;
 }
 
 /** The races of the report: per level 3 bots weapons off and on, and 5 mixed with weapons; each twice. */

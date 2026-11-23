@@ -8,6 +8,16 @@
 //   npx tsx tools/debug/branch-sheet.ts --alloc      rule 1 on Branch Yard, no browser
 //   npx tsx tools/debug/branch-sheet.ts --units      what a tile costs to bake with and without the shortcuts, no browser
 //   (--out <dir>: default tmp/br-bake, --port <n>: default 3011, --runs <n>, --detail)
+//   --track <id>     BR-TRACKS: the probe and the checks (no flag, or --tiles) on that track, a test track or a
+//                    shipped one (e.g. slag-harbour, breakers-mile); default branch-yard. --shots, --bench, --alloc,
+//                    --units and the movers check stay Branch Yard's. On any track the checks test what is a
+//                    shortcut's (the BR-TRACKS review): the posts a shortcut's road places or that stand in a mouth
+//                    or on another road (not the main road's own round its islands), the stray bone paint away from
+//                    the main road's islands (theirs is their own), the dust in the track's own theme's tones (a
+//                    track whose main road raises none is skipped, said why), the gaps where some road has one.
+//   --plant post|paint|dust|void   a control: a fault inside one of those checks' scope (a post on the first
+//                    shortcut's asphalt halfway along; a bone pixel there; the asphalt probe run on the verge; a void
+//                    pixel beyond the barrier), which is to FAIL it
 //
 // The probe, per mouth from BRANCH_GUIDE before it to 12 segments past its gore: every pixel of
 // the baked tiles there is put back in the world (its centre) and asked two ways whether it lies
@@ -85,11 +95,14 @@ import { sceneryOf, themedTrack, themeOf, type Scenery, type Theme } from "../..
 import { artLayout, bakePeaks, bakeTileIndices, bakeTileKinds, bakeTileMarked, KIND, poolTileIndices, TILE, VIEW_H, VIEW_W, World, ZOOM } from "../../client/gfx/world";
 import { BRANCH_YARD, testTrack } from "../../shared/testtracks";
 import { trackById, trackList } from "../../shared/tracks";
-import { BRANCH_GUIDE, buildTrack, halfOn, pointAt, queryRoads, queryTrack, recoveryFor, roadOf, validateTrack, type Feature, type PlacedBranch, type Track } from "../../shared/track";
+import { BRANCH_GUIDE, buildTrack, halfOn, pointAt, queryRoads, queryTrack, recoveryFor, roadOf, validateTrack, WIDEN_TAPER, type Feature, type PlacedBranch, type Track } from "../../shared/track";
 import { blank, decodePng, paste, savePng, type Picture } from "./png";
 
 const args = process.argv.slice(2);
 const arg = (name: string) => (args.includes(name) ? args[args.indexOf(name) + 1] : undefined);
+/** BR-TRACKS: --plant post|paint|dust|void, a fault inside one check's scope (see the top). */
+const PLANT = arg("--plant");
+if (PLANT !== undefined && !["post", "paint", "dust", "void"].includes(PLANT)) throw new Error(`branch-sheet: --plant ${PLANT}: post, paint, dust or void`);
 const ROOT = path.resolve(fileURLToPath(new URL("../..", import.meta.url)));
 const OUT = path.resolve(arg("--out") ?? path.join(ROOT, "tmp", "br-bake"));
 const DETAIL = args.includes("--detail");
@@ -373,10 +386,20 @@ function lists(t: Track): void {
         }
       }
     }
+    if (PLANT === "void" && theme === "scrapyard" && t.branches.length) {
+      // The control: a void pixel beyond the barrier, beside the first shortcut halfway along.
+      const r = t.branches[0].road, p = pointAt(r, r.length / 2), lat = r.wall + BARRIER + 10;
+      const x = p.x - Math.sin(p.h) * lat, y = p.y + Math.cos(p.h) * lat;
+      voids++;
+      if (wallOut(t, x, y) > BARRIER + 0.01) wideVoid++;
+    }
     const peak = bakePeaks();
     say(peak.near < peak.nearRoom && peak.cand < peak.candRoom, `${theme}: ${all.length} tiles baked; the most pieces near a block ${peak.near} of ${peak.nearRoom}, near a tile ${peak.cand} of ${peak.candRoom} (a full list leaves pieces out)`);
     say(outside === 0 && wideMarkable === 0, `${theme}: every one of their ${pixels} pixels holds a colour of the theme's table (${outside} do not; ${used.size} of its ${sc.count} colours are used), and one of the 32 where it takes marks (${wideMarkable} hold water or an extra)`);
-    if (theme === "scrapyard") say(voids > 0 && wideVoid === 0, `the gaps: ${voids} pixels of void, ${wideVoid} further out than the barrier of the road whose gap it is`);
+    // BR-TRACKS: on a track where no road has a gap there is no void to look at (the control plants one).
+    const gapped = roadsOf(t).some((r) => r.gaps.length > 0) || PLANT === "void";
+    if (theme === "scrapyard" && !gapped) console.log("      skipped: the gaps, as no road of this track has one");
+    else if (theme === "scrapyard") say(voids > 0 && wideVoid === 0, `the gaps: ${voids} pixels of void, ${wideVoid} further out than the barrier of the road whose gap it is`);
     else say(props > 0 && onRoad === 0, `${theme}: ${props} pixels of props, ${onRoad} of them between a road's walls or on its barrier`);
   }
 }
@@ -386,12 +409,20 @@ function lists(t: Track): void {
 function layout(t: Track): void {
   const art = artLayout(t);
   const roads = roadsOf(t);
+  // BR-TRACKS control: a post planted on the first shortcut's asphalt halfway along (its middle pixel there).
+  const posts = Array.from(art.posts);
+  if (PLANT === "post" && t.branches.length) {
+    const r = t.branches[0].road, p = pointAt(r, r.length / 2);
+    posts.push(Math.round(p.x * ZOOM - 0.5) - 1, Math.round(p.y * ZOOM - 0.5) - 1);
+  }
   // Every post: which road it is a post of (the one whose wall it stands 3.2 beyond), and what it stands on.
-  let astray = 0, onRoad = 0;
+  // BR-TRACKS: only a shortcut's post counts as on a road: one its own road places, one in a mouth, or one on another
+  // road than its own; the main road's own posts between its walls (round its islands) are not a shortcut's.
+  let astray = 0, onRoad = 0, ownMain = 0, ownMainS0 = Infinity, ownMainS1 = -Infinity;
   const inMouth = t.branches.map(() => [0, 0]);
-  for (let k = 0; k < art.posts.length; k += 2) {
+  for (let k = 0; k < posts.length; k += 2) {
     // Its middle pixel's centre.
-    const X = art.posts[k] + 1, Y = art.posts[k + 1] + 1;
+    const X = posts[k] + 1, Y = posts[k + 1] + 1;
     const x = (X + 0.5) / ZOOM, y = (Y + 0.5) / ZOOM;
     // Its own road: the one it stands 3.2 beyond the wall of (to the rounding of its pixel).
     let own = -1, off = Infinity;
@@ -405,13 +436,23 @@ function layout(t: Track): void {
     });
     const near = queryRoads(t, x, y);
     if (near.road !== own && Math.abs(wallOut(t, x, y) - 3.2) > 1.5) astray++;
-    if (wallOutAny(t, x, y) <= 0 || INSIDE.has(kindAt(t, X, Y))) onRoad++;
+    let mouth = false;
     t.branches.forEach((b, j) => {
       const q = queryTrack(b.road, x, y);
       if (q.dist > t.wall + 12) return;
-      if (b.forkGore && q.s <= b.forkGore.u) inMouth[j][0]++;
-      else if (b.mergeGore && q.s >= b.mergeGore.u) inMouth[j][1]++;
+      if (b.forkGore && q.s <= b.forkGore.u) inMouth[j][0]++, (mouth = true);
+      else if (b.mergeGore && q.s >= b.mergeGore.u) inMouth[j][1]++, (mouth = true);
     });
+    if (wallOutAny(t, x, y) <= 0 || INSIDE.has(kindAt(t, X, Y))) {
+      const onOther = roads.some((r, j) => j !== own && ((q) => q.dist <= halfOn(r, q.seg, q.s, q.side) + r.def.verge)(queryTrack(r, x, y)));
+      if (own > 0 || mouth || onOther) onRoad++;
+      else {
+        ownMain++;
+        const s = queryTrack(t, x, y).s;
+        ownMainS0 = Math.min(ownMainS0, s);
+        ownMainS1 = Math.max(ownMainS1, s);
+      }
+    }
   }
   // What the rule is for: the posts each road would have by itself, one every 60 units on both sides.
   let would = 0, between = 0;
@@ -426,7 +467,7 @@ function layout(t: Track): void {
       }
     }
   });
-  say(art.posts.length > 0 && onRoad === 0 && astray === 0, `barrier posts: ${art.posts.length / 2} stand; ${onRoad} between a road's walls (on its verge, kerb or asphalt), ${astray} where their own road is not the nearer one; per mouth (fork, merge): ${inMouth.map((m) => m.join(", ")).join(" | ")}`);
+  say(posts.length > 0 && onRoad === 0 && astray === 0, `barrier posts: ${posts.length / 2} stand; ${onRoad} between a road's walls (on its verge, kerb or asphalt), ${astray} where their own road is not the nearer one; per mouth (fork, merge): ${inMouth.map((m) => m.join(", ")).join(" | ")}${ownMain ? `; not a shortcut's: ${ownMain} of the main road's own between its walls, at main s ${ownMainS0.toFixed(0)}..${ownMainS1.toFixed(0)}, away from every mouth` : ""}`);
   say(between > 0, `control: of the ${would} posts the roads would have each by itself, ${between} would stand between another road's walls (the rule has something to drop)`);
 
   // Junk and ruts: outside every road's barrier by the art's own clearances (16 and 14 units beyond it).
@@ -453,22 +494,34 @@ function layout(t: Track): void {
   // arrows and its wedge, each merge its wedge; and none of it lies anywhere else.
   const bone = sceneryOf("scrapyard").index.bone1;
   const painted = t.branches.map(() => [0, 0]);
-  let stray = 0;
+  let stray = 0, isle = 0;
+  // BR-TRACKS: where a bone pixel of the asphalt lies: in a mouth (its paint), round one of the main road's islands
+  // (the island's own paint: a track with a split has it with or without a shortcut), or anywhere else (stray).
+  const classify = (x: number, y: number): void => {
+    const q = queryTrack(t, x, y);
+    let found = false;
+    t.branches.forEach((b, j) => {
+      if (found || q.dist > 2 * t.wall) return;
+      if (b.forkGore && q.s >= b.s0 && q.s <= b.forkGore.s) painted[j][0]++, (found = true);
+      else if (b.mergeGore && q.s >= b.mergeGore.s && q.s <= b.s1) painted[j][1]++, (found = true);
+    });
+    if (found) return;
+    if (q.dist <= t.wall && t.islands.some((i) => q.s >= i.s0 - WIDEN_TAPER && q.s <= i.s1 + WIDEN_TAPER)) isle++;
+    else stray++;
+  };
   for (const [tx, ty] of tilesOf(t)) {
     const kinds = tile(t, tx, ty, true), idx = tile(t, tx, ty, false);
     for (let p = 0; p < idx.length; p++) {
       if (idx[p] !== bone || kinds[p] !== KIND.tarmac) continue;
-      const q = queryTrack(t, (tx * TILE + (p % TILE) + 0.5) / ZOOM, (ty * TILE + Math.floor(p / TILE) + 0.5) / ZOOM);
-      let found = false;
-      t.branches.forEach((b, j) => {
-        if (found || q.dist > 2 * t.wall) return;
-        if (b.forkGore && q.s >= b.s0 && q.s <= b.forkGore.s) painted[j][0]++, (found = true);
-        else if (b.mergeGore && q.s >= b.mergeGore.s && q.s <= b.s1) painted[j][1]++, (found = true);
-      });
-      if (!found) stray++;
+      classify((tx * TILE + (p % TILE) + 0.5) / ZOOM, (ty * TILE + Math.floor(p / TILE) + 0.5) / ZOOM);
     }
   }
-  say(art.mouths === t.branches.length * 2 && stray === 0 && painted.every((m) => m[0] >= 1200 && m[1] >= 500), `mouth paint: ${art.mouths} of ${t.branches.length * 2} mouths have their wedge; painted asphalt pixels per mouth (fork with its two arrows, merge): ${painted.map((m) => m.join(", ")).join(" | ")}; ${stray} anywhere else`);
+  if (PLANT === "paint" && t.branches.length) {
+    // The control: a bone pixel on the first shortcut's asphalt halfway along.
+    const r = t.branches[0].road, p = pointAt(r, r.length / 2);
+    classify(p.x, p.y);
+  }
+  say(art.mouths === t.branches.length * 2 && stray === 0 && painted.every((m) => m[0] >= 1200 && m[1] >= 500), `mouth paint: ${art.mouths} of ${t.branches.length * 2} mouths have their wedge; painted asphalt pixels per mouth (fork with its two arrows, merge): ${painted.map((m) => m.join(", ")).join(" | ")}; ${stray} anywhere else${isle ? ` (and ${isle} round the main road's islands: their own paint, not a shortcut's)` : ""}`);
 }
 
 // ---- a Renderer in Node --------------------------------------------------------------------------
@@ -518,7 +571,8 @@ async function dust(t: Track): Promise<void> {
   const counted = (r: Track): Track => ({ ...r, pts: new Proxy(r.pts, { get: (o, k, rc) => (typeof k === "string" && k !== "length" && k.charCodeAt(0) < 58 && reads++, Reflect.get(o, k, rc)) }) });
   // The same track with every road's points counted as they are read (two a segment searched).
   const track: Track = { ...counted(t), branches: t.branches.map((b) => ({ ...b, road: counted(b.road) })) };
-  const tones = new Set(sceneryOf("scrapyard").dust);
+  // BR-TRACKS: the track's own theme's dust tones (a desert's are not the scrapyard's).
+  const tones = new Set(sceneryOf(themeOf(t)).dust);
   const fx = { shots: [], mines: [], sparks: [] };
   const drive = (road: Track, from: number, to: number, lat: number): { specks: number; frames: number; median: number; most: number } => {
     const rec: Recorder = { fills: new Map(), blits: 0 };
@@ -551,14 +605,28 @@ async function dust(t: Track): Promise<void> {
     const r = b.road, half = r.def.halfWidth;
     const a = b.forkGore ? b.forkGore.u + 160 : 100, z = b.mergeGore ? b.mergeGore.u - 160 : r.length - 100;
     // Past the mouth's taper: on its verge (between its kerb and its wall), then on its asphalt.
-    const verge = drive(r, a, Math.min(z, a + 700), half + 20), tar = drive(r, a, Math.min(z, a + 700), 0);
+    // (--plant dust: the asphalt's run on the verge: dust where the asphalt is to have none.)
+    const verge = drive(r, a, Math.min(z, a + 700), half + 20), tar = drive(r, a, Math.min(z, a + 700), PLANT === "dust" && k === 0 ? half + 20 : 0);
     // Through the whole fork, on the outer verge all the way (the main road's verge, then the shortcut's).
     const fork = drive(r, 0, a, t.def.halfWidth + 20);
     console.log(`      shortcut ${k + 1} (half-width ${half}): on its verge ${verge.specks} of ${verge.frames} frames with dust, ${verge.median} segments searched a frame (most ${verge.most}); on its asphalt ${tar.specks} with dust, ${tar.median} searched (most ${tar.most}); through its fork on the outer verge ${fork.specks} of ${fork.frames} with dust, ${fork.median} searched (most ${fork.most})`);
     if (!(verge.specks > verge.frames / 2 && tar.specks === 0 && fork.specks > fork.frames / 3 && verge.most <= 30 && fork.most <= 30)) good = false;
   });
-  const main = drive(t, 2000, 2700, t.def.halfWidth + 20);
-  console.log(`      the main road's verge, far from a mouth: ${main.specks} of ${main.frames} frames with dust, ${main.median} segments searched a frame (most ${main.most})`);
+  // BR-TRACKS: the main road's verge on plain road: the first 700 from s 2000 on clear of widens, gaps, ramps, islands,
+  // surfaces and every shortcut's span (Branch Yard's 2000..2700; Breaker's Mile's 2000.. is its split, widened to the probe).
+  const clear = (a: number) =>
+    t.widens.every((w) => a + 700 < w.s0 - WIDEN_TAPER || a > w.s1 + WIDEN_TAPER) && [...t.gaps, ...t.surfaces, ...t.islands].every((f) => a + 700 < f.s0 || a > f.s1) &&
+    t.ramps.every((x) => a + 700 < x.s || a > x.s + x.len) && t.branches.every((b) => a + 700 < b.s0 - 300 || a > b.s1 + 300);
+  let from = 2000;
+  while (from + 700 < t.length && !clear(from)) from += 50;
+  if (!clear(from)) from = 2000;
+  const main = drive(t, from, from + 700, t.def.halfWidth + 20);
+  console.log(`      the main road's verge, far from a mouth${from !== 2000 ? ` (main s ${from}..${from + 700}, plain)` : ""}: ${main.specks} of ${main.frames} frames with dust, ${main.median} segments searched a frame (most ${main.most})`);
+  if (main.specks === 0) {
+    // BR-TRACKS: nothing on this track raises dust where the check looks (its main road's verge neither): nothing to test.
+    console.log(`      skipped: the dust check, as the main road's verge raises none in this track's theme (${themeOf(t)}) either`);
+    return;
+  }
   say(good && main.specks > main.frames / 2 && main.most <= 30, `dust on every shortcut's verge and none on its asphalt; never more than 30 of the track's ${all} segments searched in a frame (13 round where the car was, 13 more of the other road near a mouth, 1 for the road's width)`);
 }
 
@@ -1147,15 +1215,17 @@ function alloc(): void {
 
 // ---- main -----------------------------------------------------------------------------------------
 
-const track = testTrack("branch-yard")!;
+const yard = testTrack("branch-yard")!;
+const trackId = arg("--track") ?? "branch-yard"; // BR-TRACKS: the probe and the checks on another track
+const track = testTrack(trackId) ?? trackById(trackId);
 const PORT = Number(arg("--port") ?? 3011);
 for (const sig of ["SIGINT", "SIGTERM"] as const) process.on(sig, () => void cleanup().then(() => process.exit(130)));
 let code = 0;
 try {
-  if (args.includes("--alloc-one")) await allocOne(track, arg("--alloc-one") as Theme);
+  if (args.includes("--alloc-one")) await allocOne(yard, arg("--alloc-one") as Theme);
   else if (args.includes("--alloc")) alloc();
-  else if (args.includes("--units")) units(track);
-  else if (args.includes("--shots")) await shots(track, PORT);
+  else if (args.includes("--units")) units(yard);
+  else if (args.includes("--shots")) await shots(yard, PORT);
   else if (args.includes("--bench")) {
     if (args.includes(LOCK_WORD)) code = await bench(PORT);
     else code = spawnSync(process.execPath, [...process.execArgv, fileURLToPath(import.meta.url), ...args, LOCK_WORD], { stdio: "inherit" }).status ?? 1;
