@@ -42,6 +42,15 @@
 //   turn are eight pictures; and the contrast table below, held against the scrapyard's.
 // - the scrapyard's tables are what gfx/world.ts had as constants before themes (recomputed
 //   here from palette.ts as that code did it).
+// - the harbour's own rules (TH-LOOK-H; PLAN-THEMES.md Amendment 1; harbourRules, on Quay Yard and
+//   Slag Harbour as the game draws them): the kerb's yellow is none of the fixed hazard colours
+//   and far from each, and a kerb pixel holds a hazard colour only where every theme has one;
+//   nothing is painted on the quay or the apron; every prop pixel lies in a block of the
+//   container yard or within its piece's reach at a junk site; the ground art (the yard's blocks,
+//   the crane rails) keeps clear of roads, props and marshals, and no rail lies along a road; a
+//   gap is soot and a ladder's steel; the four greys (tarmac, ground, verge, kerb slab) are a
+//   stated step apart, and water from the ground and the verge; every colour on its props, the
+//   accents too, is far from the six car colours, a container's paints as far as a parked car's.
 //
 // --contrast: how well what a player must see stands out from what it lies on. WCAG contrast
 // ratios (1 = none, 21 = black on white) of the six car bodies and the cars' outline, a

@@ -49,7 +49,10 @@
 // - its dressing (`Dress`, further down): the tones and patterns the bake puts down where the
 //   scrapyard's would be wrong for it (the ground, the barrier, the props outside the walls, a
 //   gap's void, a dirt patch, a pool's rim, a mound, the truck).
-// The scrapyard is the theme every shipped track has: its tiles are what they were, bit for bit.
+// A theme may also lay ground art out once per track, clear of every road, of the props and of
+// the flag marshals: a town's roofs (layTown), a quay's container yard and crane rails
+// (layStacks, layRails). That is ground, not props: the props stand at the junk's sites alone.
+// The scrapyard is the theme of the three original tracks: its tiles are what they were, bit for bit.
 // A theme's surface (THEME-SCHEMA: sand on a desert track, an oil slick on a city or a harbour
 // one) is baked with the road's furniture, a puddle as a pool is, where the track's own lists
 // have one (Track.sand, Track.oil) and its theme has the colours for it.
@@ -398,13 +401,16 @@ const K_TREE = 11, K_CRATE = 12, K_CONES = 13, K_CAR = 14;
 const K_BOX = 15, K_REEFER = 16, K_CRANE = 17, K_STRADDLE = 18, K_BOLLARD = 19, K_HAWSER = 20, K_PALLETS = 21, K_FORK = 22, K_EMPTY = 23;
 
 /**
- * A piece of junk: centre and size in view pixels, a turn, its paint (palette index). `n`: a
- * number of its theme's own (0 where a theme has none). PROPS_HARBOUR's pieces lie along the
- * plane's axes (`a` is 0 or a quarter turn), and `n` is: a container's or a reefer's length in
- * pixels (bits 0-5), and for a container whether another stands on it (bit 6) and that one's
- * paint (bits 7-8, of Dress.boxes); a crane's half-width in pixels; a straddle carrier's
- * half-length (bits 0-4) and the paint of the container it carries (bits 5-6); for pallets and a
- * forklift, whether there is cargo on them (bit 0).
+ * A piece of junk: centre and size in view pixels, a turn, its paint (palette index). `n`, `px`,
+ * `py`: whole numbers of its theme's own (0 where a theme has none). PROPS_HARBOUR's pieces are
+ * drawn from these alone (quayPiece: no fraction is read on the way): (px, py) is the pixel the
+ * piece's middle lies in; bits 12-13 of `n` are the way it lies (TURN: along x, along y, or, a
+ * container that fell into a gap, aslant either way); the low bits: a container's or a reefer's
+ * length in pixels (bits 0-5), and for a container whether another stands on it (bit 6) and
+ * that one's paint (bits 7-8, of Dress.boxes); a crane's half-width in pixels; a straddle
+ * carrier's half-length (bits 0-4) and the paint of the container it carries (bits 5-6); a
+ * coiled hawser's radius in quarter pixels; for pallets and a forklift, whether there is cargo
+ * on them (bit 0).
  */
 interface Junk {
   kind: number;
@@ -414,7 +420,11 @@ interface Junk {
   a: number;
   c: number;
   n: number;
+  px: number;
+  py: number;
 }
+
+const TURN = 12; // Junk.n, PROPS_HARBOUR: bits 12-13 say how a piece lies: 0 along x, 1 along y, 2 and 3 aslant
 
 /** A stain: centre and radius in view pixels. */
 interface Blob {
@@ -818,13 +828,13 @@ function propReach(d: Junk): number {
     case K_REEFER:
       return boxReach(d.n & 63);
     case K_CRANE:
-      return craneReach(d.n);
+      return craneReach(d.n & 31);
     case K_STRADDLE:
       return straddleReach(d.n & 31);
     case K_FORK:
       return FORK_REACH;
     case K_HAWSER:
-      return d.n / 4 + HAWSER_MORE;
+      return (d.n & 4095) / 4 + HAWSER_MORE;
     case K_PALLETS:
       return PALLETS_REACH;
     case K_BOLLARD:
@@ -849,8 +859,8 @@ function layRails(art: Art, roads: Track[], away: (x: number, y: number) => numb
   const out: number[] = [];
   for (const d of art.junk) {
     if (d.kind !== K_CRANE) continue;
-    const axis = d.a > 1 ? 1 : 0, half = d.n, g = half - 2;
-    const cx = Math.floor(d.x), cy = Math.floor(d.y), mid = axis ? cy : cx;
+    const axis = (d.n >> TURN) & 1, half = d.n & 31, g = half - 2;
+    const cx = d.px, cy = d.py, mid = axis ? cy : cx;
     // May both rails lie at `at` along their axis?
     const free = (at: number): boolean => {
       for (const side of [-g, g + 1]) {
@@ -1298,7 +1308,7 @@ function buildArt(track: Track, scenery: Scenery): Art {
       for (const m of stands) fit = Math.min(fit, (Math.hypot(x - m.x, y - m.y) - MARSHAL_ROOM) * ZOOM);
       const type = h & 15, axis = (h >> 4) & 1;
       const box = dress.boxes[c === RUST1 || c === HAZ0 ? 0 : c === RUST2 || c === STEEL2 ? 1 : c === RUST0 ? 2 : 3];
-      const piece = (kind: number, paint: number, n: number, a = axis): Junk => ({ kind, x: x * ZOOM, y: y * ZOOM, r, a: a ? Math.PI / 2 : 0, c: paint, n });
+      const piece = (kind: number, paint: number, n: number, a = axis): Junk => ({ kind, x: x * ZOOM, y: y * ZOOM, r, a: a ? Math.PI / 2 : 0, c: paint, n: n | (a << TURN), px: Math.floor(x * ZOOM), py: Math.floor(y * ZOOM) });
       // A container as long as there is room for: 36, 28 or 20 pixels by 10 (boxReach: 22.8, 19.0 and 15.4 from the piece's
       // middle with its shadow). Three in four have another standing on them (it lies a pixel left and two up, and its longer
       // shadow ends inside the lower one's: no more room is needed).
@@ -1362,7 +1372,7 @@ function buildArt(track: Track, scenery: Scenery): Art {
             continue;
           }
           const kind = themed ? propKind(pick, j) : pick < 0.3 ? K_CUBE : pick < 0.46 ? K_DRUM : pick < 0.62 ? K_TYRES : pick < 0.72 ? K_PLATE : pick < 0.82 ? K_PALLET : pick < 0.92 ? K_ENGINE : K_COIL;
-          art.junk.push({ kind, x: x * ZOOM, y: y * ZOOM, r: rad * ZOOM, a, c: themed ? propPaint(kind, c) : c, n: 0 });
+          art.junk.push({ kind, x: x * ZOOM, y: y * ZOOM, r: rad * ZOOM, a, c: themed ? propPaint(kind, c) : c, n: 0, px: 0, py: 0 });
         }
         // Half the heaps have leaked: a dark stain in the dirt beside them. (Laid out in every theme, so the draws that follow are the same; kept where the theme's ground has wear.)
         if (rnd() < 0.5) {
@@ -1410,11 +1420,13 @@ function buildArt(track: Track, scenery: Scenery): Art {
           const pick = rnd(), rad = 7 + rnd() * 6, a = rnd() * Math.PI, c = paints[Math.floor(rnd() * paints.length)];
           // The desert fills a gap with boulders, a car shell among them now and then; the city with rubble and crates; the harbour with containers as they fell, and pallets.
           if (harbour) {
-            out.push({ kind: pick < 0.7 ? K_BOX : K_PALLETS, x: p.x * ZOOM, y: p.y * ZOOM, r: rad * ZOOM, a, c: dress.boxes[c === RUST1 || c === HAZ0 ? 0 : c === RUST2 || c === STEEL2 ? 1 : c === RUST0 ? 2 : 3], n: pick < 0.7 ? 20 : 0 });
+            // (As it fell: along x, along y or aslant, by the junk's own turn.)
+            const turn = [0, 2, 1, 3][Math.floor((a / Math.PI) * 4) & 3];
+            out.push({ kind: pick < 0.7 ? K_BOX : K_PALLETS, x: p.x * ZOOM, y: p.y * ZOOM, r: rad * ZOOM, a, c: dress.boxes[c === RUST1 || c === HAZ0 ? 0 : c === RUST2 || c === STEEL2 ? 1 : c === RUST0 ? 2 : 3], n: pick < 0.7 ? 20 | (turn << TURN) : 0, px: Math.floor(p.x * ZOOM), py: Math.floor(p.y * ZOOM) });
             continue;
           }
           const kind = city ? (pick < 0.62 ? K_ROCK : K_CRATE) : desert ? (pick < 0.88 ? K_ROCK : K_SHELL) : pick < 0.34 ? K_CUBE : pick < 0.5 ? K_DRUM : pick < 0.66 ? K_TYRES : pick < 0.78 ? K_PLATE : pick < 0.86 ? K_PALLET : pick < 0.94 ? K_ENGINE : K_COIL;
-          out.push({ kind, x: p.x * ZOOM, y: p.y * ZOOM, r: rad * ZOOM, a, c: themed ? propPaint(kind, c) : c, n: 0 });
+          out.push({ kind, x: p.x * ZOOM, y: p.y * ZOOM, r: rad * ZOOM, a, c: themed ? propPaint(kind, c) : c, n: 0, px: 0, py: 0 });
         }
       }
       // From the top of the screen down, so lower items overlap the ones behind them.
@@ -1756,7 +1768,7 @@ function furnish(art: Art): void {
           const pick = rnd(), a = rnd() * Math.PI, c = paints[Math.floor(rnd() * paints.length)];
           // (The desert's island: rocks, scrub and succulents; a car shell has no room. The city's: planter trees, crates and cones. The harbour's: bollards, hawsers and pallets.)
           const kind = art.dress.props === PROPS_HARBOUR ? (pick < 0.4 ? K_BOLLARD : pick < 0.7 ? K_HAWSER : K_PALLETS) : city ? (pick < 0.46 ? K_TREE : pick < 0.76 ? K_CRATE : K_CONES) : desert ? (pick < 0.5 ? K_ROCK : pick < 0.72 ? K_SCRUB : K_CACTUS) : pick < 0.3 ? K_CUBE : pick < 0.5 ? K_DRUM : pick < 0.66 ? K_TYRES : pick < 0.76 ? K_PLATE : pick < 0.86 ? K_PALLET : pick < 0.94 ? K_ENGINE : K_COIL;
-          const j: Junk = { kind, x: q.x * ZOOM, y: q.y * ZOOM, r: r * ZOOM, a, c: city ? (kind === K_CRATE ? dress.woods[1 + (c & 1)] : 0) : desert ? (kind === K_ROCK ? dress.stones[c === STEEL1 || c === STEEL2 ? 1 : 0] : 0) : c, n: kind === K_HAWSER ? Math.floor(r * ZOOM * 0.7 * 4) : 0 };
+          const j: Junk = { kind, x: q.x * ZOOM, y: q.y * ZOOM, r: r * ZOOM, a, c: city ? (kind === K_CRATE ? dress.woods[1 + (c & 1)] : 0) : desert ? (kind === K_ROCK ? dress.stones[c === STEEL1 || c === STEEL2 ? 1 : 0] : 0) : c, n: kind === K_HAWSER ? Math.floor(r * ZOOM * 0.7 * 4) : 0, px: Math.floor(q.x * ZOOM), py: Math.floor(q.y * ZOOM) };
           thing(T_JUNK, j.x - j.r * 1.5 - 4, j.y - j.r * 1.5 - 4, j.x + j.r * 1.5 + 4, j.y + j.r * 1.5 + 4, { junk: j });
         }
       }
@@ -4405,6 +4417,261 @@ function inlayBox(X: number, Y: number, vert: boolean, a0: number, c0: number, a
   }
 }
 
+/**
+ * Fill a disc into the mask, growing the used box: its middle (cx2, cy2) and its radius r2 in
+ * half pixels of the buffer (a pixel's own middle is at twice its number and one). Whole numbers.
+ */
+function fillRound(cx2: number, cy2: number, r2: number): void {
+  const { mask } = buffers();
+  for (let y = (cy2 - r2) >> 1, ye = (cy2 + r2) >> 1; y <= ye; y++) {
+    if (y < 0 || y >= S) continue;
+    const dy = 2 * y + 1 - cy2;
+    for (let x = (cx2 - r2) >> 1, xe = (cx2 + r2) >> 1; x <= xe; x++) {
+      if (x < 0 || x >= S) continue;
+      const dx = 2 * x + 1 - cx2;
+      if (dx * dx + dy * dy > r2 * r2) continue;
+      mask[y * S + x] = 1;
+      if (x < mx0) mx0 = x;
+      if (x + 1 > mx1) mx1 = x + 1;
+      if (y < my0) my0 = y;
+      if (y + 1 > my1) my1 = y + 1;
+    }
+  }
+}
+
+/** Paint a disc (as fillRound takes it) in colour c, inside the shape that is in the mask. Whole numbers. */
+function inlayRound(cx2: number, cy2: number, r2: number, c: number): void {
+  const { idx, mask } = buffers();
+  for (let y = (cy2 - r2) >> 1, ye = (cy2 + r2) >> 1; y <= ye; y++) {
+    if (y < 0 || y >= S) continue;
+    const dy = 2 * y + 1 - cy2;
+    for (let x = (cx2 - r2) >> 1, xe = (cx2 + r2) >> 1; x <= xe; x++) {
+      if (x < 0 || x >= S) continue;
+      const dx = 2 * x + 1 - cx2;
+      if (dx * dx + dy * dy <= r2 * r2 && mask[y * S + x] === 1) idx[y * S + x] = c;
+    }
+  }
+}
+
+/**
+ * Fill a box that lies aslant (an eighth of a turn) into the mask, growing the used box: its
+ * middle on pixel (X, Y), `hl` either way along it and five across; `dir` 1: its length runs
+ * down to the right, -1: down to the left. Whole numbers (a pixel is inside by its place along
+ * and across the box, each the sum or the difference of its two offsets: 181 / 128 is the
+ * square root of two).
+ */
+function fillSlant(X: number, Y: number, hl: number, dir: number): void {
+  const { mask } = buffers();
+  const ua = (hl * 181) >> 7, reach = (ua + 9) >> 1;
+  for (let j = -reach; j <= reach; j++) {
+    const y = Y + j;
+    if (y < 0 || y >= S) continue;
+    for (let i = -reach; i <= reach; i++) {
+      const x = X + i;
+      if (x < 0 || x >= S) continue;
+      const u = i + dir * j, v = i - dir * j;
+      if (u < -ua || u >= ua || v < -7 || v >= 7) continue;
+      mask[y * S + x] = 1;
+      if (x < mx0) mx0 = x;
+      if (x + 1 > mx1) mx1 = x + 1;
+      if (y < my0) my0 = y;
+      if (y + 1 > my1) my1 = y + 1;
+    }
+  }
+}
+
+/**
+ * One of the harbour's props (PROPS_HARBOUR), where the yard has a piece of junk: at the junk's
+ * place and within its reach (harbourProp() sizes it; propReach()).
+ *
+ * In whole numbers alone, from the piece's own (Junk.px, .py, .n): no fraction is read, worked
+ * out or handed on anywhere on the way. A piece is drawn once per tile it touches and this
+ * function has no loop of its own (its helpers have them), so the engine is slow to optimise
+ * it; and code that is not optimised yet boxes every fraction it touches (tools/debug/
+ * theme-sheet.ts --alloc showed 7 to 37 bytes a frame from that while these were drawn with
+ * the discs and polygons of the yard's junk). Whole numbers cost nothing in any tier.
+ */
+function quayPiece(d: Junk): void {
+  const { idx, mask } = buffers();
+  const dress = job.art!.dress, woods = dress.woods;
+  const turn = (d.n >> TURN) & 3, vert = turn === 1, c = d.c;
+  const X = d.px - job.bx, Y = d.py - job.by;
+  switch (d.kind) {
+    case K_BOX:
+    case K_REEFER: {
+      // A container from above: its roof in its paint, ribbed across; ten pixels wide and as long as its site has room for.
+      const len = d.n & 63, hl = len >> 1;
+      if (turn >= 2) {
+        // In a gap, as it fell: aslant. A dark line along its ridge.
+        const dir = turn === 2 ? 1 : -1, tone = SHADE_I[c], run = (hl * 181) >> 8;
+        fillSlant(X, Y, hl, dir);
+        solid(c, 3);
+        for (let k = -run + 2; k < run - 2; k++) {
+          const x = X + k, y = Y + dir * k;
+          if (x >= 0 && y >= 0 && x < S && y < S && mask[y * S + x] === 1 && (k & 7) < 6) idx[y * S + x] = tone;
+        }
+        break;
+      }
+      boxAt(X, Y, vert, -hl, -5, hl, 5);
+      solid(c, 3);
+      prop();
+      if (d.kind === K_REEFER) {
+        // A reefer: a smooth white roof, a seam or two across it, and at one end its machinery, a dark unit with a fan.
+        inlayBox(X, Y, vert, -hl + 1, -4, hl - 6, 4, SHADE_I[c], (len - 6) >> 1);
+        inlayBox(X, Y, vert, hl - 5, -4, hl - 1, 4, STEEL1);
+        inlayBox(X, Y, vert, hl - 4, -2, hl - 2, 0, SOOT2);
+        inlayBox(X, Y, vert, hl - 4, 2, hl - 3, 3, STEEL2);
+        break;
+      }
+      inlayBox(X, Y, vert, -hl + 1, -4, hl - 1, 4, SHADE_I[c], 3);
+      if (d.n & 64) {
+        // Another stands on it: a pixel left and two up of it (it is nearer the eye), its shadow on the lower one's roof.
+        maskClear(mask);
+        const top = dress.boxes[(d.n >> 7) & 3];
+        boxAt(X - 1, Y - 2, vert, -hl, -5, hl, 5);
+        solid(top, 4);
+        prop();
+        inlayBox(X - 1, Y - 2, vert, -hl + 1, -4, hl - 1, 4, SHADE_I[top], 3);
+      }
+      break;
+    }
+    case K_CRANE: {
+      // A crane's base, and no more of the crane than that (no boom: nothing of it reaches over the
+      // yard): two sills, each on its rail with a bogie at either end; the portal's two girders
+      // across them, higher; and between those the round slewing column, the tallest of it, the
+      // hatch of its machine deck dark on top. (The rails' heads lie g either side of the piece's
+      // middle, a groove beside each: the sills sit over them, a pixel off the middle. layRails.)
+      const half = d.n & 31, g = half - 2;
+      boxAt(X, Y, vert, -half, -g - 1, half, -g + 3);
+      boxAt(X, Y, vert, -half, g - 1, half, g + 3);
+      solid(c, 2);
+      prop();
+      for (let k = -g; k <= g; k += 2 * g) {
+        inlayBox(X, Y, vert, -half + 1, k, -half + 4, k + 2, SOOT3);
+        inlayBox(X, Y, vert, half - 4, k, half - 1, k + 2, SOOT3);
+      }
+      maskClear(mask);
+      boxAt(X, Y, vert, -half + 3, -g - 1, -half + 6, g + 3);
+      boxAt(X, Y, vert, half - 6, -g - 1, half - 3, g + 3);
+      solid(c, 3);
+      prop();
+      maskClear(mask);
+      // The column: its middle between the sills, its radius 0.46 of the base's half-width (59 / 64 of it, in half pixels).
+      const cx2 = 2 * X + (vert ? 2 : 0), cy2 = 2 * Y + (vert ? 0 : 2), r2 = (half * 59) >> 6;
+      fillRound(cx2, cy2, r2);
+      solid(c, 5);
+      prop();
+      inlayRound(cx2, cy2, (r2 * 39) >> 6, SHADE_I[c]);
+      inlayRound(cx2, cy2, (r2 * 19) >> 6, SOOT3);
+      break;
+    }
+    case K_STRADDLE: {
+      // A straddle carrier: a frame on legs (two side beams, a cross beam at either end and one
+      // amidships) over the container it carries, the driver's cab of dark glass high on one corner.
+      const hl = d.n & 31, under = dress.boxes[(d.n >> 5) & 3];
+      boxAt(X, Y, vert, -hl + 3, -4, hl - 3, 4);
+      solid(under, 0);
+      prop();
+      inlayBox(X, Y, vert, -hl + 4, -3, hl - 4, 3, SHADE_I[under], 3);
+      maskClear(mask);
+      boxAt(X, Y, vert, -hl, -7, hl, -5);
+      boxAt(X, Y, vert, -hl, 5, hl, 7);
+      boxAt(X, Y, vert, -hl, -7, -hl + 2, 7);
+      boxAt(X, Y, vert, hl - 2, -7, hl, 7);
+      boxAt(X, Y, vert, -1, -7, 1, 7);
+      solid(c, 4);
+      prop();
+      maskClear(mask);
+      boxAt(X, Y, vert, hl - 6, -7, hl - 2, -3);
+      solid(STEEL0, 0);
+      prop();
+      break;
+    }
+    case K_BOLLARD: {
+      // A pair of bollards with a mooring rope: a turn of it round each, a run between the two,
+      // its end lying off to one side; and on it the bollards' heads, cast iron.
+      for (let k = -4; k <= 4; k += 8) fillRound(2 * X + 1 + (vert ? 0 : 2 * k), 2 * Y + 1 + (vert ? 2 * k : 0), 7);
+      boxAt(X, Y, vert, -4, 0, 5, 2);
+      boxAt(X, Y, vert, 4, 2, 6, 8);
+      boxAt(X, Y, vert, 1, 6, 6, 8);
+      solid(woods[1], 1);
+      prop();
+      maskClear(mask);
+      for (let k = -4; k <= 4; k += 8) {
+        fillRound(2 * X + 1 + (vert ? 0 : 2 * k), 2 * Y + 1 + (vert ? 2 * k : 0), 5);
+        solid(STEEL0, 2);
+        prop();
+        maskClear(mask);
+      }
+      return;
+    }
+    case K_HAWSER: {
+      // A coiled hawser: turns of hemp, light and dark, round the eye in its middle. Its radius in half pixels: r2.
+      const cx2 = 2 * X + 1, cy2 = 2 * Y + 1, r2 = (d.n & 4095) >> 1;
+      fillRound(cx2, cy2, r2);
+      solid(woods[1], 1);
+      prop();
+      for (let j = my0 + 1; j < my1 - 1; j++) {
+        for (let i = mx0 + 1; i < mx1 - 1; i++) {
+          const p = j * S + i;
+          if (mask[p] !== 1 || mask[p - 1] === 0 || mask[p - S] === 0 || mask[p + 1] === 0 || mask[p + S] === 0) continue; // the bevel stays
+          // How far from the middle, squared, in half pixels: a turn of the rope is 1.45 pixels wide (2.9 half pixels: 841 / 100 squared).
+          const dx = 2 * i + 1 - cx2, dy = 2 * j + 1 - cy2, d2 = (dx * dx + dy * dy) * 100;
+          let k = 0;
+          while (d2 >= 841 * (k + 1) * (k + 1)) k++;
+          idx[p] = d2 < 676 ? woods[0] : k & 1 ? woods[2] : woods[1];
+        }
+      }
+      break;
+    }
+    case K_PALLETS: {
+      // A stack of pallets: boards with the gaps between them dark; on some a crate.
+      boxAt(X, Y, false, -4, -4, 5, 5);
+      solid(woods[1], 2);
+      prop();
+      inlayBox(X, Y, true, -3, -3, 4, 4, woods[0], 3);
+      if (d.n & 1) {
+        maskClear(mask);
+        boxAt(X, Y, false, -3, -5, 3, 1);
+        solid(woods[2], 2);
+        prop();
+        inlayBox(X, Y, false, -2, -2, 2, -1, woods[1]);
+      }
+      break;
+    }
+    case K_FORK: {
+      // A forklift: its body with the counterweight behind and the driver's cage on it, the mast
+      // before it, and the two forks (or the pallet it carries on them).
+      boxAt(X, Y, vert, -5, -3, 3, 4);
+      solid(c, 2);
+      prop();
+      inlayBox(X, Y, vert, -4, -2, -2, 3, SOOT3);
+      inlayBox(X, Y, vert, -1, -2, 2, 3, STEEL0);
+      inlayBox(X, Y, vert, 0, -1, 1, 2, SHADE_I[c]);
+      maskClear(mask);
+      boxAt(X, Y, vert, 3, -3, 4, 4);
+      solid(STEEL0, 1);
+      prop();
+      maskClear(mask);
+      if (d.n & 1) {
+        boxAt(X, Y, vert, 4, -4, 10, 4);
+        solid(woods[1], 1);
+        prop();
+        inlayBox(X, Y, vert, 5, -3, 9, 3, woods[0], 2);
+      } else {
+        boxAt(X, Y, vert, 4, -2, 9, -1);
+        boxAt(X, Y, vert, 4, 2, 9, 3);
+        solid(STEEL1, 1);
+        prop();
+      }
+      break;
+    }
+    default: // K_EMPTY: a site left empty
+      return;
+  }
+  maskClear(mask);
+}
+
 /** Corner k of the polygon: (Q[0], Q[1]) in the frame AT. */
 function corner(k: number): void {
   const px = Q[0], py = Q[1];
@@ -4414,6 +4681,10 @@ function corner(k: number): void {
 
 /** One piece of junk: two tones, a lit edge, a hard shadow. */
 function junk(d: Junk): void {
+  if (d.kind >= K_BOX) {
+    quayPiece(d); // the harbour's: whole numbers only (see there)
+    return;
+  }
   const { idx, mask } = buffers();
   const x = d.x - job.bx, y = d.y - job.by, r = d.r;
   const cos = Math.cos(d.a), sin = Math.sin(d.a);
@@ -4720,195 +4991,6 @@ function junk(d: Junk): void {
       inlay(STEEL2);
       break;
     }
-    case K_BOX:
-    case K_REEFER: {
-      // A container from above: its roof in its paint, ribbed across; ten pixels wide and as long as its site has room for.
-      const len = d.n & 63;
-      if (clipClass >= 0) {
-        // In a gap: as it fell, at any turn.
-        Q[0] = 0, Q[1] = 0, Q[2] = len, Q[3] = 10;
-        rect();
-        fillPoly(mask, 1);
-        solid(d.c, 3);
-        for (let k = -1; k <= 1; k++) {
-          Q[0] = k * len * 0.28, Q[1] = 0, Q[2] = 1.2, Q[3] = 8;
-          rect();
-          inlay(SHADE_I[d.c]);
-        }
-        break;
-      }
-      const vert = d.a > 1, X = Math.floor(d.x) - job.bx, Y = Math.floor(d.y) - job.by, hl = len >> 1;
-      boxAt(X, Y, vert, -hl, -5, hl, 5);
-      solid(d.c, 3);
-      prop();
-      if (d.kind === K_REEFER) {
-        // A reefer: a smooth white roof, two seams across it, and at one end its machinery, a dark unit with a fan.
-        inlayBox(X, Y, vert, -hl + 1, -4, hl - 6, 4, SHADE_I[d.c], (len - 6) >> 1);
-        inlayBox(X, Y, vert, hl - 5, -4, hl - 1, 4, STEEL1);
-        inlayBox(X, Y, vert, hl - 4, -2, hl - 2, 0, SOOT2);
-        inlayBox(X, Y, vert, hl - 4, 2, hl - 3, 3, STEEL2);
-        break;
-      }
-      inlayBox(X, Y, vert, -hl + 1, -4, hl - 1, 4, SHADE_I[d.c], 3);
-      if (d.n & 64) {
-        // Another stands on it: a pixel left and two up of it (it is nearer the eye), its shadow on the lower one's roof.
-        maskClear(mask);
-        const c = job.art!.dress.boxes[(d.n >> 7) & 3];
-        boxAt(X - 1, Y - 2, vert, -hl, -5, hl, 5);
-        solid(c, 4);
-        prop();
-        inlayBox(X - 1, Y - 2, vert, -hl + 1, -4, hl - 1, 4, SHADE_I[c], 3);
-      }
-      break;
-    }
-    case K_CRANE: {
-      // A crane's base, and no more of the crane than that (no boom: nothing of it reaches over the
-      // yard): two sills, each on its rail with a bogie at either end; the portal's two girders
-      // across them, higher; and between those the round slewing column, the tallest of it, the
-      // hatch of its machine deck dark on top. (The rails' heads lie g either side of the piece's
-      // middle, a groove beside each: the sills sit over them, a pixel off the middle. layRails.)
-      const half = d.n, g = half - 2, vert = d.a > 1, c = d.c;
-      const X = Math.floor(d.x) - job.bx, Y = Math.floor(d.y) - job.by;
-      boxAt(X, Y, vert, -half, -g - 1, half, -g + 3);
-      boxAt(X, Y, vert, -half, g - 1, half, g + 3);
-      solid(c, 2);
-      prop();
-      for (let k = -g; k <= g; k += 2 * g) {
-        inlayBox(X, Y, vert, -half + 1, k, -half + 4, k + 2, SOOT3);
-        inlayBox(X, Y, vert, half - 4, k, half - 1, k + 2, SOOT3);
-      }
-      maskClear(mask);
-      boxAt(X, Y, vert, -half + 3, -g - 1, -half + 6, g + 3);
-      boxAt(X, Y, vert, half - 6, -g - 1, half - 3, g + 3);
-      solid(c, 3);
-      prop();
-      maskClear(mask);
-      const rr = half * 0.46 < 3.6 ? 3.6 : half * 0.46;
-      Q[0] = X + (vert ? 1 : 0), Q[1] = Y + (vert ? 0 : 1), Q[2] = rr;
-      fillDisc(mask, 1);
-      solid(c, 5);
-      prop();
-      Q[2] = rr * 0.6;
-      inlayDisc(SHADE_I[c]);
-      Q[2] = rr * 0.3;
-      inlayDisc(SOOT3);
-      break;
-    }
-    case K_STRADDLE: {
-      // A straddle carrier: a frame on legs (two side beams, a cross beam at either end and one
-      // amidships) over the container it carries, the driver's cab of dark glass high on one corner.
-      const hl = d.n & 31, vert = d.a > 1, c = d.c, under = job.art!.dress.boxes[(d.n >> 5) & 3];
-      const X = Math.floor(d.x) - job.bx, Y = Math.floor(d.y) - job.by;
-      boxAt(X, Y, vert, -hl + 3, -4, hl - 3, 4);
-      solid(under, 0);
-      prop();
-      inlayBox(X, Y, vert, -hl + 4, -3, hl - 4, 3, SHADE_I[under], 3);
-      maskClear(mask);
-      boxAt(X, Y, vert, -hl, -7, hl, -5);
-      boxAt(X, Y, vert, -hl, 5, hl, 7);
-      boxAt(X, Y, vert, -hl, -7, -hl + 2, 7);
-      boxAt(X, Y, vert, hl - 2, -7, hl, 7);
-      boxAt(X, Y, vert, -1, -7, 1, 7);
-      solid(c, 4);
-      prop();
-      maskClear(mask);
-      boxAt(X, Y, vert, hl - 6, -7, hl - 2, -3);
-      solid(STEEL0, 0);
-      prop();
-      break;
-    }
-    case K_BOLLARD: {
-      // A pair of bollards with a mooring rope: a turn of it round each, a run between the two,
-      // its end lying off to one side; and on it the bollards' heads, cast iron.
-      const vert = d.a > 1, woods = job.art!.dress.woods;
-      const X = Math.floor(d.x) - job.bx, Y = Math.floor(d.y) - job.by;
-      for (let k = -4; k <= 4; k += 8) {
-        Q[0] = X + 0.5 + (vert ? 0 : k), Q[1] = Y + 0.5 + (vert ? k : 0), Q[2] = 3.6;
-        fillDisc(mask, 1);
-      }
-      boxAt(X, Y, vert, -4, 0, 5, 2);
-      boxAt(X, Y, vert, 4, 2, 6, 8);
-      boxAt(X, Y, vert, 1, 6, 6, 8);
-      solid(woods[1], 1);
-      prop();
-      maskClear(mask);
-      for (let k = -4; k <= 4; k += 8) {
-        Q[0] = X + 0.5 + (vert ? 0 : k), Q[1] = Y + 0.5 + (vert ? k : 0), Q[2] = 2.4;
-        fillDisc(mask, 1);
-        solid(STEEL0, 2);
-        prop();
-        maskClear(mask);
-      }
-      return;
-    }
-    case K_HAWSER: {
-      // A coiled hawser: turns of hemp, light and dark, round the eye in its middle.
-      const rr = d.n / 4, woods = job.art!.dress.woods;
-      const cx = Math.floor(d.x) + 0.5 - job.bx, cy = Math.floor(d.y) + 0.5 - job.by;
-      Q[0] = cx, Q[1] = cy, Q[2] = rr;
-      fillDisc(mask, 1);
-      solid(woods[1], 1);
-      prop();
-      for (let j = my0 + 1; j < my1 - 1; j++) {
-        for (let i = mx0 + 1; i < mx1 - 1; i++) {
-          const p = j * S + i;
-          if (mask[p] !== 1 || mask[p - 1] === 0 || mask[p - S] === 0 || mask[p + 1] === 0 || mask[p + S] === 0) continue; // the bevel stays
-          // The distance from the middle: Math.hypot, spelled out (HYPOT).
-          const ha = Math.abs(i + 0.5 - cx), hb = Math.abs(j + 0.5 - cy), hm = ha > hb ? ha : hb;
-          const q = hm === 0 ? 0 : Math.sqrt((ha / hm) * (ha / hm) + (hb / hm) * (hb / hm)) * hm;
-          idx[p] = q < 1.3 ? woods[0] : Math.floor(q / 1.45) & 1 ? woods[2] : woods[1];
-        }
-      }
-      break;
-    }
-    case K_PALLETS: {
-      // A stack of pallets: boards with the gaps between them dark; on some a crate.
-      const woods = job.art!.dress.woods;
-      const X = Math.floor(d.x) - job.bx, Y = Math.floor(d.y) - job.by;
-      boxAt(X, Y, false, -4, -4, 5, 5);
-      solid(woods[1], 2);
-      prop();
-      inlayBox(X, Y, true, -3, -3, 4, 4, woods[0], 3);
-      if (d.n & 1) {
-        maskClear(mask);
-        boxAt(X, Y, false, -3, -5, 3, 1);
-        solid(woods[2], 2);
-        prop();
-        inlayBox(X, Y, false, -2, -2, 2, -1, woods[1]);
-      }
-      break;
-    }
-    case K_FORK: {
-      // A forklift: its body with the counterweight behind and the driver's cage on it, the mast
-      // before it, and the two forks (or the pallet it carries on them).
-      const vert = d.a > 1, c = d.c, woods = job.art!.dress.woods;
-      const X = Math.floor(d.x) - job.bx, Y = Math.floor(d.y) - job.by;
-      boxAt(X, Y, vert, -5, -3, 3, 4);
-      solid(c, 2);
-      prop();
-      inlayBox(X, Y, vert, -4, -2, -2, 3, SOOT3);
-      inlayBox(X, Y, vert, -1, -2, 2, 3, STEEL0);
-      inlayBox(X, Y, vert, 0, -1, 1, 2, SHADE_I[c]);
-      maskClear(mask);
-      boxAt(X, Y, vert, 3, -3, 4, 4);
-      solid(STEEL0, 1);
-      prop();
-      maskClear(mask);
-      if (d.n & 1) {
-        boxAt(X, Y, vert, 4, -4, 10, 4);
-        solid(woods[1], 1);
-        prop();
-        inlayBox(X, Y, vert, 5, -3, 9, 3, woods[0], 2);
-      } else {
-        boxAt(X, Y, vert, 4, -2, 9, -1);
-        boxAt(X, Y, vert, 4, 2, 9, 3);
-        solid(STEEL1, 1);
-        prop();
-      }
-      break;
-    }
-    case K_EMPTY:
-      return;
     default: {
       // An engine block: steel, a lighter head, three bores.
       const w = r * 1.7, h = r * 1.1;
