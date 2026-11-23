@@ -855,7 +855,10 @@ Active authors: TH-LOOK-H, THEME-SND (GRACE-1 + THEME-TRACKS in review).
 THEME-SND first WAVs (tmp/theme-snd/wavs/): user picked sand fine, ford brook, oil thin hiss (relayed).
 THEME-TRACKS review APPROVE (ctx_b0f85f68f6fa; tmp/theme-tracks/THEME-TRACKS-review.md). Play: going round costs <= 0.26 s/lap, through
 0.16-1.56 s, so the patches are cheap-to-avoid traps for a wide line, not a risk/reward choice -> for the user's drive. Nits for the
-post-TH-LOOK-H round: sim-test.ts:16983 comment (max 51 ticks), :16910 pitDist ignores lat 18, longtracks.ts:139-142 'apex' wording. TH-LOOK-2 waits for
+post-TH-LOOK-H round: sim-test.ts:16983 comment (max 51 ticks), :16910 pitDist ignores lat 18, longtracks.ts:139-142 'apex' wording.
+GRACE-1 review APPROVE (ctx_ecfce8ba55b2); 2 text nits fixed 224bd58. MERGED 45fe3e6; gate GREEN (1112/1112, 178/178, build, schema-hash);
+PLAN.md:127 updated (finishGraceMs). ClickUp ready for qa test; workers released; workspace removed. Player-visible on local main vs live:
+GRACE-1 (long-track race end) only -> next push question when THEME-SND / TH-LOOK-H land (unless the user wants it sooner). TH-LOOK-2 waits for
 MARSHALS-1 (shares render.ts + canvas-census.ts). Ford direction cue moved from THEME-SURF to TH-LOOK-3 (drawing = world.ts, Fable).
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
