@@ -852,29 +852,26 @@ function propReach(d: Junk): number {
  * reach and of the two flag marshals' room. And it never lies along a road (PLAN-THEMES.md
  * Amendment 1): the crane's rails run across the nearest road's way (harbourProp: acrossAt), and
  * a rail ends where it would come within RAIL_NEAR of a road's centreline while lying nearer
- * that road's heading than 35 degrees. `away`, `R`, `stands`: buildArt's own (a point's distance
- * from the nearest road less its extra width; the barrier's outside; the marshals' spots).
+ * that road's heading than 35 degrees. `railOk`, `stands`: buildArt's own (may a rail lie at a
+ * point, as far as the roads go; the marshals' spots).
  */
-function layRails(art: Art, roads: Track[], away: (x: number, y: number) => number, R: number, stands: Vec[]): Int32Array {
+function layRails(art: Art, railOk: (x: number, y: number, axis: number) => boolean, stands: Vec[]): Int32Array {
   const out: number[] = [];
   for (const d of art.junk) {
     if (d.kind !== K_CRANE) continue;
     const axis = (d.n >> TURN) & 1, half = d.n & 31, g = half - 2;
     const cx = d.px, cy = d.py, mid = axis ? cy : cx;
+    // The other props these rails can come near at all, however far they run (asked once: a track has hundreds of pieces).
+    const span = RAIL_REACH + half + 3;
+    const others = art.junk.filter((o) => o !== d && o.kind !== K_EMPTY && Math.abs(o.x - cx) < span + propReach(o) && Math.abs(o.y - cy) < span + propReach(o));
     // May both rails lie at `at` along their axis?
     const free = (at: number): boolean => {
       for (const side of [-g, g + 1]) {
         const px = axis ? cx + side : at, py = axis ? at : cy + side;
         const wx = px / ZOOM, wy = py / ZOOM;
-        if (away(wx, wy) < R + RAIL_CLEAR) return false;
         for (const m of stands) if (Math.hypot(wx - m.x, wy - m.y) < MARSHAL_ROOM) return false;
-        for (const o of art.junk) if (o !== d && Math.hypot(o.x - px, o.y - py) < propReach(o) + 2 && o.kind !== K_EMPTY) return false;
-        for (const r of roads) {
-          const q = queryTrack(r, wx, wy);
-          if (q.dist >= RAIL_NEAR) continue;
-          const h = pointAt(r, q.s).h;
-          if (Math.abs(axis ? Math.sin(h) : Math.cos(h)) > RAIL_ALONG) return false;
-        }
+        for (const o of others) if (Math.hypot(o.x - px, o.y - py) < propReach(o) + 2) return false;
+        if (!railOk(wx, wy, axis)) return false;
       }
       return true;
     };
@@ -1258,6 +1255,20 @@ function buildArt(track: Track, scenery: Scenery): Art {
   };
   const offset = (s: number, lat: number): Vec => offsetOn(track, s, lat);
 
+  // May a crane's rail lie at (x, y), world units, running along x (axis 0) or along y (layRails)? Off every road with
+  // RAIL_CLEAR to spare beyond its barrier (`away`'s measure, road by road), and not along any road that is near: one query a road.
+  const railOk = (x: number, y: number, axis: number): boolean => {
+    for (let k = 0; k < roads.length; k++) {
+      const r = roads[k], q = queryTrack(r, x, y);
+      const e = k ? q.dist - (halfOn(r, q.seg, q.s, q.side) - hw) : wide ? q.dist - widenAt(track, q.s, q.side) : q.dist;
+      if (e < R + RAIL_CLEAR) return false;
+      if (q.dist >= RAIL_NEAR) continue;
+      const h = pointAt(r, q.s).h;
+      if (Math.abs(axis ? Math.sin(h) : Math.cos(h)) > RAIL_ALONG) return false;
+    }
+    return true;
+  };
+
   // Which of the plane's axes runs across the nearest road's way at (x, y), world units (0: x, 1: y): the one the road's heading there is further from.
   const acrossAt = (x: number, y: number): number => {
     let best = BIG, axis = 0;
@@ -1399,7 +1410,7 @@ function buildArt(track: Track, scenery: Scenery): Art {
       }
     });
     art.junk.sort((p, q) => p.y - q.y);
-    if (dress.ground === G_QUAY) art.rails = layRails(art, roads, away, R, stands);
+    if (dress.ground === G_QUAY) art.rails = layRails(art, railOk, stands);
   }
 
   // Scrap filling a gap (drawing only: it is not solid), laid out from the gap's start.
