@@ -7,6 +7,9 @@
 //   npx tsx tools/debug/world-bench.ts --runs 3
 //   npx tsx tools/debug/world-bench.ts --quick    one run: a look, no verdict
 //   npx tsx tools/debug/world-bench.ts --theme <name>   S7's theme (default desert)
+//   npx tsx tools/debug/world-bench.ts --yard <id>      S7 on a theme's own yard (dune-yard, block-yard, canopy-yard:
+//                                                       TH-LOOK-2) instead of Preview Yard; with --theme its own theme
+//   npx tsx tools/debug/world-bench.ts --session <name> the browser session's name (default world-bench-<pid>)
 //   npx tsx tools/debug/world-bench.ts --units    the bake units per tile alone (no browser, no lock)
 //
 // The working tree is built here (as it is, into a temp directory) and served on 127.0.0.1,
@@ -35,6 +38,10 @@
 //   tree before themes (1.07 to 1.23 times their S2). Held against S2, S7 would measure the
 //   timer, not the theme. Its ratios against S2 are printed as information, and for the record
 //   S7's absolute numbers beside the S4 laps of the same run.
+// - On a theme's own yard (--yard block-yard --theme city; TH-LOOK-2): S7's views are of that
+//   yard's furniture (client/bench.ts themeYardScene) and the yard is drawn in its own theme,
+//   its theme surface with it; the same frames on the scrapyard's look are that yard through the
+//   benchmark's `&theme=scrapyard` (which has no colours for a theme surface and draws none).
 // - What a theme's tiles cost to bake is worked out here in Node from the bake itself
 //   (client/gfx/world.ts bakeTileIndices with its trace): the cost units of every tile the lap
 //   crosses, per theme (a frame's share of the baking is counted in these units, so a dearer
@@ -72,11 +79,12 @@ const RUNS = QUICK ? 1 : option("--runs", 5);
 const BUDGET = 1.1; // S6 against S2
 const THEME_BUDGET = 1.05; // S7 in a theme against S7 on the yard's own look
 const THEME = args.includes("--theme") ? args[args.indexOf("--theme") + 1] : "desert";
+const YARD = args.includes("--yard") ? args[args.indexOf("--yard") + 1] : "preview-yard"; // S7's track
 const ROOT = path.resolve(fileURLToPath(new URL("../..", import.meta.url)));
 const run = promisify(execFile);
 const VITE = path.join(ROOT, "node_modules", ".bin", "vite");
 const CHROME_ARGS = "--mute-audio,--disable-background-timer-throttling,--disable-renderer-backgrounding,--enable-precise-memory-info";
-const SESSION = `world-bench-${process.pid}`;
+const SESSION = args.includes("--session") ? args[args.indexOf("--session") + 1] : `world-bench-${process.pid}`;
 const LOCK_FILE = path.join(os.tmpdir(), "scrap-rally-bench.lock");
 const sleep = (ms: number) => new Promise<void>((done) => setTimeout(done, ms));
 const MIME: Record<string, string> = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".svg": "image/svg+xml", ".png": "image/png", ".json": "application/json", ".woff2": "font/woff2" };
@@ -232,8 +240,8 @@ async function main(): Promise<number> {
     { scene: "S2", track: "crusher-run" },
     { scene: "S2", track: "overpass-knot" },
     { scene: "S6", track: "preview-yard" },
-    { scene: "S7", track: "preview-yard", theme: THEME },
-    { scene: "S7", track: "preview-yard", theme: "scrapyard" },
+    { scene: "S7", track: YARD, theme: THEME },
+    { scene: "S7", track: YARD, theme: "scrapyard" },
     { scene: "S4", track: "rust-bowl" },
     { scene: "S4", track: "crusher-run" },
     { scene: "S4", track: "overpass-knot" },
@@ -339,7 +347,7 @@ async function bakeUnits(): Promise<void> {
   const { themedTrack } = await import("../../client/gfx/theme");
   const { testTrack } = await import("../../shared/testtracks");
   const { pointAt } = await import("../../shared/track");
-  const yard = testTrack("preview-yard")!;
+  const yard = testTrack(YARD)!;
   const keys = new Set<string>();
   for (let s = 0; s < yard.length; s += 40) {
     const p = pointAt(yard, s);
@@ -347,7 +355,7 @@ async function bakeUnits(): Promise<void> {
     for (let ty = Math.floor((y - VIEW_H / 2) / TILE); ty <= Math.floor((y + VIEW_H / 2) / TILE); ty++) for (let tx = Math.floor((x - VIEW_W / 2) / TILE); tx <= Math.floor((x + VIEW_W / 2) / TILE); tx++) keys.add(`${tx},${ty}`);
   }
   const tiles = [...keys].map((k) => k.split(",").map(Number));
-  console.log(`Bake units per tile (Node; the ${tiles.length} tiles a lap of Preview Yard has in view, each baked to the end twice, the second time measured):\n`);
+  console.log(`Bake units per tile (Node; the ${tiles.length} tiles a lap of ${yard.def.name} has in view, each baked to the end twice, the second time measured):\n`);
   console.log("| theme | units a tile: mean | median | most | by step: ground | yard and props | road | details | furniture | finish | ms a tile here: mean | most | ms per 1000 units |");
   console.log("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|");
   for (const theme of ["scrapyard", THEME] as const) {

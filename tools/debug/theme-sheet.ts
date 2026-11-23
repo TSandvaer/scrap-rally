@@ -1297,7 +1297,7 @@ async function shots(theme: Theme, out: string, port: number): Promise<void> {
       server.listen(port, "127.0.0.1", () => done());
     });
     const url = `http://127.0.0.1:${port}`;
-    const session = `thl1-shots-${process.pid}`;
+    const session = arg("--session") ?? `theme-shots-${process.pid}`;
     const ab = async (more: string[]): Promise<string> => (await run("agent-browser", ["--session", session, ...more], { timeout: 120_000, maxBuffer: 64 << 20 })).stdout.trim();
     cleanups.push(() => ab(["close"]));
     await ab(["--args", "--mute-audio,--disable-background-timer-throttling,--disable-renderer-backgrounding", "open", "about:blank"]);
@@ -1418,8 +1418,9 @@ async function allocOne(theme: Theme): Promise<void> {
   console.log(`${WARM} warm frames, then ${FRAMES} measured; a lap at ${SPEED} u/s; sampling every ${INTERVAL} bytes, objects collected since included.\n`);
   console.log("| drive | tiles baked while measured | client/ bytes a frame | outside | the same with the control (an object a frame) | charged to |");
   console.log("|---|---:|---:|---:|---:|---|");
-  for (const drive of ["world", "renderer"] as const) {
-    const track = themedTrack(drive === "world" ? trackById("crusher-run") : testTrack("preview-yard")!, theme);
+  // (A theme with a yard of its own is driven round that as well: its theme surface is baked on the way.)
+  for (const drive of ["world", "renderer", ...(YARD_OF[theme] ? (["own"] as const) : [])] as const) {
+    const track = drive === "own" ? testTrack(YARD_OF[theme]!)! : themedTrack(drive === "world" ? trackById("crusher-run") : testTrack("preview-yard")!, theme);
     const lap = Math.ceil((track.length / SPEED) * 60);
     const xs = new Float64Array(lap), ys = new Float64Array(lap), hs = new Float64Array(lap), ox = new Int32Array(lap), oy = new Int32Array(lap);
     for (let i = 0; i < lap; i++) {
@@ -1502,7 +1503,7 @@ async function allocOne(theme: Theme): Promise<void> {
     const withControl = await sample();
     control = false;
     const f1 = (x: number) => (x / FRAMES).toFixed(1);
-    console.log(`| ${drive === "world" ? "World, a lap of Crusher Run" : "Renderer.frame, a lap of Preview Yard"} | ${baked} | **${f1(plain.inside)}** | ${f1(plain.outside)} | client/ ${f1(withControl.inside)}, outside ${f1(withControl.outside)} | ${plain.rows.length ? plain.rows.slice(0, 6).map(([k, b]) => `${k} ${f1(b)}`).join("; ") : "nothing"} |`);
+    console.log(`| ${drive === "world" ? "World, a lap of Crusher Run" : drive === "own" ? `Renderer.frame, a lap of ${track.def.name}` : "Renderer.frame, a lap of Preview Yard"} | ${baked} | **${f1(plain.inside)}** | ${f1(plain.outside)} | client/ ${f1(withControl.inside)}, outside ${f1(withControl.outside)} | ${plain.rows.length ? plain.rows.slice(0, 6).map(([k, b]) => `${k} ${f1(b)}`).join("; ") : "nothing"} |`);
   }
   session.disconnect();
 }
