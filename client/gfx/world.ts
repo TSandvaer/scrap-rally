@@ -2056,30 +2056,39 @@ const MANHOLES = 104; // a cell of the grid the manhole covers lie on, view pixe
 /**
  * Manhole covers in the paving, on a grid of cells over the plane as the desert's dunes are (a
  * cell's hash says whether it holds one, and where): a round cover of cast iron, a dark rim, a
- * slot across it. On open paving alone: not under a roof, and not at the wall's foot.
+ * slot across it. On open paving alone, and whole or not at all: none under a roof, at the
+ * wall's foot or over a gap's void. (A cover that touches the tile lies in the buffer whole,
+ * its margin being wider than a cover: the tile next door comes to the same answer.)
  */
 function manholes(): void {
   const art = job.art!, b = buffers();
-  const { bx, by } = job;
-  const { idx, cls, dist } = b;
+  const { bx, by, voids } = job;
+  const { idx, cls, dist, gap } = b;
   const clear = art.track.wall + BARRIER + 3;
-  for (let gy = Math.floor((by - 4) / MANHOLES), gy1 = Math.floor((by + S + 4) / MANHOLES); gy <= gy1; gy++) {
-    for (let gx = Math.floor((bx - 4) / MANHOLES), gx1 = Math.floor((bx + S + 4) / MANHOLES); gx <= gx1; gx++) {
+  for (let gy = Math.floor((by + PAD - 3) / MANHOLES), gy1 = Math.floor((by + PAD + TILE + 3) / MANHOLES); gy <= gy1; gy++) {
+    for (let gx = Math.floor((bx + PAD - 3) / MANHOLES), gx1 = Math.floor((bx + PAD + TILE + 3) / MANHOLES); gx <= gx1; gx++) {
       let h = Math.imul(gx, 374761393) ^ Math.imul(gy, 668265263) ^ Math.imul(61, 1442695041);
       h = Math.imul(h ^ (h >>> 13), 1274126177);
       h ^= h >>> 16;
       if ((h & 255) >= 86) continue; // no cover in this cell
       // Its middle pixel, in the buffer.
       const cx = gx * MANHOLES + 4 + (((h >>> 8) & 255) * (MANHOLES - 8) >> 8) - bx, cy = gy * MANHOLES + 4 + (((h >>> 16) & 255) * (MANHOLES - 8) >> 8) - by;
-      for (let j = -3; j <= 3; j++) {
-        const y = cy + j;
-        if (y < 0 || y >= S) continue;
+      if (cx < PAD - 3 || cy < PAD - 3 || cx >= PAD + TILE + 3 || cy >= PAD + TILE + 3) continue; // no pixel of it on this tile
+      let open = true;
+      for (let j = -3; j <= 3 && open; j++) {
         for (let i = -3; i <= 3; i++) {
-          const x = cx + i, d2 = i * i + j * j;
-          if (x < 0 || x >= S || d2 > 10) continue;
-          const p = y * S + x;
-          if (cls[p] === C_PROP || !(dist[p] > clear)) continue;
-          idx[p] = d2 > 5 ? DIRT0 : j === 0 && i >= -1 && i <= 1 ? SOOT3 : STEEL1;
+          const p = (cy + j) * S + cx + i;
+          if (i * i + j * j <= 10 && (cls[p] === C_PROP || !(dist[p] > clear) || (voids && gap[p] >= 0))) {
+            open = false;
+            break;
+          }
+        }
+      }
+      if (!open) continue;
+      for (let j = -3; j <= 3; j++) {
+        for (let i = -3; i <= 3; i++) {
+          const d2 = i * i + j * j;
+          if (d2 <= 10) idx[(cy + j) * S + cx + i] = d2 > 5 ? DIRT0 : j === 0 && i >= -1 && i <= 1 ? SOOT3 : STEEL1;
         }
       }
     }
