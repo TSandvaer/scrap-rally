@@ -812,7 +812,14 @@ flake, parked (~/.claude/parking/scrap-rally/adhoc-2026-11-23.md). ClickUp ready
 NOSELECT-2 review 1 REQUEST_CHANGES (stale link toast after leaving the room); fix 3f597f3 (hide on out-of-room + Escape); confirm by
 ctx_7f10f4a11ec8. PUSH (user popup): "After both merge" -> push when NOSELECT-2 is merged + gate green, then the user's Manual Deploy + live QA.
 HARBOUR-SCHEMA 123jpnbfgzv in flight: ctx_33dfae154ede (Opus, ~/orca/workspaces/scrap-rally/harbour-schema, :3010, tmp/spec-harbour-schema.md).
-Active authors: TH-LOOK-2 (final gate), HARBOUR-SCHEMA, NOSELECT-2 (idle in review). TH-LOOK-2 waits for
+Active authors: TH-LOOK-2 (final gate), HARBOUR-SCHEMA, NOSELECT-2 (idle in review).
+NOSELECT-2 re-review APPROVE (ctx_7f10f4a11ec8). MERGED f9e87b3; gate running -> then PUSH (user-approved "after both merge").
+TH-LOOK-2 DONE cd5ad1e (city old-town look on Block Yard + sand/oil looks; identity 0 px; speed gate PASS; S7 ~1.01; report
+tmp/th-look-2/REPORT.md). Fable reviewer ctx_b58303ab42e9 (tmp/review-th-look-2.md). TASTE: inline preview shown; frozen copy
+~/orca/workspaces/scrap-rally/thl2-taste at cd5ad1e: :3012 SCRAP_DEV_TRACK=block-yard (pid 34398), :3009 SCRAP_DEV_TRACK=dune-yard (pid 34397);
+the user drives sand + oil (also THEME-SURF's feel gate).
+TH-LOOK-2 taste APPROVED (user "approved"). NOSELECT-2 gate GREEN on f9e87b3 (1092/1092, 174/174, build index-DV6ew2Qs.js, schema-hash
+all match). PUSHING main (user-approved "after both merge"): marshals + invite link + both shortcuts; then the user's Manual Deploy + live QA. TH-LOOK-2 waits for
 MARSHALS-1 (shares render.ts + canvas-census.ts). Ford direction cue moved from THEME-SURF to TH-LOOK-3 (drawing = world.ts, Fable).
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
