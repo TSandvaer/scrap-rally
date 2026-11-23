@@ -14717,10 +14717,10 @@ function thLists(): void {
   // so physics' lookup (surfaceAt) finds the sand and the pool beside it; a track without theme surfaces has empty lists.
   const inSand = pointAt(t, 950), inPool = pointAt(t, 4150);
   check(
-    "theme lists (THEME-SURF): the theme surfaces are in track.surfaces / surfAt too, the same objects as themeSurfaces (surfaceAt, physics' lookup, finds the sand and the pool beside it); every shipped track has none (empty lists, themeAt one frozen empty list a segment)",
+    "theme lists (THEME-SURF): the theme surfaces are in track.surfaces / surfAt too, the same objects as themeSurfaces (surfaceAt, physics' lookup, finds the sand and the pool beside it); the three original shipped tracks (Rust Bowl, Crusher Run, Overpass Knot) have none (empty lists, themeAt one frozen empty list a segment; THEME-TRACKS put sand on Breaker's Mile and oil on Slag Harbour)",
     t.surfaces.length === 3 && felt.every((f) => t.surfaces.includes(f)) && thT.surfaceAt(t, inSand.seg, 950, 0) === felt[0] && thT.surfaceAt(t, inPool.seg, 4150, -32)?.kind === thT.SURF_WATER &&
-      trackList().every((e) => {
-        const x = trackById(e.id);
+      ["rust-bowl", "crusher-run", "overpass-knot"].every((id) => {
+        const x = trackById(id);
         return x.sand.length + x.oil.length + x.fords.length + x.themeSurfaces.length === 0 && x.themeAt.length === thT.segCount(x) && x.themeAt.every((l) => l.length === 0 && Object.isFrozen(l));
       }),
     `surfaces ${t.surfaces.map((f) => f.kind).join(",")}`,
@@ -16799,9 +16799,9 @@ function hsSlag(): void {
   delete bare.theme;
   const plain = (x: Track) => JSON.stringify(x, (k, v) => (k === "def" ? undefined : v === Infinity ? "Inf" : v));
   check(
-    "harbour Slag Harbour: its theme is \"harbour\" (shared/longtracks.ts; the registry serves that def); built with it it equals the build without (the def aside); it validates; it carries no theme surface yet (THEME-TRACKS adds its oil)",
+    "harbour Slag Harbour: its theme is \"harbour\" (shared/longtracks.ts; the registry serves that def); built with it it equals the build without (the def aside); it validates; it carries exactly one oil slick and no sand or ford (THEME-TRACKS)",
     HS_SLAG_HARBOUR.theme === "harbour" && hsTheme.themeOf(t.def) === "harbour" && t.def === HS_SLAG_HARBOUR && plain(t) === plain(buildTrack(bare)) && validateTrack(t).length === 0 &&
-      t.sand.length + t.oil.length + t.fords.length === 0,
+      t.oil.length === 1 && t.sand.length + t.fords.length === 0,
     `theme ${t.def.theme}; ${validateTrack(t).join(" | ") || "valid"}`,
   );
   // Criterion 6 (Node side): the client's renderer takes a track's scenery from sceneryFor (client/render.ts); harbour has no art in
