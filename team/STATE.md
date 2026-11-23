@@ -867,7 +867,9 @@ THEME-SND merged main as 3172a51 (1127/1127). TH-LOOK-H DONE e427e67 (harbour lo
 sites, a HARBOUR-SCHEMA check flipped). Fable reviewer ctx_e96c61f9c157 (tmp/review-th-look-h.md).
 COMBINED TASTE COPY ~/orca/workspaces/scrap-rally/harbour-taste = e427e67 + theme-tracks' shared/longtracks.ts + theme-snd's sfx/soundboard/
 soundlogic (uncommitted overlay; tsc + build ok): :3012 normal (pid 31154; Slag Harbour harbour + oil slick + pier cut; Breaker's Mile
-sand drifts; surface sounds) and :3009 SCRAP_DEV_TRACK=quay-yard (pid 31153). One drive for TH-LOOK-H + THEME-TRACKS + THEME-SND. TH-LOOK-2 waits for
+sand drifts; surface sounds) and :3009 SCRAP_DEV_TRACK=quay-yard (pid 31153). One drive for TH-LOOK-H + THEME-TRACKS + THEME-SND.
+THEME-SND review APPROVE (ctx_2aba54843ff0). MERGED 65dcfcc; gate GREEN (1127/1127, 178/178, build index-BA2xTXSI.js, schema-hash).
+ClickUp ready for qa test; workers released; workspace removed. (Nothing audible on shipped tracks until THEME-TRACKS lands.) TH-LOOK-2 waits for
 MARSHALS-1 (shares render.ts + canvas-census.ts). Ford direction cue moved from THEME-SURF to TH-LOOK-3 (drawing = world.ts, Fable).
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
