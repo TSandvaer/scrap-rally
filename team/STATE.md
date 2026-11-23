@@ -851,7 +851,11 @@ GRACE-1 DONE 026334e (finishGraceMs; Mile 38.93 s, Easy in; short tracks 30 s; 1
 ctx_ecfce8ba55b2 (Opus, :3014, tmp/review-grace-1.md). Merges clean into main; with THEME-TRACKS only sim-test/README appends.
 THEME-SND 123jpnbfkeg (PLAN-THEMES "Later", user decision 6; ticket written now, approved plan) in flight: ctx_f4bf5cfb7322 (Opus,
 ~/orca/workspaces/scrap-rally/theme-snd, :3010, tmp/spec-theme-snd.md; WAV renders early for the user's ear).
-Active authors: TH-LOOK-H, THEME-SND (GRACE-1 + THEME-TRACKS in review). TH-LOOK-2 waits for
+Active authors: TH-LOOK-H, THEME-SND (GRACE-1 + THEME-TRACKS in review).
+THEME-SND first WAVs (tmp/theme-snd/wavs/): user picked sand fine, ford brook, oil thin hiss (relayed).
+THEME-TRACKS review APPROVE (ctx_b0f85f68f6fa; tmp/theme-tracks/THEME-TRACKS-review.md). Play: going round costs <= 0.26 s/lap, through
+0.16-1.56 s, so the patches are cheap-to-avoid traps for a wide line, not a risk/reward choice -> for the user's drive. Nits for the
+post-TH-LOOK-H round: sim-test.ts:16983 comment (max 51 ticks), :16910 pitDist ignores lat 18, longtracks.ts:139-142 'apex' wording. TH-LOOK-2 waits for
 MARSHALS-1 (shares render.ts + canvas-census.ts). Ford direction cue moved from THEME-SURF to TH-LOOK-3 (drawing = world.ts, Fable).
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
