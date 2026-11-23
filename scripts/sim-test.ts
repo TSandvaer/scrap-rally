@@ -16846,6 +16846,458 @@ for (const t of [hsTypes, hsRules, hsSlag, hsQuay]) {
   }
 }
 
+// ---- THEME-SND (ClickUp 123jpnbfkeg): surface sounds for sand, oil and fords ----------------------
+//
+// The pure targets (client/soundlogic.ts tyreSurface, sandTarget, fordTarget, oilTarget, FordSplash),
+// the voices (client/sfx.ts: GRAVEL is SND-2's, sand is the gravel voice with other parameters, the
+// ford and oil voices), RaceSounds on a stand-in AudioContext across the theme yards and Rust Bowl, and
+// a sweep of every track without theme surfaces: the same sound as before THEME-SND everywhere.
+
+import * as tsndLogic from "../client/soundlogic";
+import * as tsndSfx from "../client/sfx";
+import * as tsndTrack from "../shared/track";
+import * as tsndTests from "../shared/testtracks";
+import * as tsndTracks from "../shared/tracks";
+import * as tsndThemes from "../shared/theme";
+import { readFileSync as tsndRead } from "node:fs";
+import type { AudioEngine as TsndAudio } from "../client/audio";
+import type { Controls as TsndControls, Game as TsndGame } from "../client/game";
+
+const tsndClock = { t0: 0 };
+const TSND_ST: tsndLogic.EngineState = { phase: "racing", hasCar: true, connected: true, wreck: 0, fall: 0, air: 0, finished: false, speed: 250, topSpeed: 430, throttle: 1 };
+// gravelTarget's quiet list (surfaceSounds) and the host's pause.
+const TSND_QUIET: Partial<tsndLogic.EngineState>[] = [{ air: 5 }, { wreck: 5 }, { fall: 5 }, { finished: true }, { phase: "results" }, { phase: "lobby" }, { hasCar: false }, { connected: false }, { speed: 10 }, { paused: true }];
+
+/** A stand-in AudioParam: records its automation. */
+class TsndParam {
+  ev: [string, number, number][] = [];
+  constructor(public value = 0) {}
+  setTargetAtTime(v: number, t: number) {
+    this.ev.push(["target", v, t]);
+    return this;
+  }
+  setValueAtTime(v: number, t: number) {
+    this.ev.push(["set", v, t]);
+    return this;
+  }
+  linearRampToValueAtTime(v: number, t: number) {
+    this.ev.push(["lin", v, t]);
+    return this;
+  }
+  exponentialRampToValueAtTime(v: number, t: number) {
+    this.ev.push(["exp", v, t]);
+    return this;
+  }
+  cancelScheduledValues(t: number) {
+    this.ev.push(["cancel", 0, t]);
+    return this;
+  }
+  last(kind = "target"): number {
+    for (let i = this.ev.length - 1; i >= 0; i--) if (this.ev[i][0] === kind) return this.ev[i][1];
+    return NaN;
+  }
+}
+
+/** A stand-in audio node of any kind (gain, biquad, oscillator, buffer source, ...). */
+class TsndNode {
+  type = "";
+  buffer: { getChannelData(c: number): Float32Array } | null = null;
+  loop = false;
+  curve: unknown = null;
+  readonly gain = new TsndParam(1);
+  readonly frequency = new TsndParam(350);
+  readonly Q = new TsndParam(1);
+  readonly detune = new TsndParam(0);
+  readonly playbackRate = new TsndParam(1);
+  readonly pan = new TsndParam(0);
+  constructor(readonly kind: string) {}
+  connect<T>(n: T): T {
+    return n;
+  }
+  disconnect(): void {}
+  start(): void {}
+  stop(): void {}
+  addEventListener(): void {}
+  setPeriodicWave(): void {}
+}
+
+/** A stand-in BaseAudioContext that counts what is made. */
+function tsndCtx(sampleRate = 8000) {
+  const made: TsndNode[] = [];
+  let buffers = 0;
+  const node = (k: string) => {
+    const n = new TsndNode(k);
+    made.push(n);
+    return n;
+  };
+  const ctx = {
+    sampleRate,
+    currentTime: 0,
+    destination: new TsndNode("destination"),
+    createGain: () => node("gain"),
+    createBiquadFilter: () => node("biquad"),
+    createOscillator: () => node("osc"),
+    createBufferSource: () => node("source"),
+    createStereoPanner: () => node("pan"),
+    createWaveShaper: () => node("shaper"),
+    createPeriodicWave: () => ({}),
+    createBuffer: (ch: number, len: number, sr: number) => {
+      buffers++;
+      const d = new Float32Array(len);
+      return { length: len, sampleRate: sr, duration: len / sr, numberOfChannels: ch, getChannelData: () => d };
+    },
+  };
+  return { ctx: ctx as unknown as BaseAudioContext, made, buffers: () => buffers };
+}
+
+/** SND-2's gravel grains (client/sfx.ts before THEME-SND), copied verbatim: GRAVEL must give this buffer. */
+function tsndSnd2Grains(sr: number): Float32Array {
+  const d = new Float32Array(sr * 2);
+  let x = 0x2545f491;
+  const rnd = () => {
+    x ^= x << 13;
+    x ^= x >>> 17;
+    x ^= x << 5;
+    return (x >>> 0) / 0xffffffff;
+  };
+  for (let t = 0; t < d.length; ) {
+    t += Math.floor((-Math.log(1 - rnd() * 0.999) / 70) * sr);
+    const len = Math.floor((0.002 + rnd() * 0.006) * sr);
+    const amp = 0.3 + rnd() * 0.7;
+    for (let i = 0; i < len && t + i < d.length; i++) d[t + i] += amp * (rnd() * 2 - 1) * Math.exp((-4 * i) / len);
+  }
+  return d;
+}
+
+function tsndTargets(): void {
+  tsndClock.t0 = performance.now();
+  const L = tsndLogic;
+  const T = tsndTrack;
+  // Criterion 1: what sounds where. Every kind but the theme ones answers as onGravel did.
+  const kinds = [0, T.SURF_WATER, T.SURF_DIRT, T.SURF_BELT, T.SURF_SAND, T.SURF_OIL, T.SURF_FORD];
+  const table = kinds.map((k) => `${k}:${L.tyreSurface(k, false)}/${L.tyreSurface(k, true)}`).join(" ");
+  check(
+    "theme sounds: tyreSurface: sand, oil and a ford give their own sound on and off the asphalt (the gravel drops out); none, water, dirt and belts give exactly onGravel's (gravel off the asphalt, nothing on it)",
+    table === `0:asphalt/gravel ${T.SURF_WATER}:asphalt/gravel ${T.SURF_DIRT}:asphalt/gravel ${T.SURF_BELT}:asphalt/gravel ${T.SURF_SAND}:sand/sand ${T.SURF_OIL}:oil/oil ${T.SURF_FORD}:ford/ford`,
+    table,
+  );
+  // The three targets: gravelTarget's gate (silent airborne, wrecked, falling, finished, outside races, no car, disconnected,
+  // nearly stopped, paused), off the surface off, louder with speed; oil louder sliding; the frame loop's object reused.
+  const targets: [string, (e: tsndLogic.EngineState, on: boolean, out?: tsndLogic.SurfaceTarget) => tsndLogic.SurfaceTarget][] = [
+    ["sand", (e, on, out) => L.sandTarget(e, on, out)],
+    ["ford", (e, on, out) => L.fordTarget(e, on, out)],
+    ["oil", (e, on, out) => L.oilTarget(e, on, 0, out)],
+  ];
+  const rows = targets.map(([name, f]) => {
+    const on = f(TSND_ST, true);
+    const off = f(TSND_ST, false);
+    const quiet = TSND_QUIET.filter((q) => f({ ...TSND_ST, ...q }, true).on || f({ ...TSND_ST, ...q }, true).gain !== 0);
+    const slow = f({ ...TSND_ST, speed: 60 }, true);
+    const fast = f({ ...TSND_ST, speed: 350 }, true);
+    const out: tsndLogic.SurfaceTarget = { on: false, gain: 0, density: 0, open: 0 };
+    const same = f(TSND_ST, true, out) === out && out.on && out.gain === on.gain;
+    const ok = on.on && on.gain > 0 && !off.on && off.gain === 0 && quiet.length === 0 && fast.gain > slow.gain && fast.gain <= 1 && same;
+    return { name, ok, d: `${name}: gain ${slow.gain.toFixed(2)} at 60, ${fast.gain.toFixed(2)} at 350; density ${slow.density.toFixed(2)}/${fast.density.toFixed(2)}; sounding when it should not: ${quiet.map((q) => JSON.stringify(q)).join(" ") || "none"}` };
+  });
+  const sandDense = L.sandTarget({ ...TSND_ST, speed: 350 }, true).density > L.sandTarget({ ...TSND_ST, speed: 60 }, true).density;
+  const washDense = L.fordTarget({ ...TSND_ST, speed: 350 }, true).density > L.fordTarget({ ...TSND_ST, speed: 60 }, true).density;
+  const straight = L.oilTarget(TSND_ST, true, 0);
+  const slide = L.oilTarget(TSND_ST, true, 120);
+  check(
+    "theme sounds: sandTarget, fordTarget and oilTarget sound only on their surface while the car rolls, silent exactly where gravelTarget is (airborne, wrecked, falling, finished, results, lobby, no car, disconnected, nearly stopped) and paused; louder (sand, wash: denser) with speed; oil louder and brighter sliding; the given object is filled",
+    rows.every((r) => r.ok) && sandDense && washDense && slide.gain > straight.gain && slide.open > straight.open,
+    `${rows.map((r) => r.d).join(" | ")}; oil straight ${straight.gain.toFixed(2)}, sliding 120 u/s ${slide.gain.toFixed(2)}`,
+  );
+}
+
+function tsndSplash(): void {
+  const L = tsndLogic;
+  const st = (p: Partial<tsndLogic.EngineState> = {}) => ({ ...TSND_ST, ...p });
+  // Drive in at 250: out, out, in (splash), in, in; no splash while staying in.
+  const a = new L.FordSplash();
+  const seq = [a.update(st(), false, 0), a.update(st(), false, 16), a.update(st(), true, 33), a.update(st(), true, 50), a.update(st(), true, 66)];
+  // Jitter at the edge (a reconcile moves the predicted pose back a tick): out and in again within the refractory.
+  const jitter = [a.update(st(), false, 83), a.update(st(), true, 100)];
+  // Out, then in again after the refractory: a second splash.
+  const again = [a.update(st(), false, 700), a.update(st(), true, 33 + L.FORD_SPLASH_REFRACTORY_MS + 20)];
+  // The first update, and the first after a gap, only seed.
+  const seed = new L.FordSplash();
+  const seeded = [seed.update(st(), true, 0), seed.update(st(), false, 16), seed.update(st(), true, 16 + L.FORD_SEED_GAP_MS + 10)];
+  const reset = new L.FordSplash();
+  reset.update(st(), false, 0);
+  reset.reset();
+  const afterReset = reset.update(st(), true, 16);
+  // Strength from the speed; none below the minimum; none with the gate shut.
+  const at = (v: number) => {
+    const f = new L.FordSplash();
+    f.update(st({ speed: v }), false, 0);
+    return f.update(st({ speed: v }), true, 16);
+  };
+  const strengths = [30, 60, 150, 300, 330, 500].map(at);
+  const gated = TSND_QUIET.filter((q) => !("speed" in q) && !("air" in q)).map((q) => {
+    const f = new L.FordSplash();
+    f.update(st(q), false, 0);
+    return f.update(st(q), true, 16);
+  });
+  // Landing in the ford from the air: no splash in the air, one on touching down.
+  const land = new L.FordSplash();
+  const landing = [land.update(st({ air: 0 }), false, 0), land.update(st({ air: 8 }), true, 16), land.update(st({ air: 0 }), true, 33)];
+  check(
+    "theme sounds: FordSplash splashes once on driving into a ford (none while staying in, none for a jitter at the edge within 700 ms, again on a later entry), and on landing in one from the air; the first update, the first after a 250 ms gap and after reset() only seed",
+    seq[0] === 0 && seq[1] === 0 && seq[2] > 0 && seq[3] === 0 && seq[4] === 0 && jitter.every((x) => x === 0) && again[1] > 0 &&
+      seeded.every((x) => x === 0) && afterReset === 0 && landing[0] === 0 && landing[1] === 0 && landing[2] > 0,
+    `drive in ${seq.map((x) => x.toFixed(2)).join(",")}; jitter ${jitter.join(",")}; again ${again.map((x) => x.toFixed(2)).join(",")}; seeding ${seeded.join(",")}; after reset ${afterReset}; landing ${landing.map((x) => x.toFixed(2)).join(",")}`,
+  );
+  check(
+    "theme sounds: a splash is 0.35 at 40 u/s rising to 1 at 330 and above; none below 40 u/s, none paused, wrecked, falling, finished, outside races, with no car or disconnected",
+    strengths[0] === 0 && strengths[1] >= 0.35 && strengths[1] < strengths[2] && strengths[2] < strengths[3] && strengths[3] < 1 && strengths[4] === 1 && strengths[5] === 1 && gated.length === 8 && gated.every((x) => x === 0),
+    `at 30/60/150/300/330/500 u/s: ${strengths.map((x) => x.toFixed(2)).join(" ")}; gate shut (${gated.length} cases): ${gated.join(",")}`,
+  );
+}
+
+function tsndVoices(): void {
+  const S = tsndSfx;
+  // Criterion 4: the gravel's grains are SND-2's buffer sample for sample, and its graph and set() are SND-2's numbers.
+  const m = tsndCtx(44100);
+  const noise = m.ctx.createBuffer(1, 44100, 44100);
+  const sv = new S.SfxVoices(m.ctx, new TsndNode("bus") as unknown as AudioNode, noise);
+  const before = m.made.length;
+  const gv = sv.gravel();
+  const nodes = m.made.slice(before);
+  const grains = nodes.find((n) => n.kind === "source")!.buffer!.getChannelData(0);
+  const want = tsndSnd2Grains(44100);
+  let diff = grains.length === want.length ? 0 : -1;
+  for (let i = 0; diff >= 0 && i < want.length; i++) if (grains[i] !== want[i]) diff++;
+  const bq = nodes.filter((n) => n.kind === "biquad").map((n) => `${n.type} ${n.frequency.value} ${n.Q.value}`).join(", ");
+  const gains = nodes.filter((n) => n.kind === "gain").map((n) => n.gain.value).join(", ");
+  gv.set(0.5, 1.2, 0.3, 1);
+  const lp = nodes.filter((n) => n.kind === "biquad")[2];
+  const out = nodes.filter((n) => n.kind === "gain")[2];
+  const setOk = lp.frequency.last() === 1800 + 4500 * 0.3 && out.gain.last() === 0.5 * 0.6 && nodes.find((n) => n.kind === "source")!.playbackRate.last() === 1.2;
+  check(
+    "theme sounds: the gravel voice is SND-2's: GRAVEL's grains are its buffer sample for sample, its band-passes 2300/0.7 and 650/0.6, bed 0.18, low-pass 1800 + 4500 x open at level 0.6",
+    diff === 0 && bq === "bandpass 2300 0.7, bandpass 650 0.6, lowpass 2500 0.7" && gains === "1, 0.18, 0" && setOk,
+    `${diff} of ${want.length} grain samples differ; filters ${bq}; gains ${gains}; set() ${setOk ? "as SND-2" : "differs"}`,
+  );
+  // Criterion 1-2: sand is the gravel voice with other parameters, softer (a lower level) and lower (bands and low-pass)
+  // than gravel; the race plays fine sand and the brook wash (the user's picks).
+  const G = S.GRAVEL;
+  const softer = S.SAND_VARIANTS.map((v) => {
+    const d = S.SAND[v];
+    return { v, ok: d.level < G.level && d.grainBand < G.grainBand && d.bedBand < G.bedBand && d.lp[0] < G.lp[0] && d.lp[0] + d.lp[1] < G.lp[0] + G.lp[1] && d.grains.seed !== G.grains.seed };
+  });
+  const sandVoice = sv.crackle(S.SAND.fine);
+  check(
+    "theme sounds: sand is GravelVoice with its own tone and grains: every sand softer (level) and lower (grain band, bed, low-pass) than GRAVEL; the race plays sand \"fine\" and the wash \"brook\"",
+    softer.every((x) => x.ok) && sandVoice instanceof S.GravelVoice && sandVoice.def === S.SAND.fine && S.RACE_SAND === "fine" && S.RACE_WASH === "brook" && S.WASH_VARIANTS.length === 3 && S.SAND_VARIANTS.length === 3,
+    softer.map((x) => `${x.v} ${x.ok ? "softer, lower" : "NOT softer/lower"}`).join("; "),
+  );
+  // Criterion 2: the update path makes nothing: set() and splash() only move parameters; a voice's buffer is built once.
+  const sand2 = sv.crackle(S.SAND.fine);
+  const ford = sv.ford(S.WASH.brook);
+  const oil = sv.oil();
+  const madeBefore = m.made.length;
+  const bufsBefore = m.buffers();
+  for (let k = 0; k < 600; k++) {
+    const t = k / 60;
+    gv.set(0.7, 1.4, 0.5, t);
+    sand2.set(0.6, 1.1, 0.4, t);
+    ford.set(0.8, 1.2, 0.6, t);
+    if (k % 30 === 0) ford.splash(0.5 + (k % 60) / 120, t);
+    oil.set(0.6, 0.3, t);
+  }
+  const madeAfter = m.made.length;
+  const sand3 = sv.crackle(S.SAND.fine);
+  check(
+    "theme sounds: no allocation in the update path: 600 frames of set() on the gravel, sand, ford and oil voices and 20 splashes make no audio node and no buffer; a second sand voice reuses the grains built for the first",
+    madeAfter === madeBefore && m.buffers() === bufsBefore && sand3 !== sand2 && m.buffers() === bufsBefore,
+    `nodes ${madeBefore} -> ${madeAfter}, buffers ${bufsBefore} -> ${m.buffers()}`,
+  );
+}
+
+/** RaceSounds on a stand-in context: the own car driven along (s, lat) of a track at v u/s, a frame each 1/60 s. */
+function tsndRace(track: tsndTrack.Track) {
+  const m = tsndCtx(8000);
+  const noise = m.ctx.createBuffer(1, 8000, 8000);
+  const audio = { running: () => true, ctx: m.ctx, buses: { sfx: new TsndNode("bus") }, noise, settings: { engine: "buggy" } };
+  const car = { x: 0, y: 0, h: 0, vx: 0, vy: 0, seg: 0, wreck: 0, fall: 0, air: 0, boost: 0 };
+  const game = {
+    you: "me", phase: "racing", raceStart: 1, phaseEnds: 0, serverNow: () => 0, hasClock: () => false, snapTick: 0, takeOwnSounds: () => [], interpSnapshot: () => null,
+    paused: false, resumeGo: 0, raceId: 1, car, connected: true, ownSnap: () => null, stats: { topSpeed: 430 }, track, otherPoses: () => [], latest: null,
+  };
+  const rs = new tsndSfx.RaceSounds(audio as unknown as TsndAudio, game as unknown as TsndGame, 100);
+  const priv = rs as unknown as Record<"gravel" | "sand" | "ford" | "oil", { g?: TsndParam; splashEnv?: { gain: TsndParam } } | null>;
+  let ms = 0;
+  const realNow = performance.now.bind(performance);
+  const frames: { s: number; sand: number; wash: number; oil: number; gravel: number }[] = [];
+  const gainOf = (v: unknown) => ((v as { g?: { gain: TsndParam } } | null)?.g?.gain.last() ?? 0);
+  /** Drive from s0 to s1 at lateral lat (a slide: sideways speed), recording each frame's gains. */
+  const drive = (s0: number, s1: number, lat: number, v: number, slide = 0) => {
+    Object.defineProperty(performance, "now", { value: () => ms, configurable: true });
+    try {
+      for (let s = s0; s < s1; s += v / 60) {
+        const p = tsndTrack.pointAt(track, s);
+        car.x = p.x - Math.sin(p.h) * lat;
+        car.y = p.y + Math.cos(p.h) * lat;
+        car.h = p.h;
+        car.vx = Math.cos(p.h) * v - Math.sin(p.h) * slide;
+        car.vy = Math.sin(p.h) * v + Math.cos(p.h) * slide;
+        car.seg = p.seg;
+        rs.frame({ throttle: 1 } as TsndControls, { x: car.x, y: car.y });
+        ms += 1000 / 60;
+        frames.push({ s, sand: gainOf(priv.sand), wash: gainOf(priv.ford), oil: gainOf(priv.oil), gravel: gainOf(priv.gravel) });
+      }
+    } finally {
+      Object.defineProperty(performance, "now", { value: realNow, configurable: true });
+    }
+  };
+  const splashes = () => priv.ford?.splashEnv?.gain.ev.filter((e) => e[0] === "lin").length ?? 0;
+  return { rs, m, priv, drive, frames, splashes, game };
+}
+
+function tsndRaceSounds(): void {
+  const yard = (id: string) => tsndTests.testTrack(id)!;
+  const inside = (t: tsndTrack.Track, kind: number) => t.surfaces.filter((f) => f.kind === kind);
+  // Dune Yard: down the middle through slot A's sand (across the road) at 300 u/s.
+  const dune = yard("dune-yard");
+  const sandA = inside(dune, tsndTrack.SURF_SAND)[0];
+  const d = tsndRace(dune);
+  d.drive(sandA.s0 - 200, sandA.s1 + 200, 0, 300);
+  const dIn = d.frames.filter((f) => f.s > sandA.s0 + 20 && f.s < sandA.s1 - 20);
+  const dOut = d.frames.filter((f) => f.s > sandA.s1 + 60);
+  check(
+    "theme sounds: RaceSounds on Dune Yard: driving through the sand (on the asphalt) makes the sand crackle, it fades out past it; no gravel, ford or oil voice is made",
+    d.priv.sand !== null && dIn.length > 10 && dIn.every((f) => f.sand > 0) && dOut.every((f) => f.sand === 0) && d.priv.gravel === null && d.priv.ford === null && d.priv.oil === null,
+    `sand gain in ${dIn.length ? Math.min(...dIn.map((f) => f.sand)).toFixed(3) : "-"}..${dIn.length ? Math.max(...dIn.map((f) => f.sand)).toFixed(3) : "-"}, past it ${dOut.length ? Math.max(...dOut.map((f) => f.sand)) : "-"}; voices: gravel ${d.priv.gravel ? "made" : "none"}, ford ${d.priv.ford ? "made" : "none"}, oil ${d.priv.oil ? "made" : "none"}`,
+  );
+  // Canopy Yard: through both fords (slot A and slot B) at 280: one ford voice, a splash at each, the wash in each.
+  const canopy = yard("canopy-yard");
+  const [fA, fB] = inside(canopy, tsndTrack.SURF_FORD);
+  const c = tsndRace(canopy);
+  c.drive(fA.s0 - 150, fA.s1 + 150, 0, 280);
+  const voiceA = c.priv.ford;
+  const afterA = c.splashes();
+  c.drive(fB.s0 - 150, fB.s1 + 150, 0, 280);
+  const inFord = c.frames.filter((f) => (f.s > fA.s0 + 10 && f.s < fA.s1 - 10) || (f.s > fB.s0 + 10 && f.s < fB.s1 - 10));
+  check(
+    "theme sounds: RaceSounds on Canopy Yard: through both fords at 280 u/s, one ford voice for the race, a splash on entering each (2), the wash in each; no gravel, sand or oil voice",
+    voiceA !== null && c.priv.ford === voiceA && afterA === 1 && c.splashes() === 2 && inFord.length > 10 && inFord.every((f) => f.wash > 0) && c.priv.gravel === null && c.priv.sand === null && c.priv.oil === null,
+    `splashes ${afterA} after the first ford, ${c.splashes()} after both; wash gain in the fords ${inFord.length ? Math.min(...inFord.map((f) => f.wash)).toFixed(3) : "-"}..; same voice ${c.priv.ford === voiceA}`,
+  );
+  // Block Yard: across slot A's oil sliding at 380 (sideways 90): the hiss; the oil on the verge? None there: oil lies on the asphalt.
+  const block = yard("block-yard");
+  const oilA = inside(block, tsndTrack.SURF_OIL)[0];
+  const b = tsndRace(block);
+  b.drive(oilA.s0 - 150, oilA.s1 + 150, 0, 380, 90);
+  const bIn = b.frames.filter((f) => f.s > oilA.s0 + 10 && f.s < oilA.s1 - 10);
+  const bOut = b.frames.filter((f) => f.s > oilA.s1 + 60);
+  check(
+    "theme sounds: RaceSounds on Block Yard: sliding across the oil makes the thin slick hiss, gone past it; no gravel, sand or ford voice",
+    b.priv.oil !== null && bIn.length > 5 && bIn.every((f) => f.oil > 0) && bOut.every((f) => f.oil === 0) && b.priv.gravel === null && b.priv.sand === null && b.priv.ford === null,
+    `oil gain in ${bIn.length ? Math.min(...bIn.map((f) => f.oil)).toFixed(3) : "-"}.., past it ${bOut.length ? Math.max(...bOut.map((f) => f.oil)) : "-"}`,
+  );
+  // Criterion 4: Rust Bowl (the scrapyard), a lap down the middle and a lap on the verge: gravel on the verge as before, never a theme voice.
+  const rust = tsndTracks.trackById("rust-bowl");
+  const r = tsndRace(rust);
+  r.drive(0, rust.length, 0, 330);
+  const midGravel = r.priv.gravel;
+  r.drive(0, rust.length, rust.def.halfWidth + 20, 330);
+  const verge = r.frames.slice(-200);
+  check(
+    "theme sounds: RaceSounds on Rust Bowl (scrapyard): a lap on the asphalt makes no surface voice, a lap on the verge the gravel; no sand, ford or oil voice ever",
+    midGravel === null && r.priv.gravel !== null && verge.every((f) => f.gravel > 0) && r.priv.sand === null && r.priv.ford === null && r.priv.oil === null,
+    `gravel after the asphalt lap ${midGravel ? "made" : "none"}, on the verge ${verge.length ? Math.min(...verge.map((f) => f.gravel)).toFixed(3) : "-"}; sand ${r.priv.sand ? "made" : "none"}, ford ${r.priv.ford ? "made" : "none"}, oil ${r.priv.oil ? "made" : "none"}`,
+  );
+  // Criterion 2: once every voice is made, more frames across the surfaces make no node or buffer (the update path); the race's end
+  // stops them all (one voice per kind is made again only in the next race).
+  const all = tsndRace(canopy);
+  all.drive(fA.s0 - 150, fA.s1 + 150, 0, 280);
+  all.drive(canopy.length * 0.4, canopy.length * 0.4 + 200, canopy.def.halfWidth + 20, 280); // the verge: the gravel
+  const made = all.m.made.length;
+  const bufs = all.m.buffers();
+  all.drive(fB.s0 - 150, fB.s1 + 150, 0, 280);
+  all.drive(canopy.length * 0.4, canopy.length * 0.4 + 300, canopy.def.halfWidth + 20, 280);
+  const madeLater = all.m.made.length;
+  all.game.phase = "results";
+  all.drive(0, 50, 0, 100);
+  check(
+    "theme sounds: RaceSounds makes nothing per frame once its voices exist (a second ford and more verge: no node, no buffer), and the race's end stops the theme voices with the gravel and the engine",
+    madeLater === made && all.m.buffers() === bufs && all.priv.ford === null && all.priv.gravel === null && all.priv.sand === null && all.priv.oil === null,
+    `nodes ${made} -> ${madeLater}, buffers ${bufs} -> ${all.m.buffers()}; after the race: ford ${all.priv.ford ? "kept" : "stopped"}, gravel ${all.priv.gravel ? "kept" : "stopped"}`,
+  );
+}
+
+function tsndUnchanged(): void {
+  // Criterion 1: the lookup is the physics' own (stepCar: const road = roadFor(track, q); surfaceAt(road, q.seg, q.s, q.lat)), and the
+  // gravel test is untouched (onGravel with the per-sample asphalt).
+  const sfxText = tsndRead("client/sfx.ts", "utf8");
+  const physText = tsndRead("shared/physics.ts", "utf8");
+  check(
+    "theme sounds: client/sfx.ts asks the physics' surface lookup (surfaceAt(roadFor(g.track, q), q.seg, q.s, q.lat), as stepCar's surfaceAt(road, q.seg, q.s, q.lat) with road = roadFor(track, q)) after the same queryTrackNear, and keeps onGravel(q.dist, halfOf(g.track, q))",
+    sfxText.includes("surfaceAt(roadFor(g.track, q), q.seg, q.s, q.lat)") && sfxText.includes("queryTrackNear(g.track, car.x, car.y, car.seg)") && sfxText.includes("onGravel(q.dist, halfOf(g.track, q))") &&
+      physText.includes("const road = roadFor(track, q);") && physText.includes("surfaceAt(road, q.seg, q.s, q.lat)"),
+    "source checked",
+  );
+  // Criterion 4: every track without theme surfaces (the scrapyard tracks among them: they may have none) sounds exactly as before
+  // THEME-SND: at every sample (s every 25, lat every 8 out to the walls) tyreSurface gives onGravel's answer.
+  const T = tsndTrack;
+  const all: tsndTrack.Track[] = [...tsndTracks.trackList().map((e) => tsndTracks.trackById(e.id)), ...tsndTests.TEST_TRACKS.map((d) => tsndTests.testTrack(d.id)!)];
+  const plain = all.filter((t) => t.sand.length + t.oil.length + t.fords.length === 0);
+  const scrap = all.filter((t) => tsndThemes.themeOf(t.def) === "scrapyard");
+  let points = 0, onOther = 0, gravel = 0;
+  const wrong: string[] = [];
+  for (const t of plain) {
+    for (let s = 0; s < t.length; s += 25) {
+      const p = T.pointAt(t, s);
+      for (let lat = -t.wall + 10; lat <= t.wall - 10; lat += 8) {
+        const x = p.x - Math.sin(p.h) * lat;
+        const y = p.y + Math.cos(p.h) * lat;
+        const q = T.queryTrackNear(t, x, y, p.seg);
+        const off = tsndLogic.onGravel(q.dist, T.halfOf(t, q));
+        const f = T.surfaceAt(T.roadFor(t, q), q.seg, q.s, q.lat);
+        const under = tsndLogic.tyreSurface(f === null ? 0 : f.kind, off);
+        points++;
+        if (f !== null) onOther++;
+        if (off) gravel++;
+        if (under !== (off ? "gravel" : "asphalt") && wrong.length < 5) wrong.push(`${t.def.id} s ${s} lat ${lat}: ${under}`);
+      }
+    }
+  }
+  check(
+    "theme sounds: no new sound where no theme surface lies: on every shipped and test track without one (every scrapyard track among them) the tyre sound at every sample is onGravel's, as before THEME-SND",
+    scrap.length > 0 && scrap.every((t) => plain.includes(t)) && wrong.length === 0 && points > 10000 && onOther > 0,
+    `${plain.length} tracks (${plain.map((t) => t.def.id).join(", ")}), ${scrap.length} scrapyard; ${points} samples, ${gravel} off the asphalt, ${onOther} on water, dirt or belts; ${wrong.join(" | ") || "none differs"}`,
+  );
+  // The theme yards: inside each theme surface the car hears that surface (its traction rectangle's middle, the physics' lookup).
+  const yards = tsndTests.THEME_YARDS.map((d) => tsndTests.testTrack(d.id)!);
+  const seen = yards.flatMap((t) =>
+    t.surfaces.filter((f) => f.kind === T.SURF_SAND || f.kind === T.SURF_OIL || f.kind === T.SURF_FORD).map((f) => {
+      const s = (f.s0 + f.s1) / 2, lat = (f.lat0 + f.lat1) / 2;
+      const p = T.pointAt(t, s);
+      const q = T.queryTrackNear(t, p.x - Math.sin(p.h) * lat, p.y + Math.cos(p.h) * lat, p.seg);
+      const g = T.surfaceAt(T.roadFor(t, q), q.seg, q.s, q.lat);
+      const under = tsndLogic.tyreSurface(g === null ? 0 : g.kind, tsndLogic.onGravel(q.dist, T.halfOf(t, q)));
+      const want = f.kind === T.SURF_SAND ? "sand" : f.kind === T.SURF_OIL ? "oil" : "ford";
+      return { ok: under === want, d: `${t.def.id} ${want}@${s.toFixed(0)}/${lat.toFixed(0)}: ${under}` };
+    }),
+  );
+  check(
+    "theme sounds: on Dune, Block, Canopy and Quay Yard the middle of every theme surface sounds as its kind (sand, oil, ford) through the physics' lookup",
+    seen.length === 8 && seen.every((x) => x.ok),
+    seen.map((x) => x.d).join(", "),
+  );
+  console.log(`  THEME-SND sim-test sections' runtime (tsndTargets .. tsndUnchanged): ${((performance.now() - tsndClock.t0) / 1000).toFixed(1)} s`);
+}
+
+for (const t of [tsndTargets, tsndSplash, tsndVoices, tsndRaceSounds, tsndUnchanged]) {
+  console.log(`\n# ${t.name}`);
+  try {
+    t();
+  } catch (e) {
+    check(`${t.name} threw`, false, String((e as Error).stack ?? e));
+  }
+}
+
 // ---- the finish grace scales with the lap (GRACE-1; ClickUp 123jpnbfkch, user 2026-11-23 after QA15) ----
 // shared/protocol.ts finishGraceMs: grace = max(FINISH_GRACE_MS (30 s), 0.75 x the winner's average lap: its race time
 // over the race's laps), rounded to the nearest whole tick, fixed at the winner's finish (server/room.ts, the first
