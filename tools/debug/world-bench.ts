@@ -6,9 +6,10 @@
 //   npx tsx tools/debug/world-bench.ts            five runs, metric A at 1280x720
 //   npx tsx tools/debug/world-bench.ts --runs 3
 //   npx tsx tools/debug/world-bench.ts --quick    one run: a look, no verdict
-//   npx tsx tools/debug/world-bench.ts --theme <name>   S7's theme (default desert)
+//   npx tsx tools/debug/world-bench.ts --theme <name>   S7's theme (default: the desert on Preview Yard, and on a theme's
+//                                                       own yard that yard's own theme)
 //   npx tsx tools/debug/world-bench.ts --yard <id>      S7 on a theme's own yard (dune-yard, block-yard, canopy-yard:
-//                                                       TH-LOOK-2) instead of Preview Yard; with --theme its own theme
+//                                                       TH-LOOK-2) instead of Preview Yard, in its own theme
 //   npx tsx tools/debug/world-bench.ts --session <name> the browser session's name (default world-bench-<pid>)
 //   npx tsx tools/debug/world-bench.ts --units    the bake units per tile alone (no browser, no lock)
 //
@@ -78,8 +79,19 @@ const QUICK = args.includes("--quick");
 const RUNS = QUICK ? 1 : option("--runs", 5);
 const BUDGET = 1.1; // S6 against S2
 const THEME_BUDGET = 1.05; // S7 in a theme against S7 on the yard's own look
-const THEME = args.includes("--theme") ? args[args.indexOf("--theme") + 1] : "desert";
 const YARD = args.includes("--yard") ? args[args.indexOf("--yard") + 1] : "preview-yard"; // S7's track
+// S7's theme: --theme's; without one the desert on Preview Yard (as ever), and on a theme's own yard that yard's own theme
+// (never another's by default: a verdict would be printed for a look the yard does not have). S7 runs on Preview Yard and
+// on the theme yards alone (client/bench.ts takes no other &track for it), and only in a theme there is.
+const THEME = await (async (): Promise<string> => {
+  const { THEME_YARDS } = await import("../../shared/testtracks");
+  const { isTheme, themeOf } = await import("../../shared/theme");
+  const own = THEME_YARDS.find((d) => d.id === YARD);
+  if (YARD !== "preview-yard" && !own) throw new Error(`--yard ${YARD}: S7 runs on preview-yard or on a theme's own yard (${THEME_YARDS.map((d) => d.id).join(", ")})`);
+  const theme = args.includes("--theme") ? args[args.indexOf("--theme") + 1] : own ? themeOf(own) : "desert";
+  if (!isTheme(theme)) throw new Error(`--theme ${theme}: no such theme`);
+  return theme;
+})();
 const ROOT = path.resolve(fileURLToPath(new URL("../..", import.meta.url)));
 const run = promisify(execFile);
 const VITE = path.join(ROOT, "node_modules", ".bin", "vite");

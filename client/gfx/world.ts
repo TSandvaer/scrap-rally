@@ -57,6 +57,8 @@
 import { MAX_PLAYERS } from "../../shared/protocol";
 import { BARREL_R, gapAt, gridSlot, halfOn, holeAt, pointAt, PRESS_DEPTH, PUDDLE_TRACTION_INSET, queryMain, queryRoads, queryTrack, TRUCK_BAND, TRUCK_CAB, TRUCK_HALF, wallAt, widenAt, type Gap, type Track, type Vec } from "../../shared/track";
 import type { CarView } from "../render";
+// (gfx/marshals.ts imports this file too. Neither reads the other's exports while it loads: STAND is read in layTown(), when a town is laid out.)
+import { STAND as MARSHAL_STAND } from "./marshals";
 import { BAYER4, PALETTE, type PaletteName } from "./palette";
 import { KEEP_OFF, sceneryFor, sceneryOf, type Scenery } from "./theme";
 
@@ -470,12 +472,11 @@ interface Town {
 }
 
 const LOT_W = 76, LOT_H = 60; // a lot, view pixels
-const HOUSE_MIN = 26; // a house is no smaller than this either way
+const HOUSE_MIN = 26; // a house that is cut back for room is cut no smaller than this either way (one that is not cut is 23 by 45 at the least: the right-hand house of two on a lot)
 const TOWN_REACH = 720; // houses stand as far as this round the track (view pixels): more than a view
 const TOWN_CLEAR = 13; // open paving between the barrier and the nearest house, world units ...
 const TOWN_PROP = 5; // ... and round a prop
-const MARSHAL_STAND = 11; // a flag marshal's middle, outside the barrier at the start line (gfx/marshals.ts STAND; that file imports this one)
-const MARSHAL_ROOM = 20; // ... and the open paving round it: the figure and its flag at ease
+const MARSHAL_ROOM = 20; // the open paving round a flag marshal (who stands gfx/marshals.ts STAND outside the barrier at the start line): the figure and its flag at ease
 const TOWN_CELL = 4; // the grid the layout is worked out on, view pixels
 const HOUSE_DROP = 6; // a house's shadow falls this many pixels right, and one more down
 // A roof's kinds (the low bits of a house's `roof`): what it is made of, and its shape.
@@ -528,7 +529,7 @@ function layTown(art: Art): Town {
   const wall = art.track.wall, half = TOWN_CELL * 0.75;
   for (let i = 0; i < n; i++) mark(ax[i], ay[i], ex[i], ey[i], inv[i], (wall + Math.max(0, wL0[i], wL1[i], wR0[i], wR1[i]) + BARRIER + TOWN_CLEAR) * ZOOM + half);
   for (const j of art.junk) mark(j.x, j.y, 0, 0, 0, j.r * 1.5 + TOWN_PROP * ZOOM + half);
-  // The two flag marshals at the start line stand on open paving (gfx/marshals.ts: MARSHAL_STAND outside each barrier there).
+  // The two flag marshals at the start line stand on open paving (gfx/marshals.ts: STAND outside each barrier there).
   const line = pointAt(art.track, 0);
   for (const side of [-1, 1]) {
     const lat = side * ((side < 0 ? art.track.wallL[0] : art.track.wallR[0]) + BARRIER + MARSHAL_STAND);
@@ -2057,14 +2058,17 @@ const MANHOLES = 104; // a cell of the grid the manhole covers lie on, view pixe
  * Manhole covers in the paving, on a grid of cells over the plane as the desert's dunes are (a
  * cell's hash says whether it holds one, and where): a round cover of cast iron, a dark rim, a
  * slot across it. On open paving alone, and whole or not at all: none under a roof, at the
- * wall's foot or over a gap's void. (A cover that touches the tile lies in the buffer whole,
- * its margin being wider than a cover: the tile next door comes to the same answer.)
+ * wall's foot or over a gap's void, and none within reach of a prop (the props are drawn after
+ * the ground, in yard(): a cover there would lie half under a crate, a car or a tree's crown).
+ * (A cover that touches the tile lies in the buffer whole, its margin being wider than a
+ * cover, and the props are the track's own list: the tile next door comes to the same answer.)
  */
 function manholes(): void {
   const art = job.art!, b = buffers();
   const { bx, by, voids } = job;
   const { idx, cls, dist, gap } = b;
   const clear = art.track.wall + BARRIER + 3;
+  const props = art.junk;
   for (let gy = Math.floor((by + PAD - 3) / MANHOLES), gy1 = Math.floor((by + PAD + TILE + 3) / MANHOLES); gy <= gy1; gy++) {
     for (let gx = Math.floor((bx + PAD - 3) / MANHOLES), gx1 = Math.floor((bx + PAD + TILE + 3) / MANHOLES); gx <= gx1; gx++) {
       let h = Math.imul(gx, 374761393) ^ Math.imul(gy, 668265263) ^ Math.imul(61, 1442695041);
@@ -2083,6 +2087,11 @@ function manholes(): void {
             break;
           }
         }
+      }
+      // A prop's reach, as yard() takes it (the piece and its shadow), and the cover's own radius more.
+      for (let q = 0; q < props.length && open; q++) {
+        const d = props[q], far = d.r * 1.5 + 6 + 4, dx = d.x - (cx + bx), dy = d.y - (cy + by);
+        if (dx * dx + dy * dy < far * far) open = false;
       }
       if (!open) continue;
       for (let j = -3; j <= 3; j++) {
