@@ -16,14 +16,21 @@ import {
   SoundTriggers,
   gravelTarget,
   onGravel,
+  FordSplash,
+  fordTarget,
+  oilTarget,
+  sandTarget,
+  tyreSurface,
   type EnginePreset,
   type EngineState,
   type SfxKind,
   type SoundView,
+  type SurfaceTarget,
   type Trigger,
+  type TyreSurface,
 } from "./soundlogic";
 import type { GameEvent } from "../shared/protocol";
-import { halfOf, queryTrackNear } from "../shared/track";
+import { halfOf, queryTrackNear, roadFor, surfaceAt } from "../shared/track";
 
 /** Peak level of each effect at gain 1, before the effects volume. */
 const LEVEL: Record<SfxKind, number> = {
@@ -182,11 +189,29 @@ export class SfxVoices {
     return new EngineVoice(this.ctx, this.out, this.noiseBuf, preset, this.curve);
   }
 
-  private grainBuf: AudioBuffer | null = null;
+  private readonly grainBufs = new Map<GrainDef, AudioBuffer>();
+  private readonly bubbleBufs = new Map<BubbleDef, AudioBuffer>();
 
   gravel(): GravelVoice {
-    this.grainBuf ??= grainBuffer(this.ctx);
-    return new GravelVoice(this.ctx, this.out, this.noiseBuf, this.grainBuf);
+    return this.crackle(GRAVEL);
+  }
+
+  /** A crackle voice of this tone (GRAVEL, SAND.*): its grains built once per context. */
+  crackle(def: CrackleDef): GravelVoice {
+    let buf = this.grainBufs.get(def.grains);
+    if (!buf) this.grainBufs.set(def.grains, (buf = grainBuffer(this.ctx, def.grains)));
+    return new GravelVoice(this.ctx, this.out, this.noiseBuf, buf, def);
+  }
+
+  /** A ford voice with this wash (WASH.*): its bubbles built once per context. */
+  ford(def: WashDef): FordVoice {
+    let buf = this.bubbleBufs.get(def.bubbles);
+    if (!buf) this.bubbleBufs.set(def.bubbles, (buf = bubbleBuffer(this.ctx, def.bubbles)));
+    return new FordVoice(this.ctx, this.out, this.noiseBuf, buf, def);
+  }
+
+  oil(): OilVoice {
+    return new OilVoice(this.ctx, this.out, this.noiseBuf);
   }
 }
 
@@ -620,15 +645,27 @@ export class EngineVoice {
   }
 }
 
+/** A crackle's grains (grainBuffer): `rate` a second at random times, each lenMin..+lenSpan s long, ampMin..+ampSpan strong, seeded. */
+export interface GrainDef {
+  rate: number;
+  lenMin: number;
+  lenSpan: number;
+  ampMin: number;
+  ampSpan: number;
+  decay: number; // how fast a grain dies over its length (e^-decay at its end)
+  seed: number;
+}
+
 /**
- * Gravel grains: 2 s of short decaying noise ticks at random times (~70 a second, random
- * strength and length), seeded so renders repeat. Built once per context.
+ * Grains: 2 s of short decaying noise ticks at random times (Poisson, `rate` a second, random
+ * strength and length), seeded so renders repeat. Built once per context and def. GRAVEL's grains
+ * are SND-2's buffer, sample for sample.
  */
-function grainBuffer(ctx: BaseAudioContext): AudioBuffer {
+function grainBuffer(ctx: BaseAudioContext, g: GrainDef): AudioBuffer {
   const sr = ctx.sampleRate;
   const buf = ctx.createBuffer(1, sr * 2, sr);
   const d = buf.getChannelData(0);
-  let x = 0x2545f491;
+  let x = g.seed;
   const rnd = () => {
     x ^= x << 13;
     x ^= x >>> 17;
@@ -636,18 +673,219 @@ function grainBuffer(ctx: BaseAudioContext): AudioBuffer {
     return (x >>> 0) / 0xffffffff;
   };
   for (let t = 0; t < d.length; ) {
-    t += Math.floor((-Math.log(1 - rnd() * 0.999) / 70) * sr); // Poisson, ~70 a second
-    const len = Math.floor((0.002 + rnd() * 0.006) * sr);
-    const amp = 0.3 + rnd() * 0.7;
-    for (let i = 0; i < len && t + i < d.length; i++) d[t + i] += amp * (rnd() * 2 - 1) * Math.exp((-4 * i) / len);
+    t += Math.floor((-Math.log(1 - rnd() * 0.999) / g.rate) * sr); // Poisson
+    const len = Math.floor((g.lenMin + rnd() * g.lenSpan) * sr);
+    const amp = g.ampMin + rnd() * g.ampSpan;
+    for (let i = 0; i < len && t + i < d.length; i++) d[t + i] += amp * (rnd() * 2 - 1) * Math.exp((-g.decay * i) / len);
   }
   return buf;
 }
 
 /**
- * The own car's tyres on gravel: crackling grains (played faster with speed: denser) through a
- * band-pass, over a gritty band of noise, under a low-pass that opens with speed. One persistent
- * voice like the engine; set() only moves parameters.
+ * A crackle voice's tone (GravelVoice): its grains through a band-pass, over a band of noise (the
+ * bed), under a low-pass that opens with speed (lp: base + open x speed), at `level`.
+ */
+export interface CrackleDef {
+  label: string;
+  grains: GrainDef;
+  grainBand: number;
+  grainQ: number;
+  bedBand: number;
+  bedQ: number;
+  bedLevel: number;
+  lp: readonly [base: number, open: number];
+  level: number;
+}
+
+/** The gravel off the asphalt (SND-2, approved 2026-11-18): exactly its numbers. */
+export const GRAVEL: CrackleDef = {
+  label: "Gravel",
+  grains: { rate: 70, lenMin: 0.002, lenSpan: 0.006, ampMin: 0.3, ampSpan: 0.7, decay: 4, seed: 0x2545f491 },
+  grainBand: 2300,
+  grainQ: 0.7,
+  bedBand: 650,
+  bedQ: 0.6,
+  bedLevel: 0.18,
+  lp: [1800, 4500],
+  level: 0.6,
+};
+
+/**
+ * Sand (THEME-SND): the gravel voice with other parameters, a softer, lower crackle than gravel.
+ * The race plays RACE_SAND, "fine" (the user's pick by ear, 2026-11-23); the other two stay on
+ * the sound board for auditions only:
+ * - fine: fine loose sand, many tiny soft grains blurring into a hiss over a low rush;
+ * - crunch: packed sand, a lower, rounder crackle, sparser than gravel's, little hiss;
+ * - dune: deep sand, mostly a low hushing whoosh with a muffled crunch in it.
+ */
+export type SandVariant = "fine" | "crunch" | "dune";
+export const SAND_VARIANTS: readonly SandVariant[] = ["fine", "crunch", "dune"];
+export const SAND: Readonly<Record<SandVariant, CrackleDef>> = {
+  fine: {
+    label: "Sand: fine",
+    grains: { rate: 260, lenMin: 0.0015, lenSpan: 0.004, ampMin: 0.15, ampSpan: 0.45, decay: 3, seed: 0x51a7d3c1 },
+    grainBand: 1500,
+    grainQ: 0.6,
+    bedBand: 420,
+    bedQ: 0.5,
+    bedLevel: 0.3,
+    lp: [1100, 2600],
+    level: 0.34,
+  },
+  crunch: {
+    label: "Sand: crunch",
+    grains: { rate: 95, lenMin: 0.003, lenSpan: 0.008, ampMin: 0.25, ampSpan: 0.6, decay: 5, seed: 0x7c3e9a15 },
+    grainBand: 1050,
+    grainQ: 0.8,
+    bedBand: 300,
+    bedQ: 0.6,
+    bedLevel: 0.2,
+    lp: [900, 2200],
+    level: 0.5,
+  },
+  dune: {
+    label: "Sand: dune",
+    grains: { rate: 150, lenMin: 0.004, lenSpan: 0.01, ampMin: 0.2, ampSpan: 0.5, decay: 3.5, seed: 0x3d9b21e7 },
+    grainBand: 800,
+    grainQ: 0.5,
+    bedBand: 260,
+    bedQ: 0.7,
+    bedLevel: 0.42,
+    lp: [650, 1500],
+    level: 0.36,
+  },
+};
+
+/** A wash's bubbles (bubbleBuffer): `rate` a second, each a sine blip whose pitch rises a little as it rings, seeded. */
+export interface BubbleDef {
+  rate: number;
+  hzMin: number;
+  hzSpan: number;
+  lenMin: number;
+  lenSpan: number;
+  rise: number; // the pitch rises by this fraction over a bubble's length
+  seed: number;
+}
+
+/**
+ * Bubbles: 2 s of short rising sine blips at random times (Poisson), random pitch, length and
+ * strength, seeded so renders repeat; water's plinks. Built once per context and def.
+ */
+function bubbleBuffer(ctx: BaseAudioContext, b: BubbleDef): AudioBuffer {
+  const sr = ctx.sampleRate;
+  const buf = ctx.createBuffer(1, sr * 2, sr);
+  const d = buf.getChannelData(0);
+  let x = b.seed;
+  const rnd = () => {
+    x ^= x << 13;
+    x ^= x >>> 17;
+    x ^= x << 5;
+    return (x >>> 0) / 0xffffffff;
+  };
+  for (let t = 0; t < d.length; ) {
+    t += Math.floor((-Math.log(1 - rnd() * 0.999) / b.rate) * sr);
+    const len = Math.floor((b.lenMin + rnd() * b.lenSpan) * sr);
+    const hz = b.hzMin + rnd() * b.hzSpan;
+    const amp = 0.25 + rnd() * 0.75;
+    let ph = 0;
+    for (let i = 0; i < len && t + i < d.length; i++) {
+      const k = i / len;
+      ph += (2 * Math.PI * hz * (1 + b.rise * k)) / sr;
+      d[t + i] += amp * Math.sin(ph) * Math.min(1, i / (0.0006 * sr)) * Math.exp(-4 * k);
+    }
+  }
+  return buf;
+}
+
+/**
+ * A ford's wash (FordVoice): noise through a band-pass that rises with speed, sloshing (a slow
+ * amplitude swing, faster with speed), bubbles played faster with speed, a low body of water, under
+ * a low-pass that opens with speed.
+ */
+export interface WashDef {
+  label: string;
+  band: readonly [slow: number, fast: number];
+  q: number;
+  wash: number;
+  slosh: number; // depth of the swing 0..1
+  sloshHz: readonly [slow: number, fast: number];
+  bubbles: BubbleDef;
+  bubbleLevel: number;
+  rumble: number; // the low-passed body of water
+  lp: readonly [base: number, open: number];
+  level: number;
+}
+
+/**
+ * The ford's wash (THEME-SND). The race plays RACE_WASH, "brook" (the user's pick by ear,
+ * 2026-11-23); the other two stay on the sound board for auditions only:
+ * - brook: a bright, bubbly wash, water churned round the wheels;
+ * - surge: a heavier, lower rush with a deep slosh, few bubbles: wading through;
+ * - spray: a hissing sheet of spray off the tyres over a light slosh.
+ */
+export type WashVariant = "brook" | "surge" | "spray";
+export const WASH_VARIANTS: readonly WashVariant[] = ["brook", "surge", "spray"];
+export const WASH: Readonly<Record<WashVariant, WashDef>> = {
+  brook: {
+    label: "Ford: brook",
+    band: [650, 1300],
+    q: 0.9,
+    wash: 0.55,
+    slosh: 0.5,
+    sloshHz: [2.2, 5.5],
+    bubbles: { rate: 55, hzMin: 450, hzSpan: 1100, lenMin: 0.008, lenSpan: 0.02, rise: 0.35, seed: 0x1b873593 },
+    bubbleLevel: 0.5,
+    rumble: 0.35,
+    lp: [1600, 3200],
+    level: 0.28,
+  },
+  surge: {
+    label: "Ford: surge",
+    band: [380, 760],
+    q: 0.7,
+    wash: 0.8,
+    slosh: 0.75,
+    sloshHz: [1.3, 3.2],
+    bubbles: { rate: 22, hzMin: 300, hzSpan: 600, lenMin: 0.012, lenSpan: 0.025, rise: 0.25, seed: 0x6a09e667 },
+    bubbleLevel: 0.3,
+    rumble: 0.6,
+    lp: [1000, 2200],
+    level: 0.33,
+  },
+  spray: {
+    label: "Ford: spray",
+    band: [1500, 3000],
+    q: 0.6,
+    wash: 0.5,
+    slosh: 0.3,
+    sloshHz: [3, 7],
+    bubbles: { rate: 40, hzMin: 700, hzSpan: 1500, lenMin: 0.005, lenSpan: 0.012, rise: 0.4, seed: 0x3c6ef372 },
+    bubbleLevel: 0.3,
+    rumble: 0.2,
+    lp: [2600, 4500],
+    level: 0.24,
+  },
+};
+
+/** What the race plays on sand and in a ford (the user's picks by ear, 2026-11-23). */
+export const RACE_SAND: SandVariant = "fine";
+export const RACE_WASH: WashVariant = "brook";
+
+/** Stop a persistent voice: fade its gain out, stop its sources, disconnect everything when the first has ended. */
+function stopVoice(c: BaseAudioContext, g: GainNode, sources: readonly AudioScheduledSourceNode[], nodes: readonly AudioNode[], t = c.currentTime): void {
+  g.gain.cancelScheduledValues(t);
+  g.gain.setTargetAtTime(0, t, 0.03);
+  for (const s of sources) s.stop(t + 0.25);
+  sources[0].addEventListener("ended", () => {
+    for (const s of sources) s.disconnect();
+    for (const n of nodes) n.disconnect();
+  });
+}
+
+/**
+ * The own car's tyres on gravel (GRAVEL) or sand (SAND, THEME-SND): crackling grains (played
+ * faster with speed: denser) through a band-pass, over a band of noise, under a low-pass that opens
+ * with speed. One persistent voice like the engine; set() only moves parameters.
  */
 export class GravelVoice {
   private readonly grains: AudioBufferSourceNode;
@@ -662,6 +900,7 @@ export class GravelVoice {
     out: AudioNode,
     noise: AudioBuffer,
     grainBuf: AudioBuffer,
+    readonly def: CrackleDef = GRAVEL,
   ) {
     const t = c.currentTime;
     const filter = (type: BiquadFilterType, hz: number, q: number) => {
@@ -682,10 +921,10 @@ export class GravelVoice {
     const bed = c.createBufferSource();
     bed.buffer = noise;
     bed.loop = true;
-    const grainBand = filter("bandpass", 2300, 0.7);
+    const grainBand = filter("bandpass", def.grainBand, def.grainQ);
     const grainLevel = gain(1);
-    const bedBand = filter("bandpass", 650, 0.6);
-    const bedLevel = gain(0.18);
+    const bedBand = filter("bandpass", def.bedBand, def.bedQ);
+    const bedLevel = gain(def.bedLevel);
     this.lp = filter("lowpass", 2500, 0.7);
     this.g = gain(0);
     this.grains.connect(grainBand).connect(grainLevel).connect(this.lp);
@@ -699,25 +938,218 @@ export class GravelVoice {
   /** gain 0..1 (0 = silent), density = grain rate (playback rate), open 0..1 (speed: brighter). */
   set(gain: number, density: number, open: number, t = this.c.currentTime): void {
     if (this.stopped) return;
+    const d = this.def;
     this.grains.playbackRate.setTargetAtTime(density, t, 0.08);
-    this.lp.frequency.setTargetAtTime(1800 + 4500 * open, t, 0.08);
-    this.g.gain.setTargetAtTime(gain * GRAVEL_LEVEL, t, 0.04); // fades in and out at the asphalt edge
+    this.lp.frequency.setTargetAtTime(d.lp[0] + d.lp[1] * open, t, 0.08);
+    this.g.gain.setTargetAtTime(gain * d.level, t, 0.04); // fades in and out at the asphalt edge
   }
 
   stop(t = this.c.currentTime): void {
     if (this.stopped) return;
     this.stopped = true;
-    this.g.gain.cancelScheduledValues(t);
-    this.g.gain.setTargetAtTime(0, t, 0.03);
-    for (const s of this.sources) s.stop(t + 0.25);
-    this.grains.addEventListener("ended", () => {
-      for (const s of this.sources) s.disconnect();
-      for (const n of this.nodes) n.disconnect();
-    });
+    stopVoice(this.c, this.g, this.sources, this.nodes, t);
   }
 }
 
-const GRAVEL_LEVEL = 0.6;
+// The ford's splash (FordVoice.splash), the same for every wash: a burst of water noise through a
+// band-pass falling from bright to low, a low whump of the car hitting the water, and droplets
+// (the wash's bubbles, faster) raining back after it. strength 0.35..1 (soundlogic FordSplash).
+const SPLASH_LEVEL = 0.22;
+const SPLASH_BAND: readonly [from: number, to: number] = [3200, 600];
+const SPLASH_BAND_S = 0.32;
+const WHUMP_HZ: readonly [from: number, to: number] = [125, 48];
+
+/**
+ * The own car in a ford (THEME-SND): the wash while it rolls through (set(), WashDef), and a
+ * splash on entry (splash()). One persistent voice like the engine: set() and splash() only move
+ * parameters of the nodes built here (the splash is envelopes on its own gains), nothing is made
+ * per frame or per splash.
+ */
+export class FordVoice {
+  private readonly washBand: BiquadFilterNode;
+  private readonly sloshLfo: OscillatorNode;
+  private readonly sloshDepth: GainNode;
+  private readonly bubbles: AudioBufferSourceNode;
+  private readonly lp: BiquadFilterNode;
+  private readonly g: GainNode;
+  private readonly splashBand: BiquadFilterNode;
+  private readonly splashEnv: GainNode;
+  private readonly whump: OscillatorNode;
+  private readonly whumpEnv: GainNode;
+  private readonly dropEnv: GainNode;
+  private readonly sources: AudioScheduledSourceNode[];
+  private readonly nodes: AudioNode[];
+  private stopped = false;
+
+  constructor(
+    private readonly c: BaseAudioContext,
+    out: AudioNode,
+    noise: AudioBuffer,
+    bubbleBuf: AudioBuffer,
+    readonly def: WashDef,
+  ) {
+    const t = c.currentTime;
+    const filter = (type: BiquadFilterType, hz: number, q: number) => {
+      const f = c.createBiquadFilter();
+      f.type = type;
+      f.frequency.value = hz;
+      f.Q.value = q;
+      return f;
+    };
+    const gain = (v: number) => {
+      const g = c.createGain();
+      g.gain.value = v;
+      return g;
+    };
+    const loop = (buf: AudioBuffer) => {
+      const s = c.createBufferSource();
+      s.buffer = buf;
+      s.loop = true;
+      return s;
+    };
+    const water = loop(noise);
+    this.bubbles = loop(bubbleBuf);
+    const drops = loop(bubbleBuf);
+    // The wash: noise -> band -> slosh (a gain swinging 1 - depth .. 1 with the LFO) -> lp; bubbles and a low body beside it.
+    this.washBand = filter("bandpass", def.band[0], def.q);
+    const washLevel = gain(def.wash);
+    const slosh = gain(1 - def.slosh / 2);
+    this.sloshDepth = gain(def.slosh / 2);
+    this.sloshLfo = c.createOscillator();
+    this.sloshLfo.type = "sine";
+    this.sloshLfo.frequency.value = def.sloshHz[0];
+    const bubbleLevel = gain(def.bubbleLevel);
+    const body = filter("lowpass", 220, 0.7);
+    const bodyLevel = gain(def.rumble);
+    this.lp = filter("lowpass", def.lp[0], 0.7);
+    this.g = gain(0);
+    water.connect(this.washBand).connect(washLevel).connect(slosh).connect(this.lp);
+    this.sloshLfo.connect(this.sloshDepth).connect(slosh.gain);
+    this.bubbles.connect(bubbleLevel).connect(this.lp);
+    water.connect(body).connect(bodyLevel).connect(this.lp);
+    this.lp.connect(this.g).connect(out);
+    // The splash: envelopes at 0 until splash() opens them.
+    const splashOut = gain(SPLASH_LEVEL);
+    this.splashBand = filter("bandpass", SPLASH_BAND[0], 0.8);
+    this.splashEnv = gain(0);
+    this.whump = c.createOscillator();
+    this.whump.type = "sine";
+    this.whump.frequency.value = WHUMP_HZ[0];
+    this.whumpEnv = gain(0);
+    this.dropEnv = gain(0);
+    drops.playbackRate.value = 1.6;
+    water.connect(this.splashBand).connect(this.splashEnv).connect(splashOut);
+    this.whump.connect(this.whumpEnv).connect(splashOut);
+    drops.connect(this.dropEnv).connect(splashOut);
+    splashOut.connect(out);
+    this.sources = [water, this.bubbles, drops, this.sloshLfo, this.whump];
+    this.nodes = [this.washBand, washLevel, slosh, this.sloshDepth, bubbleLevel, body, bodyLevel, this.lp, this.g, splashOut, this.splashBand, this.splashEnv, this.whumpEnv, this.dropEnv];
+    water.start(t);
+    this.bubbles.start(t);
+    drops.start(t, 0.9); // another stretch of the bubbles than the wash's
+    this.sloshLfo.start(t);
+    this.whump.start(t);
+  }
+
+  /** The wash: gain 0..1 (0 = silent), density = the slosh and bubble rate, open 0..1 (speed: brighter, higher). */
+  set(gain: number, density: number, open: number, t = this.c.currentTime): void {
+    if (this.stopped) return;
+    const d = this.def;
+    this.washBand.frequency.setTargetAtTime(d.band[0] + (d.band[1] - d.band[0]) * open, t, 0.1);
+    this.sloshLfo.frequency.setTargetAtTime(d.sloshHz[0] + (d.sloshHz[1] - d.sloshHz[0]) * open, t, 0.2);
+    this.bubbles.playbackRate.setTargetAtTime(density, t, 0.1);
+    this.lp.frequency.setTargetAtTime(d.lp[0] + d.lp[1] * open, t, 0.1);
+    this.g.gain.setTargetAtTime(gain * d.level, t, gain > 0 ? 0.06 : 0.12); // water closes over more slowly than it opens
+  }
+
+  /** The entry splash at audio time t, strength 0.35..1 (soundlogic FordSplash). */
+  splash(strength: number, t = this.c.currentTime): void {
+    if (this.stopped || !(strength > 0)) return;
+    const s = Math.min(1, strength);
+    const band = this.splashBand.frequency;
+    band.cancelScheduledValues(t);
+    band.setValueAtTime(SPLASH_BAND[0] * (0.8 + 0.2 * s), t);
+    band.exponentialRampToValueAtTime(SPLASH_BAND[1], t + SPLASH_BAND_S * (0.7 + 0.5 * s));
+    const env = (p: AudioParam, peak: number, attack: number, hold: number, tau: number) => {
+      p.cancelScheduledValues(t);
+      p.setValueAtTime(0, t);
+      p.linearRampToValueAtTime(peak, t + attack);
+      p.setTargetAtTime(0, t + attack + hold, tau);
+    };
+    env(this.splashEnv.gain, s, 0.006, 0.02 + 0.04 * s, 0.07 + 0.12 * s);
+    env(this.whumpEnv.gain, 0.55 * s, 0.004, 0.01, 0.05 + 0.04 * s);
+    env(this.dropEnv.gain, 0.9 * s, 0.05, 0.05 + 0.1 * s, 0.18 + 0.15 * s);
+    const hz = this.whump.frequency;
+    hz.cancelScheduledValues(t);
+    hz.setValueAtTime(WHUMP_HZ[0], t);
+    hz.exponentialRampToValueAtTime(WHUMP_HZ[1], t + 0.16);
+  }
+
+  stop(t = this.c.currentTime): void {
+    if (this.stopped) return;
+    this.stopped = true;
+    for (const p of [this.splashEnv.gain, this.whumpEnv.gain, this.dropEnv.gain]) {
+      p.cancelScheduledValues(t);
+      p.setTargetAtTime(0, t, 0.03);
+    }
+    stopVoice(this.c, this.g, this.sources, this.nodes, t);
+  }
+}
+
+const OIL_LEVEL = 0.065;
+
+/**
+ * The own car on an oil slick (THEME-SND): the gravel crackle drops out on the slick (there is no
+ * asphalt tyre sound in the game to drop: on the tarmac only the engine is heard) and this thin hiss
+ * of tyres sliding on the film plays instead (the user's pick by ear over nothing, 2026-11-23): noise
+ * through a high-pass and a band-pass that rises with the slide. One persistent voice; set() only
+ * moves parameters.
+ */
+export class OilVoice {
+  private readonly band: BiquadFilterNode;
+  private readonly g: GainNode;
+  private readonly sources: AudioScheduledSourceNode[];
+  private readonly nodes: AudioNode[];
+  private stopped = false;
+
+  constructor(
+    private readonly c: BaseAudioContext,
+    out: AudioNode,
+    noise: AudioBuffer,
+  ) {
+    const t = c.currentTime;
+    const src = c.createBufferSource();
+    src.buffer = noise;
+    src.loop = true;
+    const hp = c.createBiquadFilter();
+    hp.type = "highpass";
+    hp.frequency.value = 1800;
+    hp.Q.value = 0.7;
+    this.band = c.createBiquadFilter();
+    this.band.type = "bandpass";
+    this.band.frequency.value = 3600;
+    this.band.Q.value = 0.9;
+    this.g = c.createGain();
+    this.g.gain.value = 0;
+    src.connect(hp).connect(this.band).connect(this.g).connect(out);
+    this.sources = [src];
+    this.nodes = [hp, this.band, this.g];
+    src.start(t, 0.37); // another stretch of the noise than the engine's and the gravel's
+  }
+
+  /** gain 0..1 (0 = silent), open 0..1 (the slide: higher and brighter). */
+  set(gain: number, open: number, t = this.c.currentTime): void {
+    if (this.stopped) return;
+    this.band.frequency.setTargetAtTime(3600 + 3600 * open, t, 0.08);
+    this.g.gain.setTargetAtTime(gain * OIL_LEVEL, t, 0.05);
+  }
+
+  stop(t = this.c.currentTime): void {
+    if (this.stopped) return;
+    this.stopped = true;
+    stopVoice(this.c, this.g, this.sources, this.nodes, t);
+  }
+}
 
 export interface TriggerLogEntry {
   kind: SfxKind;
@@ -746,6 +1178,14 @@ export class RaceSounds {
   private voices: SfxVoices | null = null;
   private engine: EngineVoice | null = null;
   private gravel: GravelVoice | null = null;
+  // THEME-SND: one voice per theme surface kind at most, and the frame loop's reused targets.
+  private sand: GravelVoice | null = null;
+  private ford: FordVoice | null = null;
+  private oil: OilVoice | null = null;
+  private readonly fordSplash = new FordSplash();
+  private readonly sandTarget: SurfaceTarget = { on: false, gain: 0, density: 0, open: 0 };
+  private readonly washTarget: SurfaceTarget = { on: false, gain: 0, density: 0, open: 0 };
+  private readonly oilTarget: SurfaceTarget = { on: false, gain: 0, density: 0, open: 0 };
   private readonly carState: EngineState = { phase: "", hasCar: true, connected: true, wreck: 0, fall: 0, air: 0, finished: false, speed: 0, topSpeed: 1, throttle: 0 };
   private readonly caps = new SfxCaps();
   private readonly view: SoundView = { you: "", phase: "", raceStart: 0, phaseEnds: 0, serverNow: 0, hasClock: false, snapTick: 0, own: [], snap: null };
@@ -828,14 +1268,48 @@ export class RaceSounds {
     const car = g.car!;
     const q = queryTrackNear(g.track, car.x, car.y, car.seg);
     const off = onGravel(q.dist, halfOf(g.track, q)); // the per-sample asphalt (M4-SURF part 2: a split's widened road)
-    const target = gravelTarget(st, off);
-    if (!this.gravel) {
-      if (!target.on) return;
-      const sv = this.voicesNow();
-      if (!sv) return;
-      this.gravel = sv.gravel();
+    // THEME-SND: the surface under the car's centre, the physics' own lookup (stepCar); a theme surface replaces the gravel.
+    const surf = surfaceAt(roadFor(g.track, q), q.seg, q.s, q.lat);
+    const under = tyreSurface(surf === null ? 0 : surf.kind, off);
+    const target = gravelTarget(st, under === "gravel");
+    if (!this.gravel && target.on) this.gravel = this.voicesNow()?.gravel() ?? null;
+    this.gravel?.set(target.gain, target.density, Math.min(1, st.speed / Math.max(1, st.topSpeed)));
+    this.updateThemeSurfaces(st, under, Math.abs(car.vy * Math.cos(car.h) - car.vx * Math.sin(car.h)));
+  }
+
+  /**
+   * THEME-SND, the theme surfaces' own voices (one per kind, made the first time it sounds, kept to
+   * the race's end): sand's crackle, the ford's splash and wash, oil's hiss; slip = the car's sideways speed.
+   */
+  private updateThemeSurfaces(st: EngineState, under: TyreSurface, slip: number): void {
+    const sand = sandTarget(st, under === "sand", this.sandTarget);
+    if (!this.sand && sand.on) this.sand = this.voicesNow()?.crackle(SAND[RACE_SAND]) ?? null;
+    this.sand?.set(sand.gain, sand.density, sand.open);
+
+    const inFord = under === "ford";
+    const splash = this.fordSplash.update(st, inFord, performance.now());
+    const wash = fordTarget(st, inFord, this.washTarget);
+    if (!this.ford && (wash.on || splash > 0)) this.ford = this.voicesNow()?.ford(WASH[RACE_WASH]) ?? null;
+    if (this.ford) {
+      this.ford.set(wash.gain, wash.density, wash.open);
+      if (splash > 0) this.ford.splash(splash);
     }
-    this.gravel.set(target.gain, target.density, Math.min(1, st.speed / Math.max(1, st.topSpeed)));
+
+    const oil = oilTarget(st, under === "oil", slip, this.oilTarget);
+    if (!this.oil && oil.on) this.oil = this.voicesNow()?.oil() ?? null;
+    this.oil?.set(oil.gain, oil.open);
+  }
+
+  private stopSurfaces(): void {
+    this.gravel?.stop();
+    this.gravel = null;
+    this.sand?.stop();
+    this.sand = null;
+    this.ford?.stop();
+    this.ford = null;
+    this.oil?.stop();
+    this.oil = null;
+    this.fordSplash.reset();
   }
 
   /** Where another car's sound is: its own x/y, else the car as drawn now (events). */
@@ -852,8 +1326,7 @@ export class RaceSounds {
     if (!inRace) {
       this.engine?.stop();
       this.engine = null;
-      this.gravel?.stop();
-      this.gravel = null;
+      this.stopSurfaces();
       return;
     }
     if (!audible) return; // the context is suspended: nothing moves
