@@ -13462,6 +13462,8 @@ import { unionProbe as brUnion } from "../tools/debug/branch-yard";
 const brClock = { t0: 0 };
 const brYard = () => testTrack(BRANCH_YARD.id)!;
 const brShippedIds = ["rust-bowl", "crusher-run", "overpass-knot", "slag-harbour", "breakers-mile"]; // M4-TRACKS added the last two
+/** BR-TRACKS: the shipped tracks without a shortcut (Rust Bowl, Crusher Run, Overpass Knot; Slag Harbour and Breaker's Mile have one each). */
+const brPlainShippedIds = brShippedIds.filter((id) => trackById(id).branches.length === 0);
 /** Branch Yard's three branches as declared: the dirt cut, the jump cut, the narrow cut. */
 const brDefs = () => BRANCH_YARD.features!.filter((f): f is brT.Branch => f.k === "branch");
 /** Branch Yard's loop with these branches and main-road features (and its own recovery points, or these). */
@@ -13473,10 +13475,10 @@ const brF = (v: number) => v.toFixed(1);
 function brTypes(): void {
   brClock.t0 = performance.now();
   // Criterion 1: the types. Every track without a branch: none, no mouthAt, road 0 (shipped and test tracks).
-  const plain = [...brShippedIds.map((id) => trackById(id)), ...TEST_TRACKS.filter((d) => d.id !== BRANCH_YARD.id).map((d) => testTrack(d.id)!)];
+  const plain = [...brPlainShippedIds.map((id) => trackById(id)), ...TEST_TRACKS.filter((d) => d.id !== BRANCH_YARD.id).map((d) => testTrack(d.id)!)];
   const plainErrs = plain.flatMap((t) => validateTrack(t).map((e) => `${t.def.id}: ${e}`));
   check(
-    "branch types: every track without a branch (the five shipped ones, Slag Harbour and Breaker's Mile included, and the other test tracks) has branches [], mouthAt [] and roadNo 0, its queries road 0, and validateTrack (with the branch checks) accepts it",
+    "branch types: every track without a branch (the shipped tracks without a shortcut: Rust Bowl, Crusher Run, Overpass Knot; and the other test tracks) has branches [], mouthAt [] and roadNo 0, its queries road 0, and validateTrack (with the branch checks) accepts it",
     plain.every((t) => t.branches.length === 0 && t.mouthAt.length === 0 && t.roadNo === 0 && queryTrack(t, t.pts[5].x + 3, t.pts[5].y).road === 0) &&
       plainErrs.length === 0 && brShippedIds.every((id) => trackList().some((e) => e.id === id)),
     `${plain.map((t) => t.def.id).join(", ")}${plainErrs.length ? `; ${plainErrs.join(" | ")}` : ""}`,
@@ -13637,7 +13639,7 @@ function brMaps(): void {
   );
   // queryRoads without branches is today's query exactly.
   let same = 0, differ = 0;
-  for (const id of brShippedIds) {
+  for (const id of brPlainShippedIds) {
     const s = trackById(id);
     for (let i = 0; i < s.pts.length; i += 3) {
       const x = s.pts[i].x + 37.3, y = s.pts[i].y - 21.1;
@@ -13647,7 +13649,7 @@ function brMaps(): void {
       else differ++;
     }
   }
-  check("branch queryRoads: on a track without branches it is queryTrackNear (with a hint) and queryTrack (without) exactly", differ === 0 && same > 0, `${same} points the same, ${differ} differ`);
+  check("branch queryRoads: on a track without branches (the shipped tracks without a shortcut: Rust Bowl, Crusher Run, Overpass Knot) it is queryTrackNear (with a hint) and queryTrack (without) exactly", differ === 0 && same > 0, `${same} points the same, ${differ} differ`);
   // On Branch Yard: without a hint the nearer road; with a hint on either road near a mouth (the branch's
   // segment, or the main road's beside it) the same road and distance: physics and the bake agree.
   let pts = 0, agree = 0, nearest = 0;
@@ -14946,7 +14948,7 @@ function thShipped(): void {
   const branch = ["built", "queries", "branches"].map((p) => `SAME  branch-yard ${p}`);
   const yards = THEME_YARDS.flatMap((d) => ["built", "queries", "features"].map((p) => `${d.id} ${p}`));
   check(
-    "theme shipped: schema-hash --check: every part of the five shipped tracks (Breaker's Mile desert and Slag Harbour city now) and of Branch Yard SAME; the three yards hashed on lines of their own (built, queries, features), none DIFF or GONE",
+    "theme shipped: schema-hash --check: every part of the five shipped tracks (Breaker's Mile desert now, Slag Harbour theme-less until its harbour theme) and of Branch Yard SAME; the three yards hashed on lines of their own (built, queries, features), none DIFF or GONE",
     ok && [...shipped, ...branch].every((l) => lines.includes(l)) && yards.every((y) => lines.some((l) => l.endsWith(` ${y}`) && (l.startsWith("SAME") || l.startsWith("NEW ")))) && !lines.some((l) => /^(DIFF|GONE)/.test(l)),
     lines.filter((l) => !l.startsWith("SAME")).join("; ") || `${lines.length} parts SAME`,
   );
@@ -15016,7 +15018,7 @@ function bpQuery(): void {
   // Without branches queryTrackNear is the window round the hint, as before (byte for byte: schema-hash, bpShipped);
   // queryMain (the bots' main-road query) is the same there.
   let same = 0, differ = 0;
-  for (const id of brShippedIds) {
+  for (const id of brPlainShippedIds) {
     const s = trackById(id);
     for (let i = 0; i < s.pts.length; i += 2) {
       for (const [dx, dy] of [[31.7, -12.2], [-90.1, 44.3], [3.3, 170.9]]) {
@@ -15029,7 +15031,7 @@ function bpQuery(): void {
       }
     }
   }
-  check("branch query: on the shipped tracks queryTrackNear and queryMain give the same query (road 0) at every probe", differ === 0 && same > 1000, `${same} same, ${differ} differ`);
+  check("branch query: on the shipped tracks without a shortcut (Rust Bowl, Crusher Run, Overpass Knot) queryTrackNear and queryMain give the same query (road 0) at every probe", differ === 0 && same > 1000, `${same} same, ${differ} differ`);
   // On Branch Yard: the hint's road, its window clamped on a branch; the other road in a mouth; a tie to the
   // hint's road; queryRoads with a hint is queryTrackNear exactly.
   const b = t.branches[1], r = b.road, m = bpT.segCount(r), fg = b.forkGore!;
@@ -15929,9 +15931,9 @@ function bbRing(): void {
   // The ring of a track without branches is a replica: its arrays the track's, and a bot driving on it drives as on the track.
   const rows: string[] = [];
   let allSame = true;
-  const ids = [...brShippedIds, ...BB_TEST_TRACKS.map((d) => d.id).filter((id) => bbTestTrack(id)!.branches.length === 0)];
+  const ids = [...brPlainShippedIds, ...BB_TEST_TRACKS.map((d) => d.id).filter((id) => bbTestTrack(id)!.branches.length === 0)];
   for (const id of ids) {
-    const tr = brShippedIds.includes(id) ? bbTrackById(id) : bbTestTrack(id)!;
+    const tr = brPlainShippedIds.includes(id) ? bbTrackById(id) : bbTestTrack(id)!;
     const ring = bbD.routeOf(tr, 0).ring;
     const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
     const arrays = same(ring.pts, tr.pts) && same(ring.cum, tr.cum) && same(ring.halfL, tr.halfL) && same(ring.halfR, tr.halfR) && same(ring.wallL, tr.wallL) && same(ring.wallR, tr.wallR) &&
@@ -15958,7 +15960,7 @@ function bbRing(): void {
     rows.push(`${id} ${arrays ? "arrays same" : "ARRAYS DIFFER"}, ${drv ? "drives the same" : "DRIVES DIFFERENTLY"}`);
   }
   check(
-    "branch bots ring: on every shipped track and every test track without branches the ring of route 0 is a replica (centreline, walls, every feature list and the look-ahead start indices the bots read, by track.ts' rules) and a Hard bot with mistakes on drives on it tick for tick as on the track (60 s)",
+    "branch bots ring: on every shipped track without a shortcut (Rust Bowl, Crusher Run, Overpass Knot) and every test track without branches the ring of route 0 is a replica (centreline, walls, every feature list and the look-ahead start indices the bots read, by track.ts' rules) and a Hard bot with mistakes on drives on it tick for tick as on the track (60 s)",
     allSame && rows.length >= 9,
     rows.join("; "),
   );
@@ -16199,7 +16201,7 @@ function bbShipped(): void {
   // Criterion 3: on the shipped tracks (no branches) no route is ever made: the bots' plan stays unset through a race
   // (botControls takes today's path; byte-identity: hard golden, surf shipped, hard2 identity and branch shipped above).
   const plans: string[] = [];
-  for (const id of brShippedIds) {
+  for (const id of brPlainShippedIds) {
     const sim = new Sim(1);
     const host = sim.add("Host");
     if (id !== sim.room.trackId && sim.room.setTrack(host, id)) throw new Error(id);
@@ -16209,8 +16211,8 @@ function bbShipped(): void {
     plans.push(`${id}: ${bots.map((b) => b.bot!.mem.plan).join("/")}`);
   }
   check(
-    "branch bots shipped: on the five shipped tracks the bots never make a route (plan unset after 20 s of racing): botControls drives them on the track itself, today's path",
-    plans.every((p) => p.endsWith(": -1/-1/-1")) && plans.length === 5,
+    "branch bots shipped: on the shipped tracks without a shortcut (Rust Bowl, Crusher Run, Overpass Knot) the bots never make a route (plan unset after 20 s of racing): botControls drives them on the track itself, today's path",
+    plans.every((p) => p.endsWith(": -1/-1/-1")) && plans.length === 3,
     plans.join("; "),
   );
   console.log(`  BR-BOTS sim-test sections' runtime (bbPlan .. bbShipped): ${((performance.now() - bbClock.t0) / 1000).toFixed(1)} s`);
@@ -16568,6 +16570,160 @@ function tsCpu(): void {
 }
 
 for (const t of [tsModels, tsVerge, tsRules, tsBots, tsParity, tsCpu]) {
+  console.log(`\n# ${t.name}`);
+  try {
+    t();
+  } catch (e) {
+    check(`${t.name} threw`, false, String((e as Error).stack ?? e));
+  }
+}
+
+// ---- a shortcut each on Slag Harbour and Breaker's Mile (BR-TRACKS, PLAN-BRANCH.md 3, user decisions 1-3 and 6; ClickUp 123jpnbfghe, 2026-11-22) ----
+// This section's imports (hoisted like the ones at the top).
+import { BR_TRACK_IDS as btIds, fallCost as btFallCost, gainRows as btGainRows, hazardClearance as btClearance } from "../tools/debug/br-tracks";
+import { densityOf as btDensityOf, raceSet as btRaceSet } from "../tools/debug/track-density";
+import { BOT_LANES as BT_LANES, routePlan as btRoutePlan } from "../shared/botdrive";
+import { CAR_TYPES as BT_CAR_TYPES } from "../shared/cars";
+import { statsFor as btStatsFor } from "../shared/shop";
+import { MOUTH_CLEAR as BT_MOUTH_CLEAR, recoveryFor as btRecoveryFor, validateTrack as btValidateTrack } from "../shared/track";
+import { trackById as btTrackById } from "../shared/tracks";
+
+const btClock = { t0: 0 };
+const btF = (v: number) => v.toFixed(2);
+
+function btShape(): void {
+  btClock.t0 = performance.now();
+  // Criteria 1 and 2: one shortcut each, a narrow one with a pit on Slag Harbour and a jump on Breaker's Mile (user decision 1);
+  // no wider than its main road (a wider one bakes its gap too narrow, client/gfx/world.ts); its hazards > 240 from the other road
+  // (client/gfx/world.ts predict(): 2 x wall); no gap over the main road; validateTrack passes.
+  const sh = btTrackById("slag-harbour"), bm = btTrackById("breakers-mile");
+  const rows: string[] = [];
+  let ok = sh.branches.length === 1 && bm.branches.length === 1;
+  for (const t of [sh, bm]) {
+    const b = t.branches[0], r = b.road;
+    const clear = btClearance(t);
+    const errs = btValidateTrack(t);
+    ok &&= r.def.halfWidth <= t.def.halfWidth && clear.length > 0 && clear.every((c) => c.dist > 240) && errs.length === 0 && r.length < b.s1 - b.s0;
+    rows.push(`${t.def.id}: s ${b.s0}..${b.s1}, ${r.length.toFixed(0)} long (main ${(b.s1 - b.s0).toFixed(0)}), half-width ${r.def.halfWidth} (main ${t.def.halfWidth}), pits ${r.holes.length}, ramps ${r.ramps.length}, gaps ${r.gaps.length}; ${clear.map((c) => `${c.what} ${c.dist.toFixed(1)}`).join(", ")}; ${errs.length ? errs.join(" | ") : "valid"}`);
+  }
+  const s0 = sh.branches[0].road, b0 = bm.branches[0].road;
+  ok &&= s0.def.halfWidth < sh.def.halfWidth && s0.holes.length >= 1 && s0.ramps.length === 0 && s0.gaps.length === 0 && b0.ramps.length === 1 && b0.gaps.length === 1 && b0.holes.length === 0;
+  check(
+    "br tracks shape: one shortcut on each long track, Slag Harbour's narrow (narrower than its main road) with a pit, Breaker's Mile's a jump (a ramp and a chasm); each shorter than the main road it cuts, no wider than it, its hazards (and the main road's) more than 240 from the other road's centreline, validateTrack passes",
+    ok,
+    rows.join("; "),
+  );
+}
+
+function btRecovery(): void {
+  // Criterion 3 and user decision 6: a recovery point on the shortcut before its first hazard; a fall before it goes back to the
+  // main road's recovery point before the fork, which lies within 500 before it; a fall past it goes back to it, on the shortcut.
+  const rows: string[] = [];
+  let ok = true;
+  for (const id of btIds) {
+    const t = btTrackById(id), b = t.branches[0], r = b.road;
+    const first = Math.min(...r.ramps.map((x) => x.s), ...r.gaps.map((g) => g.s0), ...r.holes.map((h) => h.s - h.r));
+    const rp = r.recovery[0];
+    const mainBefore = Math.max(...t.recovery.filter((s) => s <= b.s0));
+    const early = btRecoveryFor(t, 1, rp - 50), late = btRecoveryFor(t, 1, first + 10);
+    const good = r.recovery.length >= 1 && rp < first && b.s0 - mainBefore <= 500 && early.road === 0 && early.s === mainBefore && late.road === 1 && late.s === rp;
+    ok &&= good;
+    rows.push(`${id}: shortcut recovery u ${rp} (first hazard u ${first}); main recovery before the fork s ${mainBefore} (fork s ${b.s0}); a fall at u ${rp - 50} -> road ${early.road} s ${early.s}, at u ${first + 10} -> road ${late.road} u ${late.s}`);
+  }
+  check("br tracks recovery: each shortcut has a recovery point before its first hazard; a fall before it goes back to the main road's recovery point before the fork (within 500 of it; user decision 6), a fall past it to it", ok, rows.join("; "));
+}
+
+function btGain(): void {
+  // Criterion 1 and user decision 2: a clean run on the shortcut gains about 1.5-2.5 s a lap, per car type (one bot alone, weapons
+  // off, median of 3 laps; tools/debug/br-tracks.ts --gain). Normal and Hard (the levels that take it) gain 1.4-2.5 s; Easy never
+  // takes a risky shortcut and is shown forced (at most 3.0).
+  const rows: string[] = [];
+  let ok = true;
+  for (const id of btIds) {
+    for (const g of btGainRows(id)) {
+      const good = g.falls === 0 && g.gain >= 1.4 && g.gain <= (g.level === "easy" ? 3.0 : 2.5);
+      ok &&= good;
+      rows.push(`${id} ${g.level} ${g.car} ${btF(g.main)} -> ${btF(g.cut)} (${btF(g.gain)})${good ? "" : " OUT"}`);
+    }
+  }
+  console.log(`  ${rows.join("\n  ")}`);
+  check("br tracks gain: on both tracks a clean run on the shortcut gains 1.4-2.5 s a lap for Normal and Hard bots of every car type (Easy, forced, at most 3.0), with no fall", ok, rows.filter((r) => r.endsWith("OUT")).join("; ") || `${rows.length} rows`);
+}
+
+function btFall(): void {
+  // Criterion 1 and user decision 2: a fall on the shortcut costs more than it gains: lap 2 with one fall at its hazard is slower than
+  // the main road's lap 2, for every level and car type (tools/debug/br-tracks.ts --fall).
+  const rows: string[] = [];
+  let ok = true;
+  for (const id of btIds) {
+    for (const f of btFallCost(id)) {
+      const good = f.falls === 1 && f.cost > 0;
+      ok &&= good;
+      rows.push(`${id} ${f.level} ${f.car} main ${btF(f.main2)}, clean ${btF(f.clean2)}, with a fall ${btF(f.fall2)} (+${btF(f.cost)})${good ? "" : " OUT"}`);
+    }
+  }
+  console.log(`  ${rows.join("\n  ")}`);
+  check("br tracks fall: one fall at the shortcut's hazard (the pit, the chasm) costs more than the shortcut gains: that lap is slower than the main road's, for every level and car type on both tracks", ok, rows.filter((r) => r.endsWith("OUT")).join("; ") || `${rows.length} rows`);
+}
+
+function btPlans(): void {
+  // Criterion 4 and user decision 3: who takes them (shared/botdrive.ts routePlan, per seat, car type, L0 and L3): Easy never (both
+  // are risky: a pit, a jump), Normal on the even seats (0, 2, 4), Hard on every seat.
+  const rows: string[] = [];
+  let ok = true;
+  for (const id of btIds) {
+    const t = btTrackById(id);
+    for (const lv of [0, 3]) {
+      for (const level of ["easy", "normal", "hard"] as const) {
+        const masks: number[] = [];
+        for (let seat = 0; seat < BT_LANES.length; seat++) for (const car of BT_CAR_TYPES) masks.push(btRoutePlan(t, level, seat, car, btStatsFor(car, { engine: lv, tyres: lv, welder: lv })).mask);
+        const want = (seat: number) => (level === "easy" ? 0 : level === "hard" ? 1 : seat % 2 === 0 ? 1 : 0);
+        const good = masks.every((m, i) => m === want(Math.floor(i / BT_CAR_TYPES.length)));
+        ok &&= good;
+        rows.push(`${id} L${lv} ${level}: ${masks.join("")}${good ? "" : " OUT"}`);
+      }
+    }
+  }
+  check("br tracks plans: on both tracks Easy bots never take the shortcut, Normal ones on seats 0, 2 and 4, Hard ones on every seat, for every car type at L0 and L3 (user decision 3)", ok, rows.join("; "));
+}
+
+function btDensity(): void {
+  // Criterion 5: the density report covers the shortcut (tools/debug/track-density.ts): one group of one kind on it, no dirt, at
+  // least MOUTH_CLEAR of plain road from each gore to it, and at least 1000 of road with no obstacle along the route through it to the
+  // main road's groups either side (the long tracks' rule between groups).
+  const rows: string[] = [];
+  let ok = true;
+  for (const id of btIds) {
+    const d = btDensityOf(btTrackById(id));
+    const c = d.shortcuts?.[0];
+    const good = !!c && d.shortcuts!.length === 1 && c.groups.length === 1 && c.groups[0].kinds.length === 1 && c.mud.length === 0 &&
+      c.plainIn >= BT_MOUTH_CLEAR && c.plainOut >= BT_MOUTH_CLEAR && c.routeIn.gap >= 1000 && c.routeOut.gap >= 1000;
+    ok &&= good;
+    rows.push(c ? `${id}: ${c.groups.map((g) => `${g.kinds.join("+")} u ${g.s0.toFixed(0)}..${g.s1.toFixed(0)}`).join(", ")}; plain ${c.plainIn.toFixed(0)} in, ${c.plainOut.toFixed(0)} out; route ${c.routeIn.gap.toFixed(0)} from ${c.routeIn.from}, ${c.routeOut.gap.toFixed(0)} to ${c.routeOut.to}; dirt ${c.mud.length}` : `${id}: no shortcut section`);
+  }
+  check("br tracks density: the density report has each shortcut: one group of one kind on it, no dirt, >= 300 of plain road from each gore to it, >= 1000 of clear road along the route to the main road's groups either side", ok, rows.join("; "));
+}
+
+function btRaces(): void {
+  // Criterion 4: in the long tracks' races (track-density raceSet: 3 bots per level weapons off and on, 5 mixed; the laps, falls and
+  // contacts are longBots' checks above) the bots that plan the shortcut drive it: every Hard bot more than 600 ticks on it in each race
+  // (3 laps), every Easy bot fewer than 300 (its mouths only); each race identical on a rerun.
+  const rows: string[] = [];
+  let ok = true;
+  for (const id of btIds) {
+    for (const r of btRaceSet(id)) {
+      const levels = r.name.startsWith("5 mixed") ? ["hard", "normal", "easy", "hard", "normal"] : Array(3).fill(r.name.split(" ")[0]);
+      const ticks = r.a.shortcuts.map((x) => x[0]);
+      const good = r.same && levels.every((l, k) => (l === "hard" ? ticks[k] > 600 : l === "easy" ? ticks[k] < 300 : true));
+      ok &&= good;
+      rows.push(`${id} ${r.name}: on the shortcut ${ticks.join("/")}${r.same ? "" : " rerun DIFFERS"}${good ? "" : " OUT"}`);
+    }
+  }
+  check("br tracks races: in the long tracks' races every Hard bot drives the shortcut (> 600 ticks a race), every Easy bot keeps the main road (< 300: the mouths), every race identical on a rerun", ok, rows.join("; "));
+  console.log(`  BR-TRACKS sim-test sections' runtime (btShape .. btRaces): ${((performance.now() - btClock.t0) / 1000).toFixed(1)} s`);
+}
+
+for (const t of [btShape, btRecovery, btGain, btFall, btPlans, btDensity, btRaces]) {
   console.log(`\n# ${t.name}`);
   try {
     t();

@@ -799,7 +799,27 @@ pid 3189, log tmp/br-tracks-taste-3012.log); the Branch Yard copy (pid 27353, br
 Harbour + Breaker's Mile (taste gate 9).
 TH-LOOK-2 asked (Slag Harbour still city on main): BR-TRACKS' theme-removal commit 7c30a8e cherry-picked onto main as 4b6e9b6; gate GREEN
 (1085/1085, 166/166, build index-CXjr0vIx.js, schema-hash 37 SAME). TH-LOOK-2 told to merge main + final gate. NOSELECT-2: whole-link
-selection (user-select: all) chosen. TH-LOOK-2 waits for
+selection (user-select: all) chosen.
+HARD-3 POSTPONED (user 2026-11-23); :3009 tuning copy stopped (pid 96649) + split-taste worktree removed. Waiting on the user now: the
+BR-TRACKS drive on :3012 only (+ a push question when NOSELECT-2 lands).
+BR-TRACKS: user taste APPROVED ("all approved"); review APPROVE (ctx_c8ebf124332a; tmp/br-tracks/BR-TRACKS-review.md): Mile socket
+spike pre-existing (server input-underrun repeat, base 6.15 vs branch 6.19). Short round sent (br-tracks --shots mute toggle; branch-sheet
+--track scoped checks exit 0; 2 stale texts; merge main): ctx_fea79a6ece53. Merge after it (no re-review if only those).
+BR-TRACKS round done 54c9549 (tools + 2 texts only). MERGED 9da2cb3. Gate run 1: 1091/1092 (FAIL 'retire client: the room message drops
+our car...' car back true); run 2 on the identical tree GREEN (1092/1092, 174/174, build index-B9lUXWgz.js, schema-hash all match) ->
+flake, parked (~/.claude/parking/scrap-rally/adhoc-2026-11-23.md). ClickUp ready for qa test; workers released; workspace + branch removed;
+:3012 taste copy stopped (pid 3189) + removed.
+NOSELECT-2 review 1 REQUEST_CHANGES (stale link toast after leaving the room); fix 3f597f3 (hide on out-of-room + Escape); confirm by
+ctx_7f10f4a11ec8. PUSH (user popup): "After both merge" -> push when NOSELECT-2 is merged + gate green, then the user's Manual Deploy + live QA.
+HARBOUR-SCHEMA 123jpnbfgzv in flight: ctx_33dfae154ede (Opus, ~/orca/workspaces/scrap-rally/harbour-schema, :3010, tmp/spec-harbour-schema.md).
+Active authors: TH-LOOK-2 (final gate), HARBOUR-SCHEMA, NOSELECT-2 (idle in review).
+NOSELECT-2 re-review APPROVE (ctx_7f10f4a11ec8). MERGED f9e87b3; gate running -> then PUSH (user-approved "after both merge").
+TH-LOOK-2 DONE cd5ad1e (city old-town look on Block Yard + sand/oil looks; identity 0 px; speed gate PASS; S7 ~1.01; report
+tmp/th-look-2/REPORT.md). Fable reviewer ctx_b58303ab42e9 (tmp/review-th-look-2.md). TASTE: inline preview shown; frozen copy
+~/orca/workspaces/scrap-rally/thl2-taste at cd5ad1e: :3012 SCRAP_DEV_TRACK=block-yard (pid 34398), :3009 SCRAP_DEV_TRACK=dune-yard (pid 34397);
+the user drives sand + oil (also THEME-SURF's feel gate).
+TH-LOOK-2 taste APPROVED (user "approved"). NOSELECT-2 gate GREEN on f9e87b3 (1092/1092, 174/174, build index-DV6ew2Qs.js, schema-hash
+all match). PUSHING main (user-approved "after both merge"): marshals + invite link + both shortcuts; then the user's Manual Deploy + live QA. TH-LOOK-2 waits for
 MARSHALS-1 (shares render.ts + canvas-census.ts). Ford direction cue moved from THEME-SURF to TH-LOOK-3 (drawing = world.ts, Fable).
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).

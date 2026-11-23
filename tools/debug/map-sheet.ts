@@ -62,6 +62,19 @@
 //                          minimap in Chrome's canvas against the one made here, the bakes and mouths
 //   --port <n>             the port the working tree's build is served on (default: any free one)
 //   --session <name>       what the browser sessions are called: <name>-<pid>-* (default map)
+//
+// BR-TRACKS (ClickUp 123jpnbfghe): two of those checks read a correct map as wrong on a slant (the BR-MAP
+// review), and now do not. "No blob" leaves out the road-tone pixels inside a mouth's outline (hud.ts
+// mouthOutline, rebuilt here), which mouthPockets gives the line's tone on purpose; they are counted beside
+// it. "One line of the main road's width" no longer caps one line across at 3.25 px (a correct line reads
+// 3.5 at 15 degrees) but the line's mean width over the stretch (lineWidth) at WIDE_SLACK over a 2 px
+// line's sweep at its heading; both it and the line across read the shortcut's own line only (a pixel or a
+// sample nearer another line of the map is that line's: on the long tracks a shortcut runs 4-6 px from the
+// main road, and Slag Harbour's hairpin from itself). To see either of them work:
+//   --turns <deg,...>      ... and Branch Yard turned by each of those angles (e.g. 7.5,15,22.5,37.5,52.5,60)
+//   --plant blob|wide      a control: before the checks, plant a fault in every track's first shortcut (blob:
+//                          a 2 x 2 of the road's tone 4 px beside its line, halfway along; wide: its line a
+//                          pixel wider either side between its gores): "no blob" or the width check is to FAIL
 
 import { execFile, execFileSync } from "node:child_process";
 import { createReadStream, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
@@ -77,6 +90,7 @@ const args = process.argv.slice(2);
 const arg = (name: string) => (args.includes(name) ? args[args.indexOf(name) + 1] : undefined);
 const HERE = path.resolve(fileURLToPath(new URL("../..", import.meta.url)));
 const MAP = 108; // the minimap's box (client/gfx/hud.ts)
+const MAP_PARTED = 5; // hud.ts MAP_PARTED: a mouth's two lines have parted for good where their middles are this far apart, px
 
 /** A track's minimap out of a tree: the bake as a frame blits it, and the same with cars on it. */
 interface Baked {
@@ -112,6 +126,8 @@ interface BranchCheck {
   touching: number; // ... whose 3 x 3 covers a pixel of the line
   plain: string; // the tones across a plain stretch of it, at u = plainU ("" = it has none)
   plainU: number;
+  plainH: number; // its heading there (radians; the map is the world scaled, not turned)
+  plainW: number; // the line's mean width there (px): its road-tone pixels per px along it (lineWidth)
   islands: { s: number; runs: string }[];
 }
 
@@ -122,8 +138,13 @@ interface BranchReport {
   /** The main road's dots, the same way: probes, and those whose middle pixel is the line's. */
   mainProbes: number;
   mainOn: number;
-  /** Against the same track without its shortcuts, when both are fitted alike: pixels that differ; the main line's (or tick's) lost; road-tone pixels further than a line's stamp from a shortcut; any further than a casing's. */
-  twin: { changed: number; lost: number; strayLine: number; stray: number; line: number; casing: number } | null;
+  /**
+   * Against the same track without its shortcuts, when both are fitted alike: pixels that differ; the main line's (or tick's) lost; road-tone
+   * pixels further than a line's stamp from a shortcut, outside every mouth's outline; any further than a casing's, the same; pocket: road-tone
+   * pixels further than a line's stamp inside a mouth's outline, which hud.ts mouthPockets gives the line's tone on purpose (BR-TRACKS), and
+   * where they are (pixel indices).
+   */
+  twin: { changed: number; lost: number; strayLine: number; stray: number; line: number; casing: number; pocket: number; pockets: number[] } | null;
   /** The shape WRAP_SHAPE only: in the box of the first shortcut's fork on Branch Yard's own map, the pixels that differ from Branch Yard's (null: the two are not fitted alike). */
   wrap?: number | null;
   cars: string; // 108 x 108 RGBA, base64: the bake with cars on the shortcuts
@@ -394,6 +415,30 @@ async function child(root: string, out: string): Promise<void> {
       const corner = at(x0, y0);
       const fit = { w: (x1 - x0) * sc, h: (y1 - y0) * sc, left: corner[0], top: corner[1], beyond: Math.max(m0 - x0, x1 - m1, n0 - y0, y1 - n1) * sc };
 
+      // BR-TRACKS controls: --plant blob|wide plants a fault in the first shortcut's line before the checks
+      // read the bake (a correct map must not need these; each is to make its check FAIL):
+      // blob: a 2 x 2 of the road's tone 4 px to the right of the shortcut's centreline, halfway along it;
+      // wide: the line a pixel wider on both sides (4 px on an axis) from 200 past its fork gore to 200 before its merge gore.
+      const plant = arg("--plant");
+      if (plant && brs[0]) {
+        const r0 = brs[0].road, rgb = [1, 3, 5].map((i) => parseInt(road.slice(i, i + 2), 16));
+        const paint = (X: number, Y: number) => {
+          const u = Math.floor(X), v = Math.floor(Y);
+          if (u >= 0 && v >= 0 && u < MAP && v < MAP) bare.set([...rgb, 255], (v * MAP + u) * 4);
+        };
+        const side = (u: number, o: number): [number, number] => {
+          const p = pointAt(r0, u), [X, Y] = at(p.x, p.y);
+          return [X - Math.sin(p.h) * o, Y + Math.cos(p.h) * o];
+        };
+        if (plant === "blob") {
+          const [X, Y] = side(r0.length / 2, 4);
+          for (const [i, j] of [[0, 0], [1, 0], [0, 1], [1, 1]]) paint(X + i, Y + j);
+        } else if (plant === "wide") {
+          const u0 = (brs[0].forkGore?.u ?? 0) + 200, u1 = (brs[0].mergeGore?.u ?? r0.length) - 200;
+          for (let u = u0; u <= u1; u += 0.1 / sc) for (const o of [-1.6, 1.6]) paint(...side(u, o));
+        } else throw new Error(`map-sheet: --plant ${plant}: blob or wide`);
+      }
+
       // Every shortcut's centreline on the map, a sample every tenth of a pixel: [x, y, round a split].
       const lines: [number, number, boolean][] = [];
       const branches: BranchCheck[] = brs.map((b, bi) => {
@@ -487,6 +532,72 @@ async function child(root: string, out: string): Promise<void> {
           const apart = arms.slice(1).filter(([, [u, v]]) => !seen.has(v * MAP + u));
           return { end, joined: apart.length === 0, note: apart.length ? `the line does not reach ${apart.map((a) => a[0]).join(" or ")}` : `${seen.size} pixels of the road's tone in one piece`, box, pockets };
         };
+        /**
+         * BR-TRACKS: the line's mean width at u (px): over the stretch of the centreline from u - `half` to u + `half` (2.5 px of
+         * the map either way, or 150 units when that is less: inside a plain stretch, which is 200 clear of anything), the pixels
+         * of the road's tone whose middle is within 4 px of the stretch and whose nearest point of it is not one of its two ends,
+         * per px of its length. A stamped line of 2 px sweeps 2 (|cos h| + |sin h|) px across at heading h; a line across the
+         * road at one point reads that give or take its steps.
+         * Only the stretch's own pixels: a pixel nearer another line of the map (the main road, another shortcut, or this one
+         * more than 6 px along it: `others`) is that line's (on the long tracks a shortcut runs 4-6 px from the main road on the map).
+         */
+        const ownStretch = (r: any, u: number): [number, number][] => {
+          const half = Math.min(2.5 / sc, 150), pts: [number, number][] = [];
+          for (let w = u - half; w <= u + half + 1e-9; w += 0.05 / sc) {
+            const p = pointAt(r, w);
+            pts.push(at(p.x, p.y));
+          }
+          return pts;
+        };
+        /** Every other line's centreline on the map, a point every quarter pixel: the main road, the other shortcuts, this one away from u. */
+        const others = (r: any, u: number): [number, number][] => {
+          const out: [number, number][] = [], half = Math.min(2.5 / sc, 150) + 6 / sc;
+          for (const road of [track, ...brs.map((x) => x.road)]) {
+            for (let w = 0; w <= road.length; w += 0.25 / sc) {
+              if (road === r && Math.abs(w - u) <= half) continue;
+              const p = pointAt(road, w);
+              out.push(at(p.x, p.y));
+            }
+          }
+          return out;
+        };
+        const nearest = (list: [number, number][], X: number, Y: number): number => {
+          let d = Infinity;
+          for (const [x, y] of list) d = Math.min(d, Math.hypot(X - x, Y - y));
+          return d;
+        };
+        /** The tones across the line at u as `across` reads them, but "" where a sample lies nearer another line than this stretch (runsOf stops there). */
+        const acrossOwn = (r: any, u: number): string[] => {
+          const own = ownStretch(r, u), other = others(r, u), p = pointAt(r, u);
+          const [cx, cy] = at(p.x, p.y);
+          const tones = across(u, r, at);
+          let k = 0;
+          for (let t = -8; t <= 8; t += 0.25, k++) {
+            const X = cx - Math.sin(p.h) * t, Y = cy + Math.cos(p.h) * t;
+            if (nearest(other, X, Y) < nearest(own, X, Y)) tones[k] = "";
+          }
+          return tones;
+        };
+        const lineWidth = (r: any, u: number): number => {
+          const half = Math.min(2.5 / sc, 150), pts = ownStretch(r, u), other = others(r, u);
+          let n = 0;
+          const xs = pts.map((p) => p[0]), ys = pts.map((p) => p[1]);
+          for (let v = Math.floor(Math.min(...ys) - 5); v <= Math.ceil(Math.max(...ys) + 5); v++) {
+            for (let w = Math.floor(Math.min(...xs) - 5); w <= Math.ceil(Math.max(...xs) + 5); w++) {
+              if (tone(bare, w, v) !== road) continue;
+              let best = Infinity, at0 = 0;
+              pts.forEach(([X, Y], i) => {
+                const e = Math.hypot(w + 0.5 - X, v + 0.5 - Y);
+                if (e < best) {
+                  best = e;
+                  at0 = i;
+                }
+              });
+              if (best < 4 && at0 > 0 && at0 < pts.length - 1 && best <= nearest(other, w + 0.5, v + 0.5)) n++;
+            }
+          }
+          return n / (2 * half * sc);
+        };
         // A plain stretch: between the gores, clear of its mouths' widens, its gaps and its splits; the middle one.
         const fg = b.forkGore, mg = b.mergeGore, plains: number[] = [];
         for (let u = (fg ? fg.u : 0) + 200; u < (mg ? mg.u : L) - 200; u += 50) {
@@ -496,7 +607,7 @@ async function child(root: string, out: string): Promise<void> {
         const [probes, onLine, touching] = dotsAlong(r);
         return {
           no: bi + 1, long: L * sc, samples, off, gaps, mouths: [mouth("fork"), mouth("merge")], probes, onLine, touching,
-          plain: plains.length ? runsOf(across(plainU, r, at)) : "", plainU,
+          plain: plains.length ? runsOf(acrossOwn(r, plainU)) : "", plainU, plainH: plains.length ? pointAt(r, plainU).h : NaN, plainW: plains.length ? lineWidth(r, plainU) : NaN,
           islands: r.islands.map((i: any) => ({ s: (i.s0 + i.s1) / 2, runs: runsOf(across((i.s0 + i.s1) / 2, r, at)) })),
         };
       });
@@ -511,7 +622,34 @@ async function child(root: string, out: string): Promise<void> {
       const alone = cut(twinView), tm = (twinHud as { mini?: { scale: number; ox: number; oy: number } }).mini!;
       let twin: BranchReport["twin"] = null;
       if (tm.scale === sc && tm.ox === mini.ox && tm.oy === mini.oy) {
-        twin = { changed: 0, lost: 0, strayLine: 0, stray: 0, line: 0, casing: 0 };
+        twin = { changed: 0, lost: 0, strayLine: 0, stray: 0, line: 0, casing: 0, pocket: 0, pockets: [] };
+        // BR-TRACKS: each mouth's outline as hud.ts mouthOutline has it (the shortcut's centreline from its end at the main road to the
+        // first sample MAP_PARTED px from its own place on the main road, and the main centreline back), in map pixels. Inside one
+        // (a pixel's middle, even-odd), mouthPockets gives the line's tone to what the two lines shut in between them on a slant.
+        const outlines = brs.flatMap((b) => [false, true].map((merge) => {
+          const r = b.road, last = r.pts.length - 1, mid = last >> 1, o: number[] = [];
+          const add = (p: { x: number; y: number }) => o.push(...at(p.x, p.y));
+          let j = merge ? last : 0;
+          while (merge ? j > mid : j < mid) {
+            j += merge ? -1 : 1;
+            const p = r.pts[j], q = pointAt(track, b.mapS[j]);
+            if (Math.hypot(p.x - q.x, p.y - q.y) * sc >= MAP_PARTED) break;
+          }
+          for (let i = merge ? j : 0; i <= (merge ? last : j); i++) add(r.pts[i]);
+          const s0 = merge ? b.mapS[j] : b.s0, s1 = merge ? b.s1 : b.mapS[j];
+          if (!merge) add(pointAt(track, s1));
+          for (let i = track.pts.length - 1; i >= 0; i--) if (track.cum[i] > s0 && track.cum[i] < s1) add(track.pts[i]);
+          if (merge) add(pointAt(track, s0));
+          return o;
+        }));
+        const inMouth = (x: number, y: number) => outlines.some((o) => {
+          let inside = false;
+          for (let i = 0, n = o.length >> 1, j = n - 1; i < n; j = i++) {
+            const xi = o[2 * i], yi = o[2 * i + 1], xj = o[2 * j], yj = o[2 * j + 1];
+            if (yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) inside = !inside;
+          }
+          return inside;
+        });
         const tick = String(P.bone2).toLowerCase();
         // The casing's tone: the main line's own, beside it across the plain stretch.
         const casingTone = plain.find((t) => t !== "" && t !== face && t !== road) ?? "";
@@ -533,6 +671,12 @@ async function child(root: string, out: string): Promise<void> {
             }
             // A line's stamp reaches a pixel's middle at most 1 px either way of its own (1.42 px),
             // a casing's 2 one way and 1 the other (2.24 px); round a split the lanes lie off the centreline.
+            // BR-TRACKS: a road-tone pixel inside a mouth's outline is what mouthPockets fills there, not a blob.
+            if (c === road && d > (split ? 8 : 1.5) && inMouth(u + 0.5, v + 0.5)) {
+              twin.pocket++;
+              twin.pockets.push(v * MAP + u);
+              continue;
+            }
             if (c === road && d > (split ? 8 : 1.5)) twin.strayLine++;
             if (d > (split ? 8 : 2.3)) twin.stray++;
           }
@@ -599,6 +743,14 @@ function branchShapes(yard: any, built: any): { def: any; what: string }[] {
     return [3400 + dx * c - dy * s, 3300 + dx * s + dy * c];
   };
   const shapes: { def: any; what: string }[] = [];
+  // BR-TRACKS: --turns <deg,...> bakes Branch Yard turned by each of those angles as well (the BR-MAP review's slants).
+  for (const deg of (arg("--turns") ?? "").split(",").filter(Boolean).map(Number)) {
+    const t = turn((deg * Math.PI) / 180);
+    shapes.push({
+      what: `Branch Yard turned ${deg} degrees (--turns)`,
+      def: { ...yard, id: `map-branch-turn-${deg}`, name: `Branch Yard turned ${deg}`, control: yard.control.map(t), features: yard.features.map((f: any) => (f.k === "branch" ? { ...f, control: f.control.map(t) } : f)) },
+    });
+  }
   const t30 = turn(Math.PI / 6);
   shapes.push({
     what: "Branch Yard turned 30 degrees: every mouth on a slant",
@@ -643,7 +795,8 @@ function bakesOf(root: string): Baked[] {
   const dir = mkdtempSync(path.join(tmpdir(), "map-sheet-json-"));
   try {
     const file = path.join(dir, "out.json");
-    execFileSync(process.execPath, [...process.execArgv, fileURLToPath(import.meta.url), "--child", root, file], { cwd: HERE, stdio: ["ignore", "inherit", "inherit"] });
+    const pass = ["--turns", "--plant"].flatMap((k) => (arg(k) !== undefined ? [k, arg(k)!] : [])); // BR-TRACKS: the shapes and planted faults the child bakes
+    execFileSync(process.execPath, [...process.execArgv, fileURLToPath(import.meta.url), "--child", root, file, ...pass], { cwd: HERE, stdio: ["ignore", "inherit", "inherit"] });
     return JSON.parse(readFileSync(file, "utf8")) as Baked[];
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -743,6 +896,12 @@ async function main(): Promise<void> {
 
 const MAP_FIT = 96, MAP_AIR = 6; // the square a track is fitted into, and the box's edge round it (client/gfx/hud.ts)
 const MOUTH_Z = 16; // a mouth's picture: this many times enlarged
+/**
+ * BR-TRACKS: how much wider than a stamped 2 px line's sweep (2 (|cos h| + |sin h|) px) a shortcut's line may be on average across
+ * a plain stretch (lineWidth). Measured on Branch Yard turned every half degree from 0 to 360 (--turns): the correct map is -0.82
+ * to +0.63 px off it (2177 readings), the line drawn a pixel wider either side (--plant wide, 4 px on an axis) +1.07 to +2.63 (725).
+ */
+const WIDE_SLACK = 0.85;
 
 /** A mouth of a shortcut cut out of a bake, its box with two pixels of air, MOUTH_Z times enlarged. */
 function mouthPicture(bake: Picture, m: MouthCheck): Picture {
@@ -771,10 +930,20 @@ function branchChecks(OUT: string, t: Baked, check: (good: boolean, what: string
       check(m.joined && m.pockets === 0, `${who}: joined to the main road at its ${m.end}: in the mouth's box (${m.box[2]} x ${m.box[3]} px at ${m.box[0]}, ${m.box[1]}) ${m.note}${m.joined ? ", from the shortcut where it has left the main road (5 px from it) to the main road either side of the mouth" : ""}; ${m.pockets} pixels of another tone are shut in by the line there`);
       if (m.box[2]) savePng(path.join(OUT, `mouth-${t.id}-${b.no}-${m.end}.png`), mouthPicture(picture(t.bare), m));
     }
-    // One run of the road's tone, 2 px of it (to 3 on a slant); on a slant the line across can step
-    // from the line to the panel between two stamps of the casing, which has no corners.
+    // One run of the road's tone, at least 1.5 px of it; on a slant the line across can step from the
+    // line to the panel between two stamps of the casing, which has no corners.
+    // BR-TRACKS: the width is the line's mean width over the stretch (lineWidth), at most WIDE_SLACK over
+    // what a stamped 2 px line sweeps at its heading, 2 (|cos h| + |sin h|): one line across reads up to
+    // 3.5 px on a correct map (Branch Yard turned 15 degrees), as much as a line drawn 4 px wide can, so
+    // it caps nothing.
     const one = /^(?:other [\d.]+ \| )?road ([\d.]+)(?: \| other [\d.]+)?$/.exec(b.plain);
-    if (b.plain) check(!!one && Number(one[1]) >= 1.5 && Number(one[1]) <= 3.25, `${who}: across a plain stretch (u ${Math.round(b.plainU)}) the map shows one line of the main road's width (${b.plain}; the main road: ${t.plain})`);
+    const swept = 2 * (Math.abs(Math.cos(b.plainH)) + Math.abs(Math.sin(b.plainH)));
+    if (b.plain) {
+      check(
+        !!one && Number(one[1]) >= 1.5 && b.plainW <= swept + WIDE_SLACK,
+        `${who}: across a plain stretch (u ${Math.round(b.plainU)}) the map shows one line of the main road's width (${b.plain}; the main road: ${t.plain}); its mean width there ${b.plainW.toFixed(2)} px, at most ${(swept + WIDE_SLACK).toFixed(2)} (a 2 px line sweeps ${swept.toFixed(2)} at its heading, ${(((b.plainH * 180) / Math.PI + 360) % 180).toFixed(1)} degrees)`,
+      );
+    }
     else console.log(`      ${who}: no plain stretch between its gores to look across`);
     for (const i of b.islands) {
       if (r.wrap !== undefined) continue; // that shape's island lies in a mouth, over the main road's line: nothing to read across it
@@ -786,7 +955,7 @@ function branchChecks(OUT: string, t: Baked, check: (good: boolean, what: string
   if (r.wrap !== undefined) check(r.wrap === 0, `${t.name}: an island at the far end of a shortcut does not reach round to its start (an open road does not wrap): in the box of that shortcut's fork the map is Branch Yard's, pixel for pixel (${r.wrap === null ? "not compared: the two are not fitted alike" : `${r.wrap} pixels differ`})`);
   if (r.twin) {
     check(r.twin.line + r.twin.casing === r.twin.changed && r.twin.line > 0, `${t.name}: its shortcuts are in the main road's line style (the same track baked without them): the ${r.twin.changed} pixels they change are of the main line's two tones, ${r.twin.line} its line's and ${r.twin.casing} its casing's (an island between two lanes is in the casing's)`);
-    check(r.twin.lost === 0 && r.twin.strayLine === 0 && r.twin.stray === 0, `${t.name}: its shortcuts only add to the map, and no blob: ${r.twin.lost} pixels of the main line or the start tick are lost; ${r.twin.strayLine} of the road's tone lie further than a line's stamp (1.5 px) from a shortcut's centreline, ${r.twin.stray} of any tone further than a casing's (2.3 px)`);
+    check(r.twin.lost === 0 && r.twin.strayLine === 0 && r.twin.stray === 0, `${t.name}: its shortcuts only add to the map, and no blob: ${r.twin.lost} pixels of the main line or the start tick are lost; ${r.twin.strayLine} of the road's tone lie further than a line's stamp (1.5 px) from a shortcut's centreline, ${r.twin.stray} of any tone further than a casing's (2.3 px), outside the mouths' outlines (inside them ${r.twin.pocket} of the road's tone further than a line's stamp: mouthPockets' fill)`);
   }
   else console.log(`      ${t.name}: not compared with the same track without its shortcuts (they change the fit)`);
 }
