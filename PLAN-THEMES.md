@@ -219,3 +219,58 @@ TH-LOOK-1 measured that the S4 lap itself sits on the 5 us timer step in every t
 their S2 on the untouched tree), so "S7 <= cheapest S2 x 1.10" measures timer quantization, not the theme. S7 is judged as the theme
 against the same yard in the scrapyard look on the SAME frames: S7 theme <= S7 scrapyard x 1.05 on the means and on the faster half of the
 frames (TH-LOOK-1: 0.98-0.99); S6's rule stays for the views; S7's absolute numbers are printed beside the shipped tracks' S4 for the record.
+
+## Amendment 1 — APPROVED by the user 2026-11-22: a harbour theme for Slag Harbour
+
+User 2026-11-22: "The slag harbour biome should be a harbour with containers, cranes etc." Popup answer: **a separate harbour theme**
+(the city look stays for a future track; a fifth theme just for Slag Harbour). Fable advisor review 2026-11-22: "sound with changes";
+its binding changes are folded in below.
+
+### A1.1 Data
+- `shared/theme.ts`: `Theme` gains `"harbour"` (THEMES = scrapyard, desert, city, jungle, harbour). Additive. The client draws only
+  themes listed in `LANDED` (client/gfx/theme.ts:103-107) and falls back to the scrapyard for any other.
+- **Now (BR-TRACKS, which owns shared/longtracks.ts):** delete Slag Harbour's `theme: "city"` (longtracks.ts:28) and update the one
+  sim-test check that asserts it (scripts/sim-test.ts:14655). Theme-less is the scrapyard (shared/theme.ts:21-23) and a shipped track's
+  theme is not in its hash lines (tools/debug/schema-hash.ts:384-396), so goldens stay SAME and Slag Harbour can never ship in the city
+  look. TH-LOOK-2 then needs no hold; its accept adds "Slag Harbour 0 px against main".
+- **Oil on city AND harbour tracks** (the gate: shared/track.ts:659, :2004-2006; fix the error text at :2006 and the comments at
+  shared/theme.ts:3-4, track.ts:64, :1951-1952). Sand and ford keep one theme. Amends user decision 3 to "each surface only on its own
+  theme's tracks; oil on city and harbour tracks".
+- **Quay Yard** (harbour) beside Dune / Block / Canopy Yard (user decision 1: one yard per theme), with its oil placed differently from
+  Block Yard's so its bot runs test something new; hashed through the THEME_YARDS loop (schema-hash.ts:408; only the golden gains lines).
+
+### A1.2 Art direction: Harbour, "working container port" (all original)
+- Ground: concrete quay slabs with expansion joints (no painted bay lines: they read as road markings). Verge: a quay apron with tie-down
+  rings (no hatching: it reads as hazard chevrons). Kerbs: grey slab and a faded yellow that is NOT one of the fixed hazard colours.
+  Barrier: a concrete jersey barrier with lashing points. A crane-rail look only as a ground pattern, never placed along the road.
+- Props, re-skinned in place at today's junk sites (client/gfx/world.ts:302-304, :536-538; a theme changes what is painted, never where):
+  container stacks, crane bases/legs (no boom, no gantry spanning tiles), straddle carriers, bollards with mooring ropes, coiled hawsers,
+  pallets, forklifts, a reefer row. No prop or its shadow reaches the tarmac.
+- Gap: the dock basin, the soot ramp plus the fixed rim only (no water index, no blue; a ladder outside the hazard and bone colours).
+  Slag Harbour and the yard template have no gap, so the basin is judged on the contact sheet only.
+- Water (drivable): a rain puddle on concrete, blue-grey. No cosmetic oil blots anywhere, so an oil slick is unmistakable.
+- Dirt: ballast gravel with old rail sleepers.
+- Readability (theme-sheet --check additions): every prop colour (containers too) against the six CAR_COLORS (client/gfx/palette.ts:314;
+  the plan's :195 is stale); a numeric separation of tarmac against ground and against verge (four greys); water against ground.
+
+| Feature | Harbour |
+|---|---|
+| Tyre mound, island nose | stacked dock fenders |
+| Rolling barrels | chemical drums |
+| Press | container spreader |
+| Ramp truck | container chassis trailer |
+
+### A1.3 Tickets and order
+- **TH-LOOK-2 (Fable): unchanged** (the city look + the sand and oil looks), starts after MARSHALS-1; accept adds Slag Harbour 0 px
+  against main; its taste covers Block Yard, Dune Yard and Breaker's Mile.
+- **HARBOUR-SCHEMA (Opus, new, small):** "harbour" in shared/theme.ts; oil legal on harbour (+ the texts above); Quay Yard; Slag
+  Harbour's theme "harbour" with a test; Quay Yard's golden lines; one test per rule. After THEME-SURF (track.ts, testtracks.ts) and
+  BR-TRACKS (longtracks.ts) merge.
+- **TH-LOOK-H (Fable, new): the harbour look**, same files as TH-LOOK-2, after TH-LOOK-2 (world.ts series) and HARBOUR-SCHEMA. Accept as
+  TH-LOOK-2's plus A1.2's checks; every other theme 0 px; Slag Harbour is the one shipped scene expected to change; speed gate + S7 on
+  Quay Yard; Rule 1; census (Quay Yard adds 0 B: the census draws shipped tracks + Preview Yard, canvas-census.ts:101). Taste: Quay Yard
+  and Slag Harbour (screenshots, then the user drives).
+- TH-LOOK-3 (jungle + ford, incl. the ford's direction cue) after TH-LOOK-H. THEME-TRACKS unchanged (its Slag Harbour oil slick
+  validates on harbour).
+
+User answers (2026-11-22, popups): approve the amendment; oil on city AND harbour tracks (amends user decision 3); a visible sea (a quay edge with water outside the walls, new bake geometry) is decided after the harbour look is seen - a separate later ticket if wanted.
