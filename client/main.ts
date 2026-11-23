@@ -13,6 +13,7 @@ import { AudioEngine, SoundControls } from "./audio";
 import { ChatPanel, fitViewport } from "./chat";
 import { Game, lostMessage, NO_CONTROLS, type Controls, type TokenStore } from "./game";
 import { driving, Effects } from "./gfx/actors";
+import { raceView } from "./gfx/marshals";
 import { clearMarks } from "./gfx/world";
 import { Keyboard, mergeControls, TouchPad, type PadCar } from "./input";
 import { JerkMeter } from "./jerk";
@@ -960,30 +961,8 @@ function touchFrame(): void {
   touchPad.setAmmo(rivets, mines);
 }
 
-/** Where the race stands, for the marshals at the line (render.ts WorldFx.race): kept, changed in place. */
+/** Where the race stands, for the marshals at the line (render.ts WorldFx.race): kept, and filled every frame by gfx/marshals.ts raceView(). */
 const raceOut: RaceView = { phase: 0, lastLap: false, finished: 0, paused: false };
-
-/**
- * This frame's raceOut. The countdown ends when the HUD says GO (raceOnAt), not a snapshot later.
- * Before a room's first snapshot is in (a spectator who has just joined a running race) there is
- * no race to show yet: the cars that have finished by then are not counted in one frame late, as
- * if they had just come in.
- */
-function raceView(): RaceView {
-  let lap = 0, finished = 0;
-  const racePhase = game.latest !== null && (game.phase === "countdown" || game.phase === "racing" || game.phase === "results");
-  if (racePhase) {
-    for (const c of game.latest!.cars.values()) {
-      if (c.lap > lap) lap = c.lap;
-      if (c.fin) finished++;
-    }
-  }
-  raceOut.phase = !racePhase ? 0 : game.phase === "results" ? 3 : game.raceOnAt(game.raceNow()) ? 2 : 1;
-  raceOut.lastLap = raceOut.phase === 2 && lap >= game.laps - 1; // the leader has one lap to go, or is in
-  raceOut.finished = finished;
-  raceOut.paused = game.paused; // the host's pause, its resume 3-2-1 included: the flags are held still
-  return raceOut;
-}
 
 /** A new room track gets a new Renderer; the camera tour restarts at its start line. */
 function syncRenderer(): void {
@@ -1082,7 +1061,7 @@ function draw(alpha: number, elapsed: number): void {
   // What moves (M4-MOVE: barrels, presses, belts' arrows) at the race tick the own car's drawn step ran
   // at, a spectator's at the latest snapshot's (Game.drawTick); none before a snapshot: a still picture.
   fx.rt = game.drawTick();
-  fx.race = raceView();
+  fx.race = raceView(game, raceOut);
   driving(game.car, game.smooth, game.contact, others); // tyre marks: by the cars' driving, not by what the prediction does to them on screen
   renderer.frame(cars, fx, hudView());
 }

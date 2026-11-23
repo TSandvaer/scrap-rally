@@ -354,10 +354,69 @@ function lease(h: number): HTMLCanvasElement {
   return made.canvas;
 }
 
-// ---- the frame ----------------------------------------------------------------------------
+// ---- where the race stands ----------------------------------------------------------------
 
 // RaceView.phase.
 const COUNTDOWN = 1, RACING = 2, OVER = 3;
+
+/**
+ * What a game knows of its race, as raceView() reads it: client/game.ts Game has all of it, under
+ * these names. Spelled out here so this file needs nothing of the netcode, and so
+ * tools/debug/marshal-sheet.ts can hand over a game of its own.
+ */
+export interface RaceSource {
+  /** "lobby", "countdown", "racing" or "results": as the room message says, at once. */
+  phase: string;
+  laps: number;
+  paused: boolean;
+  /** The latest snapshot, null before a room's first. `rtOpen`: it is of the countdown or of the race, not of the results. */
+  latest: { rtOpen: boolean; cars: { forEach(each: (car: { lap: number; fin: number }) => void): void } } | null;
+  /** The race had started by server time t (the countdown was over); raceNow: that time, standing still in a pause. */
+  raceOnAt(t: number): boolean;
+  raceNow(): number;
+}
+
+// The cars of a snapshot gone through: the leader's lap, how many are in. Kept here: a frame makes nothing.
+let leaderLap = 0;
+let carsIn = 0;
+function tally(car: { lap: number; fin: number }): void {
+  if (car.lap > leaderLap) leaderLap = car.lap;
+  if (car.fin) carsIn++;
+}
+
+/**
+ * Where a game's race stands, into `out` (the caller's own, changed in place): what
+ * client/main.ts hands the Renderer every frame as WorldFx.race.
+ * - Before a room's first snapshot is in (a spectator who has just joined a running race) there
+ *   is no race to show yet: the cars that have finished by then are not counted in a frame late,
+ *   as if they had just come in.
+ * - The countdown ends when the HUD says GO (raceOnAt), not a snapshot later.
+ * - The results begin with the first snapshot of them, not with the room message. The server
+ *   ends a race in the step its last car finishes in and says so at once, but a snapshot goes
+ *   out every second tick only: for a frame or two the game's phase is "results" while its
+ *   latest snapshot is still the race's, that car not in it yet. Shown then, the results would
+ *   come before the car that brought them: no burst for it, and with nobody in yet a furled
+ *   flag. Until that snapshot the race is shown going on: the results and the car that ended the
+ *   race arrive in one frame. (Only what the marshals are handed: the HUD, the results panel and
+ *   the sound read the game's phase themselves.)
+ */
+export function raceView(game: RaceSource, out: RaceView): RaceView {
+  const snap = game.latest;
+  leaderLap = carsIn = 0;
+  if (snap === null || (game.phase !== "countdown" && game.phase !== "racing" && game.phase !== "results")) out.phase = 0;
+  else {
+    snap.cars.forEach(tally);
+    if (game.phase === "results") out.phase = snap.rtOpen ? RACING : OVER;
+    else out.phase = game.raceOnAt(game.raceNow()) ? RACING : COUNTDOWN;
+  }
+  out.lastLap = out.phase === RACING && leaderLap >= game.laps - 1; // the leader has one lap to go, or is in
+  out.finished = carsIn;
+  out.paused = game.paused; // the host's pause, its resume 3-2-1 included: the flags are held still
+  return out;
+}
+
+// ---- the frame ----------------------------------------------------------------------------
+
 /** From GO the pennant is waved fast for this long (ms); the last lap's flag does not show before. */
 const GO_MS = 3000;
 /** A car that finishes gets the chequered flag fast for this long (ms). */

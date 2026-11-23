@@ -8,6 +8,8 @@
 //   npx tsx tools/debug/marshal-sheet.ts --shots         screenshots of every phase, in headless Chrome -> tmp/marshals/shots/
 //                                                        (--out <dir>, --port <n>: default 3016, --session <prefix>: default
 //                                                        msh, the browser session is <prefix>-<pid>), and the pixel proof below
+//   npx tsx tools/debug/marshal-sheet.ts --live          real races on the real server in this process, 127.0.0.1 (--runs 8,
+//                                                        --port <n>: default 3016): what the marshals show at a race's end
 //
 // The contact sheet (Node, no browser): the sprite sheet as the game paints it for a track's
 // line, enlarged; every phase of a scripted race (at ease, the countdown, GO, the last lap, the
@@ -38,6 +40,13 @@
 //   race whose last lap is on from GO; a spectator who joins
 //   late (no burst for the cars already in, one for the next); a paused race (held up and still
 //   through the pause and its 3-2-1, a GO again when it goes on, no burst for a car already in);
+// - the end of a race through raceView() (gfx/marshals.ts: the game's own reading of where the
+//   race stands, which client/main.ts hands over every frame), on a game of the check's own, a
+//   frame at a time: the room's "results" in the same frame as the snapshot that counts the last
+//   car in, and one and two frames ahead of it (the server says "results" at once, a snapshot goes
+//   out every second tick), for a race alone and for three cars: no furled or slowed flag in
+//   those frames, the burst when the car is counted in; and raceView()'s other readings (no race
+//   before a room's first snapshot, the countdown, the leader's last lap, the pause);
 // - the wave's four pictures of each flag are four different pictures, and the three flags
 //   differ from each other in every one of them;
 // - no tone of the uniform or the flags is one of the six car colours, and how far each is from
@@ -50,6 +59,18 @@
 // heap profiler with the objects collected since counted; bytes a frame charged to functions of
 // client/, the rest to "outside" (the probe's loop, Node). A control beside it (an object a
 // frame that escapes) shows the profiler sees what there is.
+//
+// --live (Node, real time, about 40 s a race; after the reviewer's probes of MARSHALS-1): the real
+// server in this process, the real client netcode (client/game.ts over client/net.ts) stepped 60
+// times a second, raceView() on that game as client/main.ts calls it, the real Marshals on a canvas
+// that notes what it is asked to draw; races of one lap, the own car steered along the centreline.
+// - --runs races alone (the winner's finish ends the race): per race how many frames game.phase
+//   was "results" before the car was counted in, the flags in those frames, the pace after. Held:
+//   every winner gets the fast wave, no furled flag between the last lap's flag and the chequered.
+// - one race against a Hard bot with a pause, and a watcher who draws the menu and joins once the
+//   winner is in. Held: paused = held up and still; fast when it goes on; the winner and the last
+//   car in get the fast wave on the driver's view; the watcher shows the chequered flag steady
+//   for the car already in and fast for the last one. Exit code 1 if one does not hold.
 //
 // --shots (headless Chrome): the sheet's own page (marshal-sheet/: the game's Renderer on the
 // game's canvas, laid out as the game lays it out, a scripted race held at a moment), built
@@ -388,6 +409,10 @@ const apart = (a: string, b: string): number => {
 /** A figure's best part must stand out from every tone of the open ground by this (WCAG; 3 is its measure for what is not text). */
 const MIN_CONTRAST = 3;
 
+/** A flag's cell on the sheet by its name, and a wave's pace by how often its picture changed in 840 ms. */
+const flagName = (cell: number): string => (cell < 0 ? "nothing" : cell < M.M_LAST ? "pennant" : cell < M.M_CHEQ ? "last lap's flag" : cell < M.M_HELD ? "chequered" : cell < M.M_EASE ? "held up" : "furled");
+const paceName = (changes: number): string => (changes >= 10 ? "fast" : changes >= 6 ? "steady" : changes >= 3 ? "slow" : changes === 0 ? "still" : `${changes} changes`);
+
 /**
  * What the marshals show as a race goes by, handed over as client/main.ts hands it over (one
  * RaceView object, changed in place; phase 0 in the menu and the lobby), 10 ms a frame. Each
@@ -410,8 +435,7 @@ function phases(say: (good: boolean, what: string) => void): void {
           last = cell;
         }
       }
-      const flag = cell < 0 ? "nothing" : cell < M.M_LAST ? "pennant" : cell < M.M_CHEQ ? "last lap's flag" : cell < M.M_HELD ? "chequered" : cell < M.M_EASE ? "held up" : "furled";
-      return `${flag}, ${changes >= 10 ? "fast" : changes >= 6 ? "steady" : changes >= 3 ? "slow" : changes === 0 ? "still" : `${changes} changes`}`;
+      return `${flagName(cell)}, ${paceName(changes)}`;
     };
     return { race, run };
   };
@@ -521,6 +545,86 @@ function phases(say: (good: boolean, what: string) => void): void {
     Object.assign(c.race, { phase: 1, paused: true });
     steps.push(["paused in the countdown", "held up, still", c.run(2000)]);
     tell("a paused race", steps);
+  }
+
+  // The end of a race as a client learns of it, through raceView() (gfx/marshals.ts: the game's
+  // own reading of where the race stands, which client/main.ts hands over every frame), a frame
+  // at a time (60 a second) on a game of this check's own. The server ends the race in the step
+  // its last car finishes in and says so at once (the room message: game.phase is "results"),
+  // but a snapshot goes out every second tick only: the client knows of the results up to a
+  // frame or two before a snapshot counts that car in. The marshals must not show them early:
+  // no furled or slowed flag in those frames, and the burst when the car is counted in.
+  type Car = { lap: number; fin: number };
+  const ending = (cars: number, ahead: number): [string, string, string][] => {
+    const m = new M.Marshals(canvas, track);
+    const game = { phase: "lobby", laps: 1, paused: false, latest: null as { rtOpen: boolean; cars: Car[] } | null, raceOnAt: (): boolean => game.phase === "racing", raceNow: (): number => 0 };
+    const out: RaceView = { phase: 0, lastLap: false, finished: 0, paused: false };
+    let t = 1000;
+    const frame = (): number => {
+      const cell = frameOf(m, t, M.raceView(game, out)).map(cellNo).find((c) => c < M.M_BODY) ?? -1;
+      t += 1000 / 60;
+      return cell;
+    };
+    /** Frames for `ms`: the flag at the end, and its pace over the last 840 ms. */
+    const run = (ms: number): string => {
+      let last = -1, changes = 0, cell = -1;
+      for (const until = t + ms; t < until; ) {
+        const now = t;
+        cell = frame();
+        if (now >= until - 840) {
+          if (last >= 0 && cell !== last) changes++;
+          last = cell;
+        }
+      }
+      return `${flagName(cell)}, ${paceName(changes)}`;
+    };
+    const racing = (n: number): Car[] => Array.from({ length: cars }, (_, i) => ({ lap: i < n ? 1 : 0, fin: i < n ? 30000 + i : 0 }));
+    const steps: [string, string, string][] = [];
+    run(500); // the lobby, no snapshot
+    game.phase = "countdown";
+    game.latest = { rtOpen: true, cars: racing(0) };
+    run(1000);
+    game.phase = "racing";
+    run(4000); // one lap: the last lap from GO, its flag once GO's 3 s are over
+    let before = "last lap's flag";
+    if (cars > 1) {
+      game.latest = { rtOpen: true, cars: racing(cars - 1) }; // all but the last car come in, the race still on
+      steps.push(["the others in", "chequered, fast", run(840)]);
+      run(3000);
+      before = "chequered";
+    }
+    game.phase = "results"; // the room message; the snapshot is still the race's
+    if (ahead) steps.push([`${ahead} ${ahead > 1 ? "frames" : "frame"} of "results" before the count`, Array.from({ length: ahead }, () => before).join(", "), Array.from({ length: ahead }, () => flagName(frame())).join(", ")]);
+    game.latest = { rtOpen: false, cars: racing(cars) }; // the first snapshot of the results counts the last car in
+    steps.push(["the last car counted in", "chequered, fast", run(840)]);
+    steps.push(["3.8 s on", "chequered, slow", run(3000)]);
+    return steps;
+  };
+  for (const cars of [1, 3]) {
+    for (const ahead of [0, 1, 2]) tell(`the end of a race through raceView(), ${cars === 1 ? "a race alone" : `${cars} cars`}, the room's "results" ${ahead ? `${ahead} ${ahead > 1 ? "frames" : "frame"} ahead of` : "in the same frame as"} the snapshot that counts the last car in`, ending(cars, ahead));
+  }
+  // The rest of raceView(): no race before a room's first snapshot, the countdown until GO, the leader's last lap, the pause.
+  {
+    const game = { phase: "racing", laps: 3, paused: false, latest: null as { rtOpen: boolean; cars: Car[] } | null, raceOnAt: (): boolean => game.phase === "racing", raceNow: (): number => 0 };
+    const out: RaceView = { phase: 9, lastLap: true, finished: 9, paused: true };
+    const read = (): string => {
+      const r = M.raceView(game, out);
+      return `phase ${r.phase}, ${r.lastLap ? "last lap" : "not the last lap"}, ${r.finished} in${r.paused ? ", paused" : ""}`;
+    };
+    const steps: [string, string, string][] = [["a race joined, no snapshot yet", "phase 0, not the last lap, 0 in", read()]];
+    game.latest = { rtOpen: true, cars: [{ lap: 1, fin: 0 }, { lap: 0, fin: 0 }] };
+    steps.push(["its first snapshot", "phase 2, not the last lap, 0 in", read()]);
+    game.latest = { rtOpen: true, cars: [{ lap: 2, fin: 0 }, { lap: 1, fin: 0 }] };
+    game.paused = true;
+    steps.push(["the leader on lap 3 of 3, paused", "phase 2, last lap, 0 in, paused", read()]);
+    game.paused = false;
+    game.latest = { rtOpen: true, cars: [{ lap: 3, fin: 61234 }, { lap: 2, fin: 0 }] };
+    steps.push(["the leader in", "phase 2, last lap, 1 in", read()]);
+    game.phase = "countdown";
+    steps.push(["a countdown", "phase 1, not the last lap, 1 in", read()]);
+    game.phase = "lobby";
+    steps.push(["the lobby", "phase 0, not the last lap, 0 in", read()]);
+    tell("raceView(), the game's reading of where the race stands", steps);
   }
 }
 
@@ -894,9 +998,191 @@ async function shots(out: string, port: number): Promise<boolean> {
   return ok;
 }
 
+// ---- live: real races on the real server (Node) ---------------------------------------------
+
+/**
+ * The marshals through real races (the method of the reviewer's probes, MARSHALS-1 reviews 2 and
+ * 3): the real server in this process on 127.0.0.1, the real client netcode (client/game.ts over
+ * client/net.ts) stepped 60 times a second in real time, gfx/marshals.ts raceView() on that game
+ * as client/main.ts calls it, and the real Marshals on a canvas that notes what it is asked to
+ * draw. Races of one lap on the room's default track, the own car steered along the centreline.
+ */
+async function live(runs: number, port: number): Promise<boolean> {
+  const { setTimeout: sleep } = await import("node:timers/promises");
+  const { startServer } = await import("../../server/index");
+  const { Game } = await import("../../client/game");
+  const { connectWs } = await import("../../client/net");
+  const { queryTrackNear } = await import("../../shared/track");
+  const { angleDiff } = await import("../../shared/physics");
+  type GameT = InstanceType<typeof Game>;
+  const STEP = 1000 / 60;
+  const server = await startServer({ port, vite: false, laps: 1, host: "127.0.0.1" });
+  const url = `ws://127.0.0.1:${server.port}/ws`;
+  const errors: string[] = [];
+  const newGame = (): GameT => {
+    const tokens = new Map<string, string>();
+    const game = new Game(() => connectWs(url), { get: (c: string) => tokens.get(c) ?? null, set: (c: string, t: string) => void tokens.set(c, t) });
+    game.on.error = (msg: string) => errors.push(msg);
+    return game;
+  };
+  const drive = (game: GameT) => {
+    const c = game.car;
+    if (!c || c.air > 0 || c.fall > 0 || c.wreck > 0) return { throttle: 1, steer: 0, fire: false, mine: false };
+    const q = queryTrackNear(game.track, c.x, c.y, c.seg);
+    const ahead = pointAt(game.track, q.s + 55 + Math.sqrt(c.vx * c.vx + c.vy * c.vy) * 0.3);
+    return { throttle: 1, steer: Math.max(-1, Math.min(1, angleDiff(c.h, Math.atan2(ahead.y - c.y, ahead.x - c.x)) * 2.2)), fire: false, mine: false };
+  };
+  const IDLE = { throttle: 0, steer: 0, fire: false, mine: false };
+  /** What one client draws: its game, its Marshals (a new one when the track changes, as main.ts makes a new Renderer), every frame's reading. */
+  class View {
+    readonly out: RaceView = { phase: 0, lastLap: false, finished: 0, paused: false };
+    readonly frames: { t: number; gp: string; phase: number; finished: number; paused: boolean; cell: number }[] = [];
+    private track: Track;
+    private m: InstanceType<typeof M.Marshals>;
+    constructor(readonly game: GameT) {
+      this.track = game.track;
+      this.m = new M.Marshals(canvas, game.track);
+    }
+    frame(now: number): void {
+      if (this.game.track !== this.track) {
+        this.track = this.game.track;
+        this.m = new M.Marshals(canvas, this.game.track);
+      }
+      const r = M.raceView(this.game, this.out);
+      const cell = frameOf(this.m, now, r).map(cellNo).find((c) => c < M.M_BODY) ?? -1;
+      this.frames.push({ t: now, gp: this.game.phase, phase: r.phase, finished: r.finished, paused: r.paused === true, cell });
+    }
+    /** The flag's pace over the 840 ms from frame i: by how often its picture changed. */
+    pace(i: number): string {
+      let last = -2, changes = 0;
+      for (let k = i; k < this.frames.length && this.frames[k].t <= this.frames[i].t + 840; k++) {
+        if (last !== -2 && this.frames[k].cell !== last) changes++;
+        last = this.frames[k].cell;
+      }
+      return paceName(changes);
+    }
+  }
+  const until = async (ok: () => boolean, what: string, ms = 15000): Promise<void> => {
+    const from = performance.now();
+    while (!ok()) {
+      if (performance.now() - from > ms) throw new Error(`timed out waiting for ${what}${errors.length ? ` (${errors.join("; ")})` : ""}`);
+      await sleep(5);
+    }
+  };
+  /** Step the games and draw their views in real time until `done` says so (or 150 s are up). */
+  const play = async (games: [GameT, boolean][], views: View[], each: (now: number) => void, done: (now: number) => boolean): Promise<string> => {
+    let last = performance.now(), acc = 0;
+    const from = last;
+    for (;;) {
+      const now = performance.now();
+      acc += now - last;
+      last = now;
+      for (let steps = 0; acc >= STEP && steps < 5; steps++, acc -= STEP) for (const [game, driven] of games) game.step(driven ? drive(game) : IDLE, STEP);
+      if (acc >= STEP) acc = 0;
+      for (const v of views) v.frame(now);
+      each(now);
+      if (done(now)) return "";
+      if (now - from > 150_000) return `TIMED OUT (phase ${games[0][0].phase})`;
+      await sleep(Math.max(1, STEP - (performance.now() - now)));
+    }
+  };
+  let ok = true;
+  const say = (good: boolean, what: string) => {
+    console.log(`${good ? "ok  " : "FAIL"}  ${what}`);
+    if (!good) ok = false;
+  };
+  try {
+    // Races alone: the winner's finish ends the race.
+    console.log(`${runs} races alone, 1 lap. The server ends each in the step the car finishes in and says so at once; a snapshot goes out every second tick, so game.phase can be "results" a frame or two before the car is counted in.\n`);
+    console.log("| race | frames from game.phase results to the car counted in | the flag before, in those frames and at the count | race phase handed over (with the count) | the 840 ms after the count |");
+    console.log("|---|---:|---|---|---|");
+    let fast = 0, split = 0, furled = 0, played = 0;
+    for (let run = 1; run <= runs; run++) {
+      await sleep(Math.random() * 40); // the races end on odd and on even ticks
+      const game = newGame(), view = new View(game);
+      let counted = 0;
+      game.create(`Solo${run}`);
+      await until(() => !!game.you && !!game.code, "the room");
+      await sleep(300);
+      game.start();
+      const note = await play([[game, true]], [view], (now) => {
+        if (!counted && view.out.finished >= 1) counted = now;
+      }, (now) => counted > 0 && now - counted > 1000);
+      const f = view.frames, iA = f.findIndex((e) => e.gp === "results"), iB = f.findIndex((e) => e.finished >= 1);
+      if (note || iA < 0 || iB < 0) console.log(`| ${run} | - | ${note || "no finish seen"} | | |`);
+      else {
+        played++;
+        const from = Math.min(iA, iB), those = f.slice(from, iB + 1), pace = view.pace(iB);
+        if (pace === "fast") fast++;
+        if (iB !== iA) split++;
+        if (those.some((e) => e.cell < 0 || e.cell >= M.M_EASE)) furled++;
+        console.log(`| ${run} | ${iB - iA} | ${flagName(f[from - 1].cell)}; ${those.map((e) => flagName(e.cell)).join(", ")} | ${f[from - 1].phase}; ${those.map((e) => `${e.phase} (${e.finished} in)`).join(", ")} | ${pace} |`);
+      }
+      game.leave();
+      await sleep(200);
+    }
+    console.log("");
+    say(played === runs && fast === runs && furled === 0, `races alone: in ${fast} of ${runs} the winner got the fast wave; ${furled} showed a furled flag between the last lap's flag and the chequered one; in ${split} the room's "results" came at least a frame before the car was counted in${split === 0 ? " (the case this is about did not come up: run it again)" : ""}`);
+
+    // One race against a Hard bot: a pause, and a watcher who joins once the winner is in.
+    const game = newGame(), watch = newGame();
+    const driver = new View(game), watcher = new View(watch);
+    let raced = 0, pausedAt = 0, resumed = false, joined = 0, over = 0;
+    game.create("Driver");
+    await until(() => !!game.you && !!game.code, "the room");
+    game.addBot("hard");
+    await until(() => game.players.length === 2, "the bot");
+    await sleep(600);
+    game.start();
+    const note = await play([[game, true], [watch, false]], [driver, watcher], (now) => {
+      if (game.car && game.raceOn()) raced++;
+      if (!pausedAt && raced >= 180 && game.canPause()) {
+        game.pause();
+        pausedAt = now;
+      }
+      if (pausedAt && !resumed && game.paused && now - pausedAt >= 2000 && game.canResume()) {
+        game.resume();
+        resumed = true;
+      }
+      if (!joined && driver.out.phase === 2 && driver.out.finished >= 1) {
+        watch.join(game.code, "Watcher");
+        joined = now;
+      }
+      if (game.phase === "results" && !over) over = now;
+    }, (now) => over > 0 && now - over > 2500);
+    const d = driver.frames, w = watcher.frames;
+    const at = (f: typeof d, test: (e: (typeof d)[number]) => boolean): number => f.findIndex(test);
+    const secs = (f: typeof d, i: number): string => (i < 0 ? "never" : `${((f[i].t - d[0].t) / 1000).toFixed(2)} s`);
+    const show = (v: View, i: number): string => (i < 0 ? "not seen" : `${flagName(v.frames[i].cell)}, ${v.pace(i)}`);
+    const iPause = at(d, (e) => e.paused), iOn = iPause < 0 ? -1 : d.findIndex((e, k) => k > iPause && !e.paused);
+    const iWin = at(d, (e) => e.finished >= 1), iLast = at(d, (e) => e.finished >= 2);
+    const wFirst = at(w, (e) => e.phase >= 2), wLast = at(w, (e) => e.finished >= 2);
+    console.log(`\nOne race against a Hard bot (1 lap)${note ? `: ${note}` : ""}. The host pauses 3 s in and resumes 2 s later; the watcher draws the menu and joins once the winner is in (at ${joined ? `${((joined - d[0].t) / 1000).toFixed(2)} s` : "never"}).`);
+    say(iPause >= 0 && show(driver, iPause + 6) === "held up, still", `the driver, paused (${secs(d, iPause)}): ${show(driver, iPause < 0 ? -1 : iPause + 6)}`);
+    say(iOn >= 0 && show(driver, iOn) === "pennant, fast", `the driver, the race goes on (${secs(d, iOn)}): ${show(driver, iOn)}`);
+    say(show(driver, iWin) === "chequered, fast", `the driver, the winner counted in (${secs(d, iWin)}, race phase ${iWin < 0 ? "-" : d[iWin].phase}): ${show(driver, iWin)}`);
+    say(show(driver, iLast) === "chequered, fast", `the driver, the last car counted in, which ends the race (${secs(d, iLast)}, race phase ${iLast < 0 ? "-" : d[iLast].phase}; game.phase was "results" ${iLast < 0 ? "-" : iLast - at(d, (e) => e.gp === "results")} frames before): ${show(driver, iLast)}`);
+    const gap = wFirst >= 0 && wLast >= 0 ? w[wLast].t - w[wFirst].t : -1;
+    // A watcher who joins less than 840 ms before the last car is in shows that car's burst in the window: not a measure then.
+    say(wFirst >= 0 && (gap < 900 || show(watcher, wFirst) === "chequered, steady"), `the watcher, its first frame of the race (${secs(w, wFirst)}, ${wFirst < 0 ? "-" : w[wFirst].finished} in already): ${gap >= 0 && gap < 900 ? `the last car came in ${gap.toFixed(0)} ms later: too soon to tell its pace apart (run it again)` : show(watcher, wFirst)} (no burst for a car that was in before it looked)`);
+    say(show(watcher, wLast) === "chequered, fast", `the watcher, the last car counted in (${secs(w, wLast)}): ${show(watcher, wLast)}`);
+    const bad = [...d, ...w].filter((e) => e.phase >= 2 && !e.paused && (e.cell < 0 || e.cell >= M.M_HELD)).length;
+    say(bad === 0, `${bad} frames of the race or the results, on either view, showed a furled or a held flag outside the pause`);
+    watch.leave();
+    game.leave();
+    if (errors.length) say(false, `the server said: ${errors.join("; ")}`);
+  } finally {
+    await server.shutdown();
+  }
+  return ok;
+}
+
 // ---- main ----------------------------------------------------------------------------------------
 
-if (args.includes("--check")) {
+if (args.includes("--live")) {
+  const good = await live(Number(arg("--runs") ?? 8), Number(arg("--port") ?? 3016));
+  process.exit(good ? 0 : 1);
+} else if (args.includes("--check")) {
   if (!check()) process.exit(1);
 } else if (args.includes("--alloc")) {
   if (!(await alloc())) process.exit(1);
