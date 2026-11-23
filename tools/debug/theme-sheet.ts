@@ -539,16 +539,33 @@ function surfaces(): Picture {
   return compose("THEME SURFACES: SAND AND OIL", null, sections, null, null);
 }
 
+/** A note cut into lines of at most `per` letters, at its spaces. */
+function lines(note: string, per: number): string[] {
+  const out: string[] = [];
+  let line = "";
+  for (const word of note.split(" ")) {
+    if (line && line.length + 1 + word.length > per) {
+      out.push(line);
+      line = word;
+    } else line = line ? `${line} ${word}` : word;
+  }
+  if (line) out.push(line);
+  return out;
+}
+
+const STRIP_NOTE = "one row of barrels (the eight frames of a turn; desert: scoured drums; city: orange-white traffic drums) and a press's slab with its silhouette (desert: an ore stamp; city: a pile driver), on the theme's tarmac; the global 32 colours (sprites, not baked tiles); 4x";
+
 /** A sheet: its title, a theme's table (or none), the sections' shots in rows, and the strip of what moves (or none). A shot is in its own track's colours. */
 function compose(title: string, table: Scenery | null, sections: Section[], sprites: Picture | null, strip: Scenery | null): Picture {
   const W = 1560, PAD = 16, GAP = 12, LABEL = 12;
+  const PER = Math.floor((W - 2 * PAD) / 6); // letters a line of a note holds
   // Lay out: rows of shots, wrapped.
   let H = 60 + (table ? swatchesHeight(table) + 30 : 0);
   const placed: { sec: number; shot: Shot; x: number; y: number }[] = [];
   const heads: { y: number; title: string; note: string }[] = [];
   sections.forEach((sec, k) => {
     heads.push({ y: H, title: sec.title, note: sec.note });
-    H += 34 + 10 * Math.floor((sec.note.length * 6) / (W - 2 * PAD));
+    H += 24 + 10 * lines(sec.note, PER).length;
     let x = PAD, rowH = 0;
     for (const sh of sec.shots) {
       const w = sh.w * sh.zoom, h = sh.h * sh.zoom;
@@ -564,7 +581,8 @@ function compose(title: string, table: Scenery | null, sections: Section[], spri
     H += rowH + LABEL + 26;
   });
   const spritesY = H;
-  if (strip) H += 34 + (sprites ? sprites.h : 0) + 30;
+  const stripNote = lines(STRIP_NOTE, PER);
+  if (strip) H += 24 + 10 * stripNote.length + (sprites ? sprites.h : 0) + 30;
 
   const pic = blank(W, H, ...rgb(P.soot1));
   text(pic, title, PAD, 14, P.bone2, 3);
@@ -573,8 +591,7 @@ function compose(title: string, table: Scenery | null, sections: Section[], spri
   for (const h of heads) {
     text(pic, h.title, PAD, h.y, P.haz1, 2);
     // A long note runs on to a second line (and a third).
-    const per = Math.floor((W - 2 * PAD) / 6);
-    for (let k = 0; k * per < h.note.length; k++) text(pic, h.note.slice(k * per, (k + 1) * per), PAD, h.y + 18 + 10 * k, P.bone0, 1);
+    lines(h.note, PER).forEach((line, k) => text(pic, line, PAD, h.y + 18 + 10 * k, P.bone0, 1));
   }
   for (const pl of placed) {
     const sh = pl.shot;
@@ -587,8 +604,8 @@ function compose(title: string, table: Scenery | null, sections: Section[], spri
   clearMarks();
   if (strip) {
     text(pic, "WHAT MOVES: THE OBSTACLE SHEET'S SPRITES IN THE THEME'S TONES", PAD, spritesY, P.haz1, 2);
-    text(pic, "one row of barrels (the eight frames of a turn; desert: scoured drums; city: orange-white traffic drums) and a press's slab with its silhouette (desert: an ore stamp; city: a pile driver), on the theme's tarmac; the global 32 colours (sprites, not baked tiles); 4x", PAD, spritesY + 18, P.bone0, 1);
-    if (sprites) paste(pic, sprites, PAD, spritesY + 34);
+    stripNote.forEach((line, k) => text(pic, line, PAD, spritesY + 18 + 10 * k, P.bone0, 1));
+    if (sprites) paste(pic, sprites, PAD, spritesY + 24 + 10 * stripNote.length);
   }
   return pic;
 }
