@@ -790,7 +790,13 @@ MARSHALS-1 r4 confirm APPROVE (ctx_68c47f8cbab6; tmp/marshals/REVIEW-marshals-1-
 166/166, build index-CARM5PoL.js); ClickUp ready for qa test; workers released; workspace + branch removed; TH-LOOK-2 told (merge main later).
 NOSELECT-2 123jpnbfgvn in flight: ctx_2b8d184a1ef5 (Opus, ~/orca/workspaces/scrap-rally/noselect-2, :3016, spec tmp/spec-noselect-2.md).
 Active authors: BR-TRACKS, TH-LOOK-2, NOSELECT-2 (cap full). Player-visible on local main now: the marshals -> ask about a push when
-NOSELECT-2 lands (batch). TH-LOOK-2 waits for
+NOSELECT-2 lands (batch).
+BR-TRACKS DONE c35a856 (Slag narrow cut + pit, Mile jump cut; gains 1.6-2.1 s, a fall costs more; 0 falls; only the two tracks' golden
+lines; speed gate PASS; census 14,085,784 B; 1092/1092 + 174/174 x2; report + 12 shots tmp/br-tracks/). Reviewer ctx_c8ebf124332a (Opus,
+:3018, tmp/review-br-tracks.md; also the Mile socket-bot reconcile max 5.89). Merge into main: README conflict only (keep both).
+TASTE COPY :3012 now = ~/orca/workspaces/scrap-rally/br-tracks-taste detached at c35a856 (SCRAP_DEV_BOTS=1 PORT=3012 nohup npm start, node
+pid 3189, log tmp/br-tracks-taste-3012.log); the Branch Yard copy (pid 27353, branch-taste) stopped + removed. The user drives Slag
+Harbour + Breaker's Mile (taste gate 9). TH-LOOK-2 waits for
 MARSHALS-1 (shares render.ts + canvas-census.ts). Ford direction cue moved from THEME-SURF to TH-LOOK-3 (drawing = world.ts, Fable).
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
