@@ -842,7 +842,11 @@ HOLD: THEME-TRACKS merges only AFTER TH-LOOK-H if Slag Harbour's oil is invisibl
 Active authors: TH-LOOK-H, THEME-TRACKS (1 free; TH-LOOK-3 waits for TH-LOOK-H; nothing else startable).
 QA15 live (ctx_49f5d08ac0f7, released; tmp/qa15-live-report.md): all PASS (0 page errors; frame times 16.7/16.7 ms) except the Easy bot
 DNF 2/2 on Breaker's Mile (grace). User: GRACE-1 123jpnbfkch -> in flight ctx_5aee51fd378e (Opus, ~/orca/workspaces/scrap-rally/grace-1,
-:3011, tmp/spec-grace-1.md). THEME-TRACKS answered (2 test edits; HOLD until TH-LOOK-H). Active authors: TH-LOOK-H, THEME-TRACKS, GRACE-1. TH-LOOK-2 waits for
+:3011, tmp/spec-grace-1.md). THEME-TRACKS answered (2 test edits; HOLD until TH-LOOK-H). Active authors: TH-LOOK-H, THEME-TRACKS, GRACE-1.
+GRACE-1 nudged once (idled on its own test). THEME-TRACKS DONE c5375b3 (4 half-width sand drifts on Mile, 1 oil slick on Slag s 18500-18700;
+bots skirt; through costs 0.2-1.6 s; 1113/1113 + 186/186 x2; report tmp/theme-tracks/). Reviewer ctx_b0f85f68f6fa (Opus, :3018,
+tmp/review-theme-tracks.md). MERGE HELD until TH-LOOK-H merges (then: author merges main + re-shoots the slick; the user drives both
+tracks). Active authors: TH-LOOK-H, GRACE-1 (1 free; nothing startable: TH-LOOK-3 waits for TH-LOOK-H). TH-LOOK-2 waits for
 MARSHALS-1 (shares render.ts + canvas-census.ts). Ford direction cue moved from THEME-SURF to TH-LOOK-3 (drawing = world.ts, Fable).
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
