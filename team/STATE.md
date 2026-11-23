@@ -799,7 +799,9 @@ pid 3189, log tmp/br-tracks-taste-3012.log); the Branch Yard copy (pid 27353, br
 Harbour + Breaker's Mile (taste gate 9).
 TH-LOOK-2 asked (Slag Harbour still city on main): BR-TRACKS' theme-removal commit 7c30a8e cherry-picked onto main as 4b6e9b6; gate GREEN
 (1085/1085, 166/166, build index-CXjr0vIx.js, schema-hash 37 SAME). TH-LOOK-2 told to merge main + final gate. NOSELECT-2: whole-link
-selection (user-select: all) chosen. TH-LOOK-2 waits for
+selection (user-select: all) chosen.
+HARD-3 POSTPONED (user 2026-11-23); :3009 tuning copy stopped (pid 96649) + split-taste worktree removed. Waiting on the user now: the
+BR-TRACKS drive on :3012 only (+ a push question when NOSELECT-2 lands). TH-LOOK-2 waits for
 MARSHALS-1 (shares render.ts + canvas-census.ts). Ford direction cue moved from THEME-SURF to TH-LOOK-3 (drawing = world.ts, Fable).
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
