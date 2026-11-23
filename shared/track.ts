@@ -64,10 +64,11 @@ export interface Belt { k: "belt"; s0: number; s1: number; lat0: number; lat1: n
 // One per theme, each only on its own theme's tracks (validateTrack): sand on a desert track, oil
 // on a city one, a ford on a jungle one. Shaped like water and dirt: a rectangle s0..s1 by lat0..lat1
 // in track coordinates, inside the asphalt; the declared rectangle is what is drawn (the bounds the
-// puddle is painted in, as water's: TH-LOOK-2, TH-LOOK-3) and a car is to feel it inside tractionRect
-// (THEME-SURF). They do NOTHING yet: buildTrack places them in their own lists (Track.sand, oil,
-// fords) and in Track.themeSurfaces / themeAt, never in Track.surfaces / surfAt, so physics and the
-// bots see none of them (no physics or bot change until THEME-SURF).
+// puddle is painted in, as water's: TH-LOOK-2, TH-LOOK-3) and a car feels it inside tractionRect.
+// buildTrack places them in their own lists (Track.sand, oil, fords, Track.themeSurfaces / themeAt:
+// what the drawing reads) and, THEME-SURF, in Track.surfaces / surfAt with water, dirt and belts: they
+// act (shared/physics.ts stepCar: themeDrag, themeGrip, OIL_TURN, a ford's drift) and the bots cost
+// them (shared/botdrive.ts laneCost) and aim a ford upstream.
 
 /** Sand (desert): "bogs you, keeps your line" (THEME-SURF). At most SAND_LEN_MAX long, and with the dirt it runs into (LOOSE_JOIN) too. */
 export interface Sand { k: "sand"; s0: number; s1: number; lat0: number; lat1: number }
@@ -320,22 +321,23 @@ export interface Track {
   presses: PlacedPress[];
   widens: Widen[];
   islands: PlacedIsland[];
-  // THEME-SCHEMA: the theme surfaces as declared (each its draw rectangle), sorted by s0. They do
-  // nothing yet (THEME-SURF): never in surfaces / surfAt below.
+  // THEME-SCHEMA: the theme surfaces as declared (each its draw rectangle), sorted by s0. THEME-SURF:
+  // they act, felt from surfaces / surfAt below (themeSurfaces / themeAt hold the same objects).
   sand: Sand[];
   oil: Oil[];
   fords: Ford[];
   // M4-SURF: what a car feels, in per-segment buckets built once (no scan of every feature per tick).
-  /** Water, dirt and belts where a car feels them (Surface), sorted by s0. */
+  /** Water, dirt, belts and (THEME-SURF) sand, oil and fords where a car feels them (Surface), sorted by s0. */
   surfaces: Surface[];
   /** Per segment i: the surfaces whose s range overlaps cum[i]..cum[i + 1] (a car whose nearest segment is i). */
   surfAt: readonly Surface[][];
   /** Per segment i: the first index in surfaces whose s1 > cum[i] (the bots look ahead from there). */
   surfFrom: number[];
   /**
-   * THEME-SCHEMA: the theme surfaces where a car is to feel them (Surface: kind SURF_SAND, SURF_OIL or
+   * THEME-SCHEMA: the theme surfaces where a car feels them (Surface: kind SURF_SAND, SURF_OIL or
    * SURF_FORD, the traction rectangle, a ford's vx), sorted by s0, and per segment i the ones whose s
-   * range overlaps cum[i]..cum[i + 1] (as surfAt). Read by nothing yet: THEME-SURF makes them act.
+   * range overlaps cum[i]..cum[i + 1] (as surfAt). THEME-SURF: the same objects are in surfaces / surfAt,
+   * which physics and the bots read; these lists are the drawing's.
    */
   themeSurfaces: Surface[];
   themeAt: readonly Surface[][];
@@ -381,7 +383,7 @@ export interface Track {
 export const SURF_WATER = 1;
 export const SURF_DIRT = 2;
 export const SURF_BELT = 3;
-/** THEME-SCHEMA's theme surfaces (Track.themeSurfaces): nothing reads them yet (THEME-SURF). */
+/** THEME-SCHEMA's theme surfaces (Track.themeSurfaces, and from THEME-SURF in Track.surfaces: they act, shared/physics.ts). */
 export const SURF_SAND = 4;
 export const SURF_OIL = 5;
 export const SURF_FORD = 6;
@@ -391,7 +393,7 @@ export const SURF_FORD = 6;
  * (tractionRect: the declared one less PUDDLE_TRACTION_INSET), a belt by its declared rectangle; a
  * car whose centre is strictly inside (s0 < s < s1, lat0 < lat < lat1) is on it. vx: a belt's drift
  * (units/s, + = toward the right of travel), 0 for water and dirt. THEME-SCHEMA: sand, oil and a
- * ford by their traction rectangles (a ford's vx its drift), in Track.themeSurfaces only.
+ * ford by their traction rectangles (a ford's vx its drift), in Track.themeSurfaces and (THEME-SURF) Track.surfaces.
  */
 export interface Surface {
   kind: number;
@@ -948,10 +950,21 @@ function placeIsland(track: Track, f: Island): PlacedIsland {
 function buildBuckets(track: Track): void {
   const { cum, tyres } = track;
   const n = segCount(track); // the segments (BR-SCHEMA: an open road has one fewer than its samples)
+  // THEME-SCHEMA: the theme surfaces as felt (their traction rectangles, a ford's vx its drift), sorted by
+  // s0, in lists of their own (themeSurfaces / themeAt below: what the drawing reads, TH-LOOK-2/3) ...
+  const theme: Surface[] = [];
+  for (const f of track.sand) theme.push({ kind: SURF_SAND, ...tractionRect(f), vx: 0 });
+  for (const f of track.oil) theme.push({ kind: SURF_OIL, ...tractionRect(f), vx: 0 });
+  for (const f of track.fords) theme.push({ kind: SURF_FORD, ...tractionRect(f), vx: f.vx });
+  theme.sort((a, b) => a.s0 - b.s0 || a.lat0 - b.lat0);
   const surfaces: Surface[] = [];
   for (const w of track.water) surfaces.push({ kind: SURF_WATER, ...tractionRect(w), vx: 0 });
   for (const d of track.dirt) surfaces.push({ kind: SURF_DIRT, ...tractionRect(d), vx: 0 });
   for (const b of track.belts) surfaces.push({ kind: SURF_BELT, s0: b.s0, s1: b.s1, lat0: b.lat0, lat1: b.lat1, vx: b.vx });
+  // ... and THEME-SURF: in surfaces / surfAt too (the same objects), one bucket with water, dirt and belts,
+  // so physics (surfaceAt), the bots' lane costs, an island's lanes and the route rings see them. None on a
+  // track without any: the same list as before.
+  for (const f of theme) surfaces.push(f);
   surfaces.sort((a, b) => a.s0 - b.s0 || a.lat0 - b.lat0);
   track.surfaces = surfaces;
   const surfAt: Surface[][] = [], surfFrom: number[] = [], tyresAt: PlacedTyres[][] = [], tyresFrom: number[] = [];
@@ -977,14 +990,8 @@ function buildBuckets(track: Track): void {
   track.surfFrom = surfFrom;
   track.tyresAt = tyresAt;
   track.tyresFrom = tyresFrom;
-  // THEME-SCHEMA: the theme surfaces, as surfaces are (their traction rectangles, per segment), in
-  // lists of their own that nothing reads yet (THEME-SURF): a track without any shares one frozen
-  // empty list per segment.
-  const theme: Surface[] = [];
-  for (const f of track.sand) theme.push({ kind: SURF_SAND, ...tractionRect(f), vx: 0 });
-  for (const f of track.oil) theme.push({ kind: SURF_OIL, ...tractionRect(f), vx: 0 });
-  for (const f of track.fords) theme.push({ kind: SURF_FORD, ...tractionRect(f), vx: f.vx });
-  theme.sort((a, b) => a.s0 - b.s0 || a.lat0 - b.lat0);
+  // THEME-SCHEMA: the theme surfaces per segment in a list of their own as well (as surfAt), for the
+  // drawing: a track without any shares one frozen empty list per segment.
   track.themeSurfaces = theme;
   const themeAt: Surface[][] = [];
   for (let i = 0; i < n; i++) {

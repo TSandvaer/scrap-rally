@@ -18,6 +18,9 @@ import {
   segDir,
   SURF_BELT,
   SURF_DIRT,
+  SURF_FORD,
+  SURF_OIL,
+  SURF_SAND,
   SURF_WATER,
   surfaceAt,
   TRUCK_HALF,
@@ -111,6 +114,47 @@ export const WATER_FORCE = 0.35;
 export const WATER_GRIP_OF_DIRT = 1 / 3;
 export const WATER_TURN = 0.5;
 
+// Theme surfaces (THEME-SURF, PLAN-THEMES.md 2.3, advisor changes 4 and 6, user decision 7). Each type's
+// multipliers come from its dirt ones, as water's grip does (WATER_GRIP_OF_DIRT), so CarStats, the car
+// types and the upgrades are untouched:
+// - Sand (desert), "bogs you, keeps your line": the drag times 1 + SAND_DRAG_OF_DIRT x (dirtDrag - 1)
+//   (top speed Sport 210, Racer 177, Truck 323 u/s) and the grip times SAND_GRIP. Drag only, as dirt.
+// - Oil (city), "steering goes, brakes stay": the grip times dirtGrip x OIL_GRIP_OF_DIRT (Sport 0.093,
+//   Racer 0.075, Truck 0.15) and the steering times OIL_TURN; every force along the car (throttle, brake,
+//   roll, drag) is the asphalt's.
+// - Ford (jungle), "aim upstream": the belt's drift (its vx, + = right of travel) and the drag times
+//   1 + FORD_DRAG_OF_DIRT x (dirtDrag - 1) (top speed Sport 274, Racer 242, Truck 364 u/s), the grip
+//   times FORD_GRIP.
+// The verge (advisor change 6): validateTrack keeps every theme surface inside the asphalt, and on one
+// its own factors replace the verge's (they never stack with dirtDrag: a car on sand off the asphalt, on a
+// track built past validation, is on sand, not on sand and dirt).
+export const SAND_DRAG_OF_DIRT = 0.55;
+export const SAND_GRIP = 0.8;
+export const OIL_GRIP_OF_DIRT = 0.25;
+export const OIL_TURN = 0.4;
+export const FORD_DRAG_OF_DIRT = 0.3;
+export const FORD_GRIP = 0.7;
+
+/** Is this surface kind a theme surface (sand, oil, a ford)? */
+export function isThemeSurface(kind: number): boolean {
+  return kind === SURF_SAND || kind === SURF_OIL || kind === SURF_FORD;
+}
+
+/** The drag factor on a theme surface for a car with `stats` (1 = the asphalt's): sand's and a ford's from its dirt drag, oil's 1. */
+export function themeDrag(kind: number, stats: CarStats): number {
+  if (kind === SURF_SAND) return 1 + SAND_DRAG_OF_DIRT * (stats.dirtDrag - 1);
+  if (kind === SURF_FORD) return 1 + FORD_DRAG_OF_DIRT * (stats.dirtDrag - 1);
+  return 1;
+}
+
+/** The grip factor on a theme surface for a car with `stats` (times stats.grip): sand SAND_GRIP, oil dirtGrip x OIL_GRIP_OF_DIRT, a ford FORD_GRIP. */
+export function themeGrip(kind: number, stats: CarStats): number {
+  if (kind === SURF_SAND) return SAND_GRIP;
+  if (kind === SURF_OIL) return stats.dirtGrip * OIL_GRIP_OF_DIRT;
+  if (kind === SURF_FORD) return FORD_GRIP;
+  return 1;
+}
+
 // Tyre mounds (M4-SURF, PLAN-M4.md 2.3): a static circle the car capsule bounces off. Full push-out;
 // the speed into it comes back out times TYRES_RESTITUTION and at least TYRES_MIN_OUT; the speed
 // along it times TYRES_TANGENT. Airborne cars pass over (only a driving step collides), no damage.
@@ -194,13 +238,16 @@ export function stepCar(c: CarState, input: Input, stats: CarStats, track: Track
   const riding = trucks !== undefined && trucks.length > 0 ? truckRamp(road, trucks, q, c.vx, c.vy) : null;
   // The surface under the car's centre (M4-SURF; null on a track without any: exactly as before).
   const surf = surfaceAt(road, q.seg, q.s, q.lat);
-  const wet = surf !== null && surf.kind === SURF_WATER;
-  const onRoad = q.dist <= halfOf(road, q) && !(surf !== null && surf.kind === SURF_DIRT);
+  const kind = surf === null ? 0 : surf.kind;
+  const wet = kind === SURF_WATER;
+  // THEME-SURF: on sand, oil or a ford its own factors (themeDrag, themeGrip), never stacked with the verge's.
+  const themed = kind === SURF_SAND || kind === SURF_OIL || kind === SURF_FORD;
+  const onRoad = q.dist <= halfOf(road, q) && kind !== SURF_DIRT;
   const boosted = c.boost > 0;
   const accel = boosted ? stats.accel * BOOST_ACCEL : stats.accel;
-  let drag = (accel / (boosted ? stats.topSpeed * BOOST_TOP : stats.topSpeed)) * (wet ? WATER_FORCE : onRoad ? 1 : stats.dirtDrag);
+  let drag = (accel / (boosted ? stats.topSpeed * BOOST_TOP : stats.topSpeed)) * (wet ? WATER_FORCE : themed ? themeDrag(kind, stats) : onRoad ? 1 : stats.dirtDrag);
   if (draft > 0 && !boosted) drag *= 1 - DRAFT_DRAG_CUT * draft;
-  const grip = stats.grip * (wet ? stats.dirtGrip * WATER_GRIP_OF_DIRT : onRoad ? 1 : stats.dirtGrip);
+  const grip = stats.grip * (wet ? stats.dirtGrip * WATER_GRIP_OF_DIRT : themed ? themeGrip(kind, stats) : onRoad ? 1 : stats.dirtGrip);
   const force = wet ? WATER_FORCE : 1; // x 1 is exact: dry steps are the same arithmetic as before
 
   if (throttle > 0) {
@@ -219,12 +266,12 @@ export function stepCar(c: CarState, input: Input, stats: CarStats, track: Track
   c.vx = vf * cos - vl * sin;
   c.vy = vf * sin + vl * cos;
   const turnScale = clamp(vf / FULL_TURN_SPEED, -1, 1);
-  c.h = wrapAngle(c.h + steer * (wet ? stats.turn * WATER_TURN : stats.turn) * turnScale * DT);
+  c.h = wrapAngle(c.h + steer * (wet ? stats.turn * WATER_TURN : kind === SURF_OIL ? stats.turn * OIL_TURN : stats.turn) * turnScale * DT);
 
   c.x += c.vx * DT;
   c.y += c.vy * DT;
-  if (surf !== null && surf.kind === SURF_BELT) {
-    // The belt's drift, toward the right of travel at the car (a fixed move each tick).
+  if (surf !== null && (kind === SURF_BELT || kind === SURF_FORD)) {
+    // The belt's drift (THEME-SURF: a ford's too), toward the right of travel at the car (a fixed move each tick).
     const d = segDir(road, q.seg);
     c.x -= d.y * surf.vx * DT;
     c.y += d.x * surf.vx * DT;
