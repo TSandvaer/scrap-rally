@@ -8,6 +8,7 @@
 
 import type { BotLevel, BotTune } from "./botdrive";
 import type { CarType } from "./cars";
+import { TICK_HZ } from "./physics";
 import type { Levels } from "./shop";
 import type { RoomSound } from "./sound";
 import type { MineMode } from "./weapons";
@@ -17,7 +18,24 @@ export const MAX_PLAYERS = 6;
 export const SNAPSHOT_EVERY = 2; // ticks between snapshots -> 30 Hz
 export const INPUT_REDUNDANCY = 3; // each input message repeats the last N inputs
 export const COUNTDOWN_MS = 3000;
-export const FINISH_GRACE_MS = 30000; // race ends this long after the winner finishes
+export const FINISH_GRACE_MS = 30000; // the finish grace's floor: the race ends at least this long after the winner finishes
+// GRACE-1 (ClickUp 123jpnbfkch): on a long track the grace is this share of the winner's average lap.
+export const FINISH_GRACE_LAP_SHARE = 0.75;
+/**
+ * The finish grace (GRACE-1): how long after the winner's finish the race ends, fixed at that finish:
+ * max(FINISH_GRACE_MS, FINISH_GRACE_LAP_SHARE x the winner's average lap), the average lap being the
+ * winner's race time (winnerMs, its finish time) over the race's laps. The share is rounded to the
+ * nearest whole tick (1000 / TICK_HZ ms; an exact half rounds up), so the deadline is a whole number
+ * of server steps after the finish, like the 30 s floor (1800 ticks). 3 laps of 31 s: 30 s (the floor);
+ * 3 laps of 51.7 s: 2327 ticks, 38.78 s. A race time that is not a positive number (no winner) or a lap
+ * count that is not positive gets the floor.
+ */
+export function finishGraceMs(winnerMs: number, laps: number): number {
+  if (!Number.isFinite(winnerMs) || winnerMs <= 0 || !(laps > 0)) return FINISH_GRACE_MS;
+  // One division of exact products (0.75 is exact in binary), so the tick count rounds the same everywhere.
+  const ticks = Math.round((winnerMs * FINISH_GRACE_LAP_SHARE * TICK_HZ) / (laps * 1000));
+  return Math.max(FINISH_GRACE_MS, (ticks * 1000) / TICK_HZ);
+}
 export const RESULTS_MS = 8000;
 export const RECONNECT_GRACE_MS = 20000;
 // The host may "Start anyway" (not everyone ready) this long after the lobby opened or the

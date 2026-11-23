@@ -16110,7 +16110,7 @@ function bbRaces(): void {
   }
   console.log(`  ${rows.join("\n  ")}`);
   check(
-    "branch bots races: on Branch Yard 3 Easy, 3 Normal, 3 Hard and the mixed 5 (Hard, Normal, Easy, Hard, Normal by seat: M4-TRACKS' long-track field) finish 3 laps with weapons on (the race kept open until all have: whether each made the game's 30 s grace is printed), identically on a rerun, <= 1 fall per bot per race; each bot's route its seat's plan (Easy never the jump or holes cut, the dirt cut only in the Truck; Normal on even seats only), driven: > 900 ticks on each cut it takes, < 300 (mouths) on the others",
+    "branch bots races: on Branch Yard 3 Easy, 3 Normal, 3 Hard and the mixed 5 (Hard, Normal, Easy, Hard, Normal by seat: M4-TRACKS' long-track field) finish 3 laps with weapons on (the race kept open until all have: whether each made the game's finish grace, finishGraceMs: 30 s scaled with the winner's lap, is printed), identically on a rerun, <= 1 fall per bot per race; each bot's route its seat's plan (Easy never the jump or holes cut, the dirt cut only in the Truck; Normal on even seats only), driven: > 900 ticks on each cut it takes, < 300 (mouths) on the others",
     ok,
     rows.filter((r) => r.startsWith("BAD")).join(" | ") || "8 races as specified",
   );
@@ -16838,6 +16838,262 @@ function hsQuay(): void {
 }
 
 for (const t of [hsTypes, hsRules, hsSlag, hsQuay]) {
+  console.log(`\n# ${t.name}`);
+  try {
+    t();
+  } catch (e) {
+    check(`${t.name} threw`, false, String((e as Error).stack ?? e));
+  }
+}
+
+// ---- the finish grace scales with the lap (GRACE-1; ClickUp 123jpnbfkch, user 2026-11-23 after QA15) ----
+// shared/protocol.ts finishGraceMs: grace = max(FINISH_GRACE_MS (30 s), 0.75 x the winner's average lap: its race time
+// over the race's laps), rounded to the nearest whole tick, fixed at the winner's finish (server/room.ts, the first
+// finisher sets Room.phaseEnds). The long tracks (laps ~52 s) get ~39 s, so the Easy bot is in; the short ones keep 30 s.
+
+// This section's imports (hoisted like the ones at the top).
+import { FINISH_GRACE_LAP_SHARE as GR_SHARE, finishGraceMs as grGrace } from "../shared/protocol";
+import { branchRace as grRace } from "../tools/debug/branch-tune";
+import type { BotLevel as GrLevel } from "../shared/botdrive";
+import type { CarType as GrCar } from "../shared/cars";
+
+const grClock = { t0: 0 };
+const GR_TICK = 1000 / 60;
+const GR_FLOOR_TICKS = 1800; // FINISH_GRACE_MS in ticks
+const GR_LEVELS: GrLevel[] = ["easy", "normal", "hard", "hard"]; // QA15's field: Easy, Normal, Hard, Hard
+// QA15's mixed cars: Breaker's Mile race A (the Easy bot DNF there live) and Slag Harbour.
+const GR_LONG: { id: string; cars: GrCar[] }[] = [
+  { id: "breakers-mile", cars: ["racer", "truck", "racer", "sport"] },
+  { id: "slag-harbour", cars: ["truck", "sport", "truck", "racer"] },
+];
+const GR_SHORT = ["rust-bowl", "crusher-run", "overpass-knot"];
+
+function grRule(): void {
+  // Criterion 1: the pure helper. A short-track winner (3 laps of 31 s) gets the 30 s floor; 3 x 51.7 s gets 0.75 x 51.7 =
+  // 38.775 s = 2326.5 ticks, rounded to the nearest whole tick (a half up): 2327 ticks = 38.783 s ("38.8 s").
+  grClock.t0 = performance.now();
+  const short = grGrace(3 * 31000, 3), long = grGrace(3 * 51700, 3);
+  check(
+    "grace rule: a short-track winner (3 laps of 31 s) -> 30 s (FINISH_GRACE_MS, the floor); a 3 x 51.7 s winner -> 0.75 x 51.7 s rounded to the nearest whole tick: 2327 ticks = 38.78 s (38.8 s)",
+    FINISH_GRACE_MS === 30000 && GR_SHARE === 0.75 && short === 30000 && long === (2327 * 1000) / 60 && (long / 1000).toFixed(1) === "38.8",
+    `3 x 31 s: ${short} ms; 3 x 51.7 s: ${long.toFixed(3)} ms = ${((long * 60) / 1000).toFixed(6)} ticks`,
+  );
+  // The edge: an average lap of exactly 40 s is the floor (0.75 x 40 = 30); one tick of share more is past it.
+  const at40 = grGrace(120000, 3), past40 = grGrace(120100, 3), oneLap = grGrace(52000, 1), fiveLaps = grGrace(5 * 52000, 5);
+  check(
+    "grace rule: an average lap of exactly 40 s gives the floor (30 s = 1800 ticks); 40.033 s gives 0.75 x it = 1801.5 ticks -> 1802; the lap count divides the race time (1 lap of 52 s = 5 laps of 52 s = 39 s)",
+    at40 === 30000 && past40 === (1802 * 1000) / 60 && oneLap === 39000 && fiveLaps === 39000,
+    `40 s: ${at40}; 40.033 s: ${past40.toFixed(3)}; 1 x 52 s: ${oneLap}; 5 x 52 s: ${fiveLaps}`,
+  );
+  // A sweep: always a whole number of ticks, never below the floor, never more than half a tick from the rule, and
+  // non-decreasing in the race time.
+  let bad = 0, worst = 0, prev = 0, prevLaps = 0;
+  for (let laps = 1; laps <= 6; laps++) {
+    for (let ms = 1; ms <= 600000; ms += 97) {
+      const g = grGrace(ms, laps), ticks = (g * 60) / 1000, rule = Math.max(30000, (0.75 * ms) / laps);
+      worst = Math.max(worst, Math.abs(g - rule));
+      if (Math.abs(ticks - Math.round(ticks)) > 1e-6 || g < 30000 || Math.abs(g - rule) > GR_TICK / 2 + 1e-9 || (laps === prevLaps && g < prev)) bad++;
+      prev = g;
+      prevLaps = laps;
+    }
+  }
+  const degenerate = [grGrace(0, 3), grGrace(-5, 3), grGrace(NaN, 3), grGrace(Infinity, 3), grGrace(155100, 0), grGrace(155100, NaN)];
+  check(
+    "grace rule: over race times 1 ms..600 s and 1..6 laps the grace is a whole number of ticks, >= 30 s, within half a tick of max(30 s, 0.75 x the average lap) and non-decreasing; no winner (0, negative, NaN, Infinity) or no laps -> the 30 s floor",
+    bad === 0 && degenerate.every((g) => g === 30000),
+    `${bad} bad; worst distance from the rule ${worst.toFixed(3)} ms (half a tick ${(GR_TICK / 2).toFixed(3)}); degenerate ${degenerate.join("/")}`,
+  );
+}
+
+/** A 3-lap room on the default track (Rust Bowl) racing; a and b on their last lap near the line, c parked. */
+function grRoom3(): { sim: Sim; a: Player; b: Player; c: Player } {
+  const sim = new Sim(3);
+  const a = sim.add("Ann"), b = sim.add("Bo"), c = sim.add("Cy");
+  sim.startRace(a);
+  return { sim, a, b, c };
+}
+function grNearFinish(sim: Sim, p: Player): void {
+  sim.place(p, L - 40, 0, 300);
+  p.progress = { s: queryTrackNear(track, p.car!.x, p.car!.y, p.car!.seg).s, cp: 3, lap: 2, fin: 0 }; // lap 3 of 3
+}
+
+function grRoom(): void {
+  // The room sets phaseEnds at the first finisher to its finish + finishGraceMs(its race time, the race's laps), fixed
+  // there: the second finisher does not move it. A long-track winner (the race clock moved back so its race time is
+  // ~155 s) gets ~38.8 s: a runner-up 35 s later is in (the old 30 s would have shut it out); the race ends on the
+  // first tick at or past the deadline with the parked car DNF. A short-track winner (~93 s) gets exactly 30 s.
+  const out: string[] = [];
+  let ok = true;
+  for (const want of [155100, 93000]) {
+    const { sim, a, b, c } = grRoom3();
+    sim.room.raceStart = sim.now - want; // the race clock: the winner's time is ~`want` ms when it crosses the line
+    grNearFinish(sim, a);
+    for (let i = 0; i < 60 && !a.finished; i++) sim.run(1, (q) => (q === a ? { throttle: 1 } : {}));
+    const finAt = sim.now, fin = a.progress!.fin, ends = sim.room.phaseEnds;
+    const grace = grGrace(fin, 3);
+    let endAt = 0;
+    const step = (cmd?: (q: Player) => Ctl) => {
+      sim.run(1, cmd);
+      if (!endAt && (sim.room.phase as string) === "results") endAt = sim.now;
+    };
+    step(); // the next snapshot tick (SNAPSHOT_EVERY 2) carries it
+    step();
+    const snap = sim.conns.get(c.id)!.msgs.filter((m): m is Extract<ServerMsg, { t: "snap" }> => m.t === "snap").pop()!;
+    // The runner-up crosses 35 s after the winner (past the old 30 s): it lands inside a long grace only.
+    let bIn = false;
+    while (sim.now < finAt + 35000) step();
+    if (!endAt) {
+      grNearFinish(sim, b);
+      for (let i = 0; i < 60 && !b.finished; i++) step((q) => (q === b ? { throttle: 1 } : {}));
+      bIn = b.finished && sim.room.phaseEnds === ends; // fixed at the winner's finish
+    }
+    for (let i = 0; i < 60 * 60 && !endAt; i++) step();
+    const res = sim.conns.get(c.id)!.msgs.filter((m): m is Extract<ServerMsg, { t: "results" }> => m.t === "results").pop();
+    const cRow = res?.rows.find((r) => r.id === c.id), bRow = res?.rows.find((r) => r.id === b.id);
+    const long = want > 120000;
+    const good =
+      ends === finAt + grace && snap.phaseEnds === ends && (long ? grace > 30000 && Math.abs(grace - (0.75 * fin) / 3) <= GR_TICK / 2 : grace === 30000) &&
+      endAt >= ends && endAt - ends < GR_TICK + 1e-6 && !!cRow && cRow.timeMs === 0 && (long ? bIn && !!bRow && bRow.timeMs > 0 : !bIn && !!bRow && bRow.timeMs === 0);
+    ok &&= good;
+    out.push(
+      `winner ${(fin / 1000).toFixed(2)} s over 3 laps -> grace ${(grace / 1000).toFixed(3)} s (phaseEnds - finish ${(ends - finAt).toFixed(3)}, snapshot ${snap.phaseEnds === ends ? "same" : "DIFFERS"}); ` +
+        `runner-up 35 s later ${bRow?.timeMs ? "in" : "DNF"}; the race ended ${(endAt - ends).toFixed(2)} ms after the deadline; the parked car ${cRow?.timeMs === 0 ? "DNF" : "?"}${good ? "" : " BAD"}`,
+    );
+  }
+  check(
+    "grace room: the first finisher sets phaseEnds = its finish + finishGraceMs(its race time, 3 laps), fixed there and in the snapshots; a ~155 s winner gets ~38.8 s (a runner-up 35 s later is in), a ~93 s winner exactly 30 s (it is not); the race ends on the first tick at the deadline, the unfinished car DNF",
+    ok,
+    out.join("; "),
+  );
+}
+
+function grLong(): void {
+  // Criterion 2: the mixed race (Easy, Normal, Hard, Hard; QA15's mixed cars) on Breaker's Mile and Slag Harbour, the
+  // game's rule (branchRace grace on: the room's own deadline), 3 runs: every bot finishes, the race ends when the last
+  // bot does (not on the deadline), the grace is the scaled one (> 30 s, 0.75 x the winner's average lap), the 3 runs
+  // identical. Printed: each bot's gap to the winner against the old 30 s and the new grace.
+  const rows: string[] = [];
+  let ok = true;
+  for (const r of GR_LONG) {
+    const runs = [0, 1, 2].map(() => grRace({ track: r.id, levels: GR_LEVELS, cars: r.cars }));
+    const a = runs[0];
+    const same = runs.every((x) => x.hash === a.hash && JSON.stringify(x.rows) === JSON.stringify(a.rows) && x.graceTicks === a.graceTicks);
+    const fins = a.rows.map((x) => x.finish), first = Math.min(...fins), last = Math.max(...fins);
+    const allIn = a.rows.every((x) => x.finish > 0 && x.inGrace);
+    const scaled = a.graceTicks > GR_FLOOR_TICKS && Math.abs(a.graceTicks - (0.75 * first) / 3) <= 1.5;
+    const good = same && allIn && scaled && a.ticks === last;
+    ok &&= good;
+    rows.push(`${r.id}: winner ${(first / 60).toFixed(2)} s (average lap ${(first / 180).toFixed(2)} s) -> grace ${(a.graceTicks / 60).toFixed(2)} s (was 30 s); race over at ${(a.ticks / 60).toFixed(2)} s${same ? ", 3 runs identical" : ", runs DIFFER"}${good ? "" : " BAD"}`);
+    for (const x of a.rows) {
+      const gap = x.finish - first;
+      rows.push(`  seat ${x.seat} ${x.level.padEnd(6)} ${x.car.padEnd(5)} finish ${(x.finish / 60).toFixed(2)} s, gap ${(gap / 60).toFixed(2)} s: before (30 s) ${gap <= GR_FLOOR_TICKS ? "in" : "DNF"}, after (${(a.graceTicks / 60).toFixed(2)} s) ${gap <= a.graceTicks ? "in" : "DNF"}`);
+    }
+  }
+  console.log(`  ${rows.join("\n  ")}`);
+  check(
+    "grace long tracks: the mixed race (Easy, Normal, Hard, Hard; QA15's mixed cars) on Breaker's Mile and Slag Harbour under the game's deadline: every bot finishes, the race ends with the last one, the grace is 0.75 x the winner's average lap (> 30 s), 3 runs identical",
+    ok,
+    rows.filter((x) => !x.startsWith("  ")).join("; "),
+  );
+}
+
+function grShort(): void {
+  // Criterion 3: on the three short tracks the grace stays 30 s: the mixed field and 3 Easy bots (the slowest field, so
+  // the slowest winner) on each: the winner's average lap is under 40 s (0.75 x 40 = 30), so finishGraceMs gives the floor.
+  const rows: string[] = [];
+  let ok = true;
+  for (const id of GR_SHORT) {
+    for (const levels of [GR_LEVELS, ["easy", "easy", "easy"] as GrLevel[]]) {
+      const a = grRace({ track: id, levels });
+      const first = Math.min(...a.rows.map((x) => (x.finish > 0 ? x.finish : Infinity)));
+      const good = a.graceTicks === GR_FLOOR_TICKS && first / 180 < 40;
+      ok &&= good;
+      rows.push(`${id} ${levels.join("/")}: winner ${(first / 60).toFixed(2)} s, average lap ${(first / 180).toFixed(2)} s -> grace ${(a.graceTicks / 60).toFixed(2)} s${good ? "" : " BAD"}`);
+    }
+  }
+  check("grace short tracks: on Rust Bowl, Crusher Run and Overpass Knot the grace stays 30 s (1800 ticks) for the mixed field and for 3 Easy bots: the winner's average lap is under 40 s", ok, rows.join("; "));
+}
+
+function grClient(): void {
+  // Criterion 4: the deadline reaches the clients in every snapshot (snap.phaseEnds; client/game.ts sets Game.phaseEnds
+  // from it, and client/main.ts's banner "Winner is in — race closes in Ns" counts it down), so no client change. Over two
+  // wired clients on Breaker's Mile: the host (retired at GO) with the four bots (QA15's field and cars) and a guest that
+  // never drives (it never finishes, so the race runs to the deadline): the clients' phaseEnds is the server's, the
+  // banner reads the scaled grace (> 30), the race is still on 30 s after the winner, and the clients get the results
+  // on the tick the race ends, the first at or past the deadline, with every bot in and the guest DNF.
+  const realNow = performance.now.bind(performance);
+  const clock = { now: realNow() };
+  performance.now = () => clock.now;
+  try {
+    const rooms = new Rooms(3);
+    const H = wiredGame(rooms, clock);
+    const G = wiredGame(rooms, clock);
+    H.game.create("Host");
+    H.open();
+    H.flush();
+    const room = rooms.rooms.get(H.game.code)!;
+    const hp = room.players.get(H.game.you)!;
+    const e0 = room.setTrack(hp, GR_LONG[0].id);
+    const bots = GR_LEVELS.map((l, k) => {
+      const b = room.addBot(hp, l, clock.now);
+      if (typeof b === "string") throw new Error(b);
+      const e = room.setCar(hp, GR_LONG[0].cars[k], b.id);
+      if (e) throw new Error(e);
+      return b;
+    });
+    G.game.join(H.game.code, "Guest");
+    G.open();
+    G.flush();
+    G.game.setReady(true);
+    G.flush();
+    H.flush();
+    H.game.start();
+    H.flush();
+    G.flush();
+    const tick = () => {
+      clock.now += GR_TICK;
+      rooms.step(clock.now);
+      for (const W of [H, G]) {
+        W.flush();
+        W.game.step(NO_CONTROLS, GR_TICK);
+      }
+    };
+    while (room.phase !== "racing") tick();
+    room.retire(hp);
+    let finAt = 0, ends = 0, cliEnds = 0, banner = -1, at30 = "", endAt = 0, cliEndAt = 0;
+    for (let i = 0; i < 60 * 300 && !cliEndAt; i++) {
+      tick();
+      if (!finAt && room.phase === "racing" && room.phaseEnds) {
+        finAt = clock.now;
+        ends = room.phaseEnds;
+      }
+      if (finAt && !cliEnds && G.game.phaseEnds) {
+        cliEnds = G.game.phaseEnds;
+        banner = Math.max(0, Math.ceil((G.game.phaseEnds - G.game.serverNow()) / 1000)); // client/main.ts's banner
+      }
+      if (finAt && !at30 && clock.now >= finAt + FINISH_GRACE_MS + 2 * GR_TICK) at30 = `${room.phase}/${H.game.phase}/${G.game.phase}`;
+      if (!endAt && (room.phase as string) === "results") endAt = clock.now;
+      if (!cliEndAt && H.game.phase === "results" && G.game.phase === "results") cliEndAt = clock.now;
+    }
+    const winFin = Math.min(...bots.map((b) => b.progress?.fin || Infinity));
+    const grace = grGrace(winFin, 3);
+    const rows = G.game.results ?? [];
+    const botsIn = bots.every((b) => (rows.find((r) => r.id === b.id)?.timeMs ?? 0) > 0);
+    const guestDnf = rows.find((r) => r.id === G.game.you)?.timeMs === 0;
+    check(
+      "grace client: on Breaker's Mile both wired clients' phaseEnds is the server's (winner's finish + the scaled grace), the banner counts down from more than 30 s, the race is on 30 s after the winner; the clients get the results on the tick the race ends (the first at or past the deadline): the four bots in, the parked guest DNF",
+      !e0 && ends === finAt + grace && grace > FINISH_GRACE_MS && cliEnds === ends && H.game.phaseEnds !== 0 && banner > 30 && banner <= Math.ceil(grace / 1000) &&
+        at30 === "racing/racing/racing" && endAt >= ends && endAt - ends < GR_TICK + 1e-6 && cliEndAt === endAt && botsIn && guestDnf,
+      `winner ${(winFin / 1000).toFixed(2)} s -> grace ${(grace / 1000).toFixed(2)} s; client phaseEnds ${cliEnds === ends ? "= the server's" : `${cliEnds} vs ${ends}`}; banner "race closes in ${banner}s"; 30 s after the winner: ${at30}; ` +
+        `race over ${(endAt - ends).toFixed(2)} ms after the deadline, the clients saw it ${((cliEndAt - endAt) / GR_TICK).toFixed(0)} ticks later; results ${rows.map((r) => `${r.name} ${r.timeMs ? (r.timeMs / 1000).toFixed(2) : "DNF"}`).join(", ")}`,
+    );
+  } finally {
+    performance.now = realNow;
+  }
+  console.log(`  GRACE-1 sim-test sections' runtime (grRule .. grClient): ${((performance.now() - grClock.t0) / 1000).toFixed(1)} s`);
+}
+
+for (const t of [grRule, grRoom, grLong, grShort, grClient]) {
   console.log(`\n# ${t.name}`);
   try {
     t();

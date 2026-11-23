@@ -17,7 +17,6 @@ import {
   CODE_ALPHABET,
   CODE_LENGTH,
   COUNTDOWN_MS,
-  FINISH_GRACE_MS,
   FORCE_START_MS,
   MAX_PLAYERS,
   MINES_BURST,
@@ -30,6 +29,7 @@ import {
   SNAPSHOT_EVERY,
   SOUND_BURST,
   SOUND_PER_SEC,
+  finishGraceMs,
   round,
   type ChatLine,
   type ClientMsg,
@@ -1113,7 +1113,7 @@ export class Room {
         p.finished = true;
         this.finishers++;
         this.event(tick, { k: "finish", id: p.id, place: this.finishers, timeMs: pr.fin });
-        if (this.finishers === 1) this.phaseEnds = now + FINISH_GRACE_MS;
+        if (this.finishers === 1) this.phaseEnds = now + finishGraceMs(pr.fin, this.laps); // GRACE-1: fixed at the winner's finish
       }
       // Retired players have no car: they are not waited for. Nobody left on the field (all
       // retired or gone, no finisher) -> back to the lobby with no results.
