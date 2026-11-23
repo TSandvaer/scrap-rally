@@ -16823,7 +16823,7 @@ function hsQuay(): void {
   const key = (f: { s0: number; s1: number; lat0: number; lat1: number }) => `${f.s0}..${f.s1}/${f.lat0}..${f.lat1}`;
   const blockOil = hsTestTrack("block-yard")!.oil.map(key);
   const rows = t.oil.map((f) => {
-    const turn = Math.abs(pointAt(t, f.s1).h - pointAt(t, f.s0).h);
+    const turn = Math.abs(angleDiff(pointAt(t, f.s0).h, pointAt(t, f.s1).h)); // wrapped: a heading near +-pi cannot fail it
     return { f, turn, ok: f.s1 - f.s0 <= hsT.OIL_LEN_MAX && turn < hsT.POOL_STRAIGHT_TOLERANCE && !blockOil.includes(key(f)) };
   });
   const noOil = (d: typeof HS_QUAY_YARD) => JSON.stringify(d.features!.filter((f) => f.k !== "oil"));

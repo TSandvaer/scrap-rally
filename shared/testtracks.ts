@@ -196,12 +196,13 @@ export const BRANCH_YARD: TrackDef = {
 // obstacle, in spaced groups with plain road between them (the user's density rule; at least 600 units
 // between two groups, sim-test). The loop is the Preview Yard's with its top and bottom straights 1200
 // longer (12596 round; the straights s ~700-3050 and ~7050-9350), so that a ford, which lies on a
-// straight, and a ramp truck's landing have room. In order round the lap, the same on all four:
-// - top straight: the theme surface (slot A, s 800, across the whole road), then a parked ramp truck
+// straight, and a ramp truck's landing have room. In order round the lap, the same on all four (but
+// where the theme surfaces lie: each yard's own, below; Quay Yard's two oil slicks are placed elsewhere):
+// - top straight: the theme surface (slot A; Dune, Block and Canopy Yard: s 800, across the whole road), then a parked ramp truck
 //   right of centre (s 1750) with room for a boosted flight, then a tyre-mound pair (s 2700, 2880);
 // - right-hand side: a pool on the outside half of its tightest bend (s 4000-4300; the inside stays dry,
 //   the dry lane), a row of rolling barrels (s 5000), a crusher press over the left of the road (s 6300);
-// - bottom straight: the theme surface again (slot B, s 7150), then a split round an island whose right
+// - bottom straight: the theme surface again (slot B; those three: from s 7150), then a split round an island whose right
 //   lane has 340 units of dirt (the mud rule, <= 350);
 // - left-hand side and the start: plain road.
 // The theme surfaces act (THEME-SURF: shared/physics.ts stepCar bogs a car on sand, takes its grip and
