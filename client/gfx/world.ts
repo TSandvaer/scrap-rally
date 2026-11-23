@@ -474,6 +474,8 @@ const HOUSE_MIN = 26; // a house is no smaller than this either way
 const TOWN_REACH = 720; // houses stand as far as this round the track (view pixels): more than a view
 const TOWN_CLEAR = 13; // open paving between the barrier and the nearest house, world units ...
 const TOWN_PROP = 5; // ... and round a prop
+const MARSHAL_STAND = 11; // a flag marshal's middle, outside the barrier at the start line (gfx/marshals.ts STAND; that file imports this one)
+const MARSHAL_ROOM = 20; // ... and the open paving round it: the figure and its flag at ease
 const TOWN_CELL = 4; // the grid the layout is worked out on, view pixels
 const HOUSE_DROP = 6; // a house's shadow falls this many pixels right, and one more down
 // A roof's kinds (the low bits of a house's `roof`): what it is made of, and its shape.
@@ -526,6 +528,12 @@ function layTown(art: Art): Town {
   const wall = art.track.wall, half = TOWN_CELL * 0.75;
   for (let i = 0; i < n; i++) mark(ax[i], ay[i], ex[i], ey[i], inv[i], (wall + Math.max(0, wL0[i], wL1[i], wR0[i], wR1[i]) + BARRIER + TOWN_CLEAR) * ZOOM + half);
   for (const j of art.junk) mark(j.x, j.y, 0, 0, 0, j.r * 1.5 + TOWN_PROP * ZOOM + half);
+  // The two flag marshals at the start line stand on open paving (gfx/marshals.ts: MARSHAL_STAND outside each barrier there).
+  const line = pointAt(art.track, 0);
+  for (const side of [-1, 1]) {
+    const lat = side * ((side < 0 ? art.track.wallL[0] : art.track.wallR[0]) + BARRIER + MARSHAL_STAND);
+    mark((line.x - Math.sin(line.h) * lat) * ZOOM, (line.y + Math.cos(line.h) * lat) * ZOOM, 0, 0, 0, MARSHAL_ROOM * ZOOM + half);
+  }
   // Is the rectangle (view pixels, x1 and y1 exclusive) free?
   const free = (xa: number, ya: number, xb: number, yb: number): boolean => {
     for (let y = Math.floor((ya - 1) / TOWN_CELL) - cy0, ye = Math.floor(yb / TOWN_CELL) - cy0; y <= ye; y++) {
