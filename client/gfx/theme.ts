@@ -1,9 +1,9 @@
 // A track's surroundings (PLAN-THEMES.md): which theme a track has, and what a theme's tiles,
 // dust and obstacle sprites are made with (its "scenery").
 //
-// - The theme is fixed per track, in its definition. Until THEME-SCHEMA adds the typed field to
-//   shared/track.ts, themeOf() reads the optional `def.theme` here, in one place, and holds it
-//   against isTheme: an absent or unknown one is the scrapyard. (TH-LOOK-2 swaps to shared/theme.ts.)
+// - The theme is fixed per track, in its definition (shared/theme.ts: TrackDef.theme, themeOf,
+//   isTheme). themeOf() here reads it through those and holds it against isTheme: an absent one
+//   is the scrapyard, and so is one nobody knows.
 // - The Renderer resolves a track's scenery once, as it is built, and hands it to the World, the
 //   Actors and the Obstacles. A theme whose art has not landed draws as the scrapyard.
 // - A theme changes what is painted, never where: the bands of the road, the posts' spacing,
@@ -14,20 +14,15 @@
 // The game never asks for another theme than the track's own. themedTrack() is the preview's and
 // the benchmark's `&theme=` switch and the contact sheet's: the same road with another theme.
 
+import { isTheme, themeOf as themeOfDef, THEMES, type Theme } from "../../shared/theme";
 import type { Track } from "../../shared/track";
-import { DESERT_PALETTE, P, PALETTE, rgbOf, SCRAPYARD, SCRAPYARD_PALETTE, type PaletteName, type ThemePalette } from "./palette";
+import { CITY_PALETTE, DESERT_PALETTE, P, PALETTE, rgbOf, SCRAPYARD, SCRAPYARD_PALETTE, type PaletteName, type ThemePalette } from "./palette";
 
-export type Theme = "scrapyard" | "desert" | "city" | "jungle";
-export const THEMES: readonly Theme[] = ["scrapyard", "desert", "city", "jungle"];
+export { isTheme, THEMES, type Theme };
 
-export function isTheme(v: unknown): v is Theme {
-  return typeof v === "string" && (THEMES as readonly string[]).includes(v);
-}
-
-/** A track's theme: its definition's, or the scrapyard when it names none (or one nobody knows). */
+/** A track's theme: its definition's (shared/theme.ts), or the scrapyard when it names none (or one nobody knows). */
 export function themeOf(track: Track): Theme {
-  // The one cast: TrackDef has no `theme` yet (THEME-SCHEMA adds it; this compiles before and after).
-  const named = (track.def as { theme?: unknown }).theme;
+  const named = themeOfDef(track.def);
   return isTheme(named) ? named : "scrapyard";
 }
 
@@ -100,10 +95,25 @@ const DESERT_OBSTACLES: ObstacleTones = {
   slab: { outline: "soot1", lit: "rust2", dark: "rust0", stripeA: "haz1", stripeB: "soot2" },
 };
 
+// The city's: orange-white traffic drums (a white band either side of the middle, a white panel
+// that goes round as one rolls) and a pile driver (a ram of cast concrete; its top keeps the
+// hazard stripes).
+const CITY_OBSTACLES: ObstacleTones = {
+  barrel: {
+    rims: ["soot2", "soot3", "soot3", "dirt0"],
+    hoops: ["bone0", "bone0", "bone1", "bone2"],
+    label: ["bone0", "bone0", "bone1", "bone2"],
+    seam: ["soot3", "rust0", "rust0", "rust1"],
+    body: ["rust1", "rust2", "rust3", "blast"],
+  },
+  slab: { outline: "soot1", lit: "bone1", dark: "tar3", stripeA: "haz1", stripeB: "soot2" },
+};
+
 /** The themes whose art has landed, in the order of their ids. */
 const LANDED: readonly { theme: Theme; palette: ThemePalette; dust: readonly [PaletteName, PaletteName]; obstacles: ObstacleTones }[] = [
   { theme: "scrapyard", palette: SCRAPYARD_PALETTE, dust: ["bone1", "bone0"], obstacles: SCRAPYARD_OBSTACLES },
   { theme: "desert", palette: DESERT_PALETTE, dust: ["dirt3", "dirt1"], obstacles: DESERT_OBSTACLES },
+  { theme: "city", palette: CITY_PALETTE, dust: ["gravel2", "gravel1"], obstacles: CITY_OBSTACLES },
 ];
 
 function build(id: number): Scenery {
