@@ -19,13 +19,17 @@
 //                                                that point of the shortcut with its pack of six) at 1280x720 and
 //                                                390x844@3, in the track's own look. The working tree is built into
 //                                                a temp folder and served on 127.0.0.1:--port (default 3011); the
-//                                                browser session is brtracks-<pid>, its audio muted (and the game's
-//                                                M), closed at the end.
+//                                                browser session is brtracks-<pid>, its audio muted, closed at the
+//                                                end. Every shot muted in the game too: its M is sent only while the
+//                                                stored mute (localStorage) is off, and each shot checks the speaker
+//                                                icon's "muted" class and its rust ink; icons-<size>.png shows the icon
+//                                                of every shot side by side.
 //   --track slag-harbour|breakers-mile          one track only (default both)
 //
 // Its fallCost and hazardClearance are used by scripts/sim-test.ts (section BR-TRACKS).
 
 import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
 import { createReadStream, existsSync, mkdirSync, mkdtempSync, rmSync, statSync } from "node:fs";
 import http from "node:http";
 import os from "node:os";
@@ -38,6 +42,7 @@ import type { CarState } from "../../shared/physics";
 import { pointAt, queryTrack, queryTrackNear, roadOfSeg, type Track } from "../../shared/track";
 import { trackById } from "../../shared/tracks";
 import { branchRace } from "./branch-tune";
+import { blank, decodePng, paste, savePng, type Picture } from "./png";
 
 /** The two tracks with a shortcut (BR-TRACKS). */
 export const BR_TRACK_IDS = ["slag-harbour", "breakers-mile"];
@@ -178,6 +183,12 @@ export function shotPlaces(t: Track): { name: string; u: number }[] {
   ];
 }
 
+/** The game's stored mute (client/audio.ts STORE_KEY "scrap-rally:sound", its `muted`), read in the page. */
+async function storedMute(ab: (more: string[]) => Promise<string>): Promise<boolean> {
+  const got = await ab(["eval", "(() => { try { const o = JSON.parse(localStorage.getItem('scrap-rally:sound') ?? 'null'); return o !== null && o.muted === true ? 'muted' : 'sound'; } catch { return 'sound'; } })()"]);
+  return got.includes("muted");
+}
+
 async function shots(ids: string[], out: string, port: number): Promise<void> {
   mkdirSync(out, { recursive: true });
   const dist = mkdtempSync(path.join(os.tmpdir(), "br-tracks-dist-"));
@@ -202,17 +213,58 @@ async function shots(ids: string[], out: string, port: number): Promise<void> {
     opened = true;
     for (const size of SIZES) {
       await ab(["set", "viewport", String(size.w), String(size.h), String(size.scale)]);
+      const icons = new Map<string, number>(); // the speaker icon's rust ink in each shot of this size, by its hash
+      const crops: Picture[] = []; // ... and its box cut out of each, for icons-<size>.png
       for (const id of ids) {
         for (const pl of shotPlaces(trackById(id))) {
           const file = path.join(out, `${id}-${pl.name}-${size.name}.png`);
           await ab(["open", `http://127.0.0.1:${port}/?${new URLSearchParams({ debug: "1", preview: "1", freeze: "1", scene: "tour", track: id, road: "1", s: pl.u.toFixed(0), hud: "0" })}`]);
-          // Silent: the game's M too (a synthetic key, never a pressed one).
-          await ab(["eval", "window.dispatchEvent(new KeyboardEvent('keydown', { key: 'm', code: 'KeyM' })); true"]);
+          // Silent: the game's M too (a synthetic key, never a pressed one). M toggles a mute the game keeps in
+          // localStorage (client/audio.ts STORE_KEY), so it is sent only while the stored mute is off: every
+          // shot is muted (the BR-TRACKS review: sent on every load, every second shot was not).
+          const before = await storedMute(ab);
+          if (!before) await ab(["eval", "window.dispatchEvent(new KeyboardEvent('keydown', { key: 'm', code: 'KeyM' })); true"]);
           await new Promise((done) => setTimeout(done, 700)); // a held scene is redrawn every frame: any frame after the first will do
+          if (!(await storedMute(ab))) throw new Error(`br-tracks --shots: ${file}: the game is not muted after its M`);
+          // The speaker icon (#sound-btn) shows it: its "muted" class, and its box, cut out of the shot below.
+          const box = JSON.parse(JSON.parse(await ab(["eval", "JSON.stringify((() => { const b = document.getElementById('sound-btn'); if (!b) return null; const r = b.getBoundingClientRect(); return [r.x, r.y, r.width, r.height, b.classList.contains('muted')]; })())"])) as string) as [number, number, number, number, boolean] | null;
+          if (!box || !box[4]) throw new Error(`br-tracks --shots: ${file}: the speaker icon does not show the mute`);
           await ab(["screenshot", file]);
-          console.log(`${file}  (u ${pl.u.toFixed(0)})`);
+          // The icon's ink, where it is in its box: the muted icon is drawn in rust (client/style.css .sound-btn.muted,
+          // #e8752d at opacity 0.8: red high, blue low), the sounding one in bone grey; its box is see-through, so the
+          // scene behind differs from shot to shot (dimmed to at most ~110 red), the ink's pixels do not.
+          const pic = decodePng(file), h = createHash("sha256");
+          const x0 = Math.round(box[0] * size.scale), y0 = Math.round(box[1] * size.scale), w = Math.round(box[2] * size.scale), hh = Math.round(box[3] * size.scale);
+          let ink = 0;
+          for (let y = y0; y < y0 + hh; y++) {
+            for (let x = x0; x < x0 + w; x++) {
+              const o = (y * pic.w + x) * 4, r = pic.data[o], g = pic.data[o + 1], b = pic.data[o + 2];
+              const on = r > 160 && r - b > 100 && r - g > 50;
+              if (on) ink++;
+              h.update(on ? "1" : "0");
+            }
+          }
+          if (ink === 0) throw new Error(`br-tracks --shots: ${file}: no rust ink in the speaker icon (not muted)`);
+          const crop = blank(w, hh, 0, 0, 0);
+          paste(crop, pic, 0, 0, x0, y0, w, hh);
+          crops.push(crop);
+          const icon = h.digest("hex");
+          icons.set(icon, (icons.get(icon) ?? 0) + 1);
+          console.log(`${file}  (u ${pl.u.toFixed(0)}; muted, ${before ? "already" : "by its M"}; the icon's rust ink ${ink} px, ${icon.slice(0, 12)})`);
         }
       }
+      // The icons side by side, enlarged (to about 120 px high), in the order shot.
+      const z = Math.max(1, Math.round(120 / crops[0].h)), gap = 8;
+      const strip = blank(gap + crops.reduce((a, c) => a + c.w * z + gap, 0), crops[0].h * z + 2 * gap, 40, 40, 40);
+      let at = gap;
+      for (const c of crops) {
+        paste(strip, c, at, gap, 0, 0, c.w, c.h, z);
+        at += c.w * z + gap;
+      }
+      const stripFile = path.join(out, `icons-${size.name}.png`);
+      savePng(stripFile, strip);
+      console.log(stripFile);
+      console.log(`${size.name}: the speaker icon in ${[...icons.values()].reduce((a, b) => a + b, 0)} shots: muted in all (the "muted" class, rust ink in every one; its edges blend with the scene behind)`);
     }
   } finally {
     if (opened) await ab(["close"]).catch(() => "");

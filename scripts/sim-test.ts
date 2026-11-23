@@ -14948,7 +14948,7 @@ function thShipped(): void {
   const branch = ["built", "queries", "branches"].map((p) => `SAME  branch-yard ${p}`);
   const yards = THEME_YARDS.flatMap((d) => ["built", "queries", "features"].map((p) => `${d.id} ${p}`));
   check(
-    "theme shipped: schema-hash --check: every part of the five shipped tracks (Breaker's Mile desert and Slag Harbour city now) and of Branch Yard SAME; the three yards hashed on lines of their own (built, queries, features), none DIFF or GONE",
+    "theme shipped: schema-hash --check: every part of the five shipped tracks (Breaker's Mile desert now, Slag Harbour theme-less until its harbour theme) and of Branch Yard SAME; the three yards hashed on lines of their own (built, queries, features), none DIFF or GONE",
     ok && [...shipped, ...branch].every((l) => lines.includes(l)) && yards.every((y) => lines.some((l) => l.endsWith(` ${y}`) && (l.startsWith("SAME") || l.startsWith("NEW ")))) && !lines.some((l) => /^(DIFF|GONE)/.test(l)),
     lines.filter((l) => !l.startsWith("SAME")).join("; ") || `${lines.length} parts SAME`,
   );
