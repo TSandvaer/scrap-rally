@@ -858,7 +858,16 @@ THEME-TRACKS review APPROVE (ctx_b0f85f68f6fa; tmp/theme-tracks/THEME-TRACKS-rev
 post-TH-LOOK-H round: sim-test.ts:16983 comment (max 51 ticks), :16910 pitDist ignores lat 18, longtracks.ts:139-142 'apex' wording.
 GRACE-1 review APPROVE (ctx_ecfce8ba55b2); 2 text nits fixed 224bd58. MERGED 45fe3e6; gate GREEN (1112/1112, 178/178, build, schema-hash);
 PLAN.md:127 updated (finishGraceMs). ClickUp ready for qa test; workers released; workspace removed. Player-visible on local main vs live:
-GRACE-1 (long-track race end) only -> next push question when THEME-SND / TH-LOOK-H land (unless the user wants it sooner). TH-LOOK-2 waits for
+GRACE-1 (long-track race end) only -> next push question when THEME-SND / TH-LOOK-H land (unless the user wants it sooner).
+THEME-SND DONE 2e02c86 (user picks fine/brook/hiss; gravel sample-identical; 1120/1120 + 178/178; flake once, rerun green). Reviewer
+ctx_2aba54843ff0 (Opus, :3015, tmp/review-theme-snd.md). Author merging main (sim-test/README appends with GRACE-1) in parallel.
+Active authors: TH-LOOK-H (+ THEME-SND's merge-main). Nothing else startable (TH-LOOK-3 waits for TH-LOOK-H).
+THEME-SND merged main as 3172a51 (1127/1127). TH-LOOK-H DONE e427e67 (harbour look; identity 0 px elsewhere; speed gate PASS; S7 Quay
+0.968; Slag shortcut frames 0.958; report tmp/th-look-h/REPORT.md; notes: yard blocks + crane rails as ground art per track, 92 empty junk
+sites, a HARBOUR-SCHEMA check flipped). Fable reviewer ctx_e96c61f9c157 (tmp/review-th-look-h.md).
+COMBINED TASTE COPY ~/orca/workspaces/scrap-rally/harbour-taste = e427e67 + theme-tracks' shared/longtracks.ts + theme-snd's sfx/soundboard/
+soundlogic (uncommitted overlay; tsc + build ok): :3012 normal (pid 31154; Slag Harbour harbour + oil slick + pier cut; Breaker's Mile
+sand drifts; surface sounds) and :3009 SCRAP_DEV_TRACK=quay-yard (pid 31153). One drive for TH-LOOK-H + THEME-TRACKS + THEME-SND. TH-LOOK-2 waits for
 MARSHALS-1 (shares render.ts + canvas-census.ts). Ford direction cue moved from THEME-SURF to TH-LOOK-3 (drawing = world.ts, Fable).
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
