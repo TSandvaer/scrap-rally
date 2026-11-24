@@ -16,7 +16,7 @@
 
 import { isTheme, themeOf as themeOfDef, THEMES, type Theme } from "../../shared/theme";
 import type { Track } from "../../shared/track";
-import { CITY_PALETTE, DESERT_PALETTE, HARBOUR_PALETTE, P, PALETTE, rgbOf, SCRAPYARD, SCRAPYARD_PALETTE, type PaletteName, type ThemePalette } from "./palette";
+import { CITY_PALETTE, DESERT_PALETTE, HARBOUR_PALETTE, JUNGLE_PALETTE, P, PALETTE, rgbOf, SCRAPYARD, SCRAPYARD_PALETTE, type PaletteName, type ThemePalette } from "./palette";
 
 export { isTheme, THEMES, type Theme };
 
@@ -127,12 +127,27 @@ const HARBOUR_OBSTACLES: ObstacleTones = {
   slab: { outline: "soot1", lit: "rust3", dark: "rust1", stripeA: "haz1", stripeB: "soot2", corner: "steel3" },
 };
 
+// The jungle's: log sections (pale, weathered wood that shows on dark tarmac, a band of bark left
+// near either end, a patch of bark that goes round as one rolls and a split half a turn on) and
+// a log stamper (a ram of squared timber; its top keeps the hazard stripes).
+const JUNGLE_OBSTACLES: ObstacleTones = {
+  barrel: {
+    rims: ["dirt0", "dirt2", "gravel1", "gravel2"],
+    hoops: ["soot3", "dirt0", "dirt1", "dirt2"],
+    label: ["soot3", "dirt0", "dirt1", "dirt2"],
+    seam: ["soot3", "soot3", "dirt0", "dirt1"],
+    body: ["dirt2", "gravel1", "gravel2", "bone0"],
+  },
+  slab: { outline: "soot1", lit: "gravel2", dark: "dirt1", stripeA: "haz1", stripeB: "soot2" },
+};
+
 /** The themes whose art has landed, in the order of their ids. */
 const LANDED: readonly { theme: Theme; palette: ThemePalette; dust: readonly [PaletteName, PaletteName]; obstacles: ObstacleTones }[] = [
   { theme: "scrapyard", palette: SCRAPYARD_PALETTE, dust: ["bone1", "bone0"], obstacles: SCRAPYARD_OBSTACLES },
   { theme: "desert", palette: DESERT_PALETTE, dust: ["dirt3", "dirt1"], obstacles: DESERT_OBSTACLES },
   { theme: "city", palette: CITY_PALETTE, dust: ["gravel2", "gravel1"], obstacles: CITY_OBSTACLES },
   { theme: "harbour", palette: HARBOUR_PALETTE, dust: ["dirt3", "gravel2"], obstacles: HARBOUR_OBSTACLES },
+  { theme: "jungle", palette: JUNGLE_PALETTE, dust: ["gravel2", "dirt3"], obstacles: JUNGLE_OBSTACLES },
 ];
 
 function build(id: number): Scenery {

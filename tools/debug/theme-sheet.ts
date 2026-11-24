@@ -368,8 +368,8 @@ function skidAt(track: Track, x: number, y: number, h: number, len: number): voi
 function propSpots(track: Track, want: number): { x: number; y: number }[] {
   const out: { x: number; y: number }[] = [];
   const sc = sceneryFor(track);
-  if (sc.theme === "city") {
-    // A town's roofs are props too (the same kind of pixel): its heaps by the art's own list, a heap being the pieces within 50 pixels of its first.
+  if (sc.theme === "city" || sc.theme === "jungle") {
+    // A town's roofs are props too (the same kind of pixel), and so are a jungle's crowns: its heaps by the art's own list, a heap being the pieces within 50 pixels of its first.
     const heaps: { x: number; y: number; n: number }[] = [];
     for (const j of artLayout(track).junk) {
       const h = heaps.find((o) => Math.hypot(o.x - j.x, o.y - j.y) < 50);
@@ -414,7 +414,7 @@ interface Section {
 const shot = (label: string, track: Track, s: number, lat: number, w: number, h: number, zoom = 2, marks?: Shot["marks"]): Shot => ({ label, track, ...at(track, s, lat), w, h, zoom, marks });
 
 /** The yard a theme has of its own (shared/testtracks.ts THEME_YARDS), in its own theme. */
-const YARD_OF: Partial<Record<Theme, string>> = { desert: "dune-yard", city: "block-yard", harbour: "quay-yard" };
+const YARD_OF: Partial<Record<Theme, string>> = { desert: "dune-yard", city: "block-yard", harbour: "quay-yard", jungle: "canopy-yard" };
 
 /** The harbour's props on a track, a close-up of each kind: the largest piece of it, and of the containers a second one. */
 function harbourProps(track: Track): Shot[] {

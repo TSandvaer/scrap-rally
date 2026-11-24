@@ -51,11 +51,13 @@
 //   gap's void, a dirt patch, a pool's rim, a mound, the truck).
 // A theme may also lay ground art out once per track, clear of every road, of the props and of
 // the flag marshals: a town's roofs (layTown), a quay's container yard and crane rails
-// (layStacks, layRails). That is ground, not props: the props stand at the junk's sites alone.
+// (layStacks, layRails), a jungle's canopy (layCanopy). That is ground, not props: the props stand
+// at the junk's sites alone.
 // The scrapyard is the theme of the three original tracks: its tiles are what they were, bit for bit.
 // A theme's surface (THEME-SCHEMA: sand on a desert track, an oil slick on a city or a harbour
-// one) is baked with the road's furniture, a puddle as a pool is, where the track's own lists
-// have one (Track.sand, Track.oil) and its theme has the colours for it.
+// one, a ford on a jungle one) is baked with the road's furniture, a puddle as a pool is, where
+// the track's own lists have one (Track.sand, Track.oil, Track.fords) and its theme has the
+// colours for it.
 
 import { MAX_PLAYERS } from "../../shared/protocol";
 import { BARREL_R, gapAt, gridSlot, halfOn, holeAt, pointAt, PRESS_DEPTH, PUDDLE_TRACTION_INSET, queryMain, queryRoads, queryTrack, TRUCK_BAND, TRUCK_CAB, TRUCK_HALF, wallAt, widenAt, type Gap, type Track, type Vec } from "../../shared/track";
@@ -147,6 +149,7 @@ const C_SOLID = 13; // a tyre, the ramp truck
 const C_PROP = 14; // a theme's prop outside the walls, in colours of its own (the yard's junk is plain ground to the marks)
 const C_SAND = 15; // a sand patch on the road (a desert track's)
 const C_OIL = 16; // an oil slick on the road (a city track's)
+const C_FORD = 17; // a ford across the road (a jungle track's)
 
 // ---- a theme's dressing ---------------------------------------------------------------
 //
@@ -155,11 +158,11 @@ const C_OIL = 16; // an oil slick on the road (a city track's)
 // once, outside its pixel loops. Geometry is never a theme's: the bands of the road, where the
 // posts stand, the outlines of the features.
 
-const G_YARD = 0, G_DUNES = 1, G_TOWN = 2, G_QUAY = 3; // the ground: packed earth, specked; sand with dune crests and wind ripples; old paving with the roofs of a town on it; a quay's concrete slabs
-const PROPS_JUNK = 0, PROPS_DESERT = 1, PROPS_CITY = 2, PROPS_HARBOUR = 3; // outside the walls: heaps of junk; rocks, dry scrub, succulents, half-buried car shells; planter trees, crates, cones, parked cars; containers, crane bases, straddle carriers, bollards, hawsers, pallets, forklifts, reefers
-const MOUND_TYRES = 0, MOUND_BAGS = 1, MOUND_BUNDLE = 2, MOUND_FENDERS = 3; // a mound and an island's nose: tyres; sandbags; tyres strapped into a bundle; dock fenders
-const TRUCK_RAMP = 0, TRUCK_SAND = 1, TRUCK_CARRIER = 2, TRUCK_CHASSIS = 3; // the ramp truck: a scrap hauler; a sand hauler; a car carrier; a container chassis trailer
-const VOID_PIT = 0, VOID_CANYON = 1, VOID_STREET = 2, VOID_BASIN = 3; // a gap's void: steps of soot; layered rock near its rim; a wall of masonry and a street below; a dock basin's sheet piling
+const G_YARD = 0, G_DUNES = 1, G_TOWN = 2, G_QUAY = 3, G_JUNGLE = 4; // the ground: packed earth, specked; sand with dune crests and wind ripples; old paving with the roofs of a town on it; a quay's concrete slabs; loam and leaf litter under a jungle's canopy
+const PROPS_JUNK = 0, PROPS_DESERT = 1, PROPS_CITY = 2, PROPS_HARBOUR = 3, PROPS_JUNGLE = 4; // outside the walls: heaps of junk; rocks, dry scrub, succulents, half-buried car shells; planter trees, crates, cones, parked cars; containers, crane bases, straddle carriers, bollards, hawsers, pallets, forklifts, reefers; tree crowns, ferns, fallen logs, a vine-hung wall fragment
+const MOUND_TYRES = 0, MOUND_BAGS = 1, MOUND_BUNDLE = 2, MOUND_FENDERS = 3, MOUND_BALE = 4; // a mound and an island's nose: tyres; sandbags; tyres strapped into a bundle; dock fenders; a bale of bamboo
+const TRUCK_RAMP = 0, TRUCK_SAND = 1, TRUCK_CARRIER = 2, TRUCK_CHASSIS = 3, TRUCK_LOGGING = 4; // the ramp truck: a scrap hauler; a sand hauler; a car carrier; a container chassis trailer; a logging truck
+const VOID_PIT = 0, VOID_CANYON = 1, VOID_STREET = 2, VOID_BASIN = 3, VOID_GORGE = 4; // a gap's void: steps of soot; layered rock near its rim; a wall of masonry and a street below; a dock basin's sheet piling; a river gorge
 
 interface Dress {
   ground: number; // G_*
@@ -182,6 +185,9 @@ interface Dress {
   // ... or (`slabs`) a sidewalk: slabs in rows along the road, a joint between them.
   slabs: boolean;
   rings: boolean; // a quay's apron: tie-down rings set in it, two rows along the road
+  // A jungle's verge: roots creep over the moss from the wall's foot, in this tone (0 = none), their sunlit side in `rootLit`.
+  roots: number;
+  rootLit: number;
   // The kerb: its two paints in turn, `kerbOn` units of the first in every `kerbPeriod`; with
   // `kerbJoint` (not 0) each is a stone, a joint in that tone between two. `kerbWorn` (not 0):
   // the second is paint on the first's stone, worn off it in specks (of 256, by the pixel's noise).
@@ -213,6 +219,8 @@ interface Dress {
   mud: number;
   grate: boolean; // a rain puddle: a drain grate in its middle
   mound: number; // MOUND_*
+  moundA: number; // the outer ring's two paints in turn (and an island's nose's): the kerb's rust and bone, so the heap's edge shows on any ground
+  moundB: number;
   moundInner: number; // the paint of the rings inside the outer one, and of the top
   moundTop: number;
   strap: number; // MOUND_BUNDLE: the straps' tone
@@ -238,8 +246,13 @@ interface Dress {
   roofs: readonly (readonly number[])[];
   // The theme's surfaces, null where the theme has none (its table has no colours for one).
   // Sand: its troughs, its plain tone, its crests. Oil: its body, its lighter swirls, its gloss, the three bands of its sheen (outermost first).
+  // A ford: its dark streaks, its plain tone, its light ripples, its foam, the shingle at its banks.
   sand: readonly number[] | null;
   oil: readonly number[] | null;
+  ford: readonly number[] | null;
+  // PROPS_JUNGLE: what a stamp's tone codes are (jungleStamps): sixteen palette indices a family of leaves, three families.
+  stampTones: Uint8Array | null;
+  logs: readonly number[]; // TRUCK_LOGGING: a log's four tones, dark to light
 }
 
 const dresses: (Dress | undefined)[] = [];
@@ -254,72 +267,100 @@ function dressOf(sc: Scenery): Dress {
       ground: G_DUNES, props: PROPS_DESERT,
       // Sandstone blocks, a terracotta finial where the scrapyard has a post.
       wall: x.stone0, rail: x.stone2, railLit: x.stone3, block: 15, joint: x.stone1, postLit: RUST3, postMid: RUST2, postDark: RUST0,
-      vergeLight: 28, vergeDark: 224, vergeFleck: 219, slabs: false, rings: false, // grit: coarser than gravel
+      vergeLight: 28, vergeDark: 224, vergeFleck: 219, slabs: false, rings: false, roots: 0, rootLit: 0, // grit: coarser than gravel
       kerbPeriod: 32, kerbOn: 16, kerbA: RUST2, kerbB: BONE1, kerbJoint: 0, kerbWorn: 0,
       wear: true, tracks: true,
       void: VOID_CANYON, rock: [x.canyon0, x.canyon1, x.canyon2, x.canyon3], pitWall: x.canyon1, rubble: [x.canyon0, SOOT1, x.canyon1, SOOT3],
       patch: RUST1, patchLight: RUST2, patchDark: RUST0, patchPebble: GRAVEL1, tape: false, sleepers: 0, // red clay hardpan, never the sand's colour
       mud: GRAVEL2, grate: false,
-      mound: MOUND_BAGS, moundInner: x.bag1, moundTop: x.bag2, strap: 0, underlay: GRAVEL0,
+      mound: MOUND_BAGS, moundA: RUST2, moundB: BONE1, moundInner: x.bag1, moundTop: x.bag2, strap: 0, underlay: GRAVEL0,
       truck: TRUCK_SAND, cab: [],
       stones: [x.canyon2, x.stone1], shells: [STEEL2, RUST1, x.bag1, STEEL1], greens: [x.cactus0, x.cactus1, x.cactus2], twigs: [x.bag0, HAZ0], woods: [],
       boxes: [], reefer: 0, crane: 0, carrier: 0, deck: 0,
       roofs: [],
-      sand: [x.sand0, x.sand1, DIRT2], oil: null,
+      sand: [x.sand0, x.sand1, DIRT2], oil: null, ford: null,
+      stampTones: null, logs: [],
     };
   } else if (sc.theme === "city") {
     d = {
       ground: G_TOWN, props: PROPS_CITY,
       // A concrete barrier in lengths of 30 units, an amber reflector stud where the scrapyard has a post.
       wall: x.conc0, rail: x.conc2, railLit: x.conc3, block: 30, joint: x.conc1, postLit: HAZ2, postMid: HAZ1, postDark: HAZ0,
-      vergeLight: 0, vergeDark: 0, vergeFleck: 0, slabs: true, rings: false, // a sidewalk
+      vergeLight: 0, vergeDark: 0, vergeFleck: 0, slabs: true, rings: false, roots: 0, rootLit: 0, // a sidewalk
       kerbPeriod: 24, kerbOn: 12, kerbA: STEEL2, kerbB: BONE1, kerbJoint: STEEL1, kerbWorn: 0, // kerb stones, grey and white
       wear: false, tracks: false,
       void: VOID_STREET, rock: [x.conc0, x.conc1, SOOT2, SOOT3], pitWall: DIRT0, rubble: [DIRT0, SOOT1, TAR3, SOOT3],
       patch: DIRT2, patchLight: DIRT3, patchDark: DIRT1, patchPebble: GRAVEL2, tape: true, sleepers: 0, // roadworks: the road's bed laid open
       mud: 0, grate: true,
-      mound: MOUND_BUNDLE, moundInner: SOOT2, moundTop: BONE1, strap: HAZ1, underlay: DIRT0,
+      mound: MOUND_BUNDLE, moundA: RUST2, moundB: BONE1, moundInner: SOOT2, moundTop: BONE1, strap: HAZ1, underlay: DIRT0,
       truck: TRUCK_CARRIER, cab: [x.petrol1, x.petrol0],
       stones: [x.conc1, x.conc2], shells: [x.wine0, x.moss0, x.petrol0, STEEL1], greens: [x.leaf0, x.leaf1, x.leaf2], twigs: [], woods: [x.wood0, x.wood1, x.wood2],
       boxes: [], reefer: 0, crane: 0, carrier: 0, deck: 0,
       roofs: [[x.tile0, x.tile1, x.tile2, BONE0], [x.slate0, x.slate1, x.slate2, x.zinc1], [x.zinc0, x.zinc1, x.zinc2, x.zinc2]],
-      sand: null, oil: [x.oil0, x.oil1, x.oil2, x.oilt, x.oilv, HAZ1],
+      sand: null, oil: [x.oil0, x.oil1, x.oil2, x.oilt, x.oilv, HAZ1], ford: null,
+      stampTones: null, logs: [],
     };
   } else if (sc.theme === "harbour") {
     d = {
       ground: G_QUAY, props: PROPS_HARBOUR,
       // A jersey barrier of cast concrete in lengths of 20 units, a lashing ring where the scrapyard has a post.
       wall: x.conc0, rail: x.conc2, railLit: x.conc3, block: 20, joint: x.conc1, postLit: STEEL3, postMid: SOOT2, postDark: STEEL1,
-      vergeLight: 10, vergeDark: 244, vergeFleck: 256, slabs: false, rings: true, // the apron: worn concrete, tie-down rings in it
+      vergeLight: 10, vergeDark: 244, vergeFleck: 256, slabs: false, rings: true, roots: 0, rootLit: 0, // the apron: worn concrete, tie-down rings in it
       kerbPeriod: 40, kerbOn: 26, kerbA: STEEL2, kerbB: RUST2, kerbJoint: GRAVEL0, kerbWorn: 38, // kerb slabs: bare, and painted a yellow long faded
       wear: false, tracks: true, // no stains and no oil blots (an oil slick is a surface here), but tyre marks on the quay where the yard has its ruts
       void: VOID_BASIN, rock: [SOOT0, SOOT1, SOOT2, SOOT3], pitWall: DIRT0, rubble: [DIRT0, SOOT1, TAR3, SOOT3],
       patch: DIRT1, patchLight: DIRT3, patchDark: GRAVEL0, patchPebble: BONE0, tape: false, sleepers: RUST0, // ballast: grey stone, old sleepers in it
       mud: 0, grate: false,
-      mound: MOUND_FENDERS, moundInner: SOOT2, moundTop: BONE1, strap: 0, underlay: DIRT0,
+      mound: MOUND_FENDERS, moundA: RUST2, moundB: BONE1, moundInner: SOOT2, moundTop: BONE1, strap: 0, underlay: DIRT0,
       truck: TRUCK_CHASSIS, cab: [x.reef1, x.reef0],
       stones: [], shells: [], greens: [], twigs: [], woods: [x.wood0, x.wood1, x.wood2],
       boxes: [x.ox1, x.grn1, x.och1, STEEL1], reefer: x.reef1, crane: x.och1, carrier: x.ox1, deck: x.grn1,
       roofs: [],
-      sand: null, oil: [x.oil0, x.oil1, x.oil2, x.oilt, x.oilv, HAZ1],
+      sand: null, oil: [x.oil0, x.oil1, x.oil2, x.oilt, x.oilv, HAZ1], ford: null,
+      stampTones: null, logs: [],
+    };
+  } else if (sc.theme === "jungle") {
+    // What a stamp's tone codes are (ST_*), per family of leaves: a yellow-green, a darker blue-green, and moss.
+    const stampTones = new Uint8Array(3 * 16);
+    [[x.leaf0, x.leaf1, x.leaf2, x.leaf3, x.leaf4], [x.palm0, x.palm1, x.palm2, x.palm3, x.palm4], [x.leaf0, GRAVEL0, GRAVEL1, GRAVEL2, x.bam1]].forEach((leaves, f) => {
+      stampTones.set([0, ...leaves, 0, x.log0, x.log1, x.log2, x.log3, x.rope2, x.rock0, x.rock1, x.rock2, x.leaf3], f * 16);
+    });
+    d = {
+      ground: G_JUNGLE, props: PROPS_JUNGLE,
+      // A rail of logs laid end to end, 30 units each, a lashing of rope where the scrapyard has a post.
+      wall: x.log0, rail: x.log2, railLit: x.log3, block: 30, joint: x.log0, postLit: x.rope2, postMid: x.rope1, postDark: x.rope0,
+      vergeLight: 22, vergeDark: 226, vergeFleck: 256, slabs: false, rings: false, roots: DIRT1, rootLit: BONE0, // moss: tufts and hollows, roots over it
+      kerbPeriod: 30, kerbOn: 18, kerbA: STEEL2, kerbB: GRAVEL2, kerbJoint: GRAVEL0, kerbWorn: 84, // kerb stones, every other one grown over with moss
+      wear: false, tracks: true, // no stains and no oil blots; wheel ruts in the loam where the canopy leaves it open
+      void: VOID_GORGE, rock: [x.rock0, x.rock1, x.rock2, x.leaf2], pitWall: DIRT0, rubble: [DIRT0, SOOT1, x.rock0, SOOT3],
+      patch: DIRT0, patchLight: DIRT2, patchDark: SOOT2, patchPebble: STEEL1, tape: false, sleepers: 0, // black wet mud: a glint on it here and there
+      mud: 0, grate: false,
+      mound: MOUND_BALE, moundA: x.bam1, moundB: x.rope1, moundInner: x.bam0, moundTop: x.rope2, strap: x.rope0, underlay: DIRT0,
+      truck: TRUCK_LOGGING, cab: [],
+      stones: [x.rock1, x.rock1], shells: [], greens: [], twigs: [], woods: [],
+      boxes: [], reefer: 0, crane: 0, carrier: 0, deck: 0,
+      roofs: [],
+      sand: null, oil: null, ford: [x.ford0, x.ford1, x.ford2, x.foam, x.rock2],
+      stampTones, logs: [x.log0, x.log1, x.log2, x.log3],
     };
   } else {
     // The scrapyard: every tone and number is what the bake has always put down.
     d = {
       ground: G_YARD, props: PROPS_JUNK,
       wall: STEEL0, rail: STEEL2, railLit: STEEL3, block: 0, joint: STEEL0, postLit: STEEL3, postMid: STEEL1, postDark: STEEL0,
-      vergeLight: 19, vergeDark: 239, vergeFleck: 236, slabs: false, rings: false,
+      vergeLight: 19, vergeDark: 239, vergeFleck: 236, slabs: false, rings: false, roots: 0, rootLit: 0,
       kerbPeriod: 44, kerbOn: 22, kerbA: RUST2, kerbB: BONE1, kerbJoint: 0, kerbWorn: 0,
       wear: true, tracks: true,
       void: VOID_PIT, rock: [SOOT0, SOOT1, SOOT2, SOOT3], pitWall: DIRT0, rubble: [DIRT0, SOOT1, TAR3, SOOT3],
       patch: DIRT2, patchLight: DIRT3, patchDark: DIRT1, patchPebble: GRAVEL0, tape: false, sleepers: 0,
       mud: 0, grate: false,
-      mound: MOUND_TYRES, moundInner: SOOT2, moundTop: BONE1, strap: 0, underlay: DIRT0,
+      mound: MOUND_TYRES, moundA: RUST2, moundB: BONE1, moundInner: SOOT2, moundTop: BONE1, strap: 0, underlay: DIRT0,
       truck: TRUCK_RAMP, cab: [],
       stones: [], shells: [], greens: [], twigs: [], woods: [],
       boxes: [], reefer: 0, crane: 0, carrier: 0, deck: 0,
       roofs: [],
-      sand: null, oil: null,
+      sand: null, oil: null, ford: null,
+      stampTones: null, logs: [],
     };
   }
   return (dresses[sc.id] = d);
@@ -399,6 +440,10 @@ const K_TREE = 11, K_CRATE = 12, K_CONES = 13, K_CAR = 14;
 // carrier, a pair of bollards with a mooring rope, a coiled hawser, pallets, a forklift; and a
 // site left empty (where a piece would stand in a flag marshal's place).
 const K_BOX = 15, K_REEFER = 16, K_CRANE = 17, K_STRADDLE = 18, K_BOLLARD = 19, K_HAWSER = 20, K_PALLETS = 21, K_FORK = 22, K_EMPTY = 23;
+// ... (PROPS_JUNGLE): a tree's crown, a clump of ferns, a fallen log, a vine-hung fragment of a
+// wall; and K_EMPTY, as the harbour's. Each is a stamp (jungleStamps): `n` holds which, and its
+// family of leaves in bits 8-9; (px, py) is the pixel its middle lies in.
+const K_CROWN = 24, K_FERN = 25, K_LOG = 26, K_RUIN = 27;
 
 /**
  * A piece of junk: centre and size in view pixels, a turn, its paint (palette index). `n`, `px`,
@@ -425,6 +470,345 @@ interface Junk {
 }
 
 const TURN = 12; // Junk.n, PROPS_HARBOUR: bits 12-13 say how a piece lies: 0 along x, 1 along y, 2 and 3 aslant
+
+// ---- a jungle's stamps (TH-LOOK-3) ----------------------------------------------------------
+//
+// What grows and lies outside a jungle track's walls is put down from stamps: small pictures in
+// tone codes, drawn once (the first time a jungle track's art is built: fractions, a seeded
+// draw, whatever it takes) and from then on only copied into a tile, a whole number a pixel.
+// So the bake reads no fraction for them and allocates nothing in any tier of the engine (see
+// quayPiece for why that matters), and a canopy of a hundred crowns a tile costs about what the
+// ground under it does.
+// A code is one of a leaf's five tones, dark to light (which green: the family a piece names,
+// Dress.stampTones), the shadow the thing casts (whatever lies there goes a SHADE step down), or
+// a tone of bark, of cut wood, of rock.
+
+const ST_SHADOW = 6; // codes 1 to 5: a leaf's tones, dark to light
+const ST_LOG0 = 7, ST_LOG1 = 8, ST_LOG2 = 9, ST_LOG3 = 10, ST_CUT = 11, ST_ROCK0 = 12, ST_ROCK1 = 13, ST_ROCK2 = 14, ST_VINE = 15;
+
+interface Stamp {
+  w: number;
+  h: number;
+  cx: number; // the stamp's pixel that lies on the thing's middle pixel
+  cy: number;
+  reach: number; // how far the thing and its shadow reach from the middle of that pixel, view pixels
+  px: Uint8Array; // w x h tone codes, 0 = nothing
+}
+
+// The stamps, in this order: crowns (CROWN_R's radii, CROWN_V of each), fern clumps (FERN_V of
+// each of two sizes), fallen logs (four ways each of LOG_LEN's lengths: along x, along y, aslant
+// down to the right, aslant down to the left), wall fragments (along x, along y; two of each).
+const CROWN_R = [7, 10, 13, 16, 19, 22], CROWN_V = 4;
+const FERN_AT = CROWN_R.length * CROWN_V, FERN_V = 3;
+const LOG_AT = FERN_AT + 2 * FERN_V, LOG_LEN = [14, 20, 26];
+const RUIN_AT = LOG_AT + 4 * LOG_LEN.length;
+const STAMP_FAR = 31; // no stamp reaches further than this from its middle pixel (a row or a column of pixels)
+
+let STAMPS: Stamp[] | null = null;
+
+function jungleStamps(): Stamp[] {
+  if (STAMPS) return STAMPS;
+  const out: Stamp[] = [];
+  // A stamp from a picture w x h with its middle pixel at (c, c): cut to what it holds, its shadow added `drop` right and one more down.
+  const done = (w: number, h: number, c: number, px: Uint8Array, drop: number): void => {
+    if (drop) {
+      for (let y = h - 1; y >= drop + 1; y--) {
+        for (let x = w - 1; x >= drop; x--) {
+          const v = px[(y - drop - 1) * w + x - drop];
+          if (px[y * w + x] === 0 && v !== 0 && v !== ST_SHADOW) px[y * w + x] = ST_SHADOW;
+        }
+      }
+    }
+    let x0 = w, y0 = h, x1 = 0, y1 = 0, far = 0;
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        if (!px[y * w + x]) continue;
+        x0 = Math.min(x0, x);
+        x1 = Math.max(x1, x + 1);
+        y0 = Math.min(y0, y);
+        y1 = Math.max(y1, y + 1);
+        // The far corner of the pixel, from the middle of the middle pixel.
+        far = Math.max(far, Math.hypot(Math.abs(x - c) + 0.5, Math.abs(y - c) + 0.5));
+      }
+    }
+    const cut = new Uint8Array((x1 - x0) * (y1 - y0));
+    for (let y = y0; y < y1; y++) cut.set(px.subarray(y * w + x0, y * w + x1), (y - y0) * (x1 - x0));
+    if (c - x0 > STAMP_FAR || x1 - 1 - c > STAMP_FAR || c - y0 > STAMP_FAR || y1 - 1 - c > STAMP_FAR) throw new Error("gfx/world.ts: a jungle stamp reaches further than STAMP_FAR");
+    out.push({ w: x1 - x0, h: y1 - y0, cx: c - x0, cy: c - y0, reach: far, px: cut });
+  };
+  // A tree's crown from above: clumps of leaves heaped toward its middle, each a small ball in
+  // the sun (light up-left, dark down-right), the clumps on the crown's sunny side a tone
+  // lighter and those on its far side a tone darker; dark between them.
+  for (let k = 0; k < CROWN_R.length; k++) {
+    for (let v = 0; v < CROWN_V; v++) {
+      const r = CROWN_R[k], rnd = mulberry32(7001 + 97 * k + 13 * v);
+      const c = r + 3, w = 2 * c + 8, px = new Uint8Array(w * w);
+      const ball = (bx: number, by: number, br: number, level: number, flat: boolean): void => {
+        for (let y = Math.floor(by - br); y <= Math.ceil(by + br); y++) {
+          for (let x = Math.floor(bx - br); x <= Math.ceil(bx + br); x++) {
+            const dx = x + 0.5 - bx, dy = y + 0.5 - by;
+            if (dx * dx + dy * dy > br * br || x < 0 || y < 0 || x >= w || y >= w) continue;
+            const sun = (-dx - dy) / (br * Math.SQRT2);
+            const tone = flat ? level : sun > 0.42 ? level + 1 : sun < -0.74 ? level - 2 : sun < -0.36 ? level - 1 : level;
+            px[y * w + x] = Math.max(1, Math.min(5, tone));
+          }
+        }
+      };
+      ball(c + 0.5, c + 0.5, r * 0.66, 1, true); // the dark inside of the crown, where no clump lies
+      const clumps: { x: number; y: number; r: number; far: number }[] = [];
+      for (let n = Math.max(6, Math.round((r * r) / 8.5)), q = 0; q < n; q++) {
+        const cr = Math.max(2.3, r * (0.22 + 0.17 * rnd())), far = Math.sqrt(rnd()) * (r - cr), a = rnd() * Math.PI * 2;
+        clumps.push({ x: c + 0.5 + Math.cos(a) * far, y: c + 0.5 + Math.sin(a) * far, r: cr, far });
+      }
+      clumps.sort((a, b) => b.far - a.far); // the outer ones first: those in the middle lie on top
+      for (const cl of clumps) {
+        const side = (-(cl.x - c - 0.5) - (cl.y - c - 0.5)) / (r * Math.SQRT2); // toward the sun: over 0
+        ball(cl.x, cl.y, cl.r, side > 0.22 ? 4 : side < -0.3 ? 2 : 3, false);
+      }
+      done(w, w, c, px, r >= 19 ? 6 : r >= 16 ? 5 : r >= 13 ? 4 : r >= 10 ? 3 : 2);
+    }
+  }
+  // Ferns: a rosette of fronds, each a light rib with its dark underside, round a dark heart; one, two or three in a clump.
+  for (let size = 0; size < 2; size++) {
+    for (let v = 0; v < FERN_V; v++) {
+      const r = size ? 7 : 5, rnd = mulberry32(7301 + 31 * size + 7 * v);
+      const c = 2 * r + 3, w = 2 * c + 4, px = new Uint8Array(w * w);
+      const fern = (fx: number, fy: number, fr: number): void => {
+        const fronds = 6 + Math.floor(rnd() * 3), turn = rnd() * Math.PI * 2;
+        for (let f = 0; f < fronds; f++) {
+          const a = turn + (f / fronds) * Math.PI * 2 + (rnd() - 0.5) * 0.3, len = fr * (0.7 + 0.3 * rnd());
+          for (let t = 1; t <= len; t += 0.5) {
+            const x = Math.floor(fx + Math.cos(a) * t), y = Math.floor(fy + Math.sin(a) * t);
+            if (x < 0 || y < 0 || x + 1 >= w || y + 1 >= w) continue;
+            // Its underside, on the side away from the sun; then the rib.
+            const ux = Math.abs(Math.cos(a)) > Math.abs(Math.sin(a)) ? 0 : 1;
+            if (px[(y + 1 - ux) * w + x + ux] === 0) px[(y + 1 - ux) * w + x + ux] = 2;
+            px[y * w + x] = t > len - 1 ? 5 : 4;
+          }
+        }
+        px[Math.floor(fy) * w + Math.floor(fx)] = 1;
+      };
+      fern(c + 0.5, c + 0.5, r);
+      if (v >= 1) fern(c + 0.5 + r * 0.95, c + 0.5 + r * 0.5, r * 0.8);
+      if (v >= 2) fern(c + 0.5 - r * 0.6, c + 0.5 + r * 0.9, r * 0.7);
+      done(w, w, c, px, 1);
+    }
+  }
+  // A fallen log: bark with the light along its sunny flank, a sawn end, a broken one, moss grown on it.
+  for (let k = 0; k < LOG_LEN.length; k++) {
+    for (let dir = 0; dir < 4; dir++) {
+      const len = LOG_LEN[k], rnd = mulberry32(7501 + 17 * k + 5 * dir);
+      const c = (len >> 1) + 4, w = 2 * c + 6, px = new Uint8Array(w * w);
+      const a = [0, Math.PI / 2, Math.PI / 4, (3 * Math.PI) / 4][dir], cos = Math.cos(a), sin = Math.sin(a);
+      const sunny = dir === 1 || dir === 3 ? 1 : -1; // which flank is the lit one (across the log, toward the sun)
+      const moss = [0, 1].map(() => (rnd() - 0.5) * (len - 8));
+      for (let y = 0; y < w; y++) {
+        for (let x = 0; x < w; x++) {
+          const dx = x - c, dy = y - c, u = dx * cos + dy * sin, vv = (dy * cos - dx * sin) * sunny;
+          if (Math.abs(u) > len / 2 || Math.abs(vv) > 2.5) continue;
+          let tone = vv > 1.5 ? ST_LOG3 : vv > -0.5 ? ST_LOG2 : vv > -1.5 ? ST_LOG1 : ST_LOG0;
+          if (tone === ST_LOG2 && ((Math.floor(u + 400) % 5) === 0)) tone = ST_LOG1; // rings of its bark
+          if (u > len / 2 - 1.3) tone = Math.abs(vv) < 0.8 ? ST_LOG1 : ST_CUT; // the sawn end, its heart
+          else if (u < -len / 2 + 1 + (rnd() < 0.5 ? 1 : 0)) tone = ST_LOG0; // the broken one
+          else if (moss.some((m) => Math.abs(u - m) < 2.2) && vv > -0.5) tone = vv > 1.5 ? 4 : 3;
+          px[y * w + x] = tone;
+        }
+      }
+      done(w, w, c, px, 2);
+    }
+  }
+  // A fragment of an old wall: a few courses of stone still standing, one end broken down in
+  // steps, moss on its top, and vines hanging over its far side on to the ground.
+  for (let q = 0; q < 4; q++) {
+    const vert = (q & 1) === 1, rnd = mulberry32(7701 + 11 * q);
+    const len = q < 2 ? 28 : 22, thick = 7, back = q < 2 ? 0 : 9; // (the shorter two have a return: a corner of the wall)
+    const c = 18, w = 2 * c + 10, px = new Uint8Array(w * w);
+    const set = (a: number, b: number, tone: number): void => {
+      // (a: along the wall from its middle, b: across it from its sunny face.)
+      const x = vert ? c - 3 + b : c + a, y = vert ? c + a : c - 3 + b;
+      if (x >= 0 && y >= 0 && x < w && y < w) px[y * w + x] = tone;
+    };
+    const stone = (a: number, b: number, lit: boolean, dark: boolean, joint: boolean): void => {
+      set(a, b, lit ? ST_ROCK2 : dark ? ST_ROCK0 : joint ? ST_ROCK0 : rnd() < 0.14 ? 3 : ST_ROCK1); // (3: moss on it)
+    };
+    for (let a = -(len >> 1); a < len >> 1; a++) {
+      // Broken down toward its far end: it narrows in two steps.
+      const left = (len >> 1) - a, from = left <= 3 ? 4 : left <= 7 ? 2 : 0;
+      for (let b = from; b < thick; b++) stone(a, b, b === from || a === -(len >> 1), b === thick - 1, (a + 400) % 7 === (b & 2 ? 0 : 3));
+    }
+    // Its return, from the near end.
+    for (let b = thick; b < thick + back; b++) {
+      for (let a = -(len >> 1); a < -(len >> 1) + thick; a++) stone(a, b, a === -(len >> 1), a === -(len >> 1) + thick - 1 || b === thick + back - 1, (b + 400) % 7 === (a & 2 ? 0 : 3));
+    }
+    // Vines: strands over the far face, some of them on to the ground.
+    for (let strand = 0; strand < 6; strand++) {
+      const a = -(len >> 1) + thick + 1 + Math.floor(rnd() * (len - thick - 9)), from = 1 + Math.floor(rnd() * 3), down = thick + 1 + Math.floor(rnd() * 4);
+      for (let b = from; b < down; b++) {
+        const tone = b === from ? 5 : b >= thick ? (b === down - 1 ? 4 : 2) : ST_VINE;
+        set(a, b, tone);
+        if (b > from && b < thick && strand & 1) set(a + 1, b, 2);
+      }
+    }
+    done(w, w, c, px, 3);
+  }
+  return (STAMPS = out);
+}
+
+/** How far a jungle's prop and its shadow reach from the piece's middle, view pixels (0: a site left empty): its stamp's reach, and half a pixel's diagonal for the pixel the middle is rounded to. */
+function jungleReach(d: Junk): number {
+  return d.kind >= K_CROWN ? jungleStamps()[d.n & 255].reach + Math.SQRT1_2 : 0;
+}
+
+/**
+ * The largest stamp of a kind (K_CROWN, K_FERN, K_LOG, K_RUIN) that reaches no further than `fit`
+ * pixels from its piece's middle, its shadow counted; by the piece's own draw `q`: which of a
+ * crown's or a wall's variants, which way a log lies, how many ferns. A crown's radius is at
+ * most `most` pixels. -1: none of the kind has the room.
+ */
+function jungleStamp(kind: number, fit: number, q: number, most: number): number {
+  const stamps = jungleStamps();
+  const fits = (id: number): boolean => stamps[id].reach + Math.SQRT1_2 <= fit;
+  if (kind === K_CROWN) {
+    for (let k = CROWN_R.length - 1; k >= 0; k--) if (CROWN_R[k] <= most && fits(k * CROWN_V + (q & 3))) return k * CROWN_V + (q & 3);
+  } else if (kind === K_LOG) {
+    for (let k = LOG_LEN.length - 1; k >= 0; k--) if (fits(LOG_AT + k * 4 + ((q >> 2) & 3))) return LOG_AT + k * 4 + ((q >> 2) & 3);
+  } else if (kind === K_RUIN) {
+    if (fits(RUIN_AT + (q & 3))) return RUIN_AT + (q & 3);
+  } else {
+    for (let size = 1; size >= 0; size--) for (let v = (q >> 4) % FERN_V; v >= 0; v--) if (fits(FERN_AT + size * FERN_V + v)) return FERN_AT + size * FERN_V + v;
+  }
+  return -1;
+}
+
+/**
+ * A stamp with its middle on buffer pixel (X, Y), in a family's tones (Dress.stampTones). Its
+ * pixels are a theme's prop (they take no marks and hold the theme's own colours); where junk
+ * is clipped to a class (an island's yard, a gap's void) only pixels of that class are painted.
+ * Whole numbers.
+ */
+function stampAt(st: Stamp, X: number, Y: number, family: number): void {
+  const { idx, cls } = buffers();
+  const tones = job.art!.dress.stampTones!, base = family << 4, clip = clipClass;
+  const w = st.w, px = st.px, x0 = X - st.cx, y0 = Y - st.cy;
+  const xa = x0 < 0 ? 0 : x0, xb = x0 + w > S ? S : x0 + w, ya = y0 < 0 ? 0 : y0, yb = y0 + st.h > S ? S : y0 + st.h;
+  if (xa >= xb || ya >= yb) return;
+  for (let y = ya; y < yb; y++) {
+    let q = (y - y0) * w + xa - x0, p = y * S + xa;
+    for (let x = xa; x < xb; x++, q++, p++) {
+      const v = px[q];
+      if (v === 0 || (clip >= 0 && cls[p] !== clip)) continue;
+      if (v === ST_SHADOW) idx[p] = SHADE_I[idx[p]];
+      else {
+        idx[p] = tones[base + v];
+        if (clip < 0) cls[p] = C_PROP;
+      }
+    }
+  }
+  if (clip >= 0) return;
+  if (xa < job.px0) job.px0 = xa;
+  if (ya < job.py0) job.py0 = ya;
+  if (xb > job.px1) job.px1 = xb;
+  if (yb > job.py1) job.py1 = yb;
+}
+
+/**
+ * A jungle's canopy (G_JUNGLE), laid out once per track as a town's houses are (Town, layTown):
+ * ground art, not props (the props stand at the junk's sites and nowhere else). The plane is cut
+ * into square cells of CANOPY pixels; a cell holds one tree's crown, somewhere on it, or (where
+ * no crown has the room) a clump of ferns, or nothing: a clearing. Crowns are larger than their
+ * cells, so they close over the ground between them. Where the road, the open ground beside
+ * it, a prop or a flag marshal needs the room, a smaller crown stands, or none: no crown and no
+ * shadow of one ever comes nearer a barrier than CANOPY_CLEAR.
+ * Cells from column gx0 and row gy0, `cols` by `rows` of them: beyond those nothing stands.
+ */
+interface Canopy {
+  gx0: number;
+  gy0: number;
+  cols: number;
+  rows: number;
+  tree: Int32Array; // per cell: x, y of the crown's middle pixel (view pixels), and its stamp with its family of leaves in bits 8-9 (-1: none)
+}
+
+const CANOPY = 30; // a cell of the canopy's grid, view pixels
+const CANOPY_CLEAR = 9; // open ground between the barrier and the nearest crown or its shadow, world units
+const CANOPY_PROP = 2; // ... and between a crown and a prop's reach, view pixels
+
+/** The canopy round a track (Canopy): worked out on a grid of TOWN_CELL pixels on which every piece of every road (a gap's too), every prop and the two marshals are marked with their room, as layTown does it. */
+function layCanopy(art: Art): Canopy {
+  const { ax, ay, ex, ey, inv, wL0, wL1, wR0, wR1, n } = art;
+  const stamps = jungleStamps();
+  let x0 = BIG, y0 = BIG, x1 = -BIG, y1 = -BIG;
+  for (let i = 0; i < n; i++) {
+    x0 = Math.min(x0, ax[i], ax[i] + ex[i]);
+    x1 = Math.max(x1, ax[i], ax[i] + ex[i]);
+    y0 = Math.min(y0, ay[i], ay[i] + ey[i]);
+    y1 = Math.max(y1, ay[i], ay[i] + ey[i]);
+  }
+  const gx0 = Math.floor((x0 - TOWN_REACH) / CANOPY), gy0 = Math.floor((y0 - TOWN_REACH) / CANOPY);
+  const cols = Math.floor((x1 + TOWN_REACH) / CANOPY) + 1 - gx0, rows = Math.floor((y1 + TOWN_REACH) / CANOPY) + 1 - gy0;
+  // The grid: a cell is taken when something's room reaches its middle (and half a cell more, for its corners).
+  const cx0 = Math.floor((gx0 * CANOPY - STAMP_FAR) / TOWN_CELL) - 2, cy0 = Math.floor((gy0 * CANOPY - STAMP_FAR) / TOWN_CELL) - 2;
+  const cw = Math.ceil((cols * CANOPY + 2 * STAMP_FAR) / TOWN_CELL) + 5, ch = Math.ceil((rows * CANOPY + 2 * STAMP_FAR) / TOWN_CELL) + 5;
+  const taken = new Uint8Array(cw * ch);
+  const mark = (px: number, py: number, qx: number, qy: number, k: number, r: number): void => {
+    const xa = Math.max(0, Math.floor((Math.min(px, px + qx) - r) / TOWN_CELL) - cx0), xb = Math.min(cw - 1, Math.floor((Math.max(px, px + qx) + r) / TOWN_CELL) - cx0);
+    const ya = Math.max(0, Math.floor((Math.min(py, py + qy) - r) / TOWN_CELL) - cy0), yb = Math.min(ch - 1, Math.floor((Math.max(py, py + qy) + r) / TOWN_CELL) - cy0);
+    for (let y = ya; y <= yb; y++) {
+      for (let x = xa; x <= xb; x++) {
+        const wx = (x + cx0 + 0.5) * TOWN_CELL - px, wy = (y + cy0 + 0.5) * TOWN_CELL - py;
+        let t = (wx * qx + wy * qy) * k;
+        t = t < 0 ? 0 : t > 1 ? 1 : t;
+        const dx = wx - qx * t, dy = wy - qy * t;
+        if (dx * dx + dy * dy <= r * r) taken[y * cw + x] = 1;
+      }
+    }
+  };
+  const wall = art.track.wall, half = TOWN_CELL * 0.75;
+  for (let i = 0; i < n; i++) mark(ax[i], ay[i], ex[i], ey[i], inv[i], (wall + Math.max(0, wL0[i], wL1[i], wR0[i], wR1[i]) + BARRIER + CANOPY_CLEAR) * ZOOM + half);
+  for (const j of art.junk) if (j.kind !== K_EMPTY) mark(j.x, j.y, 0, 0, 0, jungleReach(j) + CANOPY_PROP + half);
+  const line = pointAt(art.track, 0);
+  for (const side of [-1, 1]) {
+    const lat = side * ((side < 0 ? art.track.wallL[0] : art.track.wallR[0]) + BARRIER + MARSHAL_STAND);
+    mark((line.x - Math.sin(line.h) * lat) * ZOOM, (line.y + Math.cos(line.h) * lat) * ZOOM, 0, 0, 0, MARSHAL_ROOM * ZOOM + half);
+  }
+  // Is the square of view pixels `far` either way of pixel (x, y) free (a stamp's whole reach lies in it)?
+  const free = (x: number, y: number, far: number): boolean => {
+    for (let cy = Math.floor((y - far) / TOWN_CELL) - cy0, ye = Math.floor((y + far + 1) / TOWN_CELL) - cy0; cy <= ye; cy++) {
+      for (let cx = Math.floor((x - far) / TOWN_CELL) - cx0, xe = Math.floor((x + far + 1) / TOWN_CELL) - cx0; cx <= xe; cx++) {
+        if (cx < 0 || cy < 0 || cx >= cw || cy >= ch || taken[cy * cw + cx]) return false;
+      }
+    }
+    return true;
+  };
+  const hash = (a: number, b: number, seed: number): number => {
+    let h = Math.imul(a, 374761393) ^ Math.imul(b, 668265263) ^ Math.imul(seed, 1442695041);
+    h = Math.imul(h ^ (h >>> 13), 1274126177);
+    return (h ^ (h >>> 16)) >>> 0;
+  };
+  const tree = new Int32Array(cols * rows * 3).fill(-1);
+  for (let gy = gy0; gy < gy0 + rows; gy++) {
+    for (let gx = gx0; gx < gx0 + cols; gx++) {
+      const h = hash(gx, gy, 83);
+      if ((h & 31) === 0) continue; // a clearing
+      const x = gx * CANOPY + 2 + ((h >>> 4) % 26), y = gy * CANOPY + 2 + ((h >>> 10) % 26);
+      // The trees of a grove are mostly of one kind (a grove: four cells by four); how tall one wants to grow is its own.
+      const grove = hash(gx >> 2, gy >> 2, 89) % 5, own = (h >>> 16) & 7;
+      const family = own === 0 ? (grove + 1) % 3 : grove < 3 ? 0 : grove - 2;
+      const k = (((gy - gy0) * cols + (gx - gx0)) * 3);
+      const variant = (h >>> 19) & 3;
+      for (let size = [5, 5, 4, 5, 3, 4, 5, 5][(h >>> 21) & 7]; size >= 0; size--) {
+        if (!free(x, y, Math.ceil(stamps[size * CROWN_V + variant].reach))) continue;
+        tree.set([x, y, (size * CROWN_V + variant) | (family << 8)], k);
+        break;
+      }
+      if (tree[k + 2] >= 0) continue;
+      // No crown has the room: ferns, where those have it.
+      const id = FERN_AT + ((h >>> 24) % (2 * FERN_V));
+      if (free(x, y, Math.ceil(stamps[id].reach))) tree.set([x, y, id | (family << 8)], k);
+    }
+  }
+  return { gx0, gy0, cols, rows, tree };
+}
 
 /** A stain: centre and radius in view pixels. */
 interface Blob {
@@ -518,6 +902,7 @@ interface Art {
   // its middle lies in (x, y) and the square of how far it and its shadow reach from there.
   rooms: Int32Array;
   stacks: Stacks | null; // G_QUAY: the container yard's blocks round the track
+  canopy: Canopy | null; // G_JUNGLE: the crowns that close over the ground round the track
 }
 
 /**
@@ -938,7 +1323,7 @@ const MOUTH_ARROW_LAT = 32; // ... each this far from its road's centreline, on 
 const MOUTH_ARROW = 64; // an arrow's length
 
 // The road's furniture (M4-WORLD): see furniture() for how each is drawn.
-const F_DIRT = 0, F_WATER = 1, F_BELT = 2, F_ROW = 3, F_BED = 4, F_ISLAND = 5, F_SAND = 6, F_OIL = 7;
+const F_DIRT = 0, F_WATER = 1, F_BELT = 2, F_ROW = 3, F_BED = 4, F_ISLAND = 5, F_SAND = 6, F_OIL = 7, F_FORD = 8;
 
 /** A rectangle in track coordinates (s along, l across, + = right of travel; world units) that is painted flat on the road. */
 interface Flat {
@@ -951,7 +1336,10 @@ interface Flat {
   y0: number;
   x1: number;
   y1: number;
-  flip: boolean; // F_ROW: the barrels roll from right to left
+  flip: boolean; // F_ROW: the barrels roll from right to left. F_FORD: its stream runs to the left of travel
+  // F_FORD: which of its two flanks is no bank but the road's own edge, where the stream runs on
+  // under the kerb (bit 0: the left one, at l0; bit 1: the right one, at l1). 0 for every other kind.
+  open: number;
   // F_WATER, F_DIRT: the puddle's outline (puddleEdge). Its seed, the radius of each of its four
   // corners (by nearer end along, then nearer side across), how much of the lobes it has (a
   // small one: less), and how long its widest lobes are along the road and across it.
@@ -1015,6 +1403,13 @@ const SLAB_ALONG = 16, SLAB_ACROSS = 13; // a sidewalk's slab (a theme with a pa
 // pixels), a row's step along the road, and the two rows' distance from the kerb's outside.
 const RING = 3.75, RING_EVERY = 52, RING_IN = 10, RING_OUT = 25;
 const SLEEPER_EVERY = 17, SLEEPER = 4.8, SLEEPER_HALF = 21; // old rail sleepers in a ballast patch: a step along the road, a sleeper's width, half its length
+// A root on a jungle's verge: a stretch of the road holds one at the most (it lies 9 to 24 units into its stretch and wanders 3 either way), world units.
+const ROOT_EVERY = 34, ROOT_LONG = 30; // (and it reaches at most ROOT_LONG in from the wall's foot)
+const ROOT_WAVE = [0, 1, 2, 3, 3, 2, 1, 0, -1, -2, -3, -3, -2, -1, 0, 1];
+// A ford's chevrons, world units: about this far from row to row along the road and from one to the next across it; a
+// chevron's arms reach FORD_ARM either side of its middle and sweep back FORD_SWEEP a unit from its tip, FORD_TIP
+// downstream of that middle; its middle keeps FORD_SIDE off the stream's two sides.
+const FORD_ROWS = 34, FORD_PITCH = 38, FORD_ARM = 8.5, FORD_SWEEP = 1, FORD_TIP = 5.5, FORD_SIDE = 13;
 
 // A track object has one theme, its definition's (gfx/theme.ts themeOf): the art is keyed by
 // the track. The preview's `&theme=` switch hands the Renderer a copy of the track that names
@@ -1043,7 +1438,7 @@ function inFrame(f: Frame, u: number, v: number, out: Float64Array, at: number):
 
 function buildArt(track: Track, scenery: Scenery): Art {
   const dress = dressOf(scenery);
-  const desert = dress.props === PROPS_DESERT, city = dress.props === PROPS_CITY, harbour = dress.props === PROPS_HARBOUR, themed = desert || city || harbour;
+  const desert = dress.props === PROPS_DESERT, city = dress.props === PROPS_CITY, harbour = dress.props === PROPS_HARBOUR, jungle = dress.props === PROPS_JUNGLE, themed = desert || city || harbour;
   // A theme's prop for a piece of junk: its kind by the same draw (the city's by its place in
   // its heap too: `j`, so that one car at most is parked in a heap), its paint by the junk's.
   const propKind = (pick: number, j: number): number =>
@@ -1144,7 +1539,7 @@ function buildArt(track: Track, scenery: Scenery): Art {
     recRoadY: roads.map((r, k) => (k ? Float64Array.from(r.recovery, (s) => pointAt(r, s).y) : new Float64Array(0))),
     recBack: new Int32Array(roads.length),
     wide: wide || branchy, wallMax: wall, wL0: f64(), wL1: f64(), wR0: f64(), wR1: f64(),
-    furnished: false, flats: [], things: [], blots: [], town: null, rails: new Int32Array(0), rooms: new Int32Array(0), stacks: null,
+    furnished: false, flats: [], things: [], blots: [], town: null, rails: new Int32Array(0), rooms: new Int32Array(0), stacks: null, canopy: null,
   };
   if (wide) {
     for (let i = 0; i < pts.length; i++) art.wallMax = Math.max(art.wallMax, track.wallL[i], track.wallR[i]);
@@ -1307,9 +1702,9 @@ function buildArt(track: Track, scenery: Scenery): Art {
   {
     const paints = [RUST1, RUST2, RUST0, HAZ0, STEEL1, RUST1, STEEL2];
     const heaps: Vec[] = [];
-    // The two flag marshals at the start line (gfx/marshals.ts: STAND outside each barrier there): a harbour's prop keeps off their spots.
+    // The two flag marshals at the start line (gfx/marshals.ts: STAND outside each barrier there): a harbour's prop keeps off their spots, and a jungle's.
     const stands: Vec[] = [];
-    if (harbour) {
+    if (harbour || jungle) {
       const line = pointAt(track, 0);
       for (const side of [-1, 1]) {
         const lat = side * ((side < 0 ? track.wallL[0] : track.wallR[0]) + BARRIER + MARSHAL_STAND);
@@ -1382,6 +1777,34 @@ function buildArt(track: Track, scenery: Scenery): Art {
       if (j === 0 && fit >= FORK_REACH) return piece(K_FORK, dress.crane, q & 1);
       return pick < 0.62 ? small() : container(false) ?? small();
     };
+    /**
+     * The jungle's prop for a piece of junk (PROPS_JUNGLE), at the junk's own place: a stamp
+     * (jungleStamps). What it is goes by the same draw as the yard's junk (`pick`: a tree's
+     * crown, a clump of ferns, a fallen log) and by its heap (in one heap of five the first
+     * piece is a vine-hung fragment of a wall; a heap's trees are of one family); how large by
+     * the room it has, as a harbour's prop: all of it and its shadow lie within the piece's
+     * reach as yard() takes it (1.5 r + 6 pixels) and short of the barrier (`far`), and off the
+     * marshals' spots. A crown is no larger than its junk merits (1.4 r), so it never reaches
+     * past the barrier however much room there is. What has not the room is something smaller
+     * (a smaller crown, ferns), or nothing.
+     */
+    const jungleProp = (heap: number, j: number, pick: number, x: number, y: number, rad: number, far: number): Junk => {
+      let h = Math.imul(heap + 1, 0x9e3779b1) ^ Math.imul(79, 1442695041);
+      h = Math.imul(h ^ (h >>> 13), 1274126177);
+      h = (h ^ (h >>> 16)) >>> 0;
+      let q = Math.imul(h ^ Math.imul(j + 1, 0x632be5ab), 1274126177);
+      q = (q ^ (q >>> 15)) >>> 0;
+      const r = rad * ZOOM;
+      let fit = Math.min(r * 1.5 + 6, (far - R) * ZOOM - 1);
+      for (const m of stands) fit = Math.min(fit, (Math.hypot(x - m.x, y - m.y) - MARSHAL_ROOM) * ZOOM);
+      const family = (h & 7) < 4 ? 0 : (h & 7) < 6 ? 1 : 2;
+      const want = j === 0 && (h >>> 3) % 5 === 0 ? K_RUIN : pick < 0.46 ? K_CROWN : pick < 0.7 ? K_FERN : K_LOG;
+      for (const kind of [want, K_CROWN, K_FERN]) {
+        const id = jungleStamp(kind, fit, q & 0xffff, r * 1.4);
+        if (id >= 0) return { kind, x: x * ZOOM, y: y * ZOOM, r, a: 0, c: 0, n: id | (family << 8), px: Math.floor(x * ZOOM), py: Math.floor(y * ZOOM) };
+      }
+      return { kind: K_EMPTY, x: x * ZOOM, y: y * ZOOM, r, a: 0, c: 0, n: 0, px: Math.floor(x * ZOOM), py: Math.floor(y * ZOOM) };
+    };
     roads.forEach((r, k) => {
       const rnd = mulberry32(7 + 7919 * k);
       const len = r.length, open = k > 0;
@@ -1400,6 +1823,10 @@ function buildArt(track: Track, scenery: Scenery): Art {
           if (far < R + 16) continue;
           if (harbour) {
             art.junk.push(harbourProp(heaps.length - 1, j, pick, x, y, rad, c, far));
+            continue;
+          }
+          if (jungle) {
+            art.junk.push(jungleProp(heaps.length - 1, j, pick, x, y, rad, far));
             continue;
           }
           const kind = themed ? propKind(pick, j) : pick < 0.3 ? K_CUBE : pick < 0.46 ? K_DRUM : pick < 0.62 ? K_TYRES : pick < 0.72 ? K_PLATE : pick < 0.82 ? K_PALLET : pick < 0.92 ? K_ENGINE : K_COIL;
@@ -1452,7 +1879,12 @@ function buildArt(track: Track, scenery: Scenery): Art {
         for (let lat = -W + 6; lat < W - 4; lat += 16) {
           const p = offsetOn(r, s + (rnd() - 0.5) * 8, lat + (rnd() - 0.5) * 9);
           const pick = rnd(), rad = 7 + rnd() * 6, a = rnd() * Math.PI, c = paints[Math.floor(rnd() * paints.length)];
-          // The desert fills a gap with boulders, a car shell among them now and then; the city with rubble and crates; the harbour with containers as they fell, and pallets.
+          // The desert fills a gap with boulders, a car shell among them now and then; the city with rubble and crates; the harbour with containers as they fell, and pallets; the jungle with logs washed down and boulders.
+          if (jungle) {
+            const log = pick < 0.6, dir = [0, 2, 1, 3][Math.floor((a / Math.PI) * 4) & 3];
+            out.push({ kind: log ? K_LOG : K_ROCK, x: p.x * ZOOM, y: p.y * ZOOM, r: rad * ZOOM, a, c: log ? 0 : dress.stones[0], n: log ? LOG_AT + (rad > 10 ? 4 : 0) + dir : 0, px: Math.floor(p.x * ZOOM), py: Math.floor(p.y * ZOOM) });
+            continue;
+          }
           if (harbour) {
             // (As it fell: along x, along y or aslant, by the junk's own turn.)
             const turn = [0, 2, 1, 3][Math.floor((a / Math.PI) * 4) & 3];
@@ -1670,6 +2102,7 @@ function buildArt(track: Track, scenery: Scenery): Art {
   furnish(art);
   if (dress.ground === G_TOWN) art.town = layTown(art);
   if (dress.ground === G_QUAY) art.stacks = layStacks(art);
+  if (dress.ground === G_JUNGLE) art.canopy = layCanopy(art);
   return art;
 }
 
@@ -1680,7 +2113,7 @@ function buildArt(track: Track, scenery: Scenery): Art {
  */
 function furnish(art: Art): void {
   const dress = art.dress;
-  const desert = dress.props === PROPS_DESERT, city = dress.props === PROPS_CITY;
+  const desert = dress.props === PROPS_DESERT, city = dress.props === PROPS_CITY, jungle = dress.props === PROPS_JUNGLE;
   // A thing's box, from the view-pixel box of what is drawn: room for its shadow down-right.
   const thing = (kind: number, x0: number, y0: number, x1: number, y1: number, more: Partial<Thing>): void => {
     art.things.push({ kind, x0: Math.floor(x0) - 2, y0: Math.floor(y0) - 2, x1: Math.ceil(x1) + 9, y1: Math.ceil(y1) + 10, tyres: new Float64Array(0), lie: new Float64Array(0), junk: null, truck: null, ...more });
@@ -1717,7 +2150,7 @@ function furnish(art: Art): void {
       if (!ring && count & 1) count++; // the outer ring: its two paints in turn, all the way round
       for (let j = 0; j < count; j++) {
         const a = turn + ring * 0.6 + (j / count) * Math.PI * 2 + (ring ? (rnd() - 0.5) * 0.18 : 0);
-        list.push(x + Math.cos(a) * rr, y + Math.sin(a) * rr, ring ? dress.moundInner : j & 1 ? RUST2 : BONE1);
+        list.push(x + Math.cos(a) * rr, y + Math.sin(a) * rr, ring ? dress.moundInner : j & 1 ? dress.moundA : dress.moundB);
       }
     }
     list.push(x, y, dress.moundTop); // the top of the heap
@@ -1731,7 +2164,7 @@ function furnish(art: Art): void {
       return { x: p.x - Math.sin(p.h) * lat, y: p.y + Math.cos(p.h) * lat };
     };
     // The box of view pixels a rectangle of the road lies in, `pad` world units wider all round.
-    const flat = (kind: number, s0: number, s1: number, l0: number, l1: number, pad: number, flip = false): void => {
+    const flat = (kind: number, s0: number, s1: number, l0: number, l1: number, pad: number, flip = false, open = 0): void => {
       let x0 = BIG, y0 = BIG, x1 = -BIG, y1 = -BIG;
       const steps = Math.max(1, Math.ceil((s1 - s0 + 2 * pad) / 12));
       for (let k = 0; k <= steps; k++) {
@@ -1756,7 +2189,7 @@ function furnish(art: Art): void {
       }
       const round = Float64Array.from(radii, (r) => Math.min(short / 2, r));
       const lobe = (side: number) => Math.max(60, Math.min(140, side / 2));
-      art.flats.push({ kind, s0: s0 + base, s1: s1 + base, l0, l1, x0: Math.floor(x0) - 2, y0: Math.floor(y0) - 2, x1: Math.ceil(x1) + 3, y1: Math.ceil(y1) + 3, flip, seed, round, swell: Math.min(1, short / 48), lobeS: lobe(s1 - s0), lobeL: lobe(l1 - l0) });
+      art.flats.push({ kind, s0: s0 + base, s1: s1 + base, l0, l1, x0: Math.floor(x0) - 2, y0: Math.floor(y0) - 2, x1: Math.ceil(x1) + 3, y1: Math.ceil(y1) + 3, flip, open, seed, round, swell: Math.min(1, short / 48), lobeS: lobe(s1 - s0), lobeL: lobe(l1 - l0) });
     };
 
     // Painted flat, in this order: the surfaces first (they never overlap each other), then what
@@ -1767,6 +2200,11 @@ function furnish(art: Art): void {
     // The theme's surfaces, where the theme has the colours for them (a track has them only in its own theme).
     if (dress.sand) for (const f of track.sand) flat(F_SAND, f.s0, f.s1, f.lat0, f.lat1, 0);
     if (dress.oil) for (const f of track.oil) flat(F_OIL, f.s0, f.s1, f.lat0, f.lat1, 0);
+    // (A ford's `flip`: its stream runs to the left of travel. `open`: it runs from kerb to kerb, see Flat.)
+    if (dress.ford) {
+      const half = track.def.halfWidth;
+      for (const f of track.fords) flat(F_FORD, f.s0, f.s1, f.lat0, f.lat1, 0, f.vx < 0, (f.lat0 <= 0.5 - half ? 1 : 0) | (f.lat1 >= half - 0.5 ? 2 : 0));
+    }
     for (const b of track.barrels) flat(F_ROW, b.s - BARREL_R - ROW_JAMB, b.s + BARREL_R + ROW_JAMB, b.lat0 - BARREL_R - BARRIER, b.lat1 + BARREL_R + BARRIER, 0, b.speed < 0);
     for (const p of track.presses) flat(F_BED, p.s - PRESS_DEPTH / 2, p.s + PRESS_DEPTH / 2, p.lat0, p.lat1, 0);
     for (const i of track.islands) flat(F_ISLAND, i.s0, i.s1, i.lat0, i.lat1, GORE);
@@ -1788,7 +2226,7 @@ function furnish(art: Art): void {
           const s = end ? isle.s1 - TYRE - row * TYRE * 1.9 : isle.s0 + TYRE + row * TYRE * 1.9;
           for (let j = 0; j < count; j++) {
             const q = offset(s, mid + (j - (count - 1) / 2) * ((width - 2 * TYRE) / Math.max(1, across - 1)));
-            list.push(q.x, q.y, (j + row) & 1 ? RUST2 : BONE1);
+            list.push(q.x, q.y, (j + row) & 1 ? dress.moundA : dress.moundB);
           }
         }
         heap(list);
@@ -1800,7 +2238,19 @@ function furnish(art: Art): void {
           const r = Math.min(room / 2.3, 7 + rnd() * 5);
           const q = offset(s, mid + (rnd() - 0.5) * Math.max(0, room - r * 2.2));
           const pick = rnd(), a = rnd() * Math.PI, c = paints[Math.floor(rnd() * paints.length)];
-          // (The desert's island: rocks, scrub and succulents; a car shell has no room. The city's: planter trees, crates and cones. The harbour's: bollards, hawsers and pallets.)
+          // (The desert's island: rocks, scrub and succulents; a car shell has no room. The city's: planter trees, crates and cones. The harbour's: bollards, hawsers and pallets. The jungle's: ferns, a bush, a log.)
+          if (jungle) {
+            const want = pick < 0.5 ? K_FERN : pick < 0.8 ? K_CROWN : K_LOG, draw = Math.floor(a * 1000);
+            let kind = want, id = jungleStamp(want, r * ZOOM * 1.5 + 3, draw, r * ZOOM);
+            if (id < 0) {
+              kind = K_FERN;
+              id = jungleStamp(K_FERN, r * ZOOM * 1.5 + 3, draw, 0);
+            }
+            if (id < 0) continue;
+            const j: Junk = { kind, x: q.x * ZOOM, y: q.y * ZOOM, r: r * ZOOM, a, c: 0, n: id | ((draw % 3) << 8), px: Math.floor(q.x * ZOOM), py: Math.floor(q.y * ZOOM) };
+            thing(T_JUNK, j.x - j.r * 1.5 - 4, j.y - j.r * 1.5 - 4, j.x + j.r * 1.5 + 4, j.y + j.r * 1.5 + 4, { junk: j });
+            continue;
+          }
           const kind = art.dress.props === PROPS_HARBOUR ? (pick < 0.4 ? K_BOLLARD : pick < 0.7 ? K_HAWSER : K_PALLETS) : city ? (pick < 0.46 ? K_TREE : pick < 0.76 ? K_CRATE : K_CONES) : desert ? (pick < 0.5 ? K_ROCK : pick < 0.72 ? K_SCRUB : K_CACTUS) : pick < 0.3 ? K_CUBE : pick < 0.5 ? K_DRUM : pick < 0.66 ? K_TYRES : pick < 0.76 ? K_PLATE : pick < 0.86 ? K_PALLET : pick < 0.94 ? K_ENGINE : K_COIL;
           const j: Junk = { kind, x: q.x * ZOOM, y: q.y * ZOOM, r: r * ZOOM, a, c: city ? (kind === K_CRATE ? dress.woods[1 + (c & 1)] : 0) : desert ? (kind === K_ROCK ? dress.stones[c === STEEL1 || c === STEEL2 ? 1 : 0] : 0) : c, n: kind === K_HAWSER ? Math.floor(r * ZOOM * 0.7 * 4) : 0, px: Math.floor(q.x * ZOOM), py: Math.floor(q.y * ZOOM) };
           thing(T_JUNK, j.x - j.r * 1.5 - 4, j.y - j.r * 1.5 - 4, j.x + j.r * 1.5 + 4, j.y + j.r * 1.5 + 4, { junk: j });
@@ -2011,6 +2461,7 @@ function bakeStep(): boolean {
       if (job.art!.dress.ground === G_DUNES) dunes();
       else if (job.art!.dress.ground === G_TOWN) town();
       else if (job.art!.dress.ground === G_QUAY) quay();
+      else if (job.art!.dress.ground === G_JUNGLE) loam();
       else ground();
       return true;
     case 2:
@@ -2436,6 +2887,108 @@ function sandMarks(): void {
       }
     }
   }
+}
+
+/**
+ * The jungle's ground (G_JUNGLE), where the scrapyard has ground(): dark loam under leaf litter.
+ * Fallen leaves lie on it as short dashes, a tan one here, a mossy one there, with a dark speck
+ * of wet earth and now and then a leaf of rust between them; moss creeps up against the foot of
+ * the wall. Half the tile per call; then the canopy that closes over it (canopy), in calls of
+ * its own.
+ */
+function loam(): void {
+  if (job.sub >= 2) {
+    canopy();
+    return;
+  }
+  const art = job.art!, b = buffers(), N = noiseTable();
+  const { bx, by, o1, o2, o3 } = job;
+  const { idx, dist } = b;
+  const R = art.track.wall + BARRIER;
+  const rows = S / 2, from = job.sub * rows;
+  for (let y = from; y < from + rows; y++) {
+    const Y = by + y;
+    const nRow = ((Y + (o1 >> 8)) & 255) << 8, lRow = ((Y + (o3 >> 8)) & 255) << 8, mRow = ((Y + (o2 >> 8)) & 255) << 8;
+    for (let x = 0; x < S; x++) {
+      const p = y * S + x;
+      if (dist[p] <= R) continue; // the road covers it
+      const X = bx + x;
+      const n = N[nRow | ((X + o1) & 255)];
+      // A leaf: two pixels side by side.
+      const leaf = N[lRow | (((X >> 1) + o3) & 255)];
+      let col = leaf < 13 ? DIRT3 : leaf > 249 ? GRAVEL0 : n < 12 ? DIRT1 : n > 254 ? RUST1 : DIRT2;
+      // Moss against the wall: dense at its foot.
+      const far = dist[p] - R;
+      if (far <= FRINGE_FAR) {
+        const m = N[mRow | ((X + o2) & 255)];
+        if (m < (far <= FRINGE_NEAR ? 116 : 40)) col = m & 1 ? GRAVEL0 : GRAVEL1;
+      }
+      idx[p] = col;
+    }
+  }
+  job.sub++;
+  job.row = 0;
+  COST[0] = LOAM_HALF;
+}
+
+// What the two halves of the loam and a pixel of a stamp cost, in cost units (measured: tools/debug/world-bench.ts --units and theme-sheet.ts --alloc's timings).
+const LOAM_HALF = 110, STAMP_PIXEL = 0.0011;
+
+/**
+ * The jungle's canopy on the buffer (Art.canopy; see Canopy for how it stands): each cell's
+ * stamp, row by row of the grid and cell by cell along a row, so that a crown lies over the
+ * ones up and to the left of it and its shadow falls on them and on the ground (a tile is still
+ * a pure function of its place: whatever tile a pixel is baked in, the same crowns are put on
+ * it in the same order). A few rows of cells per call. Whole numbers.
+ */
+function canopy(): void {
+  const art = job.art!, t = art.canopy!, b = buffers();
+  const { bx, by } = job;
+  const { idx, cls } = b;
+  const stamps = STAMPS!, tones = art.dress.stampTones!, shade = SHADE_I;
+  const { gx0, gy0, cols, rows, tree } = t;
+  const gya = Math.floor((by - STAMP_FAR) / CANOPY), gyb = Math.floor((by + S + STAMP_FAR) / CANOPY);
+  const gxa = Math.floor((bx - STAMP_FAR) / CANOPY), gxb = Math.floor((bx + S + STAMP_FAR) / CANOPY);
+  let work = 0, gy = gya + job.row;
+  let pa = job.px0, pb = job.py0, pc = job.px1, pd = job.py1;
+  for (; gy <= gyb && work < 110000; gy++) {
+    if (gy < gy0 || gy >= gy0 + rows) continue;
+    for (let gx = gxa; gx <= gxb; gx++) {
+      if (gx < gx0 || gx >= gx0 + cols) continue;
+      const k = ((gy - gy0) * cols + (gx - gx0)) * 3, id = tree[k + 2];
+      if (id < 0) continue;
+      const st = stamps[id & 255], base = ((id >> 8) & 3) << 4;
+      const w = st.w, px = st.px, x0 = tree[k] - st.cx - bx, y0 = tree[k + 1] - st.cy - by;
+      const xa = x0 < 0 ? 0 : x0, xb = x0 + w > S ? S : x0 + w, ya = y0 < 0 ? 0 : y0, yb = y0 + st.h > S ? S : y0 + st.h;
+      if (xa >= xb || ya >= yb) continue;
+      for (let y = ya; y < yb; y++) {
+        let q = (y - y0) * w + xa - x0, p = y * S + xa;
+        for (let x = xa; x < xb; x++, q++, p++) {
+          const v = px[q];
+          if (v === 0) continue;
+          if (v === ST_SHADOW) idx[p] = shade[idx[p]];
+          else {
+            idx[p] = tones[base + v];
+            cls[p] = C_PROP;
+          }
+        }
+      }
+      work += (xb - xa) * (yb - ya);
+      if (xa < pa) pa = xa;
+      if (ya < pb) pb = ya;
+      if (xb > pc) pc = xb;
+      if (yb > pd) pd = yb;
+    }
+  }
+  job.px0 = pa;
+  job.py0 = pb;
+  job.px1 = pc;
+  job.py1 = pd;
+  if (gy > gyb) {
+    job.row = 0;
+    next();
+  } else job.row = gy - gya;
+  COST[0] = 3 + work * STAMP_PIXEL;
 }
 
 const TOWN_MORE = 40; // what the houses' details and shadows cost a tile, in cost units (about)
@@ -3049,11 +3602,13 @@ function road(): void {
   const vLight = dress.vergeLight, vDark = dress.vergeDark, vFleck = dress.vergeFleck;
   const kerbPeriod = dress.kerbPeriod, kerbOn = dress.kerbOn, KERB_A = dress.kerbA, KERB_B = dress.kerbB, KERB_JOINT = dress.kerbJoint, KERB_WORN = dress.kerbWorn;
   const slabs = dress.slabs, rings = dress.rings;
-  const canyon = dress.void === VOID_CANYON, street = dress.void === VOID_STREET, basin = dress.void === VOID_BASIN, rock = dress.rock, rubble = dress.rubble;
+  const canyon = dress.void === VOID_CANYON, street = dress.void === VOID_STREET, basin = dress.void === VOID_BASIN, gorge = dress.void === VOID_GORGE, rock = dress.rock, rubble = dress.rubble;
+  const ROOTS = dress.roots, ROOT_LIT = dress.rootLit;
   const ROCK0 = rock[0], ROCK1 = rock[1], ROCK2 = rock[2], ROCK3 = rock[3];
   const RUB0 = rubble[0], RUB1 = rubble[1], RUB2 = rubble[2], RUB3 = rubble[3];
   const from = job.sub;
   let work = 0, y = from;
+  let rootCell = -1e9, rootLeft = false, rootDraw = 0; // the stretch of the verge whose root a pixel last asked about (ROOTS)
   for (; y < S && work < 11000; y++) {
     const Y = by + y;
     for (let x = 0; x < S; x++) {
@@ -3083,6 +3638,15 @@ function road(): void {
             if (am < 1.2) {
               if ((l + 4000) % 26 < 11) c = SOOT3;
             } else if (am >= 22) c = am < 23.4 ? SOOT3 : n < 96 ? SOOT2 : SOOT1;
+          } else if (gorge) {
+            // A river far below, running under the road along the gorge: streaks on dark water that
+            // waver and break, a thin line where it meets its banks. All of it soot: no blue down
+            // there, and nothing to drive on.
+            const m = s - (gp.s0 + gp.s1) / 2, am = m < 0 ? -m : m, bank = (gp.s1 - gp.s0) / 2 - 42;
+            if (am < bank) {
+              const v = m + 4000 + ((Math.floor((l + 4000) / 11) * 7) % 5) * 0.7, ph = v - Math.floor(v / 6) * 6;
+              c = am > bank - 1.3 ? SOOT3 : ph < 1.1 ? (n < 150 ? SOOT2 : SOOT1) : n < 6 ? SOOT3 : n < 150 ? SOOT1 : SOOT0;
+            }
           }
         } else {
           // Which wall is this the foot of, and does it face the sun (down-right walls do)? By the
@@ -3134,6 +3698,18 @@ function road(): void {
               const from = s - (gp.s0 + (gp.s1 - gp.s0) / 3), off = from < 0 ? -from : from;
               if (off < 3.4) c = off > 2 ? (e < 12 ? STEEL2 : STEEL1) : e % 3.6 < 1.3 ? (e < 12 ? STEEL1 : STEEL0) : c;
             }
+          } else if (gorge) {
+            // A river gorge: mossy rock at its rim where a wall faces the sun, vines hanging over
+            // it; under that, and on the walls away from the sun, steps of soot.
+            if (away) c = e < 2.6 ? ROCK0 : e < 6 ? SOOT3 : e < 13 ? SOOT2 : e < 21 ? SOOT1 : n < 40 ? SOOT0 : SOOT1;
+            else {
+              c = e < 2.6 ? ROCK2 : e < 5.2 ? ROCK1 : e < 8 ? ROCK0 : e < 13 ? SOOT3 : e < 21 ? (n < 80 ? ROCK0 : SOOT2) : n < 128 ? SOOT2 : SOOT1;
+              // A strand every few units along the rim, each as long as its own draw says (ROCK3: the vines' green).
+              const run = (side <= head && side <= tail ? s : l) + 4000, strand = Math.floor(run / 2.5);
+              let hv = Math.imul(strand, 374761393) ^ Math.imul(g + 7, 668265263);
+              hv = Math.imul(hv ^ (hv >>> 13), 1274126177);
+              if ((hv & 3) === 0 && run - strand * 2.5 < 1.3 && e < 2 + ((hv >>> 4) & 7)) c = ROCK3;
+            }
           } else c = e < 6 ? (away ? SOOT3 : DIRT0) : e < 13 ? (away ? SOOT2 : SOOT3) : e < 21 ? (away ? SOOT1 : SOOT2) : away ? (n < 40 ? SOOT0 : SOOT1) : n < 128 ? SOOT2 : SOOT1;
         }
         // The drop just inside each end, in the shade of the road above.
@@ -3169,6 +3745,30 @@ function road(): void {
               c = ((h >>> 16) & 255) < 43 ? (n > 250 ? GRAVEL1 : GRAVEL2) : n < 6 ? GRAVEL2 : n > 251 ? GRAVEL0 : GRAVEL1;
             }
           } else c = n < vLight ? GRAVEL2 : n > vDark ? GRAVEL0 : n > vFleck ? BONE0 : GRAVEL1;
+          if (ROOTS !== 0) {
+            // A jungle's verge: roots creep over the moss from the wall's foot, one in most
+            // stretches of ROOT_EVERY units on either side of the road, each as long as its own
+            // draw says, wandering as it goes and thinner toward its tip.
+            const up = wall - d;
+            if (up < ROOT_LONG) {
+              const run = dash0[i] + ds[i] * t, cell = Math.floor(run / ROOT_EVERY), left = l < 0;
+              // (The stretch's draw is kept from pixel to pixel: the pixels of a row are mostly in one stretch.)
+              if (cell !== rootCell || left !== rootLeft) {
+                rootCell = cell;
+                rootLeft = left;
+                let h = Math.imul(cell, 374761393) ^ (left ? 0x5bd1e995 : 0x1b873593);
+                h = Math.imul(h ^ (h >>> 13), 1274126177);
+                rootDraw = (h ^ (h >>> 16)) & 0xffff;
+              }
+              const len = ROOT_LONG - 15 + ((rootDraw >> 3) & 15);
+              if ((rootDraw & 7) < 5 && up < len) {
+                const at = run - cell * ROOT_EVERY - 9 - ((rootDraw >> 7) & 15) - ROOT_WAVE[(((up * 0.55) | 0) + ((rootDraw >> 11) & 7)) & 15];
+                const half = up < len - 6 ? 0.95 : 0.6;
+                if (at > -half && at < half) c = ROOT_LIT;
+                else if (at >= half && at < half + 1.15) c = ROOTS; // its side away from the sun
+              }
+            }
+          }
           if (rings) {
             // A quay's apron: tie-down rings let into it, in two rows along the road (the outer
             // one half a step on), each a ring of steel round its dark eye.
@@ -3511,7 +4111,9 @@ function finish(): void {
   }
   // A theme's props outside the walls are in colours of its own, which only a pixel that takes
   // no marks can hold: wherever the tile lies (one far from the road has no other such pixel).
-  if (job.px1 > job.px0) {
+  // (Where they lie all over the tile, a jungle's canopy, they get the bit further down, in the pass that makes the pixels: one pass over the tile, not two.)
+  const all = art.canopy !== null && job.px1 > job.px0;
+  if (job.px1 > job.px0 && !all) {
     const xa = job.px0 > PAD ? job.px0 : PAD, xb = job.px1 < PAD + TILE ? job.px1 : PAD + TILE;
     const ya = job.py0 > PAD ? job.py0 : PAD, yb = job.py1 < PAD + TILE ? job.py1 : PAD + TILE;
     for (let y = ya; y < yb; y++) {
@@ -3522,7 +4124,13 @@ function finish(): void {
   const base = baking ? baking.base : spareBase(), rows = b.rows, palOff = art.scenery.palOff;
   for (let y = 0; y < TILE; y++) {
     let p = (y + PAD) * S + PAD, o = y * TILE;
-    for (let x = 0; x < TILE; x++) out32[o++] = palOff[idx[p++]];
+    if (all) {
+      for (let x = 0; x < TILE; x++, p++) {
+        let v = idx[p];
+        if (cls[p] === C_PROP) idx[p] = v = v | OFF;
+        out32[o++] = palOff[v];
+      }
+    } else for (let x = 0; x < TILE; x++) out32[o++] = palOff[idx[p++]];
     base.set(rows[y], y * TILE);
   }
   next(7); // done (step 6, the furniture, comes before this one)
@@ -3579,7 +4187,13 @@ const EDGE = new Float64Array(3);
  */
 function puddleEdge(f: Flat): void {
   const s = EDGE[0], l = EDGE[1];
-  const a = s - f.s0, b = f.s1 - s, c = l - f.l0, d = f.l1 - l;
+  const a = s - f.s0, b = f.s1 - s;
+  let c = l - f.l0, d = f.l1 - l;
+  // A ford that runs from kerb to kerb has no bank there: its outline is its two banks along the road, and no corner.
+  if (f.open !== 0) {
+    if (f.open & 1) c = BIG;
+    if (f.open & 2) d = BIG;
+  }
   const ds = a < b ? a : b, dl = c < d ? c : d;
   const r = f.round[(a < b ? 0 : 1) | (c < d ? 0 : 2)]; // the nearest corner's radius
   const corner = ds < r && dl < r;
@@ -3688,6 +4302,8 @@ function flats(): void {
   const sand = dress.sand, oil = dress.oil;
   const SAND0 = sand ? sand[0] : 0, SAND1 = sand ? sand[1] : 0, SAND2 = sand ? sand[2] : 0;
   const OIL0 = oil ? oil[0] : 0, OIL1 = oil ? oil[1] : 0, OIL2 = oil ? oil[2] : 0, SHEEN0 = oil ? oil[3] : 0, SHEEN1 = oil ? oil[4] : 0, SHEEN2 = oil ? oil[5] : 0;
+  const ford = dress.ford;
+  const FORD0 = ford ? ford[0] : 0, FORD1 = ford ? ford[1] : 0, FORD2 = ford ? ford[2] : 0, FOAM = ford ? ford[3] : 0, SHINGLE = ford ? ford[4] : 0;
   const MUD = dress.mud, rim = MUD ? -4.4 : -2.2; // how far outside its edge a pool changes the ground
   const WALL = dress.wall, RAIL = dress.rail, BLOCK = dress.block, JOINT = dress.joint, UNDERLAY = dress.underlay;
   let work = 0, y = job.row;
@@ -3699,6 +4315,13 @@ function flats(): void {
       const kind = f.kind;
       const xa = f.x0 - bx > 0 ? f.x0 - bx : 0, xb = f.x1 - bx < S ? f.x1 - bx : S;
       work += 8;
+      // A ford's chevrons: rows of them `fordRow` apart along the road, `fordPitch` apart across it, pointing the way `fordWay` (1: to the right of travel).
+      let fordRow = 1, fordPitch = 1, fordWay = 1;
+      if (kind === F_FORD) {
+        fordRow = (f.s1 - f.s0) / Math.max(1, Math.round((f.s1 - f.s0 - 20) / FORD_ROWS));
+        fordPitch = (f.l1 - f.l0) / Math.max(1, Math.round((f.l1 - f.l0 - 20) / FORD_PITCH));
+        fordWay = f.flip ? -1 : 1;
+      }
       for (let x = xa; x < xb; x++) {
         const p = y * S + x;
         const d = dist[p];
@@ -3863,6 +4486,46 @@ function flats(): void {
           }
           idx[p] = c;
           cls[p] = C_OIL;
+        } else if (kind === F_FORD) {
+          // A ford (TH-LOOK-3): a shallow stream across the asphalt. Jade, lighter and greener than
+          // a pool and with no dark edge: shingle shows through at its two banks, and its surface
+          // runs in streaks across the road, the way the water goes. On it, baked and still, the
+          // cue that says which way that is (PLAN-THEMES.md advisor change 6): rows of foam
+          // chevrons that point downstream, the way a car is pushed, each with its shadow on the
+          // water behind it and a fainter one in its wake. The road's centre line shows through.
+          if (d > hw || k !== C_TARMAC || es <= 0 || el <= 0) continue;
+          EDGE[0] = s;
+          EDGE[1] = l;
+          puddleEdge(f);
+          const e = EDGE[2];
+          if (e <= -1.8) continue;
+          const was = idx[p];
+          if (e <= 0) {
+            idx[p] = shade[was]; // the road is wet at its banks (it stays tarmac, and takes marks)
+            continue;
+          }
+          let c: number;
+          if (e < 2.4) c = n < 96 ? SHINGLE : n < 150 ? FORD2 : FORD1;
+          else {
+            poolNoise(X, Y);
+            const v = s - f.s0 + 6 * NOISE_OUT[1], ph = v - Math.floor(v / 7) * 7;
+            c = was === TAR3 ? FORD2 : ph < 1.1 ? (n < 190 ? FORD0 : FORD1) : ph >= 3.4 && ph < 4.3 ? (n < 120 ? FORD2 : FORD1) : n < 5 ? SHINGLE : FORD1;
+            // The chevron of this stretch of the stream nearest the pixel, where one stands whole.
+            const row = Math.floor((s - f.s0) / fordRow), db = s - f.s0 - (row + 0.5) * fordRow, ab = db < 0 ? -db : db;
+            if (ab <= FORD_ARM) {
+              const shift = row & 1 ? fordPitch / 2 : 0;
+              const mid = shift + (Math.floor((l - f.l0 - shift) / fordPitch) + 0.5) * fordPitch;
+              if (mid >= FORD_SIDE && mid <= f.l1 - f.l0 - FORD_SIDE) {
+                // How far downstream of the middle of the chevron's stroke.
+                const at = (l - f.l0 - mid) * fordWay - (FORD_TIP - FORD_SWEEP * ab);
+                if (at >= -1.6 && at <= 1.6) c = FOAM;
+                else if (at > -3.6 && at < -1.6) c = FORD0;
+                else if (ab <= FORD_ARM - 3 && at >= -8.6 && at <= -6.4) c = FORD2;
+              }
+            }
+          }
+          idx[p] = c;
+          cls[p] = C_FORD;
         } else if (kind === F_BED) {
           if (d > wall || k === C_VOID || k === C_PLATE || es < 0 || el < 0) continue;
           // A steel plate, a hazard strip where a car drives on and off it, and on each corner
@@ -3931,6 +4594,7 @@ function things(): void {
     if (t.kind === T_TYRES) {
       if (job.art!.dress.mound === MOUND_BAGS) bags(t.tyres, t.lie);
       else if (job.art!.dress.mound === MOUND_FENDERS) fenders(t.tyres, t.lie);
+      else if (job.art!.dress.mound === MOUND_BALE) bales(t.tyres, t.lie);
       else tyres(t.tyres);
       cost += 4 + t.tyres.length * 1.5;
     } else if (t.kind === T_TRUCK) {
@@ -4074,6 +4738,50 @@ function fenders(a: Float64Array, lie: Float64Array): void {
   }
 }
 
+/**
+ * A bale of bamboo (MOUND_BALE), where the scrapyard has a heap of tyres: the same places and
+ * paints (x, y, radius, paint each; view pixels), the lowest first. Each is a bundle of canes
+ * lying round the bale's middle (`lie`: a cosine and a sine each), cut square at its two ends,
+ * the canes' lines along it and a lashing near either end; in the sun with its shadow on what
+ * lies under it. The outer ones are green cane and dried cane in turn (the ring's two paints,
+ * so the bale's edge shows on any ground), the inner ones a darker green.
+ */
+function bales(a: Float64Array, lie: Float64Array): void {
+  const { mask } = buffers();
+  const { bx, by } = job;
+  const dress = job.art!.dress;
+  for (let k = 0; k < a.length; k += 4) {
+    const x = a[k] - bx, y = a[k + 1] - by, r = a[k + 2], c = a[k + 3] | 0;
+    if (x + r + 9 < 0 || y + r + 9 < 0 || x - r - 3 > S || y - r - 3 > S) continue;
+    AT[0] = x;
+    AT[1] = y;
+    AT[2] = lie[k >> 1];
+    AT[3] = lie[(k >> 1) + 1];
+    const L = r * 1.24, W = r * 0.68;
+    Q[0] = 0, Q[1] = 0, Q[2] = 2 * L, Q[3] = 2 * W;
+    rect();
+    fillPoly(mask, 1);
+    solid(c, 2);
+    stands();
+    // The canes: a line between one and the next, along the bundle.
+    Q[0] = 0, Q[1] = -W * 0.36, Q[2] = 2 * L - 2.2, Q[3] = 1;
+    rect();
+    inlay(SHADE_I[c]);
+    Q[0] = 0, Q[1] = W * 0.36, Q[2] = 2 * L - 2.2, Q[3] = 1;
+    rect();
+    inlay(SHADE_I[c]);
+    // Its two lashings, across it.
+    const tie = c === dress.moundInner ? dress.moundTop : dress.strap;
+    Q[0] = -(L - 2.6), Q[1] = 0, Q[2] = 1.3, Q[3] = 2 * W;
+    rect();
+    inlay(tie);
+    Q[0] = L - 2.6, Q[1] = 0, Q[2] = 1.3, Q[3] = 2 * W;
+    rect();
+    inlay(tie);
+    maskClear(mask);
+  }
+}
+
 /** A heap of tyres (x, y, radius, paint each; view pixels), the lowest first: each a ring in the sun with its shadow on what lies under it. */
 function tyres(a: Float64Array): void {
   const { mask } = buffers();
@@ -4134,7 +4842,9 @@ function truck(t: TruckArt): void {
   // A sand hauler: its side bins are full of sand, its cab is terracotta (the scrapyard's: rusted boards, a yellow cab).
   // A car carrier (the city's): two runners with a slot between them where the others have a deck, open rails at its sides, a cab in a paint of its own.
   // A container chassis trailer (the harbour's): a container lies on it where the others have a deck (its roof is the deck, ribbed), the chassis's rail shows either side of it, and a terminal tractor's cab in a paint of its own pulls it.
-  const dress = job.art!.dress, sand = dress.truck === TRUCK_SAND, carrier = dress.truck === TRUCK_CARRIER, chassis = dress.truck === TRUCK_CHASSIS, N = noiseTable();
+  // A logging truck (the jungle's): its load of logs is its deck, lying along it between the stakes of its bunks.
+  const dress = job.art!.dress, sand = dress.truck === TRUCK_SAND, carrier = dress.truck === TRUCK_CARRIER, chassis = dress.truck === TRUCK_CHASSIS, logging = dress.truck === TRUCK_LOGGING, N = noiseTable();
+  const LOG0 = logging ? dress.logs[0] : 0, LOG1 = logging ? dress.logs[1] : 0, LOG2 = logging ? dress.logs[2] : 0, LOG3 = logging ? dress.logs[3] : 0;
   const CAB = carrier || chassis ? dress.cab[0] : sand ? RUST2 : HAZ1, CAB_DARK = carrier || chassis ? dress.cab[1] : sand ? RUST1 : HAZ0;
   const DECK = dress.deck, DECK_RIB = SHADE_I[DECK];
   AT[0] = t.x - bx;
@@ -4179,6 +4889,11 @@ function truck(t: TruckArt): void {
           c = rise < 0.34 ? (rise > 0.3 && seam ? base : SHADE_I[base]) : rise > 0.67 ? (rise < 0.71 && seam ? base : LIT_I[base]) : base;
         } else if (carrier && u <= lip - 3.2) c = a < 3.4 ? SOOT3 : (u - ramp) % 5.5 < 1.3 ? STEEL1 : STEEL3; // the two runners, ribbed, and the slot between them
         else if (chassis && u <= lip - 3.2) c = (u - ramp) % 3.75 < 1.25 ? DECK_RIB : DECK; // the container's roof
+        else if (logging && u <= lip - 3.2) {
+          // Its load is its deck: logs lying side by side along it, each with the light along its top, a sawn end where one ends and the next begins.
+          const lane = Math.floor((v + TRUCK_BAND) / 3.5), w = v + TRUCK_BAND - lane * 3.5;
+          c = (u - ramp + lane * 17) % 46 < 1.5 ? dress.moundTop : w < 0.9 ? LOG0 : w < 1.9 ? LOG3 : w < 2.8 ? LOG2 : LOG1;
+        }
         else c = u > lip - 3.2 ? HAZ1 : (u - ramp) % 11 < 1.3 ? STEEL2 : STEEL3; // the deck, the lip at its end
         if (a > TRUCK_BAND - 1.5 && u <= lip - 3.2) c = SOOT2; // the band's edge
       } else if (a <= TRUCK_BAND + 1.3) c = SOOT2;
@@ -4190,6 +4905,7 @@ function truck(t: TruckArt): void {
         c = (u - ramp) % 14 < 1.5 || a > 18.2 ? RUST0 : n < 40 ? DIRT3 : n > 226 ? DIRT1 : DIRT2;
       } else if (carrier) c = (u - ramp) % 14 < 2 ? STEEL3 : a > 18 ? STEEL2 : SOOT3; // open sides: a rail on posts
       else if (chassis) c = (u - ramp) % 14 < 2 ? STEEL3 : a > 18 ? STEEL0 : STEEL1; // the chassis's rail, a twistlock every so often
+      else if (logging) c = (u - ramp) % 14 < 2 ? STEEL3 : a > 18 ? STEEL0 : STEEL1; // the bunks' rail, a stake every so often
       else c = (u - ramp) % 14 < 1.5 ? RUST0 : RUST1; // the side boards
       idx[p] = c;
     }
@@ -4737,6 +5453,10 @@ function corner(k: number): void {
 
 /** One piece of junk: two tones, a lit edge, a hard shadow. */
 function junk(d: Junk): void {
+  if (d.kind >= K_CROWN) {
+    stampAt(STAMPS![d.n & 255], d.px - job.bx, d.py - job.by, (d.n >> 8) & 3); // the jungle's: a stamp (whole numbers only, as the harbour's)
+    return;
+  }
   if (d.kind >= K_BOX) {
     quayPiece(d); // the harbour's: whole numbers only (see there)
     return;
@@ -5971,22 +6691,33 @@ export function bakePeaks(reset = false): { near: number; nearRoom: number; cand
  * junk also tells its `kind` (PROP names the harbour's) and `reach`: how far a harbour's prop and
  * its shadow reach from its middle, view pixels (0 in another theme). `rails`: a quay's crane
  * rails (Art.rails: six numbers a pair) and `blocks`: its container yard's blocks (Stacks.rect:
- * x0, y0, x1, y1 each); both empty in a theme without a quay.
+ * x0, y0, x1, y1 each); both empty in a theme without a quay. `trees`: a jungle's canopy (Canopy:
+ * per crown or clump of ferns the pixel its middle lies in and how far it and its shadow reach
+ * from that pixel's middle, view pixels); empty in a theme without one. A jungle's piece of junk
+ * tells its `kind` (PLANT) and `reach` as a harbour's does.
  */
-export function artLayout(track: Track): { posts: Int32Array; junk: readonly { x: number; y: number; r: number; kind: number; reach: number }[]; ruts: readonly Float32Array[]; mouths: number; blots: readonly { x: number; y: number; r: number }[]; houses: Int32Array; rails: Int32Array; blocks: Int32Array } {
+export function artLayout(track: Track): { posts: Int32Array; junk: readonly { x: number; y: number; r: number; kind: number; reach: number }[]; ruts: readonly Float32Array[]; mouths: number; blots: readonly { x: number; y: number; r: number }[]; houses: Int32Array; rails: Int32Array; blocks: Int32Array; trees: readonly { x: number; y: number; reach: number; fern: boolean }[] } {
   const a = artOf(track);
-  const quay = a.dress.props === PROPS_HARBOUR;
+  const quay = a.dress.props === PROPS_HARBOUR, jungle = a.dress.props === PROPS_JUNGLE;
+  const trees: { x: number; y: number; reach: number; fern: boolean }[] = [];
+  if (a.canopy) {
+    const t = a.canopy.tree, stamps = jungleStamps();
+    for (let k = 0; k < t.length; k += 3) if (t[k + 2] >= 0) trees.push({ x: t[k], y: t[k + 1], reach: stamps[t[k + 2] & 255].reach, fern: (t[k + 2] & 255) >= FERN_AT });
+  }
   return {
-    posts: a.posts, junk: a.junk.map((j) => ({ x: j.x, y: j.y, r: j.r, kind: j.kind, reach: quay ? propReach(j) : 0 })), ruts: a.ruts, mouths: a.mouths.length, blots: a.blots,
-    houses: a.town ? a.town.rect : new Int32Array(0), rails: a.rails, blocks: a.stacks ? a.stacks.rect : new Int32Array(0),
+    posts: a.posts, junk: a.junk.map((j) => ({ x: j.x, y: j.y, r: j.r, kind: j.kind, reach: quay ? propReach(j) : jungle ? jungleReach(j) : 0 })), ruts: a.ruts, mouths: a.mouths.length, blots: a.blots,
+    houses: a.town ? a.town.rect : new Int32Array(0), rails: a.rails, blocks: a.stacks ? a.stacks.rect : new Int32Array(0), trees,
   };
 }
+
+/** The jungle's props, as artLayout() names a piece's kind. */
+export const PLANT = { crown: K_CROWN, ferns: K_FERN, log: K_LOG, wall: K_RUIN, empty: K_EMPTY } as const;
 
 /** The harbour's props, as artLayout() names a piece's kind. */
 export const PROP = { container: K_BOX, reefer: K_REEFER, crane: K_CRANE, straddle: K_STRADDLE, bollards: K_BOLLARD, hawser: K_HAWSER, pallets: K_PALLETS, forklift: K_FORK, empty: K_EMPTY } as const;
 
 /** What a pixel of a baked tile is, as bakeTileKinds() tells it. */
-export const KIND = { tarmac: C_TARMAC, kerb: C_KERB, verge: C_VERGE, barrier: C_BARRIER, rail: C_RAIL, dirt: C_DIRT, bed: C_BED, water: C_WATER, belt: C_BELT, isle: C_ISLE, solid: C_SOLID, plate: C_PLATE, void: C_VOID, prop: C_PROP, sand: C_SAND, oil: C_OIL } as const;
+export const KIND = { tarmac: C_TARMAC, kerb: C_KERB, verge: C_VERGE, barrier: C_BARRIER, rail: C_RAIL, dirt: C_DIRT, bed: C_BED, water: C_WATER, belt: C_BELT, isle: C_ISLE, solid: C_SOLID, plate: C_PLATE, void: C_VOID, prop: C_PROP, sand: C_SAND, oil: C_OIL, ford: C_FORD } as const;
 
 /**
  * For tests and checks: bake one tile of a track to the end and return what each of its pixels
