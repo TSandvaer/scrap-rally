@@ -5,6 +5,7 @@
 // ---- settings -----------------------------------------------------------------------
 
 import { BUILTIN_SOUND, clampVolume, type RoomSound } from "../shared/sound";
+import { SURF_FORD, SURF_OIL, SURF_SAND } from "../shared/track";
 
 export { clampVolume };
 
@@ -786,6 +787,136 @@ export function gravelTarget(e: EngineState, offRoad: boolean): { on: boolean; g
   const on = offRoad && e.hasCar && e.connected && !e.paused && (e.phase === "countdown" || e.phase === "racing") && e.wreck === 0 && e.fall === 0 && e.air === 0 && !e.finished && v > GRAVEL_QUIET_SPEED;
   const f = Math.min(1, (v - GRAVEL_QUIET_SPEED) / (GRAVEL_FULL_SPEED - GRAVEL_QUIET_SPEED));
   return { on, gain: on ? 0.25 + 0.75 * f : 0, density: 0.5 + 1.6 * Math.min(1, v / 430) };
+}
+
+// ---- surface: the theme surfaces (THEME-SND, PLAN-THEMES.md 2.3) ---------------------------
+//
+// The own car only, as gravel. What is under the car's centre is the physics' own lookup
+// (shared/physics.ts stepCar: surfaceAt(roadFor(track, q), q.seg, q.s, q.lat), read only here);
+// client/sfx.ts RaceSounds asks it each frame and passes the kind in. Sand: a softer, lower
+// crackle (sfx.ts SAND: the gravel voice with other parameters and grains). A ford: a splash on
+// entry (FordSplash), then a wash while in it (fordTarget). Oil: the gravel crackle drops out on the
+// slick (there is no asphalt tyre sound to drop: on the tarmac the engine is all you hear), and a
+// thin slick hiss rises with the speed and the sideways slide (oilTarget). Every other surface
+// (none, water, dirt, belts) sounds exactly as before: gravel off the asphalt, nothing on it.
+
+/** Which tyre sound the own car makes: gravel and asphalt as before THEME-SND, or a theme surface's. */
+export type TyreSurface = "asphalt" | "gravel" | "sand" | "oil" | "ford";
+
+/**
+ * The tyre sound for the surface kind under the car's centre (Surface.kind, 0 = none) and the
+ * gravel test (onGravel). A theme surface replaces the gravel wherever it lies; any other kind
+ * gives exactly what onGravel gave before.
+ */
+export function tyreSurface(kind: number, offRoad: boolean): TyreSurface {
+  if (kind === SURF_SAND) return "sand";
+  if (kind === SURF_OIL) return "oil";
+  if (kind === SURF_FORD) return "ford";
+  return offRoad ? "gravel" : "asphalt";
+}
+
+/** A rolling surface sound's target: gain 0..1 (0 = silent), density = grain rate, open 0..1 (brighter). */
+export interface SurfaceTarget {
+  on: boolean;
+  gain: number;
+  density: number;
+  open: number;
+}
+
+const surfaceTarget = (): SurfaceTarget => ({ on: false, gain: 0, density: 0, open: 0 });
+
+/** The gate every tyre sound shares (gravelTarget's): a driving car rolling on the ground in the countdown or the race. */
+function rolling(e: EngineState, v: number): boolean {
+  return e.hasCar && e.connected && !e.paused && (e.phase === "countdown" || e.phase === "racing") && e.wreck === 0 && e.fall === 0 && e.air === 0 && !e.finished && v > GRAVEL_QUIET_SPEED;
+}
+
+function fill(out: SurfaceTarget, on: boolean, gain: number, density: number, open: number): SurfaceTarget {
+  out.on = on;
+  out.gain = on ? gain : 0;
+  out.density = density;
+  out.open = open;
+  return out;
+}
+
+// Sand bogs a car down (a Sport's top speed on it is 210 u/s, PLAN-THEMES 2.3): the crackle is full by SAND_FULL_SPEED.
+export const SAND_FULL_SPEED = 240;
+
+/**
+ * The own car's tyres on sand: gravelTarget's gate, a softer gain curve, a slower grain rate (the
+ * voice's own grains are finer and lower, sfx.ts SAND). Out: an object to fill (the frame loop's: no allocation).
+ */
+export function sandTarget(e: EngineState, onSand: boolean, out: SurfaceTarget = surfaceTarget()): SurfaceTarget {
+  const v = Math.max(0, e.speed);
+  const f = Math.min(1, Math.max(0, (v - GRAVEL_QUIET_SPEED) / (SAND_FULL_SPEED - GRAVEL_QUIET_SPEED)));
+  return fill(out, onSand && rolling(e, v), 0.3 + 0.7 * f, 0.6 + 0.9 * Math.min(1, v / 400), Math.min(1, v / SAND_FULL_SPEED));
+}
+
+// A ford drags too (top speed 242..364 u/s by type): the wash is full by FORD_FULL_SPEED.
+export const FORD_FULL_SPEED = 320;
+
+/**
+ * The own car in a ford: a wash of water while it rolls through, gravelTarget's gate, louder,
+ * faster sloshing (density) and brighter (open) with speed. The entry splash is FordSplash's.
+ */
+export function fordTarget(e: EngineState, inFord: boolean, out: SurfaceTarget = surfaceTarget()): SurfaceTarget {
+  const v = Math.max(0, e.speed);
+  const f = Math.min(1, Math.max(0, (v - GRAVEL_QUIET_SPEED) / (FORD_FULL_SPEED - GRAVEL_QUIET_SPEED)));
+  return fill(out, inFord && rolling(e, v), 0.2 + 0.8 * f, 0.5 + 1.1 * f, f);
+}
+
+// Oil keeps the speed (the forces along the car are unchanged): the hiss rises to full at
+// OIL_FULL_SPEED, and the sideways slide (the steering is gone) adds to it up to OIL_SLIP_FULL.
+export const OIL_FULL_SPEED = 430;
+export const OIL_SLIP_FULL = 140;
+
+/**
+ * The own car on an oil slick: the gravel drops out (tyreSurface) and a thin hiss of tyres on the
+ * film plays instead, gravelTarget's gate; slip = the car's sideways speed (u/s). gain from the
+ * speed and the slide, open (a higher, brighter hiss) from the slide.
+ */
+export function oilTarget(e: EngineState, onOil: boolean, slip: number, out: SurfaceTarget = surfaceTarget()): SurfaceTarget {
+  const v = Math.max(0, e.speed);
+  const f = Math.min(1, v / OIL_FULL_SPEED);
+  const s = Math.min(1, Math.max(0, slip) / OIL_SLIP_FULL);
+  return fill(out, onOil && rolling(e, v), 0.25 + 0.35 * f + 0.4 * s, 1, s);
+}
+
+export const FORD_SPLASH_MIN_SPEED = 40; // slower into a ford: no splash (a wheel rolls in)
+export const FORD_SPLASH_FULL_SPEED = 330;
+export const FORD_SPLASH_REFRACTORY_MS = 700; // a predicted pose jittering at the edge (a reconcile) splashes once
+export const FORD_SEED_GAP_MS = 250; // a gap in the updates (a hidden tab, a new race): the next one only seeds
+
+/**
+ * The splash when the own car comes into a ford: it drives in, or lands in it from the air.
+ * update() once per frame with whether the car's centre is in a ford (the raw lookup, whatever
+ * the car is doing) and returns the splash strength 0.35..1 (from the speed), or 0 for none. A
+ * splash needs the gate open (gravelTarget's but for the speed: paused, wrecked, falling,
+ * finished, outside races, airborne: none) and FORD_SPLASH_MIN_SPEED; at most one per
+ * FORD_SPLASH_REFRACTORY_MS. The first update, and the first after a gap of FORD_SEED_GAP_MS or
+ * reset(), only seeds: a car already in the ford makes no splash.
+ */
+export class FordSplash {
+  private was = false; // in the ford on the ground at the last update
+  private lastMs = -Infinity;
+  private splashMs = -Infinity;
+
+  reset(): void {
+    this.lastMs = -Infinity;
+    this.was = false;
+  }
+
+  update(e: EngineState, inFord: boolean, nowMs: number): number {
+    const seeding = !(nowMs - this.lastMs <= FORD_SEED_GAP_MS);
+    this.lastMs = nowMs;
+    const now = inFord && e.air === 0;
+    const entered = now && !this.was;
+    this.was = now;
+    if (seeding || !entered) return 0;
+    const v = Math.max(0, e.speed);
+    if (v < FORD_SPLASH_MIN_SPEED || !rolling(e, v) || nowMs - this.splashMs < FORD_SPLASH_REFRACTORY_MS) return 0;
+    this.splashMs = nowMs;
+    return 0.35 + 0.65 * Math.min(1, (v - FORD_SPLASH_MIN_SPEED) / (FORD_SPLASH_FULL_SPEED - FORD_SPLASH_MIN_SPEED));
+  }
 }
 
 // ---- engine -------------------------------------------------------------------------

@@ -655,4 +655,242 @@ export function mountEffects(board: SoundBoard, audio: AudioEngine): void {
   });
   const w = window as unknown as { scrapSound?: Record<string, unknown> };
   w.scrapSound = { ...w.scrapSound, effects: { check: checkEffects, render: renderEffects, wavBase64, engineWavBase64, engineLevels, previewWavBase64, previewLevels } };
+  mountSurfaces(board, audio, live, now, link);
+}
+
+// ---- theme surfaces (THEME-SND) -----------------------------------------------------------
+//
+// Sand, a ford and oil as the race plays them (client/sfx.ts RaceSounds.updateThemeSurfaces, the
+// targets of client/soundlogic.ts), driven by a script of legs instead of a car: a button per
+// render (live), a WAV per render, and levels against gravel and the engine. The race plays
+// RACE_SAND, RACE_WASH and the oil hiss (the user's picks); the other sands and washes, and oil
+// with nothing, are auditions here only. Browser checks: window.scrapSound.surfaces.wavBase64(name),
+// .levels(), .renders. tools/debug/surface-wavs.ts writes every render to files.
+
+import { RACE_SAND, RACE_WASH, SAND, SAND_VARIANTS, WASH, WASH_VARIANTS, type FordVoice, type OilVoice, type SandVariant, type WashVariant } from "./sfx";
+import { FordSplash, fordTarget, oilTarget, sandTarget, type EngineState, type TyreSurface } from "./soundlogic";
+
+/** Oil in an audition: the race's thin hiss, or nothing (the gravel only drops out). */
+type OilVariant = "hiss" | "none";
+
+/** One stretch of a scripted drive: `s` seconds on a surface, the speed from -> to (u/s), the sideways slide. */
+interface Leg {
+  s: number;
+  on: TyreSurface;
+  v: number | readonly [from: number, to: number];
+  slip?: number | readonly [from: number, to: number];
+  oil?: OilVariant; // this leg's oil (default: the drive's)
+}
+
+interface DrivePick {
+  engine?: EnginePreset; // an engine under it (the race's mix), none if absent
+  sand?: SandVariant;
+  ford?: WashVariant;
+  oil?: OilVariant;
+}
+
+const DRIVE_HZ = 50; // parameter updates a second, as a frame loop would
+
+const lerp = (x: number | readonly [number, number], k: number) => (typeof x === "number" ? x : x[0] + (x[1] - x[0]) * k);
+
+/**
+ * A scripted drive from audio time t: every DRIVE_HZ the race's own decisions (gravelTarget,
+ * sandTarget, fordTarget with FordSplash, oilTarget, engineTarget) for the leg's surface, set on one
+ * voice per surface as RaceSounds does. Returns when it ends.
+ */
+function drive(sv: SfxVoices, t: number, legs: readonly Leg[], pick: DrivePick = {}): number {
+  const top = BASE_STATS.topSpeed;
+  const st: EngineState = { phase: "racing", hasCar: true, connected: true, wreck: 0, fall: 0, air: 0, finished: false, speed: 0, topSpeed: top, throttle: 1 };
+  const engine = pick.engine ? sv.engine(pick.engine) : null;
+  const gravel = sv.gravel();
+  const sand = sv.crackle(SAND[pick.sand ?? RACE_SAND]);
+  const ford: FordVoice = sv.ford(WASH[pick.ford ?? RACE_WASH]);
+  const oil: OilVoice = sv.oil();
+  const splash = new FordSplash();
+  const total = legs.reduce((n, l) => n + l.s, 0);
+  let at = 0;
+  let prevV = 0;
+  for (const leg of legs) {
+    const n = Math.max(1, Math.round(leg.s * DRIVE_HZ));
+    for (let i = 0; i < n; i++) {
+      const k = i / n;
+      const s = at + i / DRIVE_HZ;
+      const v = lerp(leg.v, k);
+      st.speed = v;
+      st.throttle = v >= prevV - 1e-6 && v > 0 ? 1 : 0;
+      prevV = v;
+      const when = t + s;
+      const g = gravelTarget(st, leg.on === "gravel");
+      gravel.set(g.gain, g.density, Math.min(1, v / top), when);
+      const sd = sandTarget(st, leg.on === "sand");
+      sand.set(sd.gain, sd.density, sd.open, when);
+      const inFord = leg.on === "ford";
+      const sp = splash.update(st, inFord, s * 1000);
+      const wash = fordTarget(st, inFord);
+      ford.set(wash.gain, wash.density, wash.open, when);
+      if (sp > 0) ford.splash(sp, when);
+      const o = oilTarget(st, leg.on === "oil" && (leg.oil ?? pick.oil ?? "hiss") === "hiss", lerp(leg.slip ?? 0, k));
+      oil.set(o.gain, o.open, when);
+      if (engine) {
+        const e = engineTarget(st);
+        engine.set(e.rpm, e.load, e.gain, when);
+      }
+    }
+    at += leg.s;
+  }
+  const end = t + total;
+  for (const v of [gravel, sand, ford, oil, engine]) v?.stop(end);
+  return end + 0.3;
+}
+
+// The scripted drives. Gravel and sand: the gravel preview's run (0 -> 350 -> 0) on each, the same
+// for an A/B. A ford: through it at 120 and at 320 u/s as long as a 140 ford takes (1.2 s, 0.45 s), then
+// 3 s held in it at each speed (the wash alone). Oil: at 330 u/s with the engine, off the verge
+// (gravel) onto a slick with a slide, then the asphalt; with the hiss, then the same with nothing.
+// The race mix: the engine and the default picks, every surface in a row.
+const run = (on: TyreSurface): Leg[] => [
+  { s: 2, on, v: [0, 350] },
+  { s: 1.5, on, v: 350 },
+  { s: 1.4, on, v: [350, 0] },
+];
+const ASPHALT_GAP: Leg = { s: 0.6, on: "asphalt", v: 0 };
+const fordPass = (v: number, inFord: number): Leg[] => [
+  { s: 0.4, on: "asphalt", v },
+  { s: inFord, on: "ford", v },
+  { s: 0.9, on: "asphalt", v },
+];
+const oilPass = (oil: OilVariant): Leg[] => [
+  { s: 1, on: "asphalt", v: 330 },
+  { s: 1, on: "gravel", v: 330 },
+  { s: 1.6, on: "oil", v: 330, slip: [0, 130], oil },
+  { s: 1.2, on: "asphalt", v: 330 },
+];
+
+export type SurfaceRender = `sand-${SandVariant}` | `ford-${WashVariant}` | "oil-on-off" | "race-mix";
+export const SURFACE_RENDERS: readonly SurfaceRender[] = [...SAND_VARIANTS.map((v) => `sand-${v}` as const), ...WASH_VARIANTS.map((v) => `ford-${v}` as const), "oil-on-off", "race-mix"];
+
+function surfaceLegs(name: SurfaceRender): { legs: Leg[]; pick: DrivePick } {
+  if (name.startsWith("sand-")) return { legs: [{ s: 0.2, on: "asphalt", v: 0 }, ...run("gravel"), ASPHALT_GAP, ...run("sand")], pick: { sand: name.slice(5) as SandVariant } };
+  if (name.startsWith("ford-")) {
+    return { legs: [...fordPass(120, 1.2), ASPHALT_GAP, ...fordPass(320, 0.45), ASPHALT_GAP, ...fordPass(120, 3), ASPHALT_GAP, ...fordPass(320, 3)], pick: { ford: name.slice(5) as WashVariant } };
+  }
+  if (name === "oil-on-off") return { legs: [...oilPass("hiss"), { s: 0.8, on: "asphalt", v: 330 }, ...oilPass("none")], pick: { engine: DEFAULT_SOUND.engine } };
+  return {
+    legs: [
+      { s: 2.5, on: "asphalt", v: [0, 380] },
+      { s: 1, on: "gravel", v: 380 },
+      { s: 0.8, on: "asphalt", v: 380 },
+      { s: 1.6, on: "sand", v: [380, 210] },
+      { s: 1.4, on: "asphalt", v: [210, 330] },
+      { s: 0.5, on: "ford", v: [330, 290] },
+      { s: 1.5, on: "asphalt", v: [290, 380] },
+      { s: 1.2, on: "oil", v: 380, slip: [0, 90] },
+      { s: 1.2, on: "asphalt", v: 380 },
+      { s: 1.6, on: "asphalt", v: [380, 0] },
+    ],
+    pick: { engine: DEFAULT_SOUND.engine, sand: RACE_SAND, ford: RACE_WASH, oil: "hiss" },
+  };
+}
+
+const legsSeconds = (legs: readonly Leg[]) => legs.reduce((n, l) => n + l.s, 0);
+
+/** A surface render offline through the live chain (effects volume 1), from LEAD s. */
+async function renderSurface(name: SurfaceRender, sampleRate = 44100): Promise<AudioBuffer> {
+  const { legs, pick } = surfaceLegs(name);
+  const ctx = new OfflineAudioContext(2, Math.ceil((0.2 + legsSeconds(legs) + 0.6) * sampleRate), sampleRate);
+  drive(new SfxVoices(ctx, buildBuses(ctx, { music: 0, effects: 1, muted: false }).sfx, makeNoise(ctx)), 0.2, legs, pick);
+  return ctx.startRendering();
+}
+
+/** Peak and RMS (dBFS) of a buffer between a and b seconds. */
+function windowLevels(buf: AudioBuffer, a: number, b: number): { peakDb: number; rmsDb: number } {
+  let peak = 0;
+  let sum = 0;
+  let n = 0;
+  for (let c = 0; c < buf.numberOfChannels; c++) {
+    const d = buf.getChannelData(c);
+    for (let i = Math.floor(a * buf.sampleRate); i < Math.min(d.length, Math.floor(b * buf.sampleRate)); i++) {
+      peak = Math.max(peak, Math.abs(d[i]));
+      sum += d[i] * d[i];
+      n++;
+    }
+  }
+  return { peakDb: db(peak), rmsDb: db(Math.sqrt(sum / Math.max(1, n))) };
+}
+
+/**
+ * Each surface sound alone at a steady speed, its level over 1.5 s after 1 s to settle (offline,
+ * effects volume 1, the live chain): gravel and sand at 300 u/s, a sand at 210 (its top speed on
+ * sand), each wash at 120 and 300, the oil hiss at 380 straight and sliding at 130, a splash at 120 and
+ * 320 (its first 0.4 s), and the engine flat out (engineLevels' "top") for the balance.
+ */
+async function surfaceLevels(): Promise<Record<string, { peakDb: number; rmsDb: number }>> {
+  const out: Record<string, { peakDb: number; rmsDb: number }> = {};
+  const steady = async (key: string, on: TyreSurface, v: number, pick: DrivePick, slip = 0) => {
+    const legs: Leg[] = [{ s: 0.1, on: "asphalt", v }, { s: 2.6, on, v, slip }];
+    const ctx = new OfflineAudioContext(2, Math.ceil(3.2 * 44100), 44100);
+    drive(new SfxVoices(ctx, buildBuses(ctx, { music: 0, effects: 1, muted: false }).sfx, makeNoise(ctx)), 0.2, legs, pick);
+    out[key] = windowLevels(await ctx.startRendering(), 1.3, 2.8);
+  };
+  await steady("gravel 300", "gravel", 300, {});
+  for (const s of SAND_VARIANTS) {
+    await steady(`sand ${s} 300`, "sand", 300, { sand: s });
+    await steady(`sand ${s} 210`, "sand", 210, { sand: s });
+  }
+  for (const f of WASH_VARIANTS) {
+    await steady(`wash ${f} 120`, "ford", 120, { ford: f });
+    await steady(`wash ${f} 300`, "ford", 300, { ford: f });
+  }
+  await steady("oil hiss 380", "oil", 380, { oil: "hiss" });
+  await steady("oil hiss 380 slide 130", "oil", 380, { oil: "hiss" }, 130);
+  for (const v of [120, 320]) {
+    const ctx = new OfflineAudioContext(2, Math.ceil(1.6 * 44100), 44100);
+    drive(new SfxVoices(ctx, buildBuses(ctx, { music: 0, effects: 1, muted: false }).sfx, makeNoise(ctx)), 0.2, [{ s: 0.3, on: "asphalt", v }, { s: 0.6, on: "ford", v }], { ford: "brook" });
+    out[`splash ${v} (+ wash)`] = windowLevels(await ctx.startRendering(), 0.5, 0.9);
+  }
+  out["engine top (buggy)"] = (await engineLevels(DEFAULT_SOUND.engine)).top;
+  return out;
+}
+
+const SURFACE_LABEL: Record<SurfaceRender, string> = {
+  "sand-fine": "Gravel / sand fine (race)",
+  "sand-crunch": "Gravel / sand crunch",
+  "sand-dune": "Gravel / sand dune",
+  "ford-brook": "Ford brook 120 + 320 (race)",
+  "ford-surge": "Ford surge 120 + 320",
+  "ford-spray": "Ford spray 120 + 320",
+  "oil-on-off": "Oil: hiss (race), then none",
+  "race-mix": "Race mix (engine)",
+};
+
+function mountSurfaces(
+  board: SoundBoard,
+  audio: AudioEngine,
+  live: () => SfxVoices | null,
+  now: (v: SfxVoices) => number,
+  link: (after: HTMLElement, id: string, text: string, file: string, buf: AudioBuffer) => void,
+): void {
+  for (const name of SURFACE_RENDERS) {
+    board.addButton("Theme surfaces", SURFACE_LABEL[name], () => {
+      const v = live();
+      if (!v) return;
+      const { legs, pick } = surfaceLegs(name);
+      drive(v, now(v), legs, { ...pick, engine: pick.engine ? audio.settings.engine : undefined });
+    });
+  }
+  const wbtn = board.addButton("Check", "Surface WAVs", () => {
+    wbtn.textContent = "rendering…";
+    void Promise.all(SURFACE_RENDERS.map((n) => renderSurface(n))).then((bufs) => {
+      [...bufs].reverse().forEach((buf, i) => {
+        const n = SURFACE_RENDERS[bufs.length - 1 - i];
+        link(wbtn, `sboard-surface-${n}`, `${SURFACE_LABEL[n]} WAV`, `scrap-rally-surface-${n}.wav`, buf);
+      });
+      wbtn.textContent = "Surface WAVs";
+    });
+  });
+  const w = window as unknown as { scrapSound?: Record<string, unknown> };
+  w.scrapSound = {
+    ...w.scrapSound,
+    surfaces: { renders: SURFACE_RENDERS, levels: surfaceLevels, render: renderSurface, wavBase64: async (name: SurfaceRender) => base64(await renderSurface(name)) },
+  };
 }
