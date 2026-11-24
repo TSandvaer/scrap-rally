@@ -896,7 +896,9 @@ TH-LOOK-3 taste APPROVED (user "looks good"); review APPROVE (ctx_558b660cd081; 
 notes, none acted on). MERGED 3689093; gate GREEN (1135/1135, 186/186, build index-GBDALd3C.js, schema-hash). ClickUp ready for qa test;
 workers released; workspace removed; :3012 copy stopped (pid 76845) + removed. PLAN-THEMES COMPLETE on local main.
 Board: nothing startable (HARD-3 postponed). Waiting on the user: Manual Deploy of 121be4e (then curl + QA16); next work direction.
-TH-LOOK-3 (Canopy Yard only) goes with the next push. TH-LOOK-2 waits for
+TH-LOOK-3 (Canopy Yard only) goes with the next push.
+DEPLOYED (seen by curl 2026-11-25): live serves index-DvPo_v9J.js (+ physics/render/weapons chunks) = the 3a051e3 build; 3a051e3..121be4e
+is team/ only -> live = origin/main 121be4e. QA16 live worker ctx_98dc11d253df (tmp/spec-qa-live-16.md). TH-LOOK-2 waits for
 MARSHALS-1 (shares render.ts + canvas-census.ts). Ford direction cue moved from THEME-SURF to TH-LOOK-3 (drawing = world.ts, Fable).
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
