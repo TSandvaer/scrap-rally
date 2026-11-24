@@ -869,7 +869,17 @@ COMBINED TASTE COPY ~/orca/workspaces/scrap-rally/harbour-taste = e427e67 + them
 soundlogic (uncommitted overlay; tsc + build ok): :3012 normal (pid 31154; Slag Harbour harbour + oil slick + pier cut; Breaker's Mile
 sand drifts; surface sounds) and :3009 SCRAP_DEV_TRACK=quay-yard (pid 31153). One drive for TH-LOOK-H + THEME-TRACKS + THEME-SND.
 THEME-SND review APPROVE (ctx_2aba54843ff0). MERGED 65dcfcc; gate GREEN (1127/1127, 178/178, build index-BA2xTXSI.js, schema-hash).
-ClickUp ready for qa test; workers released; workspace removed. (Nothing audible on shipped tracks until THEME-TRACKS lands.) TH-LOOK-2 waits for
+ClickUp ready for qa test; workers released; workspace removed. (Nothing audible on shipped tracks until THEME-TRACKS lands.)
+TH-LOOK-H review APPROVE (ctx_e96c61f9c157; tmp/th-look-h/REVIEW-TH-LOOK-H.md). Notes: (1) harbour Rule-1 alloc 9.4 B/frame in marshals.ts:513
+at default warm -> parked; (2) och1 (crane bases/forklifts) dE 4.2 from haz0 and (3) reefer white 26.0 from car 6 -> taste points; (4)
+cosmetic baked pixels (tyre marks across rails, a rail through a drain, props half on drains) and (5) bench.ts:37 stale comment -> fix
+round after the user's drive (with any taste changes); (6) harbour art builds slower once (Slag 28.8 vs 17.6 ms). MERGE after the user's
+drive + that round. Then THEME-TRACKS merges main + re-shoots + merges; TH-LOOK-3 starts.
+2026-11-24: USER APPROVED the combined drive ("its good"): harbour look, THEME-TRACKS placement, THEME-SND in race; no sea ticket.
+Combined copy stopped (pids 31154, 31153) + removed. Earlier workers' sessions had exited -> TH-LOOK-H review round as a NEW Fable worker
+in the existing workspace: ctx_fff5ae23cb4e (tmp/fix-th-look-h-r1.md: rails vs tyre marks, drain under a rail, props on drains,
+bench.ts:37 comment; merge main). Then merge TH-LOOK-H; then THEME-TRACKS (new worker in its workspace: merge main, its 3 nits, re-shoot
+the slick in the harbour look) -> merge; TH-LOOK-3 starts after TH-LOOK-H; then the push question. TH-LOOK-2 waits for
 MARSHALS-1 (shares render.ts + canvas-census.ts). Ford direction cue moved from THEME-SURF to TH-LOOK-3 (drawing = world.ts, Fable).
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
