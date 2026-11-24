@@ -2903,8 +2903,8 @@ function sandMarks(): void {
 /**
  * The jungle's ground (G_JUNGLE), where the scrapyard has ground(): dark loam under leaf litter.
  * Fallen leaves lie on it as short dashes, a tan one here, a mossy one there, with a dark speck
- * of wet earth and now and then a leaf of rust between them; moss creeps up against the foot of
- * the wall. Half the tile per call; then the canopy that closes over it (canopy), in calls of
+ * of wet earth between them (the ground's own tones and the moss's, nothing else: a flag marshal
+ * stands on it); moss creeps up against the foot of the wall. Half the tile per call; then the canopy that closes over it (canopy), in calls of
  * its own.
  */
 function loam(): void {
@@ -2927,7 +2927,7 @@ function loam(): void {
       const n = N[nRow | ((X + o1) & 255)];
       // A leaf: two pixels side by side.
       const leaf = N[lRow | (((X >> 1) + o3) & 255)];
-      let col = leaf < 13 ? DIRT3 : leaf > 249 ? GRAVEL0 : n < 12 ? DIRT1 : n > 254 ? RUST1 : DIRT2;
+      let col = leaf < 13 ? DIRT3 : leaf > 249 ? GRAVEL0 : n < 12 ? DIRT1 : DIRT2;
       // Moss against the wall: dense at its foot.
       const far = dist[p] - R;
       if (far <= FRINGE_FAR) {
