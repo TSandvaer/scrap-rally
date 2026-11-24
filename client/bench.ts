@@ -34,7 +34,9 @@
 // same frames in the scrapyard's look).
 // &scene=S8 is a cell of its own as well (BR-BAKE; PLAN-BRANCH.md 3): a lap of the Branch Yard
 // test track at 430 u/s that takes every shortcut (the main road to a fork, down the shortcut,
-// on from its merge), whatever &track says. &plain=1 draws a cell's frames on the same road
+// on from its merge). It stays on Branch Yard unless &track names a track that has shortcut
+// roads (above): a track without any leaves it there, an id no track has is an error.
+// &plain=1 draws a cell's frames on the same road
 // without its shortcut roads, the same camera and cars (tools/debug/branch-sheet.ts --bench:
 // S4's lap of Branch Yard's main road with and without them; S8's frames then pass over bare
 // ground, their cars off any road).

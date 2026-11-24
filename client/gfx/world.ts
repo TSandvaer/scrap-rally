@@ -514,6 +514,9 @@ interface Art {
   // middle between the two in view pixels (x, y), which way they run (0 along x, 1 along y), how
   // far each lies from that middle, and from where to where they run (along their axis, exclusive).
   rails: Int32Array;
+  // G_QUAY: the room each prop that stands takes, three whole numbers a prop (layRooms): the pixel
+  // its middle lies in (x, y) and the square of how far it and its shadow reach from there.
+  rooms: Int32Array;
   stacks: Stacks | null; // G_QUAY: the container yard's blocks round the track
 }
 
@@ -884,6 +887,23 @@ function layRails(art: Art, railOk: (x: number, y: number, axis: number) => bool
 }
 
 /**
+ * The room a quay's props take (Art.rooms), in whole numbers for the bake: per prop that stands
+ * (a site left empty has none) the pixel its middle lies in and the square of its reach from
+ * that pixel. propReach() is measured from the middle itself, which lies within half a pixel's
+ * diagonal of the middle of that pixel: a pixel more than it holds every pixel of the piece and
+ * of its shadow. quayMarks() leaves out a drain that has a pixel in a prop's room.
+ */
+function layRooms(art: Art): Int32Array {
+  const out: number[] = [];
+  for (const d of art.junk) {
+    if (d.kind === K_EMPTY) continue;
+    const far = propReach(d) + 1;
+    out.push(d.px, d.py, Math.floor(far * far));
+  }
+  return Int32Array.from(out);
+}
+
+/**
  * What is painted on the road where a shortcut leaves the main road or rejoins it (BR-BAKE;
  * PLAN-BRANCH.md 2.7, user decision 4: painted arrows, no text). One per gore.
  * - The wedge: worn stripes on the asphalt the two roads share, between them, from where their
@@ -1124,7 +1144,7 @@ function buildArt(track: Track, scenery: Scenery): Art {
     recRoadY: roads.map((r, k) => (k ? Float64Array.from(r.recovery, (s) => pointAt(r, s).y) : new Float64Array(0))),
     recBack: new Int32Array(roads.length),
     wide: wide || branchy, wallMax: wall, wL0: f64(), wL1: f64(), wR0: f64(), wR1: f64(),
-    furnished: false, flats: [], things: [], blots: [], town: null, rails: new Int32Array(0), stacks: null,
+    furnished: false, flats: [], things: [], blots: [], town: null, rails: new Int32Array(0), rooms: new Int32Array(0), stacks: null,
   };
   if (wide) {
     for (let i = 0; i < pts.length; i++) art.wallMax = Math.max(art.wallMax, track.wallL[i], track.wallR[i]);
@@ -1410,7 +1430,10 @@ function buildArt(track: Track, scenery: Scenery): Art {
       }
     });
     art.junk.sort((p, q) => p.y - q.y);
-    if (dress.ground === G_QUAY) art.rails = layRails(art, railOk, stands);
+    if (dress.ground === G_QUAY) {
+      art.rails = layRails(art, railOk, stands);
+      art.rooms = layRooms(art);
+    }
   }
 
   // Scrap filling a gap (drawing only: it is not solid), laid out from the gap's start.
@@ -2825,7 +2848,11 @@ function stacks(): void {
  * - Drains, on a grid of cells over the plane as the desert's dunes are (a cell's hash says
  *   whether it holds one, and where): a grate of seven pixels by four, its frame and its slots
  *   in the apron's dark tones. On open concrete alone and whole or not at all, as a town's
- *   manhole covers are (manholes): none at the wall's foot or over a gap's void.
+ *   manhole covers are (manholes): none at the wall's foot or over a gap's void, none where a
+ *   crane's rail would run through it, and none within reach of a prop (the props are drawn
+ *   after the ground, in yard(): a drain there would lie half under a container or its shadow).
+ *   (The rails and the props' rooms are the track's own lists, in view pixels: the tile next
+ *   door comes to the same answer.)
  * - The crane rails (Art.rails): per rail its head, a light line, and the shadow in its groove
  *   beside it; a buffer stop at either end.
  * Drains are in the ground's own tones (a flag marshal may stand on one: tools/debug/
@@ -2837,6 +2864,7 @@ function quayMarks(): void {
   const { bx, by, voids } = job;
   const { idx, cls, dist, gap } = b;
   const R = art.track.wall + BARRIER, clear = R + 3;
+  const rails = art.rails, rooms = art.rooms;
   for (let gy = Math.floor((by + PAD - 60) / DRAINS), gy1 = Math.floor((by + PAD + TILE) / DRAINS); gy <= gy1; gy++) {
     for (let gx = Math.floor((bx + PAD - 60) / DRAINS), gx1 = Math.floor((bx + PAD + TILE) / DRAINS); gx <= gx1; gx++) {
       let h = Math.imul(gx, 374761393) ^ Math.imul(gy, 668265263) ^ Math.imul(69, 1442695041);
@@ -2856,11 +2884,25 @@ function quayMarks(): void {
           }
         }
       }
+      const X = dx + bx, Y = dy + by; // the drain's top-left pixel in the view: it lies on X to X + 6, Y to Y + 3
+      // A crane's rail through it: a rail is the two pixels from g either side of its pair's middle (below).
+      for (let q = 0; q < rails.length && open; q += 6) {
+        const axis = rails[q + 2], g = rails[q + 3];
+        const a = axis ? Y : X, na = axis ? 4 : 7; // the drain along the rails ...
+        if (a >= rails[q + 5] || a + na <= rails[q + 4]) continue; // (beyond their ends)
+        const c = axis ? X - rails[q] : Y - rails[q + 1], nc = axis ? 7 : 4; // ... and across them, from the pair's middle
+        if ((c < 2 - g && c + nc > -g) || (c < g + 2 && c + nc > g)) open = false;
+      }
+      // A prop's room (layRooms): the drain's pixel nearest the prop's middle lies in it.
+      for (let q = 0; q < rooms.length && open; q += 3) {
+        const px = rooms[q], py = rooms[q + 1];
+        const ex = px < X ? X - px : px > X + 6 ? px - X - 6 : 0, ey = py < Y ? Y - py : py > Y + 3 ? py - Y - 3 : 0;
+        if (ex * ex + ey * ey <= rooms[q + 2]) open = false;
+      }
       if (!open) continue;
       for (let j = 0; j < 4; j++) for (let i = 0; i < 7; i++) idx[(dy + j) * S + dx + i] = j === 0 || j === 3 || i === 0 || i === 6 ? GRAVEL0 : i & 1 ? DIRT0 : GRAVEL1;
     }
   }
-  const rails = art.rails;
   for (let q = 0; q < rails.length; q += 6) {
     const cx = rails[q], cy = rails[q + 1], axis = rails[q + 2], g = rails[q + 3], from = rails[q + 4], to = rails[q + 5];
     // The two rails: `at` is a rail's head, across its axis; its groove lies beside it (below, or to the right).
@@ -2891,6 +2933,7 @@ function yard(): void {
   const R = art.track.wall + BARRIER;
   let cost = 8;
   const stains = art.stains, ruts = art.ruts, heaps = art.junk;
+  const railed = art.rails.length > 0; // a quay with crane rails: a tyre mark does not show on a rail's steel
   for (let q = 0; q < stains.length; q++) {
     const st = stains[q];
     const x0 = Math.max(0, Math.floor(st.x - st.r * 1.3 - bx)), x1 = Math.min(S - 1, Math.ceil(st.x + st.r * 1.3 - bx));
@@ -2922,6 +2965,8 @@ function yard(): void {
         if (x < 0 || y < 0 || x >= S || y >= S) continue;
         const p = y * S + x;
         if (dist[p] <= R || cls[p] === C_PROP) continue; // (not on a theme's ground art: a quay's container blocks stand on the tyre marks)
+        // Nor on a crane's rail (quayMarks: its head, its groove, its buffer stops; the quay's ground holds those tones nowhere else): a rail reads unbroken.
+        if (railed && (idx[p] === STEEL2 || idx[p] === STEEL0 || idx[p] === SOOT3)) continue;
         // A broken line: the rut shows where the ground is soft.
         if (N[(((((by + y) >> 2) + (o2 >> 8)) & 255) << 8) | ((((bx + x) >> 2) + o2 + 37) & 255)] < 170) idx[p] = DIRT1;
       }
