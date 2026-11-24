@@ -831,7 +831,60 @@ TH-LOOK-2 round done e1bbba5 (5 fixed; world.ts <-> marshals.ts import each othe
 GREEN (1092/1092, 174/174, build, schema-hash all match). Build now splits render-*.js (151 kB) + weapons-*.js chunks out of index (bench.ts
 imports them); chunk graph has no cycle (index -> render, weapons -> physics). ClickUp ready for qa test; workers released; workspace +
 thl2-taste copies (:3012 pid 34398, :3009 pid 34397) stopped/removed; sheets in tmp/th-look-2/sheets/. TH-LOOK-H spec ready
-(tmp/spec-th-look-h.md, Fable, :3017): dispatch when HARBOUR-SCHEMA merges. TH-LOOK-2 waits for
+(tmp/spec-th-look-h.md, Fable, :3017): dispatch when HARBOUR-SCHEMA merges.
+DEPLOYED (user Manual Deploy 2026-11-23): live serves index-DV6ew2Qs.js + physics-DAIDLMqM.js (curl) = origin/main 39266cb. QA15 live
+worker ctx_49f5d08ac0f7 (tmp/spec-qa-live-15.md; marshals, both shortcuts, NOSELECT-2, track list, frame times).
+HARBOUR-SCHEMA review APPROVE (ctx_da8f608615ce); nits fixed 7f662a1. MERGED 3f27544; gate GREEN (1105/1105, 178/178, build
+index-DGA6TMuw.js, schema-hash all match). ClickUp ready for qa test; workers released; workspace removed.
+TH-LOOK-H 123jpnbfgzw in flight: ctx_e453b89d2d75 (Fable, ~/orca/workspaces/scrap-rally/th-look-h, :3017, tmp/spec-th-look-h.md).
+THEME-TRACKS 123jpnbfgj5 in flight: ctx_2d2d39d14cd1 (Opus, ~/orca/workspaces/scrap-rally/theme-tracks, :3010, tmp/spec-theme-tracks.md).
+HOLD: THEME-TRACKS merges only AFTER TH-LOOK-H if Slag Harbour's oil is invisible in the scrapyard look (no oil colours there).
+Active authors: TH-LOOK-H, THEME-TRACKS (1 free; TH-LOOK-3 waits for TH-LOOK-H; nothing else startable).
+QA15 live (ctx_49f5d08ac0f7, released; tmp/qa15-live-report.md): all PASS (0 page errors; frame times 16.7/16.7 ms) except the Easy bot
+DNF 2/2 on Breaker's Mile (grace). User: GRACE-1 123jpnbfkch -> in flight ctx_5aee51fd378e (Opus, ~/orca/workspaces/scrap-rally/grace-1,
+:3011, tmp/spec-grace-1.md). THEME-TRACKS answered (2 test edits; HOLD until TH-LOOK-H). Active authors: TH-LOOK-H, THEME-TRACKS, GRACE-1.
+GRACE-1 nudged once (idled on its own test). THEME-TRACKS DONE c5375b3 (4 half-width sand drifts on Mile, 1 oil slick on Slag s 18500-18700;
+bots skirt; through costs 0.2-1.6 s; 1113/1113 + 186/186 x2; report tmp/theme-tracks/). Reviewer ctx_b0f85f68f6fa (Opus, :3018,
+tmp/review-theme-tracks.md). MERGE HELD until TH-LOOK-H merges (then: author merges main + re-shoots the slick; the user drives both
+tracks). Active authors: TH-LOOK-H, GRACE-1 (1 free; nothing startable: TH-LOOK-3 waits for TH-LOOK-H).
+GRACE-1 DONE 026334e (finishGraceMs; Mile 38.93 s, Easy in; short tracks 30 s; 1112/1112 + 178/178 x2; no golden moved). Reviewer
+ctx_ecfce8ba55b2 (Opus, :3014, tmp/review-grace-1.md). Merges clean into main; with THEME-TRACKS only sim-test/README appends.
+THEME-SND 123jpnbfkeg (PLAN-THEMES "Later", user decision 6; ticket written now, approved plan) in flight: ctx_f4bf5cfb7322 (Opus,
+~/orca/workspaces/scrap-rally/theme-snd, :3010, tmp/spec-theme-snd.md; WAV renders early for the user's ear).
+Active authors: TH-LOOK-H, THEME-SND (GRACE-1 + THEME-TRACKS in review).
+THEME-SND first WAVs (tmp/theme-snd/wavs/): user picked sand fine, ford brook, oil thin hiss (relayed).
+THEME-TRACKS review APPROVE (ctx_b0f85f68f6fa; tmp/theme-tracks/THEME-TRACKS-review.md). Play: going round costs <= 0.26 s/lap, through
+0.16-1.56 s, so the patches are cheap-to-avoid traps for a wide line, not a risk/reward choice -> for the user's drive. Nits for the
+post-TH-LOOK-H round: sim-test.ts:16983 comment (max 51 ticks), :16910 pitDist ignores lat 18, longtracks.ts:139-142 'apex' wording.
+GRACE-1 review APPROVE (ctx_ecfce8ba55b2); 2 text nits fixed 224bd58. MERGED 45fe3e6; gate GREEN (1112/1112, 178/178, build, schema-hash);
+PLAN.md:127 updated (finishGraceMs). ClickUp ready for qa test; workers released; workspace removed. Player-visible on local main vs live:
+GRACE-1 (long-track race end) only -> next push question when THEME-SND / TH-LOOK-H land (unless the user wants it sooner).
+THEME-SND DONE 2e02c86 (user picks fine/brook/hiss; gravel sample-identical; 1120/1120 + 178/178; flake once, rerun green). Reviewer
+ctx_2aba54843ff0 (Opus, :3015, tmp/review-theme-snd.md). Author merging main (sim-test/README appends with GRACE-1) in parallel.
+Active authors: TH-LOOK-H (+ THEME-SND's merge-main). Nothing else startable (TH-LOOK-3 waits for TH-LOOK-H).
+THEME-SND merged main as 3172a51 (1127/1127). TH-LOOK-H DONE e427e67 (harbour look; identity 0 px elsewhere; speed gate PASS; S7 Quay
+0.968; Slag shortcut frames 0.958; report tmp/th-look-h/REPORT.md; notes: yard blocks + crane rails as ground art per track, 92 empty junk
+sites, a HARBOUR-SCHEMA check flipped). Fable reviewer ctx_e96c61f9c157 (tmp/review-th-look-h.md).
+COMBINED TASTE COPY ~/orca/workspaces/scrap-rally/harbour-taste = e427e67 + theme-tracks' shared/longtracks.ts + theme-snd's sfx/soundboard/
+soundlogic (uncommitted overlay; tsc + build ok): :3012 normal (pid 31154; Slag Harbour harbour + oil slick + pier cut; Breaker's Mile
+sand drifts; surface sounds) and :3009 SCRAP_DEV_TRACK=quay-yard (pid 31153). One drive for TH-LOOK-H + THEME-TRACKS + THEME-SND.
+THEME-SND review APPROVE (ctx_2aba54843ff0). MERGED 65dcfcc; gate GREEN (1127/1127, 178/178, build index-BA2xTXSI.js, schema-hash).
+ClickUp ready for qa test; workers released; workspace removed. (Nothing audible on shipped tracks until THEME-TRACKS lands.)
+TH-LOOK-H review APPROVE (ctx_e96c61f9c157; tmp/th-look-h/REVIEW-TH-LOOK-H.md). Notes: (1) harbour Rule-1 alloc 9.4 B/frame in marshals.ts:513
+at default warm -> parked; (2) och1 (crane bases/forklifts) dE 4.2 from haz0 and (3) reefer white 26.0 from car 6 -> taste points; (4)
+cosmetic baked pixels (tyre marks across rails, a rail through a drain, props half on drains) and (5) bench.ts:37 stale comment -> fix
+round after the user's drive (with any taste changes); (6) harbour art builds slower once (Slag 28.8 vs 17.6 ms). MERGE after the user's
+drive + that round. Then THEME-TRACKS merges main + re-shoots + merges; TH-LOOK-3 starts.
+2026-11-24: USER APPROVED the combined drive ("its good"): harbour look, THEME-TRACKS placement, THEME-SND in race; no sea ticket.
+Combined copy stopped (pids 31154, 31153) + removed. Earlier workers' sessions had exited -> TH-LOOK-H review round as a NEW Fable worker
+in the existing workspace: ctx_fff5ae23cb4e (tmp/fix-th-look-h-r1.md: rails vs tyre marks, drain under a rail, props on drains,
+bench.ts:37 comment; merge main). Then merge TH-LOOK-H; then THEME-TRACKS (new worker in its workspace: merge main, its 3 nits, re-shoot
+the slick in the harbour look) -> merge; TH-LOOK-3 starts after TH-LOOK-H; then the push question.
+TH-LOOK-H round done 8d93ea9 (0 marks on rails, 0 drains under a rail/prop). MERGED 579cad7; gate GREEN (1127/1127, 178/178, build
+index-Chv2CkE9.js, schema-hash). ClickUp ready for qa test; workers released; workspace removed; sheets in tmp/th-look-h/sheets/.
+TH-LOOK-3 123jpnbfgj4 in flight: ctx_c2b81b63fd08 (Fable, ~/orca/workspaces/scrap-rally/th-look-3, :3017, tmp/spec-th-look-3.md).
+THEME-TRACKS finishing round: ctx_4ccc4c00757d (new worker in its workspace, tmp/fix-theme-tracks-r1.md: merge main, 3 nits, re-shoot
+the slick, test x2). Merge it after -> then the push question (harbour look + sand/oil + sounds + GRACE-1 + city/sand/oil looks). TH-LOOK-2 waits for
 MARSHALS-1 (shares render.ts + canvas-census.ts). Ford direction cue moved from THEME-SURF to TH-LOOK-3 (drawing = world.ts, Fable).
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).

@@ -22,7 +22,7 @@
 // two long shipped tracks, Slag Harbour and Breaker's Mile, have puddles: they are probed like the test
 // tracks).
 // The theme surfaces (TH-LOOK-2; PLAN-THEMES.md 2.3) are puddles as well and are held to the same
-// promise: a sand patch (a desert track's, Track.sand) and an oil slick (a city track's, Track.oil),
+// promise: a sand patch (a desert track's, Track.sand) and an oil slick (a city or a harbour track's, Track.oil: Quay Yard's two, TH-LOOK-H),
 // each drawn inside its declared rectangle with all of its traction rectangle the surface's own
 // pixels. A track is probed in its own theme, as the game draws it; a ford (a jungle track's) has no
 // look yet (TH-LOOK-3) and is not probed.
