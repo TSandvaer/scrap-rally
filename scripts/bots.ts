@@ -402,6 +402,7 @@ async function run(ctx: Ctx, bots: Bot[]): Promise<void> {
   await runBranchBots(ctx, bots);
   await runThemeSurf(ctx, bots);
   await runBrTracks(ctx, bots);
+  await runThemeTracks(ctx, bots);
 }
 
 const lost = new Map<string, (ConnReason | undefined)[]>();
@@ -2867,6 +2868,80 @@ async function runBrTracks(ctx: Ctx, bots: Bot[]): Promise<void> {
         b.afterStep = null;
         b.game.leave();
       }
+    }
+  }
+}
+
+// ---- the long tracks' sand and oil over sockets (THEME-TRACKS, PLAN-THEMES.md 2.3, 2.6, section 3; ClickUp 123jpnbfgj5, 2026-11-23) ----------
+
+/**
+ * Breaker's Mile's sand drifts and Slag Harbour's oil slick over a lagged link, on the shipped tracks (no dev flag: the
+ * host picks each): an unlagged Normal socket bot on lane 24 races a lagged (80±10 ms) Normal one on lane -24, weapons off,
+ * one lap. The bots go round a half-width patch on its firm half, so the lagged one is steered through the middle of each
+ * patch (its driver's throttle, a pursuit steer at the patch's middle lane from 150 before it to its end, on the main road):
+ * the client predicts the sand's drag and the oil's grip and turn with the server's stepCar, so its median reconciliation
+ * error stays below 0.5 (no error above 50, at most 4 state mismatches); it is on every patch (server ticks); both finish.
+ */
+async function runThemeTracks(ctx: Ctx, bots: Bot[]): Promise<void> {
+  for (const [id, n] of [["slag-harbour", 11], ["breakers-mile", 12]] as const) {
+    const H = new Bot(`Tango${n}`, ctx.url, 24);
+    const S = new Bot(`Uniform${n}`, ctx.url, -24, { lag: 80, jitter: 10 });
+    bots.push(H, S);
+    for (const b of [H, S]) b.weapons = false;
+    let room: ReturnType<typeof ctx.server.rooms.rooms.get> | undefined;
+    let tick: ((t: number, now: number) => void) | null = null;
+    try {
+      H.game.create(H.name);
+      await waitFor(`${id} theme: H welcome`, () => !!H.game.you, 3000);
+      S.game.join(H.game.code, S.name);
+      await waitFor(`${id} theme: S in H's room`, () => H.game.players.length === 2 && !!S.game.you, 3000);
+      room = ctx.server.rooms.rooms.get(H.game.code)!;
+      H.game.pickTrack(id);
+      await waitFor(`${id} theme: both clients on it`, () => H.game.trackId === id && S.game.trackId === id, 3000);
+      const t = S.game.track;
+      // Through the middle of each patch (see above), else the driver's own controls.
+      S.script = () => {
+        const base = S.driver.controls();
+        const c = S.game.car;
+        if (!c || c.air > 0 || c.fall > 0 || c.wreck > 0 || btRoadOfSeg(t, c.seg) !== 0) return base;
+        const q = queryTrackNear(t, c.x, c.y, c.seg);
+        const f = t.themeSurfaces.find((x) => q.s >= x.s0 - 150 && q.s <= x.s1);
+        if (!f) return base;
+        const lane = (f.lat0 + f.lat1) / 2;
+        const a = pointAt(t, q.s + 60 + speedOf(c) * 0.2);
+        const tx = a.x - Math.sin(a.h) * lane, ty = a.y + Math.cos(a.h) * lane;
+        return { ...base, steer: clamp(angleDiff(c.h, Math.atan2(ty - c.y, tx - c.x)) * 2.2, -1, 1) };
+      };
+      const r = room;
+      tick = r.tick.bind(r);
+      // Server ticks of the lagged bot on each patch (by its traction rectangle), on the main road.
+      const on = t.themeSurfaces.map(() => 0);
+      r.tick = (tk: number, now: number) => {
+        tick!(tk, now);
+        const sp = r.players.get(S.game.you), c = sp?.car;
+        if (!c || r.phase !== "racing" || sp?.progress?.fin || c.air > 0 || c.fall > 0 || btRoadOfSeg(r.track, c.seg) !== 0) return;
+        const q = queryTrackNear(r.track, c.x, c.y, c.seg);
+        const f = thsSurfaceAt(r.track, q.seg, q.s, q.lat);
+        if (f && thsIsTheme(f.kind)) on[r.track.themeSurfaces.indexOf(f)]++;
+      };
+      const e0 = S.game.recErrors.length, st0 = S.game.recStateErrors;
+      const rows = await runRace(`${id} theme`, bots, H, [H, S]);
+      const s = stats(S.game.recErrors.slice(e0));
+      const st = S.game.recStateErrors - st0;
+      console.log(
+        `      ${S.name} (80±10 ms, through the middle of each patch) on ${id} (${H.game.laps} lap): server ticks on its ${t.themeSurfaces.length} theme surface(s) ${on.join("/")}; ` +
+          `rec err n=${s.n} median=${s.median.toFixed(3)} p95=${s.p95.toFixed(3)} max=${s.max.toFixed(2)}; state mismatches ${st}, rtt=${S.game.rtt.toFixed(1)}ms; finish ${rows.map((x) => `${x.name} ${(x.timeMs / 1000).toFixed(2)}s`).join(", ")}`,
+      );
+      check(
+        `${id} theme surfaces over sockets: on the shipped track (picked by the host, no dev flag) a lagged (80±10 ms) Normal socket bot driven through the middle of each of its theme surfaces keeps a median reconciliation error below 0.5, no error above 50, at most 4 state mismatches; on every patch; both finish`,
+        room.trackId === id && rows.length === 2 && rows.every((x) => x.timeMs > 0) && on.length === (id === "slag-harbour" ? 1 : 4) && on.every((x) => x > 5) &&
+          s.n > 500 && s.median < 0.5 && s.max <= 50 && st <= 4 && H.errors.length + S.errors.length === 0,
+        `ticks on the patches ${on.join("/")}; median ${s.median.toFixed(3)}, max ${s.max.toFixed(2)}; state mismatches ${st}; errors ${[...H.errors, ...S.errors].join("; ") || "none"}`,
+      );
+    } finally {
+      if (room && tick) room.tick = tick;
+      S.script = null;
+      for (const b of [H, S]) b.game.leave();
     }
   }
 }
