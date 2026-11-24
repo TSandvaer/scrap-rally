@@ -898,7 +898,12 @@ workers released; workspace removed; :3012 copy stopped (pid 76845) + removed. P
 Board: nothing startable (HARD-3 postponed). Waiting on the user: Manual Deploy of 121be4e (then curl + QA16); next work direction.
 TH-LOOK-3 (Canopy Yard only) goes with the next push.
 DEPLOYED (seen by curl 2026-11-25): live serves index-DvPo_v9J.js (+ physics/render/weapons chunks) = the 3a051e3 build; 3a051e3..121be4e
-is team/ only -> live = origin/main 121be4e. QA16 live worker ctx_98dc11d253df (tmp/spec-qa-live-16.md). TH-LOOK-2 waits for
+is team/ only -> live = origin/main 121be4e. QA16 live worker ctx_98dc11d253df (tmp/spec-qa-live-16.md).
+QA16 live PASS (tmp/qa16-live-report.md): harbour look in every frame; oil 0.4x yaw, brakes unchanged; sand 381 -> 217 u/s; grace
+38950 ms Mile / 38916 ms Slag, Easy in; Rust Bowl 30.1 s; frame times 16.7/16.7 ms. THEME-SND not checkable (muted, AudioContext
+suspended). ClickUp -> complete (live-verified by QA15/QA16): BR-PHYS, BR-BAKE, BR-BOTS, BR-MAP, BR-TRACKS, MARSHALS-1, NOSELECT-2,
+THEME-SURF, TH-LOOK-2, THEME-TRACKS, HARBOUR-SCHEMA, TH-LOOK-H, GRACE-1. Left at ready for qa test: THEME-SND (heard by the user locally,
+not live-checked), TH-LOOK-3 (not pushed). HARD-3 postponed. Board otherwise empty; slots idle until the user picks the next direction. TH-LOOK-2 waits for
 MARSHALS-1 (shares render.ts + canvas-census.ts). Ford direction cue moved from THEME-SURF to TH-LOOK-3 (drawing = world.ts, Fable).
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
