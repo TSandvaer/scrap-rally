@@ -891,7 +891,12 @@ NEXT: push question (popup). Active author: TH-LOOK-3 only (nothing else startab
 PUSHED 2026-11-24 (user "Push now"): origin/main = 121be4e (was 39266cb). Waiting for the user's Manual Deploy; then curl + QA16.
 TH-LOOK-3 DONE 0b33a69 (jungle + ford with static chevrons; identity 0 px elsewhere; speed gate PASS; S7 ~1.01; report tmp/th-look-3/).
 Fable reviewer ctx_558b660cd081 (tmp/review-th-look-3.md). TASTE COPY ~/orca/workspaces/scrap-rally/thl3-taste at 0b33a69 on :3012
-SCRAP_DEV_TRACK=canopy-yard (pid 76845); inline preview shown. TH-LOOK-2 waits for
+SCRAP_DEV_TRACK=canopy-yard (pid 76845); inline preview shown.
+TH-LOOK-3 taste APPROVED (user "looks good"); review APPROVE (ctx_558b660cd081; tmp/th-look-3/REVIEW-TH-LOOK-3.md; 5 cosmetic/hypothetical
+notes, none acted on). MERGED 3689093; gate GREEN (1135/1135, 186/186, build index-GBDALd3C.js, schema-hash). ClickUp ready for qa test;
+workers released; workspace removed; :3012 copy stopped (pid 76845) + removed. PLAN-THEMES COMPLETE on local main.
+Board: nothing startable (HARD-3 postponed). Waiting on the user: Manual Deploy of 121be4e (then curl + QA16); next work direction.
+TH-LOOK-3 (Canopy Yard only) goes with the next push. TH-LOOK-2 waits for
 MARSHALS-1 (shares render.ts + canvas-census.ts). Ford direction cue moved from THEME-SURF to TH-LOOK-3 (drawing = world.ts, Fable).
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
