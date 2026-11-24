@@ -34,6 +34,8 @@
 // 32, whatever the track's theme. A theme picks its tones from those (gfx/theme.ts
 // ObstacleTones): what a barrel is made of, a slab's edge. The slab keeps its hazard stripes
 // and the lamps their red in every theme. A track's sprites are painted in its theme's tones.
+// (The harbour's slab is a container spreader: a block on each corner of its top, where its
+// twistlocks sit; the stripes are everywhere else on it.)
 
 import { barrelLat, BARREL_R, pointAt, PRESS_DEPTH, PRESS_DOWN, PRESS_WARN_TICKS, PRESS_WARNING, pressState, type PlacedBarrels, type PlacedPress, type Track } from "../../shared/track";
 import { P, PALETTE, type PaletteName } from "./palette";
@@ -309,6 +311,7 @@ function paintSlab(out: Uint8Array, ax: number, ay: number, w: number, h: number
   };
   // Does a face look up-left, to the sun? Its outward normal: -+ the road's direction, -+ across it.
   const lit = [-cos - sin < 0, cos + sin < 0, sin - cos < 0, cos - sin < 0];
+  const corner = t.corner ? IDX[t.corner] : 0;
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
       const o = (ay + y) * OBST_W + ax + x;
@@ -317,6 +320,11 @@ function paintSlab(out: Uint8Array, ax: number, ay: number, w: number, h: number
       if (e >= 0) {
         if (e < 1.3) c = IDX[t.outline];
         else if (e < 3.7) c = lit[face] ? IDX[t.lit] : IDX[t.dark]; // its edge in the sun and away from it
+        else if (corner && PRESS_DEPTH / 2 - Math.abs(uu) < 8.6 && width / 2 - Math.abs(vv) < 8.6) {
+          // A twistlock housing on each corner of the top: a block with a dark rim.
+          const far = Math.max(PRESS_DEPTH / 2 - Math.abs(uu), width / 2 - Math.abs(vv));
+          c = e < 4.9 || far > 7.4 ? IDX[t.outline] : corner;
+        }
         else c = Math.floor((uu + vv + 4000) / 5.5) & 1 ? IDX[t.stripeA] : IDX[t.stripeB]; // its top: hazard stripes all over, so it is not taken for its bed
       } else if (x >= 3 && y >= 4 && inside(x - 3, y - 4) >= 0) c = FX_SHADOW; // the shadow it casts when down
       out[o] = c;
