@@ -136,8 +136,8 @@ export const BREAKERS_MILE: TrackDef = {
     { k: "gap", s0: 10980, s1: 11200 },
     { k: "cell", s: 11120, lat: 34, air: true },
     // THEME-TRACKS: sand drifts, half the road each (the other half firm), in two groups. The bottom-left
-    // sweeper and the right-hander at its end: a drift on the sweeper's inside, then one on the corner's
-    // inside at its apex (the way round is the outside, longer).
+    // sweeper and the right-hander at its end: a drift on the sweeper's inside, then one on the inside of the
+    // corner's turn-in (its sharpest turning starts where the drift ends; the way round is the outside, longer).
     { k: "sand", s0: 12450, s1: 12750, lat0: 0, lat1: 64 },
     { k: "sand", s0: 13130, s1: 13400, lat0: 0, lat1: 64 },
     // The finger: the pit pair, then a cell on its hairpin's inside kerb.

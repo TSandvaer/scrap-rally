@@ -17616,12 +17616,13 @@ function ttPatches(): void {
   // shortcut's fork and merge and >= 1000 (in the world) from its pit; no sand or ford.
   const sh = ttTrackById("slag-harbour"), Ls = sh.length, sb = sh.branches[0];
   const oil = sh.oil[0];
-  const pit = sb.road.holes[0], pp = pointAt(sb.road, pit.s);
+  // The pit's distance is from its centre as placed (x, y: at its s on the shortcut, its lat 18 aside), less its radius.
+  const pit = sb.road.holes[0];
   let pitDist = Infinity;
   for (let s2 = oil.s0; s2 <= oil.s1; s2 += 10) {
     for (let lat = oil.lat0; lat <= oil.lat1; lat += 8) {
       const p = pointAt(sh, s2);
-      pitDist = Math.min(pitDist, Math.hypot(p.x - Math.sin(p.h) * lat - pp.x, p.y + Math.cos(p.h) * lat - pp.y) - pit.r);
+      pitDist = Math.min(pitDist, Math.hypot(p.x - Math.sin(p.h) * lat - pit.x, p.y + Math.cos(p.h) * lat - pit.y) - pit.r);
     }
   }
   const sMouth = Math.min(ttFrom(oil, sb.s0, Ls), ttFrom(oil, sb.s1, Ls));
@@ -17689,7 +17690,7 @@ function ttValidate(): void {
   );
 }
 
-/** Per bot per race: the most ticks on the theme surfaces a bot spends (they skirt them; measured 2026-11-23: at most 43). */
+/** Per bot per race: the most ticks on the theme surfaces a bot spends (they skirt them; measured 2026-11-23: at most 51, Breaker's Mile Hard with weapons; 43 is the most on one patch summed over a race's bots). */
 const TT_TOUCH_MAX = 90;
 
 function ttBots(): void {
