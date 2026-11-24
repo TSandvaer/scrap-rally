@@ -52,6 +52,17 @@
 //   gap is soot and a ladder's steel; the four greys (tarmac, ground, verge, kerb slab) are a
 //   stated step apart, and water from the ground and the verge; every colour on its props, the
 //   accents too, is far from the six car colours, a container's paints as far as a parked car's.
+// - the jungle's own rules (TH-LOOK-3; PLAN-THEMES.md 2.2, advisor change 9; jungleRules, on
+//   Canopy Yard as the game draws it): every prop pixel lies within a crown's reach in the canopy
+//   or within its piece's reach at a junk site, and none where the yard's scrapyard look has a
+//   pixel of a road; the ground art (the canopy) keeps clear of roads, props and marshals, its
+//   shadows counted; nothing is put on the tarmac; the kerb is stone and moss; a gap is soot,
+//   the gorge's rock and its vines; tarmac against verge and ground, water against both; every
+//   colour on its props, the accents too, is far from the six car colours.
+// - the ford's (TH-LOOK-3; PLAN-THEMES.md 2.3, advisor change 6; themeSurfaces, fordCue): its
+//   plain tone is far from a pool's water, the tarmac, a mud patch and a gorge's soot; and its
+//   baked direction cue says the truth: every foam chevron on a ford points the way the ford's
+//   drift (its vx) pushes, and is large and bright enough to read at 390x844@3.
 //
 // --contrast: how well what a player must see stands out from what it lies on. WCAG contrast
 // ratios (1 = none, 21 = black on white) of the six car bodies and the cars' outline, a
