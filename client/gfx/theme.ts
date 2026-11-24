@@ -127,16 +127,16 @@ const HARBOUR_OBSTACLES: ObstacleTones = {
   slab: { outline: "soot1", lit: "rust3", dark: "rust1", stripeA: "haz1", stripeB: "soot2", corner: "steel3" },
 };
 
-// The jungle's: log sections (pale, weathered wood that shows on dark tarmac, a band of bark left
-// near either end, a patch of bark that goes round as one rolls and a split half a turn on) and
-// a log stamper (a ram of squared timber; its top keeps the hazard stripes).
+// The jungle's: log sections (bark, light enough to show on dark tarmac; a pale sawn end at
+// either end, two furrows round it, a knot that goes round as one rolls and a split half a turn
+// on) and a log stamper (a ram of squared timber; its top keeps the hazard stripes).
 const JUNGLE_OBSTACLES: ObstacleTones = {
   barrel: {
-    rims: ["dirt0", "dirt2", "gravel1", "gravel2"],
+    rims: ["gravel2", "bone0", "bone1", "bone2"],
     hoops: ["soot3", "dirt0", "dirt1", "dirt2"],
-    label: ["soot3", "dirt0", "dirt1", "dirt2"],
-    seam: ["soot3", "soot3", "dirt0", "dirt1"],
-    body: ["dirt2", "gravel1", "gravel2", "bone0"],
+    label: ["soot3", "soot3", "dirt0", "dirt1"],
+    seam: ["dirt0", "dirt1", "dirt2", "dirt3"],
+    body: ["dirt2", "dirt3", "gravel1", "gravel2"],
   },
   slab: { outline: "soot1", lit: "gravel2", dark: "dirt1", stripeA: "haz1", stripeB: "soot2" },
 };

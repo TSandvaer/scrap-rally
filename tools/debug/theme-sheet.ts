@@ -9,7 +9,8 @@
 //   npx tsx tools/debug/theme-sheet.ts --contrast         the readability table alone (part of --check)
 //   npx tsx tools/debug/theme-sheet.ts --hash [--root d]  the scrapyard's identity: a sha256 per track over what the
 //                                                         bake and the obstacle sheet come to (see below)
-//   npx tsx tools/debug/theme-sheet.ts --surfaces         the theme surfaces' sheet: sand and oil -> tmp/th-look/surfaces-sheet.png
+//   npx tsx tools/debug/theme-sheet.ts --surfaces         the theme surfaces' sheet: sand, oil and the ford -> tmp/th-look/surfaces-sheet.png
+//   npx tsx tools/debug/theme-sheet.ts --ford             the ford's own sheet (TH-LOOK-3): both ways its stream can run -> tmp/th-look/ford-sheet.png
 //   npx tsx tools/debug/theme-sheet.ts --shots            the override's screenshots and the theme's own yard's, in headless
 //                                                         Chrome -> tmp/th-look/shots/ (--theme, --out <dir>, --port <n>:
 //                                                         default 3017, --session <name>, --only <start of a shot's name>)
@@ -648,7 +649,57 @@ function surfaces(): Picture {
       })()],
     },
   ];
-  return compose("THEME SURFACES: SAND AND OIL", null, sections, null, null);
+  return compose("THEME SURFACES: SAND, OIL AND A FORD", null, [...sections, ...fordSections()], null, null);
+}
+
+/**
+ * The ford on paper (TH-LOOK-3): each of Canopy Yard's two, the one whose stream runs to the
+ * right of travel and the one whose stream runs to the left, whole, as a race shows it, its
+ * chevrons and a bank close up, and track marks made across a bank (the ford takes none, the
+ * tarmac beside it does); then what a ford must not be taken for: a pool, a mud patch, a gorge.
+ */
+function fordSections(): Section[] {
+  const yard = testTrack("canopy-yard")!;
+  const crusher = themedTrack(trackById("crusher-run"), "jungle"), gap = crusher.gaps.find((g) => !g.scrap)!;
+  const marks = (s: number, lat: number) => (t: Track) => {
+    for (const [ds, dl] of [[-30, -14], [40, 12]]) {
+      const p = at(t, s + ds, lat + dl);
+      scorchAt(t, p.x, p.y);
+    }
+    const q = at(t, s - 70, lat + 30);
+    skidAt(t, q.x, q.y, q.h - 0.22, 150);
+  };
+  const one = (f: (typeof yard.fords)[number]): Section => {
+    const way = f.vx > 0 ? "right" : "left", mid = (f.s0 + f.s1) / 2;
+    return {
+      title: `A FORD (JUNGLE; CANOPY YARD): ITS STREAM RUNS TO THE ${way.toUpperCase()} OF TRAVEL (VX ${f.vx > 0 ? "+" : ""}${f.vx})`,
+      note: `drawn where Track.fords has one (s ${f.s0}..${f.s1}, from kerb to kerb), inside its declared rectangle; the traction rectangle is all ford. A shallow stream across the asphalt: jade, lighter and greener than a pool, no dark edge; shingle shows through at its two banks, which run in lobes and bays; its surface runs in streaks across the road, the way the water goes. The cue that says which way it pushes is baked and still: rows of foam chevrons whose tips point downstream, here to the ${way} of travel (the road runs ${Math.cos(at(yard, mid).h) > 0 ? "left to right" : "right to left"} in these pictures, so they point ${(Math.cos(at(yard, mid).h) > 0) === (f.vx > 0) ? "down" : "up"}): steer the other way, upstream. The centre line shows through; it takes no track marks`,
+      shots: [
+        shot(`the ford across the road (${f.s1 - f.s0} x ${f.lat1 - f.lat0} units), 2x`, yard, mid, 0, Math.ceil((f.s1 - f.s0) * ZOOM) + 110, 230),
+        shot("its chevrons, 4x", yard, mid, 0, 150, 110, 4),
+        shot("a bank, 4x", yard, f.s0 + 8, -30, 150, 110, 4),
+        shot("as a race shows it, 1x", yard, mid, 0, 640, 360, 1),
+        shot("as a phone shows it at 390x844@3 (1.83 device pixels a view pixel): 2x", yard, mid, 0, 213, 461, 2),
+        shot("scorches and a tyre mark across a bank, 3x", yard, f.s0 + 10, 0, 250, 150, 3, marks(f.s0 + 10, 0)),
+      ],
+    };
+  };
+  return [
+    ...yard.fords.map(one),
+    {
+      title: "WHAT A FORD MUST NOT BE TAKEN FOR",
+      note: "a pool (drivable water of another kind: murky blue-grey with a dark edge, the same in every theme), a mud patch (black wet mud, the jungle's dirt), a gorge (a gap's void: soot, its river far below soot too; nothing to drive on), a pit",
+      shots: [
+        shot("a pool, 2x", yard, (yard.water[0].s0 + yard.water[0].s1) / 2, -32, 330, 190),
+        shot("a mud patch, 2x", yard, (yard.dirt[0].s0 + yard.dirt[0].s1) / 2, (yard.dirt[0].lat0 + yard.dirt[0].lat1) / 2, 330, 190),
+        shot("a gorge (Crusher Run in the theme), 2x", crusher, (gap.s0 + gap.s1) / 2, 0, 330, 250),
+        ((): Shot => {
+          const knot = themedTrack(trackById("overpass-knot"), "jungle"), hole = knot.holes[0];
+          return shot("a pit (Overpass Knot in the theme), 2x", knot, hole.s, hole.lat, 200, 190);
+        })(),
+      ],
+    },
+  ];
 }
 
 /** A note cut into lines of at most `per` letters, at its spaces. */
@@ -2191,6 +2242,11 @@ if (args.includes("--check")) {
   if (!isTheme(theme)) throw new Error(`unknown theme ${theme}`);
   await shots(theme, path.resolve(arg("--out") ?? path.join(ROOT, "tmp", "th-look", "shots")), Number(arg("--port") ?? 3017));
   process.exit(process.exitCode ?? 0);
+} else if (args.includes("--ford")) {
+  const out = path.resolve(arg("--out") ?? path.join(ROOT, "tmp", "th-look", "ford-sheet.png"));
+  mkdirSync(path.dirname(out), { recursive: true });
+  savePng(out, compose("THE FORD: BOTH WAYS ITS STREAM CAN RUN", null, fordSections(), null, null));
+  console.log(out);
 } else if (args.includes("--surfaces")) {
   const out = path.resolve(arg("--out") ?? path.join(ROOT, "tmp", "th-look", "surfaces-sheet.png"));
   mkdirSync(path.dirname(out), { recursive: true });

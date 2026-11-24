@@ -621,32 +621,43 @@ function jungleStamps(): Stamp[] {
   // steps, moss on its top, and vines hanging over its far side on to the ground.
   for (let q = 0; q < 4; q++) {
     const vert = (q & 1) === 1, rnd = mulberry32(7701 + 11 * q);
-    const len = q < 2 ? 28 : 22, thick = 7, back = q < 2 ? 0 : 9; // (the shorter two have a return: a corner of the wall)
-    const c = 18, w = 2 * c + 10, px = new Uint8Array(w * w);
+    const len = q < 2 ? 30 : 22, thick = 8, back = q < 2 ? 0 : 10; // (the shorter two have a return: a corner of the wall)
+    const c = 19, w = 2 * c + 10, px = new Uint8Array(w * w);
     const set = (a: number, b: number, tone: number): void => {
       // (a: along the wall from its middle, b: across it from its sunny face.)
-      const x = vert ? c - 3 + b : c + a, y = vert ? c + a : c - 3 + b;
+      const x = vert ? c - 4 + b : c + a, y = vert ? c + a : c - 4 + b;
       if (x >= 0 && y >= 0 && x < w && y < w) px[y * w + x] = tone;
     };
-    const stone = (a: number, b: number, lit: boolean, dark: boolean, joint: boolean): void => {
-      set(a, b, lit ? ST_ROCK2 : dark ? ST_ROCK0 : joint ? ST_ROCK0 : rnd() < 0.14 ? 3 : ST_ROCK1); // (3: moss on it)
-    };
-    for (let a = -(len >> 1); a < len >> 1; a++) {
+    // A course of stones: its lit face, its top with a joint every few pixels (the courses' joints staggered), its dark far edge.
+    const stone = (a: number, b: number, lit: boolean, dark: boolean, joint: boolean): void => set(a, b, lit ? ST_ROCK2 : dark || joint ? ST_ROCK0 : ST_ROCK1);
+    const near = -(len >> 1);
+    for (let a = near; a < len >> 1; a++) {
       // Broken down toward its far end: it narrows in two steps.
-      const left = (len >> 1) - a, from = left <= 3 ? 4 : left <= 7 ? 2 : 0;
-      for (let b = from; b < thick; b++) stone(a, b, b === from || a === -(len >> 1), b === thick - 1, (a + 400) % 7 === (b & 2 ? 0 : 3));
+      const left = (len >> 1) - a, from = left <= 3 ? 5 : left <= 7 ? 2 : 0;
+      for (let b = from; b < thick; b++) stone(a, b, b === from || a === near, b === thick - 1, b > from + 1 && b < thick - 1 && (a - near) % 6 === (b & 2 ? 0 : 3));
     }
     // Its return, from the near end.
     for (let b = thick; b < thick + back; b++) {
-      for (let a = -(len >> 1); a < -(len >> 1) + thick; a++) stone(a, b, a === -(len >> 1), a === -(len >> 1) + thick - 1 || b === thick + back - 1, (b + 400) % 7 === (a & 2 ? 0 : 3));
+      for (let a = near; a < near + thick; a++) stone(a, b, a === near, a === near + thick - 1 || b === thick + back - 1, a > near + 1 && a < near + thick - 1 && (b - thick) % 6 === (a & 2 ? 0 : 3));
     }
-    // Vines: strands over the far face, some of them on to the ground.
-    for (let strand = 0; strand < 6; strand++) {
-      const a = -(len >> 1) + thick + 1 + Math.floor(rnd() * (len - thick - 9)), from = 1 + Math.floor(rnd() * 3), down = thick + 1 + Math.floor(rnd() * 4);
+    // Stones fallen from its broken end.
+    for (let k = 0; k < 3; k++) {
+      const a = (len >> 1) + 1 + Math.floor(rnd() * 4), b = Math.floor(rnd() * (thick + 2));
+      set(a, b, ST_ROCK2);
+      set(a + 1, b, ST_ROCK1);
+      set(a, b + 1, ST_ROCK1);
+      set(a + 1, b + 1, ST_ROCK0);
+    }
+    // Moss in patches on its top; vines over its far face, hanging on to the ground.
+    for (let k = 0; k < 4; k++) {
+      const a = near + 2 + Math.floor(rnd() * (len - 12)), b = 1 + Math.floor(rnd() * (thick - 4));
+      for (let j = 0; j < 2; j++) for (let i = 0; i < 3; i++) set(a + i, b + j, i + j === 0 ? 4 : 3);
+    }
+    for (let strand = 0; strand < 7; strand++) {
+      const a = near + (back ? thick + 1 : 2) + Math.floor(rnd() * (len - (back ? thick + 10 : 11))), from = 2 + Math.floor(rnd() * 3), down = thick + 2 + Math.floor(rnd() * 4);
       for (let b = from; b < down; b++) {
-        const tone = b === from ? 5 : b >= thick ? (b === down - 1 ? 4 : 2) : ST_VINE;
-        set(a, b, tone);
-        if (b > from && b < thick && strand & 1) set(a + 1, b, 2);
+        set(a, b, b === from ? 5 : b === down - 1 ? 4 : b >= thick ? 2 : ST_VINE);
+        if (b > from && b < down - 1 && (strand & 1 || b >= thick)) set(a + 1, b, b >= thick ? 3 : 2);
       }
     }
     done(w, w, c, px, 3);
@@ -3645,7 +3656,7 @@ function road(): void {
             const m = s - (gp.s0 + gp.s1) / 2, am = m < 0 ? -m : m, bank = (gp.s1 - gp.s0) / 2 - 42;
             if (am < bank) {
               const v = m + 4000 + ((Math.floor((l + 4000) / 11) * 7) % 5) * 0.7, ph = v - Math.floor(v / 6) * 6;
-              c = am > bank - 1.3 ? SOOT3 : ph < 1.1 ? (n < 150 ? SOOT2 : SOOT1) : n < 6 ? SOOT3 : n < 150 ? SOOT1 : SOOT0;
+              c = am > bank - 1.3 ? SOOT3 : ph < 1.2 ? (n < 36 ? SOOT3 : n < 190 ? SOOT2 : SOOT1) : n < 4 ? SOOT3 : n < 150 ? SOOT1 : SOOT0;
             }
           }
         } else {
