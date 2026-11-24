@@ -172,3 +172,4 @@
 - 2026-11-23 — THEME-SND sounds (user popups after the WAV renders in tmp/theme-snd/wavs/): sand = "fine", ford wash = "brook", oil = the thin slick hiss.
 - 2026-11-24 — Combined taste (user, after driving the harbour-taste copy: e427e67 + THEME-TRACKS' longtracks + THEME-SND's sounds): "its good" -> TH-LOOK-H's harbour look approved (incl. the ochre crane bases/forklifts and the reefer white); THEME-TRACKS' sand/oil placement approved as is (cheap-to-avoid traps); THEME-SND heard in a race. The visible sea: not requested (no ticket).
 - 2026-11-24 — Push (user popup): "Push now" -> main 4a735cf+ (harbour look, sand/oil on the long tracks + sounds, GRACE-1) pushed; then the user's Manual Deploy and live QA16.
+- 2026-11-24 — TH-LOOK-3 taste (user, after the inline preview and the :3012 Canopy Yard copy at 0b33a69): "looks good" -> the jungle look, the ford look with its static chevrons, and the ford's sound in a race approved. Merge on review APPROVE.
