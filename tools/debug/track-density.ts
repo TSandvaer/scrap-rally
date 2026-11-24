@@ -8,6 +8,7 @@
 //   npx tsx tools/debug/track-density.ts --race          ... and the bot races on the two long tracks
 //   npx tsx tools/debug/track-density.ts --png <dir>     ... and a map of each: <dir>/density-<id>.png
 //   --track <id>                                         one track only
+//   --theme                                              the theme yards' theme surfaces count too (THEME-TRACKS; a shipped track's always do)
 //
 // The density report, per track:
 // - every feature's footprint along the track (s0..s1: a ramp to the end of its take-off zone, a
@@ -37,6 +38,13 @@
 //   its plain share and dirt stretches; and the gaps along the route through it: from the main road's last
 //   group before the fork to its first group, and from its last group to the main road's first after the
 //   merge. --png draws it too; --race adds each bot's ticks on each shortcut to its row.
+// - THEME-TRACKS (ClickUp 123jpnbfgj5): on a shipped track (a theme yard with --theme) the theme surfaces
+//   count as footprints of their own kinds (sand, oil, ford; in a split's widen: split), so the groups,
+//   gaps, breathers and shares above include them, and a section lists each one (declared and traction
+//   length, lat, the dry asphalt beside it, how far the road turns over it, its group) and every stretch of
+//   sand and dirt (patches less than LOOSE_JOIN apart, any lat: the mud rule's, <= SAND_LEN_MAX); --png
+//   draws them; --race adds each bot's ticks on each theme surface to its row. A track without theme
+//   surfaces prints as before, and so do the theme yards without --theme.
 // --race (the two long tracks): server bots in a Room on the sim clock, the host retired at GO,
 // 3 laps, three bots per level (Easy, Normal, Hard; Sport, Racer, Truck by add order) with weapons
 // off and on, and five mixed bots with weapons (Hard, Normal, Easy, Hard, Normal); every race run
@@ -53,7 +61,7 @@ import type { CarState } from "../../shared/physics";
 import type { ServerMsg } from "../../shared/protocol";
 import { TEST_TRACKS, testTrack } from "../../shared/testtracks";
 import { trackById, trackList } from "../../shared/tracks";
-import { LIP_ZONE, pointAt, queryTrackNear, roadOfSeg, SURF_DIRT, SURF_WATER, surfaceAt, tractionRect, type Track } from "../../shared/track";
+import { halfAt, LIP_ZONE, LOOSE_JOIN, pointAt, queryTrackNear, roadOfSeg, SAND_LEN_MAX, SURF_DIRT, SURF_WATER, surfaceAt, tractionRect, type Track } from "../../shared/track";
 import { CAR_HP } from "../../shared/weapons";
 import { wallHitSpeed } from "../../client/game";
 import { Room, type Conn, type Player, type Session } from "../../server/room";
@@ -123,6 +131,37 @@ export interface Density {
   straights: Straight[];
   /** BR-TRACKS: one per shortcut road (present only on a track that has some). */
   shortcuts?: ShortcutDensity[];
+  /** THEME-TRACKS: its theme surfaces (present only when densityOf counts them and the track has some). */
+  themes?: ThemeDensity;
+}
+
+/** THEME-TRACKS: a theme surface (sand, an oil slick, a ford) on the main road. */
+export interface ThemePatch {
+  what: string;
+  kind: string; // sand, oil, ford
+  s0: number;
+  s1: number;
+  length: number; // declared (sand <= 350, oil <= 200)
+  traction: number; // what a car feels (tractionRect)
+  lat0: number;
+  lat1: number;
+  dry: number; // the narrowest, over its samples, of the widest asphalt beside it (either side) it leaves
+  turn: number; // how far the road's heading turns over it (degrees)
+  group: number; // the obstacle group it is in (1..), 0 if none
+}
+
+/** THEME-TRACKS: a stretch of loose ground: sand and dirt patches (any lat) less than LOOSE_JOIN apart (shared/track.ts, the mud rule). */
+export interface LooseStretch {
+  s0: number;
+  s1: number;
+  length: number;
+  members: string[];
+}
+
+export interface ThemeDensity {
+  patches: ThemePatch[];
+  loose: LooseStretch[]; // only the stretches with sand in them (the rule's), in s order
+  branchPatches: number; // theme surfaces on the shortcut roads
 }
 
 /** BR-TRACKS: a shortcut road's density (its distances are its own, u). */
@@ -145,8 +184,8 @@ export interface ShortcutDensity {
 
 const f0 = (v: number) => v.toFixed(0);
 
-/** Every feature's footprint along the track, with its kind (see the top of this file). */
-export function footprints(t: Track): Footprint[] {
+/** Every feature's footprint along the track, with its kind (see the top of this file); theme (THEME-TRACKS): the theme surfaces too (sand, oil, fords). */
+export function footprints(t: Track, theme = false): Footprint[] {
   const out: Footprint[] = [];
   const inWiden = (s0: number, s1: number) => t.widens.some((w) => s0 >= w.s0 && s1 <= w.s1);
   for (const w of t.widens) out.push({ what: `widen ${f0(w.s0)}..${f0(w.s1)}`, kind: "split", s0: w.s0, s1: w.s1, obstacle: true });
@@ -156,6 +195,11 @@ export function footprints(t: Track): Footprint[] {
   for (const w of t.water) surf("water", "water", w);
   for (const d of t.dirt) surf("dirt", "dirt", d);
   for (const b of t.belts) surf("belt", "belt", b);
+  if (theme) {
+    for (const f of t.sand) surf("sand", "sand", f);
+    for (const f of t.oil) surf("oil", "oil", f);
+    for (const f of t.fords) surf("ford", "ford", f);
+  }
   for (const r of t.ramps) out.push({ what: `ramp ${f0(r.s)}`, kind: "jump", s0: r.s, s1: r.s + r.len + LIP_ZONE, obstacle: true });
   for (const g of t.gaps) out.push({ what: `gap ${f0(g.s0)}..${f0(g.s1)}`, kind: "jump", s0: g.s0, s1: g.s1, obstacle: true });
   for (const h of t.holes) out.push({ what: `pit ${f0(h.s)}`, kind: inWiden(h.s - h.r, h.s + h.r) ? "split" : "pits", s0: h.s - h.r, s1: h.s + h.r, obstacle: true });
@@ -273,9 +317,10 @@ export function straightsOf(t: Track, list: Footprint[]): Straight[] {
   return kept.slice(0, 3);
 }
 
-export function densityOf(t: Track): Density {
+/** theme (THEME-TRACKS): the theme surfaces count as footprints (kinds sand, oil, ford) and get a section of their own. */
+export function densityOf(t: Track, theme = false): Density {
   const L = t.length;
-  const list = footprints(t);
+  const list = footprints(t, theme);
   const obstacles = list.filter((f) => f.obstacle);
   const groups = groupsOf(t, obstacles);
   const gaps = groups.map((g, i) => {
@@ -304,16 +349,52 @@ export function densityOf(t: Track): Density {
     mixed: groups.filter((g) => g.kinds.length > 1),
     plain: 1 - all.length / L, clear: 1 - obs.length / L, longestPlain: all.longestFree, mud, straights: straightsOf(t, list),
   };
-  if (t.branches.length > 0) out.shortcuts = t.branches.map((b, k) => shortcutDensity(t, k, groups));
+  if (t.branches.length > 0) out.shortcuts = t.branches.map((b, k) => shortcutDensity(t, k, groups, theme));
+  if (theme && t.sand.length + t.oil.length + t.fords.length > 0) out.themes = themeDensity(t, groups);
   return out;
 }
 
+/** THEME-TRACKS: the theme surfaces' section of densityOf: each patch, and the stretches of sand and dirt (the mud rule). */
+function themeDensity(t: Track, groups: Group[]): ThemeDensity {
+  const L = t.length;
+  const deg = (r: number) => (r * 180) / Math.PI;
+  const patches: ThemePatch[] = [...t.sand, ...t.oil, ...t.fords].sort((a, b) => a.s0 - b.s0).map((f) => {
+    const tr = tractionRect(f);
+    let dry = Infinity, turn = 0;
+    const h0 = pointAt(t, f.s0).h;
+    for (let s = f.s0; s <= f.s1 + 1e-9; s += Math.max(1, (f.s1 - f.s0) / 40)) {
+      dry = Math.min(dry, Math.max(f.lat0 + halfAt(t, s, -1), halfAt(t, s, 1) - f.lat1));
+      const d = pointAt(t, s).h - h0;
+      turn = Math.max(turn, Math.abs(Math.atan2(Math.sin(d), Math.cos(d))));
+    }
+    const g = groups.findIndex((x) => [0, L, -L].some((off) => f.s0 + off < x.s1 && x.s0 < f.s1 + off));
+    return {
+      what: `${f.k} ${f0(f.s0)}..${f0(f.s1)}`, kind: f.k, s0: f.s0, s1: f.s1, length: f.s1 - f.s0, traction: Math.max(0, tr.s1 - tr.s0),
+      lat0: f.lat0, lat1: f.lat1, dry: Math.max(0, dry), turn: deg(turn), group: g + 1,
+    };
+  });
+  // The mud rule's stretches (validateSchema's): sand and dirt patches, any lat, less than LOOSE_JOIN apart.
+  const loose = [...t.sand.map((f) => ({ s0: f.s0, s1: f.s1, what: `sand ${f0(f.s0)}..${f0(f.s1)}`, sand: true })), ...t.dirt.map((f) => ({ s0: f.s0, s1: f.s1, what: `dirt ${f0(f.s0)}..${f0(f.s1)}`, sand: false }))].sort((a, b) => a.s0 - b.s0);
+  const stretches: LooseStretch[] = [];
+  for (let i = 0; i < loose.length; ) {
+    let j = i, hi = loose[i].s1, sand = loose[i].sand;
+    while (j + 1 < loose.length && loose[j + 1].s0 < hi + LOOSE_JOIN) {
+      j++;
+      hi = Math.max(hi, loose[j].s1);
+      sand ||= loose[j].sand;
+    }
+    if (sand) stretches.push({ s0: loose[i].s0, s1: hi, length: hi - loose[i].s0, members: loose.slice(i, j + 1).map((x) => x.what) });
+    i = j + 1;
+  }
+  return { patches, loose: stretches, branchPatches: t.branches.reduce((n, b) => n + b.road.sand.length + b.road.oil.length + b.road.fords.length, 0) };
+}
+
 /** BR-TRACKS: shortcut k's density (see the top of this file); mainGroups: the main road's obstacle groups. */
-function shortcutDensity(t: Track, k: number, mainGroups: Group[]): ShortcutDensity {
+function shortcutDensity(t: Track, k: number, mainGroups: Group[], theme = false): ShortcutDensity {
   const b = t.branches[k], r = b.road, L = t.length;
   // Its own features only: the widens buildTrack adds for its mouths (the mouth width, shared/track.ts) are road, not a split.
   const declared = (r.def.features ?? []).filter((f) => f.k === "widen");
-  const list = footprints({ ...r, widens: r.widens.filter((w) => declared.some((f) => f.k === "widen" && f.s0 === w.s0 && f.s1 === w.s1)) });
+  const list = footprints({ ...r, widens: r.widens.filter((w) => declared.some((f) => f.k === "widen" && f.s0 === w.s0 && f.s1 === w.s1)) }, theme);
   const obstacles = list.filter((f) => f.obstacle);
   const groups = groupsOf(r, obstacles);
   const fu = b.forkGore ? b.forkGore.u : 0, mu = b.mergeGore ? b.mergeGore.u : r.length;
@@ -347,6 +428,11 @@ export function densityReport(d: Density): string[] {
   });
   out.push(`dirt stretches (rule: <= ~350 declared): ${d.mud.length ? d.mud.map((m) => `${f0(m.s0)}..${f0(m.s1)} = ${f0(m.length)} (traction ${f0(m.traction)}), lat ${f0(m.lat0)}..${f0(m.lat1)}${m.splitLane ? ", a split lane" : ""}`).join("; ") : "none"}`);
   out.push(`longest straights (heading within ${(STRAIGHT_TOL * 180 / Math.PI).toFixed(0)} deg): ${d.straights.map((s) => `${f0(s.s0)}..${f0(s.s1)} = ${f0(s.length)}${s.on.length ? ` (on it: ${s.on.join(", ")}; its longest plain run ${f0(s.plain)})` : " (plain)"}`).join("; ")}`);
+  if (d.themes) {
+    const th = d.themes;
+    out.push(`theme surfaces (THEME-TRACKS; the footprints, groups and shares above count them): ${th.patches.length} on the main road, ${th.branchPatches} on its shortcuts: ${th.patches.map((p) => `${p.what} = ${f0(p.length)} (traction ${f0(p.traction)}), lat ${f0(p.lat0)}..${f0(p.lat1)} (dry beside it ${f0(p.dry)}), the road turns ${p.turn.toFixed(1)} deg over it, group ${p.group}`).join("; ")}`);
+    out.push(`sand and dirt stretches (patches, any lat, less than ${LOOSE_JOIN} apart are one; rule: <= ${SAND_LEN_MAX}): ${th.loose.length ? th.loose.map((x) => `${f0(x.s0)}..${f0(x.s1)} = ${f0(x.length)} (${x.members.join(" + ")})`).join("; ") : "none"}`);
+  }
   for (const c of d.shortcuts ?? []) {
     out.push(`shortcut ${c.no}: main s ${f0(c.s0)}..${f0(c.s1)} (${f0(c.s1 - c.s0)}) cut by ${f0(c.length)} of road (${f0(c.s1 - c.s0 - c.length)} shorter), half-width ${c.halfWidth}; plain ${pc(c.plain)} of it; from its fork gore ${f0(c.plainIn)} of plain road to its first footprint, from its last ${f0(c.plainOut)} to its merge gore`);
     c.groups.forEach((g, i) => out.push(`  shortcut ${c.no} group ${i + 1}: u ${f0(g.s0)}..${f0(g.s1)} (${f0(g.s1 - g.s0)} long) ${g.kinds.join("+")}: ${g.members.join(", ")}`));
@@ -361,10 +447,11 @@ export function densityReport(d: Density): string[] {
 const KIND_RGB: Record<string, [number, number, number]> = {
   split: [220, 70, 70], jump: [240, 160, 30], truck: [0, 200, 200], tyres: [200, 200, 200], pits: [120, 0, 120], barrels: [240, 120, 0],
   press: [170, 40, 220], belt: [220, 220, 40], water: [40, 110, 230], dirt: [160, 110, 40], "kerb cell": [255, 240, 0],
+  sand: [236, 206, 120], oil: [150, 40, 160], ford: [70, 170, 150], // THEME-TRACKS
 };
 
 /** A map of the track: the corridor, every feature, a band outside the right wall (green: plain road; a kind's colour: its footprint), s every 1000 (white, red every 5000), recovery points (green). */
-export function densityPng(t: Track, file: string, W = 1100): void {
+export function densityPng(t: Track, file: string, W = 1100, theme = false): void {
   let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
   for (const p of t.pts) {
     x0 = Math.min(x0, p.x); y0 = Math.min(y0, p.y); x1 = Math.max(x1, p.x); y1 = Math.max(y1, p.y);
@@ -402,7 +489,7 @@ export function densityPng(t: Track, file: string, W = 1100): void {
     }
   }
   // The band: plain (green) or the kind of the footprint there.
-  const list = footprints(t);
+  const list = footprints(t, theme);
   for (let s = 0; s < t.length; s += step) {
     const i = pointAt(t, s).seg;
     const f = list.find((g) => s >= g.s0 && s <= g.s1);
@@ -412,6 +499,11 @@ export function densityPng(t: Track, file: string, W = 1100): void {
   for (const w of t.water) fill(w.s0, w.s1, w.lat0, w.lat1, KIND_RGB.water);
   for (const d of t.dirt) fill(d.s0, d.s1, d.lat0, d.lat1, KIND_RGB.dirt);
   for (const b of t.belts) fill(b.s0, b.s1, b.lat0, b.lat1, KIND_RGB.belt);
+  if (theme) {
+    for (const f of t.sand) fill(f.s0, f.s1, f.lat0, f.lat1, KIND_RGB.sand);
+    for (const f of t.oil) fill(f.s0, f.s1, f.lat0, f.lat1, KIND_RGB.oil);
+    for (const f of t.fords) fill(f.s0, f.s1, f.lat0, f.lat1, KIND_RGB.ford);
+  }
   for (const i of t.islands) fill(i.s0, i.s1, i.lat0, i.lat1, [200, 60, 60]);
   for (const g of t.gaps) fill(g.s0, g.s1, -t.wall, t.wall, [0, 0, 0]);
   for (const r of t.ramps) fill(r.s, r.s + r.len, -t.def.halfWidth, t.def.halfWidth, KIND_RGB.jump);
@@ -483,6 +575,7 @@ export interface LongRace {
   water: number[]; // ticks on water
   lanes: string[][]; // per bot, per island: "L"/"R" lap by lap
   shortcuts: number[][]; // BR-TRACKS: per bot, per shortcut road: the ticks it is on it (empty on a track without one)
+  themes: number[][]; // THEME-TRACKS: per bot, per theme surface (track.themeSurfaces' order): the ticks it is on it, by its traction rectangle (empty on a track without one)
   digest: string;
 }
 
@@ -514,7 +607,7 @@ export function longRace(trackId: string, levels: BotLevel[], laps = 3, weapons 
     track: trackId, phase: "", ticks: 0, finish: [], cars: bots.map((b) => b.carType), laps: bots.map(() => []), falls: zero(), wrecks: zero(),
     walls: zero(), mounds: zero(), sides: zero(), noses: zero(), barrels: zero(), presses: zero(), trucks: zero(), truckJumps: zero(),
     rampJumps: zero(), cells: zero(), waits: zero(), dirt: zero(), water: zero(), lanes: bots.map(() => t.islands.map(() => "")),
-    shortcuts: bots.map(() => t.branches.map(() => 0)), digest: "",
+    shortcuts: bots.map(() => t.branches.map(() => 0)), themes: bots.map(() => t.themeSurfaces.map(() => 0)), digest: "",
   };
   const prev = bots.map((b) => ({ ...b.car! }));
   const lapAt = bots.map(() => 0);
@@ -557,6 +650,8 @@ export function longRace(trackId: string, levels: BotLevel[], laps = 3, weapons 
         const f = surfaceAt(t, q.seg, q.s, q.lat);
         if (f?.kind === SURF_DIRT) out.dirt[k]++;
         else if (f?.kind === SURF_WATER) out.water[k]++;
+        const th = f && road === 0 ? t.themeSurfaces.indexOf(f) : -1;
+        if (th >= 0) out.themes[k][th]++;
         const q0 = queryTrackNear(t, p.x, p.y, p.seg);
         t.islands.forEach((isl, i) => {
           const m = (isl.s0 + isl.s1) / 2;
@@ -580,7 +675,7 @@ export function longRace(trackId: string, levels: BotLevel[], laps = 3, weapons 
 export function longRow(name: string, r: LongRace): string {
   const j = (a: number[]) => a.join("/");
   const laps = r.laps.map((l) => l.map((x) => x.toFixed(2)).join(",")).join(" | ");
-  return `${name.padEnd(18)} ${r.phase} ${(r.ticks / 60).toFixed(1)} s | cars ${r.cars.join("/")} | laps ${laps} | falls ${j(r.falls)} wrecks ${j(r.wrecks)} walls ${j(r.walls)} | mound ${j(r.mounds)} side ${j(r.sides)} nose ${j(r.noses)} barrel ${j(r.barrels)} press ${j(r.presses)} truck ${j(r.trucks)} | truck jumps ${j(r.truckJumps)} ramp jumps ${j(r.rampJumps)} | cells ${j(r.cells)} press waits ${j(r.waits)} | dirt ${j(r.dirt)} water ${j(r.water)} | lanes ${r.lanes.map((l) => l.join(":")).join(" ")}${r.shortcuts.some((x) => x.length) ? ` | on shortcuts ${r.shortcuts.map((x) => x.join(":")).join("/")}` : ""} | ${r.digest}`;
+  return `${name.padEnd(18)} ${r.phase} ${(r.ticks / 60).toFixed(1)} s | cars ${r.cars.join("/")} | laps ${laps} | falls ${j(r.falls)} wrecks ${j(r.wrecks)} walls ${j(r.walls)} | mound ${j(r.mounds)} side ${j(r.sides)} nose ${j(r.noses)} barrel ${j(r.barrels)} press ${j(r.presses)} truck ${j(r.trucks)} | truck jumps ${j(r.truckJumps)} ramp jumps ${j(r.rampJumps)} | cells ${j(r.cells)} press waits ${j(r.waits)} | dirt ${j(r.dirt)} water ${j(r.water)} | lanes ${r.lanes.map((l) => l.join(":")).join(" ")}${r.shortcuts.some((x) => x.length) ? ` | on shortcuts ${r.shortcuts.map((x) => x.join(":")).join("/")}` : ""}${r.themes.some((x) => x.length) ? ` | on theme surfaces ${r.themes.map((x) => x.join(":")).join("/")}` : ""} | ${r.digest}`;
 }
 
 /** The races of the report: per level 3 bots weapons off and on, and 5 mixed with weapons; each twice. */
@@ -608,10 +703,12 @@ if (process.argv[1]?.endsWith("track-density.ts")) {
   if (png) mkdirSync(png, { recursive: true });
   for (const id of ids) {
     const t = testTrack(id) ?? trackById(id);
-    console.log(densityReport(densityOf(t)).join("\n"));
+    // THEME-TRACKS: a shipped track's theme surfaces count (the theme yards print as before unless --theme).
+    const theme = !testTrack(id) || args.includes("--theme");
+    console.log(densityReport(densityOf(t, theme)).join("\n"));
     if (png) {
       const file = path.join(png, `density-${id}.png`);
-      densityPng(t, file);
+      densityPng(t, file, 1100, theme);
       console.log(`map: ${file}`);
     }
     if (args.includes("--race") && !testTrack(id)) {

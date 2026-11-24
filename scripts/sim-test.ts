@@ -14717,10 +14717,10 @@ function thLists(): void {
   // so physics' lookup (surfaceAt) finds the sand and the pool beside it; a track without theme surfaces has empty lists.
   const inSand = pointAt(t, 950), inPool = pointAt(t, 4150);
   check(
-    "theme lists (THEME-SURF): the theme surfaces are in track.surfaces / surfAt too, the same objects as themeSurfaces (surfaceAt, physics' lookup, finds the sand and the pool beside it); every shipped track has none (empty lists, themeAt one frozen empty list a segment)",
+    "theme lists (THEME-SURF): the theme surfaces are in track.surfaces / surfAt too, the same objects as themeSurfaces (surfaceAt, physics' lookup, finds the sand and the pool beside it); the three original shipped tracks (Rust Bowl, Crusher Run, Overpass Knot) have none (empty lists, themeAt one frozen empty list a segment; THEME-TRACKS put sand on Breaker's Mile and oil on Slag Harbour)",
     t.surfaces.length === 3 && felt.every((f) => t.surfaces.includes(f)) && thT.surfaceAt(t, inSand.seg, 950, 0) === felt[0] && thT.surfaceAt(t, inPool.seg, 4150, -32)?.kind === thT.SURF_WATER &&
-      trackList().every((e) => {
-        const x = trackById(e.id);
+      ["rust-bowl", "crusher-run", "overpass-knot"].every((id) => {
+        const x = trackById(id);
         return x.sand.length + x.oil.length + x.fords.length + x.themeSurfaces.length === 0 && x.themeAt.length === thT.segCount(x) && x.themeAt.every((l) => l.length === 0 && Object.isFrozen(l));
       }),
     `surfaces ${t.surfaces.map((f) => f.kind).join(",")}`,
@@ -16799,9 +16799,9 @@ function hsSlag(): void {
   delete bare.theme;
   const plain = (x: Track) => JSON.stringify(x, (k, v) => (k === "def" ? undefined : v === Infinity ? "Inf" : v));
   check(
-    "harbour Slag Harbour: its theme is \"harbour\" (shared/longtracks.ts; the registry serves that def); built with it it equals the build without (the def aside); it validates; it carries no theme surface yet (THEME-TRACKS adds its oil)",
+    "harbour Slag Harbour: its theme is \"harbour\" (shared/longtracks.ts; the registry serves that def); built with it it equals the build without (the def aside); it validates; it carries exactly one oil slick and no sand or ford (THEME-TRACKS)",
     HS_SLAG_HARBOUR.theme === "harbour" && hsTheme.themeOf(t.def) === "harbour" && t.def === HS_SLAG_HARBOUR && plain(t) === plain(buildTrack(bare)) && validateTrack(t).length === 0 &&
-      t.sand.length + t.oil.length + t.fords.length === 0,
+      t.oil.length === 1 && t.sand.length + t.fords.length === 0,
     `theme ${t.def.theme}; ${validateTrack(t).join(" | ") || "valid"}`,
   );
   // Criterion 6 (Node side): the client's renderer takes a track's scenery from sceneryFor (client/render.ts). HARBOUR-SCHEMA held
@@ -17547,6 +17547,245 @@ function grClient(): void {
 }
 
 for (const t of [grRule, grRoom, grLong, grShort, grClient]) {
+  console.log(`\n# ${t.name}`);
+  try {
+    t();
+  } catch (e) {
+    check(`${t.name} threw`, false, String((e as Error).stack ?? e));
+  }
+}
+
+// ---- the theme surfaces on the two long tracks (THEME-TRACKS, PLAN-THEMES.md 2.3, 2.6, section 3, Amendment 1; ClickUp 123jpnbfgj5, 2026-11-23) ----
+// This section's imports (hoisted like the ones at the top).
+import * as ttT from "../shared/track";
+import * as ttW from "../shared/weapons";
+import * as ttP from "../shared/physics";
+import { themeOf as ttThemeOf } from "../shared/theme";
+import { trackById as ttTrackById } from "../shared/tracks";
+import { BREAKERS_MILE as TT_MILE, SLAG_HARBOUR as TT_SLAG } from "../shared/longtracks";
+import { CAR_TYPES as TT_CAR_TYPES } from "../shared/cars";
+import { statsFor as ttStatsFor } from "../shared/shop";
+import { boostTopSpeed as ttBoostTop, draftTopSpeed as ttDraftTop } from "../shared/catchup";
+import { densityOf as ttDensityOf, densityReport as ttDensityReport, raceSet as ttRaceSet } from "../tools/debug/track-density";
+import { themeTrackCosts as ttCosts, themeTrackLines as ttCostLines, THEME_TRACK_IDS as TT_IDS } from "../tools/debug/theme-tune";
+
+const ttClock = { t0: 0 };
+const ttF = (v: number, d = 0) => v.toFixed(d);
+/** The narrowest, over a patch's samples (every 10), of the widest asphalt it leaves beside it (either side). */
+function ttDry(t: Track, f: { s0: number; s1: number; lat0: number; lat1: number }): number {
+  let dry = Infinity;
+  for (let s = f.s0; s <= f.s1; s += 10) dry = Math.min(dry, Math.max(f.lat0 + ttT.halfAt(t, s, -1), ttT.halfAt(t, s, 1) - f.lat1));
+  return dry;
+}
+/** How far apart two s values are round a lap of length L. */
+const ttAround = (a: number, b: number, L: number) => Math.min(Math.abs(a - b), L - Math.abs(a - b));
+/** The distance along s from a patch to the point at s (0 inside it), round the lap. */
+const ttFrom = (f: { s0: number; s1: number }, s: number, L: number) => (s >= f.s0 && s <= f.s1 ? 0 : Math.min(ttAround(f.s0, s, L), ttAround(f.s1, s, L)));
+
+function ttPatches(): void {
+  ttClock.t0 = performance.now();
+  // Criterion 1: Breaker's Mile's sand drifts: desert; each <= SAND_LEN_MAX and half the road (the other half firm: the
+  // way round); none on the shortcut road, none within 1000 of its fork or merge, none on the jump's run-up (from
+  // the recovery point before the ramp to the end of its take-off zone) or landing (the gap and 600 past it), none
+  // within 150 of a recovery point; the stretches of sand and dirt (LOOSE_JOIN) <= SAND_LEN_MAX, the dirt split lane
+  // among them.
+  const bm = ttTrackById("breakers-mile"), L = bm.length, half = bm.def.halfWidth;
+  const ramp = bm.ramps[0], gap = bm.gaps[0], br = bm.branches[0];
+  const recBefore = Math.max(...bm.recovery.filter((r) => r < ramp.s));
+  const runUp = { s0: recBefore, s1: ramp.s + ramp.len + ttT.LIP_ZONE }, landing = { s0: gap.s0, s1: gap.s1 + 600 };
+  const overlaps = (f: { s0: number; s1: number }, g: { s0: number; s1: number }) => f.s0 < g.s1 && g.s0 < f.s1;
+  const rows = bm.sand.map((f) => {
+    const halfOnly = (f.lat0 === 0 && f.lat1 === half) || (f.lat0 === -half && f.lat1 === 0);
+    const mouth = Math.min(ttFrom(f, br.s0, L), ttFrom(f, br.s1, L));
+    const rec = Math.min(...bm.recovery.map((r) => ttFrom(f, r, L)));
+    const dry = ttDry(bm, f);
+    const ok = f.s1 - f.s0 <= ttT.SAND_LEN_MAX && halfOnly && dry >= half && mouth >= 1000 && !overlaps(f, runUp) && !overlaps(f, landing) && rec >= 150;
+    return { ok, line: `sand ${f.s0}..${f.s1} (${f.s1 - f.s0}) lat ${f.lat0}..${f.lat1}: dry beside it ${ttF(dry)}, ${ttF(mouth)} from a shortcut mouth, ${ttF(rec)} from a recovery point${ok ? "" : " FAIL"}` };
+  });
+  const dm = ttDensityOf(bm, true);
+  const loose = dm.themes?.loose ?? [];
+  const onBranch = bm.branches.reduce((n, b) => n + b.road.sand.length + b.road.oil.length + b.road.fords.length, 0);
+  check(
+    `theme tracks Breaker's Mile: desert, ${bm.sand.length} sand drifts, each <= ${ttT.SAND_LEN_MAX} and half the road (the other half firm), none on the shortcut or within 1000 of its mouths, the jump's run-up (s ${runUp.s0}..${runUp.s1}) or landing (s ${landing.s0}..${landing.s1}), none within 150 of a recovery point; every stretch of sand and dirt <= ${ttT.SAND_LEN_MAX} (LOOSE_JOIN ${ttT.LOOSE_JOIN}); no oil or ford`,
+    ttThemeOf(bm.def) === "desert" && bm.def === TT_MILE && bm.sand.length === 4 && rows.every((r) => r.ok) && onBranch === 0 && bm.oil.length + bm.fords.length === 0 &&
+      loose.length === 4 && loose.every((x) => x.length <= ttT.SAND_LEN_MAX) && dm.mud.every((m) => m.length <= ttT.SAND_LEN_MAX),
+    `${rows.map((r) => r.line).join("; ")}; sand and dirt stretches ${loose.map((x) => `${x.s0}..${x.s1} = ${ttF(x.length)}`).join(", ")}; dirt ${dm.mud.map((m) => `${m.s0}..${m.s1} = ${ttF(m.length)}`).join(", ")}; on the shortcut ${onBranch}`,
+  );
+  // Criterion 2: Slag Harbour's oil slick: harbour; one, <= OIL_LEN_MAX, a dry lane of >= DRY_LANE_MIN beside it at every
+  // sample (water's rule; it lies in a bend), on the quay (the bottom-left corner's exit), >= 1000 along the lap from the pier
+  // shortcut's fork and merge and >= 1000 (in the world) from its pit; no sand or ford.
+  const sh = ttTrackById("slag-harbour"), Ls = sh.length, sb = sh.branches[0];
+  const oil = sh.oil[0];
+  // The pit's distance is from its centre as placed (x, y: at its s on the shortcut, its lat 18 aside), less its radius.
+  const pit = sb.road.holes[0];
+  let pitDist = Infinity;
+  for (let s2 = oil.s0; s2 <= oil.s1; s2 += 10) {
+    for (let lat = oil.lat0; lat <= oil.lat1; lat += 8) {
+      const p = pointAt(sh, s2);
+      pitDist = Math.min(pitDist, Math.hypot(p.x - Math.sin(p.h) * lat - pit.x, p.y + Math.cos(p.h) * lat - pit.y) - pit.r);
+    }
+  }
+  const sMouth = Math.min(ttFrom(oil, sb.s0, Ls), ttFrom(oil, sb.s1, Ls));
+  const sDry = ttDry(sh, oil);
+  check(
+    `theme tracks Slag Harbour: harbour, one oil slick <= ${ttT.OIL_LEN_MAX} with a dry lane >= ${ttT.DRY_LANE_MIN} beside it at every sample, >= 1000 along the lap from the pier shortcut's fork and merge and >= 1000 from its pit; no sand or ford, none on the shortcut`,
+    ttThemeOf(sh.def) === "harbour" && sh.def === TT_SLAG && sh.oil.length === 1 && oil.s1 - oil.s0 <= ttT.OIL_LEN_MAX && sDry >= ttT.DRY_LANE_MIN && sMouth >= 1000 && pitDist >= 1000 &&
+      sh.sand.length + sh.fords.length === 0 && sb.road.oil.length + sb.road.sand.length + sb.road.fords.length === 0,
+    `oil ${oil.s0}..${oil.s1} (${oil.s1 - oil.s0}) lat ${oil.lat0}..${oil.lat1}: dry beside it ${ttF(sDry)}; ${ttF(sMouth)} from the fork (${sb.s0}) / merge (${sb.s1}); ${ttF(pitDist)} from the pit's edge`,
+  );
+}
+
+function ttDensity(): void {
+  // Criterion 6: tools/debug/track-density.ts with the theme surfaces counted (as it prints a shipped track): the user's rules
+  // for the long tracks (as longDensityRules applies them to the M4 features): no two obstacle kinds back to back (no mixed
+  // group), >= 1000 of obstacle-free road between two groups and between two obstacles of different kinds, >= 85 % of the
+  // lap obstacle-free; Breaker's Mile keeps two plain straights of >= 1500 to draft on.
+  const rows: string[] = [];
+  let ok = true;
+  for (const id of TT_IDS) {
+    const d = ttDensityOf(ttTrackById(id), true);
+    const plain = d.straights.filter((x) => x.plain >= 1500).length;
+    const good = d.mixed.length === 0 && d.shortestGap >= 1000 && d.breather.gap >= 1000 && d.clear >= 0.85 && !!d.themes && (id !== "breakers-mile" || plain >= 2);
+    ok &&= good;
+    console.log(`  ${ttDensityReport(d).join("\n  ")}`);
+    rows.push(`${id}: ${d.groups.length} groups (${d.groups.map((g) => `${ttF(g.s0)}..${ttF(g.s1)} ${g.kinds.join("+")}`).join(", ")}), shortest gap ${ttF(d.shortestGap)}, breather ${ttF(d.breather.gap)} (${d.breather.a} | ${d.breather.b}), obstacle-free ${(d.clear * 100).toFixed(2)} %, mixed ${d.mixed.length}, plain straights >= 1500: ${plain}`);
+  }
+  check("theme tracks density: with the theme surfaces counted, no two obstacle kinds back to back, >= 1000 of clear road between groups and between kinds, >= 85 % of the lap obstacle-free, Breaker's Mile's two drafting straights plain", ok, rows.join("; "));
+}
+
+function ttValidate(): void {
+  // Criterion 4: every car type at L0 and L3, through the patches and the shortcuts: validateTrack, validateRunUps,
+  // validateJumpSweep at the slipstream's and a boost's tops and 473 / 537, validateCells. And they act on the patches:
+  // a drift moved onto the jump's run-up fails validateRunUps, the slick made full width in its bend fails the dry-lane rule.
+  const draft = ttDraftTop(430), boost = ttBoostTop(430);
+  const all = (t: Track): string[] => {
+    const errs = [...validateTrack(t), ...ttW.validateCells(t, boost)];
+    for (const car of TT_CAR_TYPES) {
+      for (const lv of [0, 3]) {
+        const st = ttStatsFor(car, { engine: lv, tyres: lv, welder: lv });
+        errs.push(...ttW.validateRunUps(t, st).map((m) => `${car} L${lv}: ${m}`));
+        for (const v of [draft, 473, 537, boost]) errs.push(...ttW.validateJumpSweep(t, v, st).map((m) => `${car} L${lv} at ${v.toFixed(1)}: ${m}`));
+      }
+    }
+    return errs;
+  };
+  const rows = TT_IDS.map((id) => ({ id, errs: all(ttTrackById(id)) }));
+  check(
+    `theme tracks validate with their patches for every car type at L0 and L3: validateTrack, validateRunUps (the shortcuts' too), validateJumpSweep at ${draft.toFixed(1)}, 473, 537 and ${boost.toFixed(1)}, validateCells`,
+    rows.every((r) => r.errs.length === 0),
+    rows.map((r) => `${r.id}: ${r.errs.join(" | ") || "valid"}`).join("; ").slice(0, 900),
+  );
+  const moved = (def: TrackDef, k: "sand" | "oil", to: Partial<ttT.Sand>) => {
+    let done = false;
+    return buildTrack({ ...def, features: def.features!.map((f) => (f.k === k && !done ? ((done = true), { ...f, ...to }) : f)) });
+  };
+  const onRunUp = moved(TT_MILE, "sand", { s0: 10550, s1: 10850 });
+  const runUpErrs = TT_CAR_TYPES.flatMap((car) => ttW.validateRunUps(onRunUp, ttStatsFor(car, { engine: 0, tyres: 0, welder: 0 })).map((m) => `${car}: ${m}`));
+  const wide = moved(TT_SLAG, "oil", { lat0: -64, lat1: 64 });
+  const wideErrs = validateTrack(wide);
+  check(
+    "theme tracks validation acts on the patches: Breaker's Mile with its first drift moved onto the jump's run-up (s 10550..10850, ending 50 before the ramp) fails validateRunUps (the Sport lands short); Slag Harbour's slick made full width in its bend fails the dry-lane-or-straight rule",
+    validateTrack(onRunUp).length === 0 && runUpErrs.length > 0 && wideErrs.some((m) => m.includes("no dry lane")),
+    `run-up: ${runUpErrs.join(" | ").slice(0, 300)}; full width: ${wideErrs.join(" | ").slice(0, 300)}`,
+  );
+}
+
+/** Per bot per race: the most ticks on the theme surfaces a bot spends (they skirt them; measured 2026-11-23: at most 51, Breaker's Mile Hard with weapons; 43 is the most on one patch summed over a race's bots). */
+const TT_TOUCH_MAX = 90;
+
+function ttBots(): void {
+  // Criterion 5: track-density's races on both tracks (3 bots per level, Sport / Racer / Truck, weapons off and on, and
+  // five mixed; each run twice): every bot finishes 3 laps, at most one fall, Normal laps 50-60 s, Hard laps >= 47.5 (below 50
+  // only by a shortcut's gain, at most 2.5 s, user decision 2), a rerun identical, and on the theme surfaces at most
+  // TT_TOUCH_MAX ticks a bot (per patch, the ticks of each race summed over the bots, printed).
+  const rows: string[] = [];
+  let ok = true;
+  for (const id of TT_IDS) {
+    const t = ttTrackById(id);
+    for (const r of ttRaceSet(id)) {
+      const a = r.a;
+      const finished = a.phase === "results" && a.laps.every((l) => l.length === 3);
+      const normal = !r.name.startsWith("normal") || a.laps.every((l) => l.every((x) => x >= 50 && x <= 60));
+      const hard = !r.name.startsWith("hard") || a.laps.every((l) => l.every((x) => x >= 47.5));
+      const touch = a.themes.map((x) => x.reduce((p, q) => p + q, 0));
+      const good = finished && normal && hard && a.falls.every((f) => f <= 1) && touch.every((n) => n <= TT_TOUCH_MAX) && r.same && a.themes.every((x) => x.length === t.themeSurfaces.length);
+      ok &&= good;
+      const per = t.themeSurfaces.map((_, i) => a.themes.reduce((p, x) => p + x[i], 0));
+      rows.push(`${id} ${r.name}: ${good ? "" : "FAIL "}laps ${a.laps.map((l) => l.map((x) => x.toFixed(2)).join(",")).join(" | ")}; falls ${a.falls.join("/")}; ticks on each patch ${per.join("/")} (per bot ${touch.join("/")}); ${r.same ? "rerun same" : "RERUN DIFFERS"}`);
+    }
+  }
+  console.log(`  ${rows.join("\n  ")}`);
+  check(
+    `theme tracks bots: on both tracks every bot finishes 3 laps (3 per level, weapons off and on, and five mixed), <= 1 fall, Normal laps 50-60 s, Hard >= 47.5 s, identically on a rerun; <= ${TT_TOUCH_MAX} ticks a bot on the theme surfaces (they skirt them)`,
+    ok,
+    rows.filter((x) => x.includes("FAIL")).join("; ") || `${rows.length} races`,
+  );
+}
+
+function ttCost(): void {
+  // Criterion 3: what each patch costs a clean lap (tools/debug/theme-tune.ts --tracks: a lone Normal and Hard bot per car type
+  // from seats 0, 1 and 2, the mean of laps 2-3, against the track with no theme surface). The way round is the cheaper choice:
+  // for the Sport and the Racer, driving through each patch (made wall to wall) costs more than going round it (seats'
+  // mean) at both levels; the patches as shipped cost a lone bot at most 0.5 s a lap (seats' mean); no fall.
+  const rows: string[] = [];
+  let ok = true;
+  for (const id of TT_IDS) {
+    const c = ttCosts(id);
+    console.log(`  ${ttCostLines(c).join("\n  ")}`);
+    const mean = (a: number[]) => a.reduce((p, q) => p + q, 0) / a.length;
+    for (const lv of Object.keys(c.cost)) {
+      for (const car of TT_CAR_TYPES) {
+        const x = c.cost[lv][car];
+        const pays = car === "truck" || c.patches.every((_, i) => mean(x.through[i].d) > mean(x.round[i].d));
+        const cheap = mean(x.shipped.d) <= 0.5;
+        const falls = x.shipped.falls + x.round.reduce((p, q) => p + q.falls, 0) + x.through.reduce((p, q) => p + q.falls, 0);
+        const good = pays && cheap && falls === 0 && [x.shipped, ...x.round, ...x.through].every((y) => y.d.every(Number.isFinite));
+        ok &&= good;
+        rows.push(`${id} ${lv} ${car}: shipped ${mean(x.shipped.d).toFixed(2)} s; round ${x.round.map((y) => mean(y.d).toFixed(2)).join("/")}, through ${x.through.map((y) => mean(y.d).toFixed(2)).join("/")}${good ? "" : " FAIL"}`);
+      }
+    }
+  }
+  check("theme tracks lap cost: for the Sport and the Racer each patch costs more driven through than gone round (Normal and Hard alone, seats 0-2); as shipped at most 0.5 s a clean lap per type; no fall", ok, rows.join("; "));
+}
+
+function ttParity(): void {
+  // Criterion 5 (sim side): a car driven through the middle of each patch (from 250 before it at 300 u/s, full throttle, the
+  // tools' pursuit driver, to 150 past it), stepped from a clone at every tick, equals the reference bit for bit (every type).
+  const rows: string[] = [];
+  let all = true;
+  for (const id of TT_IDS) {
+    const t = ttTrackById(id);
+    for (const f of [...t.sand, ...t.oil]) {
+      const lane = (f.lat0 + f.lat1) / 2;
+      for (const car of TT_CAR_TYPES) {
+        const st = ttStatsFor(car, { engine: 0, tyres: 0, welder: 0 });
+        const p0 = pointAt(t, f.s0 - 250);
+        const c: CarState = { x: p0.x - Math.sin(p0.h) * lane, y: p0.y + Math.cos(p0.h) * lane, h: p0.h, vx: Math.cos(p0.h) * 300, vy: Math.sin(p0.h) * 300, seg: p0.seg, wreck: 0, air: 0, fall: 0, boost: 0 };
+        const env = ttW.raceEnv(t);
+        let mismatch = 0, on = 0;
+        for (let rt = 1; rt <= 60 * 4; rt++) {
+          const q = queryTrackNear(t, c.x, c.y, c.seg);
+          if (q.s > f.s1 + 150) break;
+          const a = pointAt(t, q.s + 60 + speedOf(c) * 0.2);
+          const input = { throttle: 1, steer: ttP.clamp(ttP.angleDiff(c.h, Math.atan2(a.y + Math.cos(a.h) * lane - c.y, a.x - Math.sin(a.h) * lane - c.x)) * 2.2, -1, 1) };
+          const clone = cloneCar(c);
+          env.rt = rt;
+          ttW.stepRaceCar(c, input, st, env);
+          ttW.stepRaceCar(clone, input, st, ttW.raceEnv(t, rt, 0));
+          if (!(["x", "y", "h", "vx", "vy", "seg", "wreck", "air", "fall", "boost"] as const).every((k) => Object.is(c[k], clone[k]))) mismatch++;
+          const g = ttT.surfaceAt(t, q.seg, q.s, q.lat);
+          if (g && ttP.isThemeSurface(g.kind)) on++;
+        }
+        all &&= mismatch === 0 && on > 10;
+        rows.push(`${id} ${f.k} ${f.s0} ${car}: ${mismatch} mismatches, ${on} ticks on it`);
+      }
+    }
+  }
+  check("theme tracks parity: a car driven through the middle of each patch, stepped from a clone at every tick, equals the reference bit for bit (every type)", all, rows.join("; "));
+  console.log(`  THEME-TRACKS sim-test sections' runtime (ttPatches .. ttParity): ${((performance.now() - ttClock.t0) / 1000).toFixed(1)} s`);
+}
+
+for (const t of [ttPatches, ttDensity, ttValidate, ttBots, ttCost, ttParity]) {
   console.log(`\n# ${t.name}`);
   try {
     t();

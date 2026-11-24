@@ -16,8 +16,16 @@
 //   --race     server bots on each theme yard, 3 laps, 3 bots per level (Easy, Normal, Hard) and car type
 //              (Sport, Racer, Truck): finish times, falls, wall-hit ticks, ticks on the theme surface;
 //              run twice (identical = deterministic). --race <yard-id> for one yard.
+//   --tracks   THEME-TRACKS (ClickUp 123jpnbfgj5): the theme surfaces of the shipped tracks (Breaker's Mile's sand
+//              drifts, Slag Harbour's oil slick). Per patch: the ticks the bots spend on it (by its traction rectangle) in
+//              tools/debug/track-density.ts's races (raceSet: 3 bots per level, Sport / Racer / Truck, weapons off and on,
+//              and five mixed), per race summed over the bots; and what it costs a clean lap per car type: one server bot
+//              alone (Normal and Hard; seat 0, 1 and 2, its lane -24, 24 and 0), weapons off, 3 laps, the mean of laps 2
+//              and 3, on the track with only that patch ("round": the bot keeps off it where it can) and with only that
+//              patch made wall to wall ("through": no lane round it, the bot drives its line through it), each against the
+//              track with no theme surface; and the track as shipped against none. --tracks <track-id> for one track.
 //
-//   npx tsx tools/debug/theme-tune.ts --numbers | --ab | --ford | --race [yard-id]
+//   npx tsx tools/debug/theme-tune.ts --numbers | --ab | --ford | --race [yard-id] | --tracks [track-id]
 
 import { FORD_AIM, fordAim, laneCost, type BotLevel } from "../../shared/botdrive";
 import { CAR_TYPES, CARS, type CarType } from "../../shared/cars";
@@ -26,11 +34,13 @@ import type { ServerMsg } from "../../shared/protocol";
 import { statsFor } from "../../shared/shop";
 import { CANOPY_YARD, THEME_LOOP, THEME_YARDS } from "../../shared/testtracks";
 import type { Theme } from "../../shared/theme";
-import { buildTrack, pointAt, queryTrackNear, SURF_FORD, SURF_OIL, SURF_SAND, SURF_WATER, surfaceAt, type Feature, type Track } from "../../shared/track";
+import { buildTrack, pointAt, queryTrackNear, roadOfSeg, SURF_FORD, SURF_OIL, SURF_SAND, SURF_WATER, surfaceAt, tractionRect, type Feature, type Track } from "../../shared/track";
 import { CAR_HP, raceEnv, stepRaceCar } from "../../shared/weapons";
 import { wallHitSpeed } from "../../client/game";
 import { botStep, newBotSeat } from "../../server/bots";
 import { Room, type Conn, type Player, type Session } from "../../server/room";
+import { trackById } from "../../shared/tracks";
+import { raceSet } from "./track-density";
 
 const f1 = (v: number) => v.toFixed(1);
 const LEVELS: readonly BotLevel[] = ["easy", "normal", "hard"];
@@ -386,6 +396,180 @@ export function raceLine(r: { a: ThemeRace; same: boolean }): string {
   return `${a.track.padEnd(11)} ${a.level.padEnd(6)} ${a.car.padEnd(5)}: ${a.phase} after ${a.ticks} ticks, ${a.finished}/3 finished (${a.finish.join(", ")}); falls ${a.falls.join("/")}; wall-hit ticks ${a.walls.join("/")}; on the theme surface ${a.on.join("/")} ticks; rerun ${r.same ? "identical" : "DIFFERS"}`;
 }
 
+// ---- THEME-TRACKS (ClickUp 123jpnbfgj5): the shipped tracks' theme surfaces in numbers ----------------------
+
+/** The shipped tracks with theme surfaces (THEME-TRACKS). */
+export const THEME_TRACK_IDS = ["slag-harbour", "breakers-mile"];
+
+type ThemePatchDef = Extract<Feature, { k: "sand" | "oil" | "ford" }>;
+const isThemePatch = (f: Feature): f is ThemePatchDef => f.k === "sand" || f.k === "oil" || f.k === "ford";
+
+/** The shipped track `id` with only the theme surfaces `keep` (indices into its def's theme patches, in def order); `wall`: that one made wall to wall. Not validated: a measuring track. */
+export function themeVariant(id: string, keep: number[], wall = -1): Track {
+  const def = trackById(id).def;
+  const t0 = trackById(id);
+  const reach = t0.wall + 40; // past the walls: its traction rectangle covers every lane, the verge's too
+  let k = -1;
+  const features = (def.features ?? []).flatMap((f): Feature[] => {
+    if (!isThemePatch(f)) return [f];
+    k++;
+    if (!keep.includes(k)) return [];
+    return [k === wall ? { ...f, lat0: -reach, lat1: reach } : f];
+  });
+  return buildTrack({ ...def, features });
+}
+
+/** The theme patches of a shipped track's def, in def order. */
+export function themePatches(id: string): ThemePatchDef[] {
+  return (trackById(id).def.features ?? []).filter(isThemePatch);
+}
+
+export interface SoloLaps {
+  laps: number[]; // each lap's time (s)
+  clean: number; // the mean of laps 2 and 3
+  falls: number;
+  walls: number; // wall-hit ticks (>= 50 u/s into the wall, client/game.ts wallHitSpeed), as track-density counts them
+  on: number; // ticks on a theme surface (its traction rectangle), main road
+}
+
+/** One server bot alone on `track` (a Room on its def's id, the track swapped in before the race), seat `seat`, weapons off, 3 laps. */
+export function soloLaps(track: Track, level: BotLevel, car: CarType, seat: number): SoloLaps {
+  const room = new Room("THEMETR", 3, CAR_HP, track.def.id);
+  const inner = room as unknown as { _track: Track; _combat: unknown; newCombat(): unknown };
+  inner._track = track; // the measuring track (Room builds its own from the registry); in the lobby, no shots or mines yet
+  inner._combat = inner.newCombat();
+  let now = 1000, tick = 0;
+  const conn = new HostConn();
+  const host = room.addPlayer("Host", { conn, room: null, player: null } as Session, now) as Player;
+  const added: Player[] = [];
+  for (let k = 0; k <= seat; k++) {
+    const b = room.addBot(host, level, now);
+    if (typeof b === "string") throw new Error(b);
+    added.push(b);
+  }
+  for (const b of added.slice(0, seat)) {
+    const e = room.kick(host, b.id, now);
+    if (e) throw new Error(e);
+  }
+  const me = added[seat];
+  if (me.bot!.slot !== seat) throw new Error(`seat ${me.bot!.slot}, not ${seat}`);
+  const e0 = room.setCar(host, car, me.id);
+  if (e0) throw new Error(e0);
+  me.bot!.mem.weapons = false;
+  const e = room.start(host, now);
+  if (e) throw new Error(e);
+  const step = () => {
+    tick++;
+    now += 1000 / 60;
+    room.tick(tick, now);
+  };
+  while (room.phase !== "racing") step();
+  if (room.retire(host)) throw new Error("retire");
+  const out: SoloLaps = { laps: [], clean: NaN, falls: 0, walls: 0, on: 0 };
+  let lap = 0, lapRt = 0;
+  let prev = { ...me.car! };
+  while (room.phase === "racing" && room.rt < 60 * 400) {
+    step();
+    const c = me.car;
+    if (!c) break;
+    if (me.progress && me.progress.lap > lap) {
+      out.laps.push((room.rt - lapRt) / 60);
+      lap = me.progress.lap;
+      lapRt = room.rt;
+    }
+    if (c.fall > 0 && prev.fall === 0) out.falls++;
+    if (me.progress?.fin) break;
+    if (c.air === 0 && c.fall === 0 && c.wreck === 0 && prev.air === 0) {
+      if (wallHitSpeed(prev, c, track) >= 50) out.walls++;
+      if (roadOfSeg(track, c.seg) === 0) {
+        const q = queryTrackNear(track, c.x, c.y, c.seg);
+        const f = surfaceAt(track, q.seg, q.s, q.lat);
+        if (f && (f.kind === SURF_SAND || f.kind === SURF_OIL || f.kind === SURF_FORD)) out.on++;
+      }
+    }
+    prev = { ...c };
+  }
+  out.clean = out.laps.length >= 3 ? (out.laps[1] + out.laps[2]) / 2 : NaN;
+  return out;
+}
+
+const TRACK_LEVELS: readonly BotLevel[] = ["normal", "hard"];
+/** The seats a lone bot is measured from (BOT_LANES: lanes -24, 24 and 0). */
+const TRACK_SEATS = [0, 1, 2];
+
+/** One lone-bot measurement against the track with no theme surface: per seat, the clean lap's change (s), ticks on a theme surface, wall-hit ticks and falls. */
+export interface LapCost {
+  d: number[];
+  on: number[];
+  walls: number[];
+  falls: number;
+}
+
+export interface TrackCosts {
+  id: string;
+  patches: ThemePatchDef[];
+  /** track-density's races (raceSet): per race, per patch, each bot's ticks on it (by its traction rectangle). */
+  races: { name: string; cars: string[]; ticks: number[][]; falls: number[]; laps: number[][]; same: boolean }[];
+  /** [level][car]: the clean laps with no theme surface (per seat), as shipped, and per patch round and through. */
+  cost: Record<string, Record<string, { base: number[]; shipped: LapCost; round: LapCost[]; through: LapCost[] }>>;
+}
+
+/** --tracks: the numbers for track `id` (see the top of this file). */
+export function themeTrackCosts(id: string): TrackCosts {
+  const t = trackById(id);
+  const patches = themePatches(id);
+  const idxOf = patches.map((p) => {
+    const r = tractionRect(p);
+    return t.themeSurfaces.findIndex((f) => f.s0 === r.s0 && f.s1 === r.s1 && f.lat0 === r.lat0 && f.lat1 === r.lat1);
+  });
+  const races = raceSet(id).map((r) => ({
+    name: r.name, cars: r.a.cars, ticks: patches.map((_, i) => r.a.themes.map((bot) => bot[idxOf[i]] ?? 0)), falls: r.a.falls, laps: r.a.laps, same: r.same,
+  }));
+  const none = themeVariant(id, []);
+  const all = patches.map((_, i) => i);
+  const cost: TrackCosts["cost"] = {};
+  for (const level of TRACK_LEVELS) {
+    cost[level] = {};
+    for (const car of CAR_TYPES) {
+      const base = TRACK_SEATS.map((seat) => soloLaps(none, level, car, seat));
+      const against = (track: Track): LapCost => {
+        const runs = TRACK_SEATS.map((seat) => soloLaps(track, level, car, seat));
+        return { d: runs.map((r, k) => r.clean - base[k].clean), on: runs.map((r) => r.on), walls: runs.map((r) => r.walls), falls: runs.reduce((a, r) => a + r.falls, 0) };
+      };
+      cost[level][car] = {
+        base: base.map((b) => b.clean),
+        shipped: against(themeVariant(id, all)),
+        round: patches.map((_, i) => against(themeVariant(id, [i]))),
+        through: patches.map((_, i) => against(themeVariant(id, [i], i))),
+      };
+    }
+  }
+  return { id, patches, races, cost };
+}
+
+/** --tracks: the report lines. */
+export function themeTrackLines(c: TrackCosts): string[] {
+  const out: string[] = [];
+  const t = trackById(c.id);
+  const sg = (v: number) => (v >= 0 ? "+" : "") + v.toFixed(2);
+  const name = (p: ThemePatchDef, i: number) => `#${i + 1} ${p.k} s ${p.s0}..${p.s1} lat ${p.lat0}..${p.lat1}`;
+  const cell = (x: LapCost) => `${x.d.map(sg).join("/")}${x.walls.some((w) => w > 0) ? ` (walls ${x.walls.join("/")})` : ""}${x.falls ? ` (falls ${x.falls})` : ""}`;
+  out.push(`## ${t.def.name} (${c.id}): ${c.patches.length} theme surface(s): ${c.patches.map((p, i) => `${name(p, i)} (${p.s1 - p.s0} long)`).join("; ")}`);
+  out.push(`races (track-density raceSet, 3 laps): ${c.races.map((r) => `${r.name} (${r.cars.join("/")}) laps ${r.laps.map((l) => l.map((x) => x.toFixed(2)).join(",")).join(" | ")}, falls ${r.falls.join("/")}, rerun ${r.same ? "SAME" : "DIFFERS"}`).join("; ")}`);
+  for (const lv of TRACK_LEVELS) {
+    const row = c.cost[lv];
+    out.push(`${lv} alone, clean lap (mean of laps 2-3) with no theme surface, seats ${TRACK_SEATS.join("/")}: ${CAR_TYPES.map((car) => `${CARS[car].name} ${row[car].base.map((x) => x.toFixed(2)).join("/")}`).join(", ")} s; as shipped, its change: ${CAR_TYPES.map((car) => `${CARS[car].name} ${cell(row[car].shipped)}`).join(", ")} s`);
+  }
+  c.patches.forEach((p, i) => {
+    out.push(`${name(p, i)}: on it per race (ticks, all bots; per bot): ${c.races.map((r) => `${r.name} ${r.ticks[i].reduce((a, b) => a + b, 0)} (${r.ticks[i].join("/")})`).join(", ")}`);
+    for (const lv of TRACK_LEVELS) {
+      const row = c.cost[lv];
+      out.push(`  ${lv} alone, its lap cost per seat (s): round ${CAR_TYPES.map((car) => `${CARS[car].name} ${cell(row[car].round[i])}`).join(", ")}; through (wall to wall) ${CAR_TYPES.map((car) => `${CARS[car].name} ${cell(row[car].through[i])}`).join(", ")}`);
+    }
+  });
+  return out;
+}
+
 if (process.argv[1]?.endsWith("theme-tune.ts")) {
   const arg = process.argv;
   if (arg.includes("--numbers")) for (const l of themeNumbers()) console.log(l);
@@ -394,5 +578,8 @@ if (process.argv[1]?.endsWith("theme-tune.ts")) {
   else if (arg.includes("--race")) {
     const only = arg[arg.indexOf("--race") + 1];
     for (const r of themeRaces(only && !only.startsWith("--") ? only : undefined)) console.log(raceLine(r));
-  } else console.log("Usage: npx tsx tools/debug/theme-tune.ts --numbers | --ab | --ford | --race [yard-id]");
+  } else if (arg.includes("--tracks")) {
+    const only = arg[arg.indexOf("--tracks") + 1];
+    for (const id of THEME_TRACK_IDS) if (!only || only.startsWith("--") || only === id) for (const l of themeTrackLines(themeTrackCosts(id))) console.log(l);
+  } else console.log("Usage: npx tsx tools/debug/theme-tune.ts --numbers | --ab | --ford | --race [yard-id] | --tracks [track-id]");
 }
