@@ -887,7 +887,11 @@ THEME-TRACKS finishing round: ctx_4ccc4c00757d (new worker in its workspace, tmp
 the slick, test x2). Merge it after -> then the push question (harbour look + sand/oil + sounds + GRACE-1 + city/sand/oil looks).
 THEME-TRACKS round 2 done 4499d45 (merge main; nits; slick drawn in the harbour look: tmp/theme-tracks/shots-r2/). MERGED 3a051e3; gate
 GREEN (1135/1135, 186/186, build index-DvPo_v9J.js, schema-hash). ClickUp ready for qa test; workers released; workspace removed.
-NEXT: push question (popup). Active author: TH-LOOK-3 only (nothing else startable on the board). TH-LOOK-2 waits for
+NEXT: push question (popup). Active author: TH-LOOK-3 only (nothing else startable on the board).
+PUSHED 2026-11-24 (user "Push now"): origin/main = 121be4e (was 39266cb). Waiting for the user's Manual Deploy; then curl + QA16.
+TH-LOOK-3 DONE 0b33a69 (jungle + ford with static chevrons; identity 0 px elsewhere; speed gate PASS; S7 ~1.01; report tmp/th-look-3/).
+Fable reviewer ctx_558b660cd081 (tmp/review-th-look-3.md). TASTE COPY ~/orca/workspaces/scrap-rally/thl3-taste at 0b33a69 on :3012
+SCRAP_DEV_TRACK=canopy-yard (pid 76845); inline preview shown. TH-LOOK-2 waits for
 MARSHALS-1 (shares render.ts + canvas-census.ts). Ford direction cue moved from THEME-SURF to TH-LOOK-3 (drawing = world.ts, Fable).
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
