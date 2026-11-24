@@ -386,6 +386,81 @@ export const HARBOUR_PALETTE: ThemePalette = {
 };
 
 /**
+ * The jungle, "overgrown" (TH-LOOK-3; PLAN-THEMES.md 2.2). Our own colours. The ground is dark
+ * loam (`dirt`: its lightest tone a fallen leaf's tan); the verge moss (`gravel`: a middling
+ * green, light enough that a mine's dark body shows on it and dark enough for a rivet); the
+ * tarmac the scrapyard's with a damp green-grey tint and as dark. Steel and rust stay as they
+ * are: a kerb's stones, ramps, plates and belts are the same grey and the same rusted metal
+ * here, and the water keeps its colour, its edge and its glints (advisor change 9: water is
+ * blue-grey in every theme, the jungle's too). The extras, all for pixels that take no marks:
+ * logs (the barrier's rail, fallen logs, a logging truck's load), rope (a rail's lashings, dried
+ * bamboo), leaves in two greens (a tree's crown, ferns, vines: a yellow-green and a darker
+ * blue-green; none near the green car's), bamboo, mossy rock (a gorge's rim, a wall fragment),
+ * and the ford's: a shallow stream's jade (lighter and greener than a pool, so the two are never
+ * taken for each other; a middling tone, so that a rivet's light head and a mine's dark body
+ * both show on it), its dark and light streaks, and its foam.
+ */
+export const JUNGLE_PALETTE: ThemePalette = {
+  colours: {
+    ...P,
+    // Loam. dirt0 is loam in a cast shadow; dirt3 a fallen leaf.
+    dirt0: "#2e231a",
+    dirt1: "#3a2c1f",
+    dirt2: "#4a3826",
+    dirt3: "#6b5530",
+    // Moss: its dark hollows, its plain tone, a light tuft.
+    gravel0: "#46592f",
+    gravel1: "#62763f",
+    gravel2: "#7d9150",
+    // Tarmac, damp: tinted a green-grey.
+    tar0: "#282a27",
+    tar1: "#373a35",
+    tar2: "#444841",
+    tar3: "#61665c",
+  },
+  // Moss in a shadow is darker moss, not earth (the scrapyard's gravel shades into its dirt).
+  shade: {
+    ...SHADE,
+    gravel0: "dirt0", gravel1: "gravel0", gravel2: "gravel1",
+    bone0: "dirt3",
+  },
+  lit: {
+    ...LIT,
+    dirt3: "bone0",
+  },
+  extras: [
+    { name: "log0", hex: "#3b2a1a", shade: "soot3", lit: "log1" },
+    { name: "log1", hex: "#5c4127", shade: "log0", lit: "log2" },
+    { name: "log2", hex: "#8a6a40", shade: "log1", lit: "log3" },
+    { name: "log3", hex: "#b08f5c", shade: "log2", lit: "log3" },
+    { name: "rope0", hex: "#6e6344", shade: "soot3", lit: "rope1" },
+    { name: "rope1", hex: "#a99a6c", shade: "rope0", lit: "rope2" },
+    { name: "rope2", hex: "#d6c79a", shade: "rope1", lit: "rope2" },
+    { name: "leaf0", hex: "#1f3a22", shade: "soot3", lit: "leaf1" },
+    { name: "leaf1", hex: "#2f5229", shade: "leaf0", lit: "leaf2" },
+    { name: "leaf2", hex: "#44702f", shade: "leaf1", lit: "leaf3" },
+    { name: "leaf3", hex: "#62903a", shade: "leaf2", lit: "leaf4" },
+    { name: "leaf4", hex: "#8fb24a", shade: "leaf3", lit: "leaf4" },
+    { name: "palm0", hex: "#17302a", shade: "soot3", lit: "palm1" },
+    { name: "palm1", hex: "#23463a", shade: "palm0", lit: "palm2" },
+    { name: "palm2", hex: "#32604c", shade: "palm1", lit: "palm3" },
+    { name: "palm3", hex: "#487d5e", shade: "palm2", lit: "palm4" },
+    { name: "palm4", hex: "#6a9c72", shade: "palm3", lit: "palm4" },
+    { name: "bam0", hex: "#5a6a2c", shade: "soot3", lit: "bam1" },
+    { name: "bam1", hex: "#8c9c46", shade: "bam0", lit: "bam2" },
+    { name: "bam2", hex: "#b9c26c", shade: "bam1", lit: "bam2" },
+    { name: "rock0", hex: "#3a3f38", shade: "soot3", lit: "rock1" },
+    { name: "rock1", hex: "#5b6156", shade: "rock0", lit: "rock2" },
+    { name: "rock2", hex: "#8a9082", shade: "rock1", lit: "rock2" },
+    { name: "ford0", hex: "#3a6a5e", shade: "palm1", lit: "ford1" },
+    { name: "ford1", hex: "#4f8273", shade: "ford0", lit: "ford2" },
+    { name: "ford2", hex: "#7fb09a", shade: "ford1", lit: "foam" },
+    { name: "foam", hex: "#e2eee2", shade: "ford2", lit: "foam" },
+  ],
+  burn: { singed: ["soot2", "soot3", "dirt0", "dirt1"], charred: ["soot1", "soot2", "soot3", "dirt0"] },
+};
+
+/**
  * style.css :root mirrored: the palette entry each CSS variable takes. Six equal today's CSS
  * value exactly; --line (#4a3a2b), --panel (rgba(22,17,13,0.92)) and --err (#ff8b6b) move
  * onto the palette when GFX-3 applies the mirror (red on soot1 is 4.8:1; GFX-3 judges it).

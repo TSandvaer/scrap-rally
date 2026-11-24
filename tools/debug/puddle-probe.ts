@@ -24,8 +24,10 @@
 // The theme surfaces (TH-LOOK-2; PLAN-THEMES.md 2.3) are puddles as well and are held to the same
 // promise: a sand patch (a desert track's, Track.sand) and an oil slick (a city or a harbour track's, Track.oil: Quay Yard's two, TH-LOOK-H),
 // each drawn inside its declared rectangle with all of its traction rectangle the surface's own
-// pixels. A track is probed in its own theme, as the game draws it; a ford (a jungle track's) has no
-// look yet (TH-LOOK-3) and is not probed.
+// pixels. A track is probed in its own theme, as the game draws it. A ford (a jungle track's,
+// Track.fords; TH-LOOK-3) is held to the same promise: all of its traction rectangle is the ford's
+// own pixels and none of them lies outside its declared rectangle (one that runs from kerb to kerb
+// is drawn right up to the road's two edges, which are its rectangle's).
 // Exit code 1 if a pixel breaks a promise.
 
 import { PUDDLE_TRACTION_INSET, tractionRect, type PuddleRect } from "../../client/gfx/puddle-shape";
@@ -68,8 +70,9 @@ function probe(track: Track): void {
     ...track.dirt.map((d) => ({ what: "dirt", kind: KIND.dirt as number, rect: d })),
     ...track.sand.map((d) => ({ what: "sand", kind: KIND.sand as number, rect: d })),
     ...track.oil.map((d) => ({ what: "oil", kind: KIND.oil as number, rect: d })),
+    ...track.fords.map((d) => ({ what: "ford", kind: KIND.ford as number, rect: d })),
   ];
-  console.log(`\n## ${track.def.name}: ${track.water.length} pools, ${track.dirt.length} dirt patches${track.sand.length || track.oil.length ? `, ${track.sand.length} sand patches, ${track.oil.length} oil slicks` : ""}\n`);
+  console.log(`\n## ${track.def.name}: ${track.water.length} pools, ${track.dirt.length} dirt patches${track.sand.length || track.oil.length || track.fords.length ? `, ${track.sand.length} sand patches, ${track.oil.length} oil slicks, ${track.fords.length} fords` : ""}\n`);
   if (!puddles.length) return;
   console.log("| puddle (s0..s1 x lat0..lat1) | declared | puddle fills | traction rect | of the puddle | traction pixels | not the puddle's | nearest the edge comes | puddle pixels outside its bounds |");
   console.log("|---|---:|---:|---:|---:|---:|---:|---:|---:|");
