@@ -25,21 +25,24 @@
 //              patch made wall to wall ("through": no lane round it, the bot drives its line through it), each against the
 //              track with no theme surface; and the track as shipped against none. --tracks <track-id> for one track.
 //
-//   npx tsx tools/debug/theme-tune.ts --numbers | --ab | --ford | --race [yard-id] | --tracks [track-id]
+//   --ford <track-id>  TRACK3: every ford of a shipped track on its own road (a shortcut's too), per drift tried (see below).
+//
+//   npx tsx tools/debug/theme-tune.ts --numbers | --ab | --ford [track-id] | --race [yard-id] | --tracks [track-id]
 
 import { FORD_AIM, fordAim, laneCost, type BotLevel } from "../../shared/botdrive";
 import { CAR_TYPES, CARS, type CarType } from "../../shared/cars";
-import { angleDiff, clamp, DT, OIL_TURN, speedOf, themeDrag, themeGrip, WATER_GRIP_OF_DIRT, WATER_TURN, type CarState, type CarStats } from "../../shared/physics";
+import { angleDiff, CAR_WIDTH, clamp, DT, OIL_TURN, speedOf, themeDrag, themeGrip, WATER_GRIP_OF_DIRT, WATER_TURN, type CarState, type CarStats } from "../../shared/physics";
 import type { ServerMsg } from "../../shared/protocol";
 import { statsFor } from "../../shared/shop";
 import { CANOPY_YARD, THEME_LOOP, THEME_YARDS } from "../../shared/testtracks";
 import type { Theme } from "../../shared/theme";
-import { buildTrack, pointAt, queryTrackNear, roadOfSeg, SURF_FORD, SURF_OIL, SURF_SAND, SURF_WATER, surfaceAt, tractionRect, type Feature, type Track } from "../../shared/track";
+import { buildTrack, pointAt, queryTrackNear, roadOfSeg, SURF_FORD, SURF_OIL, SURF_SAND, SURF_WATER, surfaceAt, tractionRect, type Feature, type Track, type TrackDef } from "../../shared/track";
 import { CAR_HP, raceEnv, stepRaceCar } from "../../shared/weapons";
 import { wallHitSpeed } from "../../client/game";
 import { botStep, newBotSeat } from "../../server/bots";
 import { Room, type Conn, type Player, type Session } from "../../server/room";
-import { trackById } from "../../shared/tracks";
+import { registerTestTrack, trackById } from "../../shared/tracks";
+import { branchRace } from "./branch-tune";
 import { raceSet } from "./track-density";
 
 const f1 = (v: number) => v.toFixed(1);
@@ -398,8 +401,8 @@ export function raceLine(r: { a: ThemeRace; same: boolean }): string {
 
 // ---- THEME-TRACKS (ClickUp 123jpnbfgj5): the shipped tracks' theme surfaces in numbers ----------------------
 
-/** The shipped tracks with theme surfaces (THEME-TRACKS). */
-export const THEME_TRACK_IDS = ["slag-harbour", "breakers-mile"];
+/** The shipped tracks with theme surfaces (THEME-TRACKS; TRACK3 added Rootwater Run, its main road's ford here). */
+export const THEME_TRACK_IDS = ["slag-harbour", "breakers-mile", "rootwater-run"];
 
 type ThemePatchDef = Extract<Feature, { k: "sand" | "oil" | "ford" }>;
 const isThemePatch = (f: Feature): f is ThemePatchDef => f.k === "sand" || f.k === "oil" || f.k === "ford";
@@ -570,16 +573,148 @@ export function themeTrackLines(c: TrackCosts): string[] {
   return out;
 }
 
+// ---- TRACK3 (ClickUp 123jpnbfp0e; PLAN-TRACK3 advisor change 4): a shipped track's fords, each on its own road ----------
+// `--ford <track-id>`: every ford of the track, on the main road or on a shortcut (a shortcut's road is narrower: Rootwater
+// Run's 48 half-width against the 64 FORD_AIM.gain was tuned at), at its declared drift and at FORD_VX_TRY's (its sign):
+// - per car type (L0), a scripted car on lane 0 from FORD_RUN_IN before it at FORD_V0 u/s, full throttle, steering by pursuit
+//   at the bots' look-ahead on that road (as fordCross), without and with the upstream aim (fordAim on that road): its lat at
+//   the ford's end, the widest |lat| from its start to FORD_AFTER past its end, the slowest speed in it, and the margin the
+//   widest leaves to the asphalt's edge less half a car (halfWidth - CAR_WIDTH / 2 - widest: < 0 = a wheel off the asphalt);
+// - per car type, a Hard server bot alone, weapons off, its route forced onto that road (a shortcut's mask; the main road 0),
+//   3 laps on the track with that ford's drift (a registered variant): the lat at which it enters and leaves the ford's
+//   traction rectangle each lap (on that road), the widest |lat| off its entry from there to half a second past its end, and
+//   its falls.
+
+/** The drifts tried beside a ford's own (|vx|, its sign). */
+export const FORD_VX_TRY = [40, 55, 70, 85, 100];
+const FORD_RUN_IN = 300;
+const FORD_V0 = 380;
+const FORD_AFTER = 400;
+
+/** Every ford of a track: road 0 the main road's, k its branch k - 1's (its road's fords, in its own u). */
+export function trackFords(t: Track): { road: number; r: Track; f: Track["fords"][number]; name: string }[] {
+  const out: { road: number; r: Track; f: Track["fords"][number]; name: string }[] = t.fords.map((f) => ({ road: 0, r: t, f, name: `main ford s ${f.s0}..${f.s1}` }));
+  t.branches.forEach((b, k) => {
+    for (const f of b.road.fords) out.push({ road: k + 1, r: b.road, f, name: `shortcut ${k + 1} ford u ${f.s0}..${f.s1}` });
+  });
+  return out;
+}
+
+/** `def` with ford `n` of road `road` (trackFords' order on that road: sorted by s0, as placeFeatures sorts a road's fords,
+ *  a stable sort, so equal s0 keep their declared order) drifting at vx. */
+function fordVariant(def: TrackDef, road: number, n: number, vx: number, id: string): TrackDef {
+  const swap = <F extends Feature>(fs: readonly F[]): F[] => {
+    const s0 = (i: number) => { const f = fs[i]; return f.k === "ford" ? f.s0 : 0; };
+    const at = fs.map((_, i) => i).filter((i) => fs[i].k === "ford").sort((a, b) => s0(a) - s0(b))[n];
+    return fs.map((f, i) => (i === at ? { ...f, vx } : f));
+  };
+  let b = 0;
+  const features = road === 0 ? swap(def.features ?? []) : (def.features ?? []).map((f) => (f.k === "branch" && ++b === road ? { ...f, features: swap(f.features ?? []) } : f));
+  return { ...def, id, features };
+}
+
+export interface RoadFordCross { exit: number; widest: number; vMin: number; margin: number }
+
+/** The scripted crossing (see above) of ford f on road r of track t. */
+export function roadFordCross(t: Track, road: number, r: Track, f: Track["fords"][number], type: CarType, aim: boolean): RoadFordCross {
+  const base = road === 0 ? 0 : t.branches[road - 1].base;
+  const p = pointAt(r, f.s0 - FORD_RUN_IN);
+  const c: CarState = { x: p.x, y: p.y, h: p.h, vx: Math.cos(p.h) * FORD_V0, vy: Math.sin(p.h) * FORD_V0, seg: base + p.seg, wreck: 0, air: 0, fall: 0, boost: 0 };
+  const st = statsFor(type, { engine: 0, tyres: 0, welder: 0 });
+  const env = raceEnv(t);
+  let exit = NaN, widest = 0, vMin = Infinity;
+  for (let i = 0; i < 240; i++) {
+    const q = queryTrackNear(r, c.x, c.y, c.seg - base);
+    const look = 55 + speedOf(c) * 0.3; // the bots' aim look-ahead (as fordCross)
+    env.rt = i + 1;
+    stepRaceCar(c, { throttle: 1, steer: pursue(r, { ...c, seg: c.seg - base }, 0, aim ? fordAim(r, q.s, q.seg, look, speedOf(c), 0) : 0, look) }, st, env);
+    const w = queryTrackNear(r, c.x, c.y, c.seg - base);
+    if (w.s >= f.s0 && w.s <= f.s1 + FORD_AFTER) widest = Math.max(widest, Math.abs(w.lat));
+    if (w.s >= f.s0 && w.s <= f.s1) vMin = Math.min(vMin, speedOf(c));
+    if (exit !== exit && w.s >= f.s1) exit = w.lat;
+    if (w.s > f.s1 + FORD_AFTER) break;
+  }
+  return { exit, widest, vMin, margin: r.def.halfWidth - CAR_WIDTH / 2 - widest };
+}
+
+export interface RoadFordBot { entry: number[]; exit: number[]; widest: number; falls: number; laps: number }
+
+/** A Hard bot alone, weapons off, route forced onto `road`, 3 laps on registered track `id`: its crossings of that road's ford n. */
+export function roadFordBot(id: string, road: number, n: number, type: CarType): RoadFordBot {
+  const t = trackById(id), r = road === 0 ? t : t.branches[road - 1].road, f = r.fords[n], tr = tractionRect(f);
+  const out: RoadFordBot = { entry: [], exit: [], widest: 0, falls: 0, laps: 0 };
+  let inIt = false, entry = NaN, until = -Infinity, fell = false;
+  const res = branchRace({
+    track: id, levels: ["hard"], cars: [type], laps: 3, weapons: false, force: [road === 0 ? 0 : 1 << (road - 1)],
+    observe: (_k, c) => {
+      if (c.fall > 0 && !fell) out.falls++;
+      fell = c.fall > 0;
+      if (roadOfSeg(t, c.seg) !== road) {
+        inIt = false;
+        return;
+      }
+      const base = road === 0 ? 0 : t.branches[road - 1].base;
+      const q = queryTrackNear(r, c.x, c.y, c.seg - base);
+      const on = q.s >= tr.s0 && q.s <= tr.s1;
+      if (on && !inIt) {
+        entry = q.lat;
+        out.entry.push(q.lat);
+        until = tr.s1 + 0.5 * speedOf(c);
+      }
+      if (!on && inIt && q.s > tr.s1) out.exit.push(q.lat);
+      if (entry === entry && q.s >= tr.s0 && q.s <= until) out.widest = Math.max(out.widest, Math.abs(q.lat - entry));
+      inIt = on;
+    },
+  });
+  out.laps = res.rows[0].lapTicks.length;
+  return out;
+}
+
+const fordVariants = new Set<string>();
+
+/** --ford <track-id>: the lines (see above). */
+export function trackFordLines(id: string): string[] {
+  const t = trackById(id), out: string[] = [];
+  const fords = trackFords(t);
+  const perRoad = new Map<number, number>();
+  for (const { road, r, f, name } of fords) {
+    const n = perRoad.get(road) ?? 0;
+    perRoad.set(road, n + 1);
+    const sign = Math.sign(f.vx);
+    const vxs = [f.vx, ...FORD_VX_TRY.map((v) => sign * v).filter((v) => v !== f.vx)];
+    out.push(`## ${t.def.name} ${name} (declared vx ${f.vx}, ${f.s1 - f.s0} long, lat ${f.lat0}..${f.lat1}; its road's half-width ${r.def.halfWidth}, a car centre keeps ${r.def.halfWidth - CAR_WIDTH / 2} of the asphalt)`);
+    for (const vx of vxs) {
+      const vid = `${id}-ford${road}-${n}-vx${vx}`;
+      const def = fordVariant(t.def, road, n, vx, vid);
+      if (!fordVariants.has(vid)) {
+        registerTestTrack(def);
+        fordVariants.add(vid);
+      }
+      const tv = trackById(vid), rv = road === 0 ? tv : tv.branches[road - 1].road, fv = rv.fords[n];
+      for (const type of CAR_TYPES) {
+        const a = roadFordCross(tv, road, rv, fv, type, false), b = roadFordCross(tv, road, rv, fv, type, true);
+        const bot = roadFordBot(vid, road, n, type);
+        const list = (x: number[]) => x.map((v) => v.toFixed(0)).join(",");
+        out.push(`  vx ${String(vx).padStart(4)} ${CARS[type].name.padEnd(5)}: pursuit only lat ${f1(a.exit)} at its end, widest ${f1(a.widest)} (margin ${f1(a.margin)}), slowest ${f1(a.vMin)}; aim upstream ${f1(b.exit)}, widest ${f1(b.widest)} (margin ${f1(b.margin)}); Hard bot ${bot.laps} laps: entry ${list(bot.entry)}, exit ${list(bot.exit)}, widest off its entry ${f1(bot.widest)}, falls ${bot.falls}`);
+      }
+    }
+  }
+  return out;
+}
+
 if (process.argv[1]?.endsWith("theme-tune.ts")) {
   const arg = process.argv;
   if (arg.includes("--numbers")) for (const l of themeNumbers()) console.log(l);
   else if (arg.includes("--ab")) for (const l of [...abLines(abRows()), ...brakeRows()]) console.log(l);
-  else if (arg.includes("--ford")) for (const l of [...fordCross(), ...fordBotLines()]) console.log(l);
+  else if (arg.includes("--ford")) {
+    const id = arg[arg.indexOf("--ford") + 1];
+    for (const l of id && !id.startsWith("--") ? trackFordLines(id) : [...fordCross(), ...fordBotLines()]) console.log(l);
+  }
   else if (arg.includes("--race")) {
     const only = arg[arg.indexOf("--race") + 1];
     for (const r of themeRaces(only && !only.startsWith("--") ? only : undefined)) console.log(raceLine(r));
   } else if (arg.includes("--tracks")) {
     const only = arg[arg.indexOf("--tracks") + 1];
     for (const id of THEME_TRACK_IDS) if (!only || only.startsWith("--") || only === id) for (const l of themeTrackLines(themeTrackCosts(id))) console.log(l);
-  } else console.log("Usage: npx tsx tools/debug/theme-tune.ts --numbers | --ab | --ford | --race [yard-id] | --tracks [track-id]");
+  } else console.log("Usage: npx tsx tools/debug/theme-tune.ts --numbers | --ab | --ford [track-id] | --race [yard-id] | --tracks [track-id]");
 }

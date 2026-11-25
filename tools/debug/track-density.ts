@@ -3,9 +3,9 @@
 // groups with clear road between them, never two obstacle kinds back to back without a breather,
 // plain racing stretches between the feature sections; no dirt stretch longer than ~350 units.
 //
-//   npx tsx tools/debug/track-density.ts                 the density report of the two long tracks
+//   npx tsx tools/debug/track-density.ts                 the density report of the long tracks
 //   npx tsx tools/debug/track-density.ts --all           ... of every track there is (shipped and test tracks)
-//   npx tsx tools/debug/track-density.ts --race          ... and the bot races on the two long tracks
+//   npx tsx tools/debug/track-density.ts --race          ... and the bot races on the long tracks
 //   npx tsx tools/debug/track-density.ts --png <dir>     ... and a map of each: <dir>/density-<id>.png
 //   --track <id>                                         one track only
 //   --theme                                              the theme yards' theme surfaces count too (THEME-TRACKS; a shipped track's always do)
@@ -45,7 +45,10 @@
 //   sand and dirt (patches less than LOOSE_JOIN apart, any lat: the mud rule's, <= SAND_LEN_MAX); --png
 //   draws them; --race adds each bot's ticks on each theme surface to its row. A track without theme
 //   surfaces prints as before, and so do the theme yards without --theme.
-// --race (the two long tracks): server bots in a Room on the sim clock, the host retired at GO,
+// - TRACK3 (ClickUp 123jpnbfp0e): Rootwater Run is the third long track (LONG_TRACK_IDS); its shortcut has a ford, a theme
+//   surface on a shortcut road: --race adds each bot's ticks on the shortcut roads' theme surfaces to its row (felt on
+//   that road; a track without one prints as before).
+// --race (the long tracks): server bots in a Room on the sim clock, the host retired at GO,
 // 3 laps, three bots per level (Easy, Normal, Hard; Sport, Racer, Truck by add order) with weapons
 // off and on, and five mixed bots with weapons (Hard, Normal, Easy, Hard, Normal); every race run
 // twice (a rerun must be identical). Per bot: each lap's time, falls, wrecks, wall hits (>= 50 u/s),
@@ -70,8 +73,8 @@ import { blank, savePng } from "./png";
 import { islandContact } from "./split-tune";
 import { touchesMound } from "./surf-tune";
 
-/** The two long tracks (shared/longtracks.ts). */
-export const LONG_TRACK_IDS = ["slag-harbour", "breakers-mile"];
+/** The long tracks (shared/longtracks.ts; TRACK3 added Rootwater Run). */
+export const LONG_TRACK_IDS = ["slag-harbour", "breakers-mile", "rootwater-run"];
 /** Footprints closer than this along the track are one group (about 0.7 s at 430 u/s) ... */
 export const GROUP_JOIN = 300;
 /** ... and footprints of the same kind closer than this (about 1.6 s): one section of rows or mounds. */
@@ -576,6 +579,7 @@ export interface LongRace {
   lanes: string[][]; // per bot, per island: "L"/"R" lap by lap
   shortcuts: number[][]; // BR-TRACKS: per bot, per shortcut road: the ticks it is on it (empty on a track without one)
   themes: number[][]; // THEME-TRACKS: per bot, per theme surface (track.themeSurfaces' order): the ticks it is on it, by its traction rectangle (empty on a track without one)
+  branchThemes: number[][]; // TRACK3: per bot, per theme surface of the shortcut roads (each branch's road.themeSurfaces in branch order): the ticks it is on it (empty on a track without one)
   digest: string;
 }
 
@@ -607,9 +611,13 @@ export function longRace(trackId: string, levels: BotLevel[], laps = 3, weapons 
     track: trackId, phase: "", ticks: 0, finish: [], cars: bots.map((b) => b.carType), laps: bots.map(() => []), falls: zero(), wrecks: zero(),
     walls: zero(), mounds: zero(), sides: zero(), noses: zero(), barrels: zero(), presses: zero(), trucks: zero(), truckJumps: zero(),
     rampJumps: zero(), cells: zero(), waits: zero(), dirt: zero(), water: zero(), lanes: bots.map(() => t.islands.map(() => "")),
-    shortcuts: bots.map(() => t.branches.map(() => 0)), themes: bots.map(() => t.themeSurfaces.map(() => 0)), digest: "",
+    shortcuts: bots.map(() => t.branches.map(() => 0)), themes: bots.map(() => t.themeSurfaces.map(() => 0)),
+    branchThemes: bots.map(() => t.branches.flatMap((b) => b.road.themeSurfaces.map(() => 0))), digest: "",
   };
   const prev = bots.map((b) => ({ ...b.car! }));
+  // TRACK3: where each branch's theme surfaces start in branchThemes (-1: it has none).
+  let nBranchThemes = 0;
+  const branchBase = t.branches.map((b) => (b.road.themeSurfaces.length ? (nBranchThemes += b.road.themeSurfaces.length) - b.road.themeSurfaces.length : -1));
   const lapAt = bots.map(() => 0);
   const lapRt = bots.map(() => 0);
   const parts: number[] = [];
@@ -652,6 +660,11 @@ export function longRace(trackId: string, levels: BotLevel[], laps = 3, weapons 
         else if (f?.kind === SURF_WATER) out.water[k]++;
         const th = f && road === 0 ? t.themeSurfaces.indexOf(f) : -1;
         if (th >= 0) out.themes[k][th]++;
+        // TRACK3: a shortcut road's own theme surfaces (Rootwater Run's ford), felt on that road (q is on it).
+        if (road > 0 && branchBase[road - 1] >= 0) {
+          const br = t.branches[road - 1].road, fb = surfaceAt(br, q.seg, q.s, q.lat), bi = fb ? br.themeSurfaces.indexOf(fb) : -1;
+          if (bi >= 0) out.branchThemes[k][branchBase[road - 1] + bi]++;
+        }
         const q0 = queryTrackNear(t, p.x, p.y, p.seg);
         t.islands.forEach((isl, i) => {
           const m = (isl.s0 + isl.s1) / 2;
@@ -675,7 +688,7 @@ export function longRace(trackId: string, levels: BotLevel[], laps = 3, weapons 
 export function longRow(name: string, r: LongRace): string {
   const j = (a: number[]) => a.join("/");
   const laps = r.laps.map((l) => l.map((x) => x.toFixed(2)).join(",")).join(" | ");
-  return `${name.padEnd(18)} ${r.phase} ${(r.ticks / 60).toFixed(1)} s | cars ${r.cars.join("/")} | laps ${laps} | falls ${j(r.falls)} wrecks ${j(r.wrecks)} walls ${j(r.walls)} | mound ${j(r.mounds)} side ${j(r.sides)} nose ${j(r.noses)} barrel ${j(r.barrels)} press ${j(r.presses)} truck ${j(r.trucks)} | truck jumps ${j(r.truckJumps)} ramp jumps ${j(r.rampJumps)} | cells ${j(r.cells)} press waits ${j(r.waits)} | dirt ${j(r.dirt)} water ${j(r.water)} | lanes ${r.lanes.map((l) => l.join(":")).join(" ")}${r.shortcuts.some((x) => x.length) ? ` | on shortcuts ${r.shortcuts.map((x) => x.join(":")).join("/")}` : ""}${r.themes.some((x) => x.length) ? ` | on theme surfaces ${r.themes.map((x) => x.join(":")).join("/")}` : ""} | ${r.digest}`;
+  return `${name.padEnd(18)} ${r.phase} ${(r.ticks / 60).toFixed(1)} s | cars ${r.cars.join("/")} | laps ${laps} | falls ${j(r.falls)} wrecks ${j(r.wrecks)} walls ${j(r.walls)} | mound ${j(r.mounds)} side ${j(r.sides)} nose ${j(r.noses)} barrel ${j(r.barrels)} press ${j(r.presses)} truck ${j(r.trucks)} | truck jumps ${j(r.truckJumps)} ramp jumps ${j(r.rampJumps)} | cells ${j(r.cells)} press waits ${j(r.waits)} | dirt ${j(r.dirt)} water ${j(r.water)} | lanes ${r.lanes.map((l) => l.join(":")).join(" ")}${r.shortcuts.some((x) => x.length) ? ` | on shortcuts ${r.shortcuts.map((x) => x.join(":")).join("/")}` : ""}${r.themes.some((x) => x.length) ? ` | on theme surfaces ${r.themes.map((x) => x.join(":")).join("/")}` : ""}${r.branchThemes.some((x) => x.length) ? ` | on shortcut theme surfaces ${r.branchThemes.map((x) => x.join(":")).join("/")}` : ""} | ${r.digest}`;
 }
 
 /** The races of the report: per level 3 bots weapons off and on, and 5 mixed with weapons; each twice. */

@@ -27,7 +27,8 @@
 // pixels. A track is probed in its own theme, as the game draws it. A ford (a jungle track's,
 // Track.fords; TH-LOOK-3) is held to the same promise: all of its traction rectangle is the ford's
 // own pixels and none of them lies outside its declared rectangle (one that runs from kerb to kerb
-// is drawn right up to the road's two edges, which are its rectangle's).
+// is drawn right up to the road's two edges, which are its rectangle's). TRACK3: so is a ford on a shortcut road
+// (Rootwater Run's), read along that road (its own s, lat and half-width; the bake is the track's).
 // Exit code 1 if a pixel breaks a promise.
 
 import { PUDDLE_TRACTION_INSET, tractionRect, type PuddleRect } from "../../client/gfx/puddle-shape";
@@ -58,21 +59,27 @@ function tilesUnder(track: Track, r: PuddleRect, pad: number): [number, number][
   return out;
 }
 
-function probe(track: Track): void {
+/**
+ * Probe the puddles of `road` (the track's main road, or TRACK3: one of its shortcut roads, whose fords are read
+ * along that road: its s, lat and tiles; the bake is the whole track's).
+ */
+function probe(track: Track, road: Track = track): void {
   const kinds = new Map<string, Uint8Array>();
   const kindsOf = (tx: number, ty: number): Uint8Array => {
     let k = kinds.get(`${tx},${ty}`);
     if (!k) kinds.set(`${tx},${ty}`, (k = bakeTileKinds(track, tx, ty)));
     return k;
   };
-  const puddles: { what: string; kind: number; rect: PuddleRect }[] = [
+  const main = road === track;
+  const puddles: { what: string; kind: number; rect: PuddleRect }[] = main ? [
     ...track.water.map((w) => ({ what: "water", kind: KIND.water as number, rect: w })),
     ...track.dirt.map((d) => ({ what: "dirt", kind: KIND.dirt as number, rect: d })),
     ...track.sand.map((d) => ({ what: "sand", kind: KIND.sand as number, rect: d })),
     ...track.oil.map((d) => ({ what: "oil", kind: KIND.oil as number, rect: d })),
     ...track.fords.map((d) => ({ what: "ford", kind: KIND.ford as number, rect: d })),
-  ];
-  console.log(`\n## ${track.def.name}: ${track.water.length} pools, ${track.dirt.length} dirt patches${track.sand.length || track.oil.length || track.fords.length ? `, ${track.sand.length} sand patches, ${track.oil.length} oil slicks, ${track.fords.length} fords` : ""}\n`);
+  ] : road.fords.map((d) => ({ what: "ford", kind: KIND.ford as number, rect: d }));
+  if (main) console.log(`\n## ${track.def.name}: ${track.water.length} pools, ${track.dirt.length} dirt patches${track.sand.length || track.oil.length || track.fords.length ? `, ${track.sand.length} sand patches, ${track.oil.length} oil slicks, ${track.fords.length} fords` : ""}\n`);
+  else console.log(`\n## ${track.def.name}, shortcut ${road.roadNo}: ${road.fords.length} fords (read along the shortcut's own road)\n`);
   if (!puddles.length) return;
   console.log("| puddle (s0..s1 x lat0..lat1) | declared | puddle fills | traction rect | of the puddle | traction pixels | not the puddle's | nearest the edge comes | puddle pixels outside its bounds |");
   console.log("|---|---:|---:|---:|---:|---:|---:|---:|---:|");
@@ -80,13 +87,13 @@ function probe(track: Track): void {
     const t = tractionRect(rect);
     let declared = 0, drawn = 0, inTraction = 0, misses = 0, hidden = 0, outside = 0, nearest = Infinity;
     const lines: string[] = [];
-    for (const [tx, ty] of tilesUnder(track, rect, 16)) {
+    for (const [tx, ty] of tilesUnder(road, rect, 16)) {
       const k = kindsOf(tx, ty);
       for (let y = 0; y < TILE; y++) {
         for (let x = 0; x < TILE; x++) {
           const is = k[y * TILE + x];
           const wx = (tx * TILE + x + 0.5) / ZOOM, wy = (ty * TILE + y + 0.5) / ZOOM;
-          const q = queryTrack(track, wx, wy);
+          const q = queryTrack(road, wx, wy);
           const inRect = q.s >= rect.s0 && q.s <= rect.s1 && q.lat >= rect.lat0 && q.lat <= rect.lat1;
           if (is === kind) {
             // Another puddle of the kind may lie in the same tiles: only what is nearer this rectangle than 16 units is held against it.
@@ -133,7 +140,11 @@ function probe(track: Track): void {
 console.log(`# Puddle probe: the baked world against tractionRect (inset ${PUDDLE_TRACTION_INSET} units)`);
 const ORIGINAL = ["rust-bowl", "crusher-run", "overpass-knot"];
 const long = trackList().filter((e) => !ORIGINAL.includes(e.id)).map((e) => trackById(e.id));
-for (const track of [...TEST_TRACKS.map((d) => testTrack(d.id)!), sheetYard(), ...long]) probe(track);
+for (const track of [...TEST_TRACKS.map((d) => testTrack(d.id)!), sheetYard(), ...long]) {
+  probe(track);
+  // TRACK3: a ford on a shortcut road (Rootwater Run's) is held to the same promise, on that road.
+  for (const b of track.branches) if (b.road.fords.length) probe(track, b.road);
+}
 
 // The three original shipped tracks: nothing of this on them.
 console.log("\n## Shipped tracks (the three original ones)\n");

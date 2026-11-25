@@ -403,6 +403,7 @@ async function run(ctx: Ctx, bots: Bot[]): Promise<void> {
   await runThemeSurf(ctx, bots);
   await runBrTracks(ctx, bots);
   await runThemeTracks(ctx, bots);
+  await runTrack3(ctx, bots);
 }
 
 const lost = new Map<string, (ConnReason | undefined)[]>();
@@ -2942,6 +2943,114 @@ async function runThemeTracks(ctx: Ctx, bots: Bot[]): Promise<void> {
       if (room && tick) room.tick = tick;
       S.script = null;
       for (const b of [H, S]) b.game.leave();
+    }
+  }
+}
+
+// ---- Rootwater Run over sockets: both fords, the gorge, the shortcut (TRACK3, PLAN-TRACK3.md; ClickUp 123jpnbfp0e, 2026-11-25) ----------
+// This section's imports (hoisted like the ones at the top).
+import { roadOf as tr3RoadOf, roadOfSeg as tr3RoadOfSeg, surfaceAt as tr3SurfaceAt, tractionRect as tr3Traction } from "../shared/track";
+
+/**
+ * Rootwater Run over a lagged link, on the shipped track (no dev flag: the host picks it): two lagged (80±10 ms) socket bots,
+ * weapons off, one lap. Victor, a Hard bot on lane 0 (seat 2: its plan takes the shortcut), fords the river twice: the main
+ * road's ford and the shortcut's (and passes the shortcut's pit); Whiskey, a Normal bot on lane 24 (seat 1: Normal on an odd
+ * seat keeps the main road), fords the main road's and jumps the gorge. The bots go round a ford on its dry edge (its traction
+ * rectangle leaves PUDDLE_TRACTION_INSET of the asphalt dry at each kerb), so each is steered through the middle of every ford on
+ * its road (its driver's throttle, a pursuit steer at the ford's middle lane from 150 before it to its end, on that road). The
+ * client predicts the drift on both roads and the flight with the server's stepCar: each keeps a median reconciliation error
+ * below 0.5, no error above 50, at most 4 state mismatches; server ticks in each ford it crosses, the shortcut's ticks, the gorge
+ * jump, no fall; both finish.
+ */
+async function runTrack3(ctx: Ctx, bots: Bot[]): Promise<void> {
+  const id = "rootwater-run";
+  const V = new Bot("Victor13", ctx.url, 0, { lag: 80, jitter: 10 }, undefined, "hard");
+  const W = new Bot("Whiskey13", ctx.url, 24, { lag: 80, jitter: 10 });
+  bots.push(V, W);
+  for (const b of [V, W]) b.weapons = false;
+  let room: ReturnType<typeof ctx.server.rooms.rooms.get> | undefined;
+  let tick: ((t: number, now: number) => void) | null = null;
+  try {
+    W.game.create(W.name);
+    await waitFor(`${id}: W welcome`, () => !!W.game.you, 3000);
+    V.game.join(W.game.code, V.name);
+    await waitFor(`${id}: V in W's room`, () => W.game.players.length === 2 && !!V.game.you, 3000);
+    room = ctx.server.rooms.rooms.get(W.game.code)!;
+    W.game.pickTrack(id);
+    await waitFor(`${id}: both clients on it`, () => W.game.trackId === id && V.game.trackId === id, 3000);
+    const t = V.game.track;
+    // Through the middle of every ford on the road the car is on (see above), else the driver's own controls.
+    for (const B of [V, W]) {
+      B.script = () => {
+        const base = B.driver.controls();
+        const c = B.game.car;
+        if (!c || c.air > 0 || c.fall > 0 || c.wreck > 0) return base;
+        const q = queryTrackNear(t, c.x, c.y, c.seg), road = tr3RoadOf(t, q.road);
+        const f = road.fords.find((x) => q.s >= x.s0 - 150 && q.s <= x.s1);
+        if (!f) return base;
+        const lane = (f.lat0 + f.lat1) / 2;
+        const a = pointAt(road, q.s + 60 + speedOf(c) * 0.2);
+        const tx = a.x - Math.sin(a.h) * lane, ty = a.y + Math.cos(a.h) * lane;
+        return { ...base, steer: clamp(angleDiff(c.h, Math.atan2(ty - c.y, tx - c.x)) * 2.2, -1, 1) };
+      };
+    }
+    const r = room;
+    tick = r.tick.bind(r);
+    // Per bot, server ticks: in the main road's ford and in the shortcut's (each by its traction rectangle, on its road), on the
+    // shortcut; take-offs over the gorge (on the main road, from its ramp to the gap's end); falls.
+    const gap = t.gaps[0], ramp = t.ramps[0];
+    const mainFord = tr3Traction(t.fords[0]);
+    const cutFord = tr3Traction(t.branches[0].road.fords[0]);
+    const tally = () => ({ main: 0, cut: 0, shortcut: 0, gorge: 0, falls: 0, air: false, fall: false });
+    const on = { v: tally(), w: tally() };
+    r.tick = (tk: number, now: number) => {
+      tick!(tk, now);
+      if (r.phase !== "racing") return;
+      for (const [B, o] of [[V, on.v], [W, on.w]] as const) {
+        const p = r.players.get(B.game.you), c = p?.car;
+        if (!c || p?.progress?.fin) continue;
+        if (c.fall > 0 && !o.fall) o.falls++;
+        o.fall = c.fall > 0;
+        const road = tr3RoadOfSeg(r.track, c.seg);
+        const q = queryTrackNear(r.track, c.x, c.y, c.seg);
+        if (road === 1) o.shortcut++;
+        if (c.air > 0 && !o.air && road === 0 && q.s >= ramp.s && q.s <= gap.s1) o.gorge++;
+        o.air = c.air > 0;
+        if (c.air > 0 || c.fall > 0) continue;
+        const f = tr3SurfaceAt(tr3RoadOf(r.track, q.road), q.seg, q.s, q.lat);
+        if (!f) continue;
+        const inRect = (x: { s0: number; s1: number }) => q.s > x.s0 && q.s < x.s1;
+        if (road === 0 && inRect(mainFord)) o.main++;
+        if (road === 1 && inRect(cutFord)) o.cut++;
+      }
+    };
+    const vMem = (V.driver as unknown as { mem: BotMem }).mem, wMem = (W.driver as unknown as { mem: BotMem }).mem;
+    const plan = { v: -1, w: -1 };
+    V.afterStep = () => void (V.game.phase === "racing" && vMem.plan >= 0 && (plan.v = vMem.plan));
+    W.afterStep = () => void (W.game.phase === "racing" && wMem.plan >= 0 && (plan.w = wMem.plan));
+    const v0 = V.game.recErrors.length, w0 = W.game.recErrors.length, vs0 = V.game.recStateErrors, ws0 = W.game.recStateErrors;
+    const rows = await runRace(`${id} fords`, bots, W, [W, V]);
+    const sv = stats(V.game.recErrors.slice(v0)), sw = stats(W.game.recErrors.slice(w0));
+    const stv = V.game.recStateErrors - vs0, stw = W.game.recStateErrors - ws0;
+    const line = (B: Bot, o: ReturnType<typeof tally>, s: ReturnType<typeof stats>, st: number, pl: number, seat: number) =>
+      `${B.name} (seat ${seat}, plan ${pl}): server ticks in the main ford ${o.main}, in the shortcut's ford ${o.cut}, on the shortcut ${o.shortcut}; gorge take-offs ${o.gorge}; falls ${o.falls}; rec err n=${s.n} median=${s.median.toFixed(3)} p95=${s.p95.toFixed(3)} max=${s.max.toFixed(2)}, state mismatches ${st}, rtt=${B.game.rtt.toFixed(1)}ms`;
+    console.log(`      ${line(V, on.v, sv, stv, plan.v, vMem.seat)}`);
+    console.log(`      ${line(W, on.w, sw, stw, plan.w, wMem.seat)}`);
+    console.log(`      finish ${rows.map((x) => `${x.name} ${(x.timeMs / 1000).toFixed(2)}s`).join(", ")}`);
+    check(
+      `${id} over sockets: on the shipped track (picked by the host, no dev flag) a lagged (80±10 ms) Hard socket bot on seat 2 takes the shortcut through both fords (server ticks in each) and a lagged Normal one on seat 1 keeps the main road through its ford and over the gorge; no fall; each keeps a median reconciliation error below 0.5, no error above 50, at most 4 state mismatches; both finish`,
+      room.trackId === id && rows.length === 2 && rows.every((x) => x.timeMs > 0) &&
+        vMem.seat === 2 && plan.v === 1 && on.v.shortcut > 300 && on.v.main > 5 && on.v.cut > 5 && on.v.falls === 0 && sv.n > 500 && sv.median < 0.5 && sv.max <= 50 && stv <= 4 &&
+        wMem.seat === 1 && plan.w === 0 && on.w.shortcut < 300 && on.w.main > 5 && on.w.gorge === 1 && on.w.falls === 0 && sw.n > 500 && sw.median < 0.5 && sw.max <= 50 && stw <= 4 &&
+        V.errors.length + W.errors.length === 0,
+      `${line(V, on.v, sv, stv, plan.v, vMem.seat)}; ${line(W, on.w, sw, stw, plan.w, wMem.seat)}; errors ${[...V.errors, ...W.errors].join("; ") || "none"}`,
+    );
+  } finally {
+    if (room && tick) room.tick = tick;
+    for (const b of [V, W]) {
+      b.script = null;
+      b.afterStep = null;
+      b.game.leave();
     }
   }
 }
