@@ -174,3 +174,4 @@
 - 2026-11-24 — Push (user popup): "Push now" -> main 4a735cf+ (harbour look, sand/oil on the long tracks + sounds, GRACE-1) pushed; then the user's Manual Deploy and live QA16.
 - 2026-11-24 — TH-LOOK-3 taste (user, after the inline preview and the :3012 Canopy Yard copy at 0b33a69): "looks good" -> the jungle look, the ford look with its static chevrons, and the ford's sound in a race approved. Merge on review APPROVE.
 - 2026-11-25 — Next work (user popup): "A third new track" -> a long jungle track (fords, a river gorge, a shortcut). Draft tmp/plan-track3-draft.md -> Fable advisor review -> user approval.
+- 2026-11-25 — PLAN-TRACK3 approved (user popups, after the Fable advisor review "sound with changes"): Rootwater Run (id rootwater-run), jungle, bot laps 50-60 s; the branch-ford spike's fallback (a mud cut with a hole) may be taken without asking; the art-build hitch is measured then asked.
