@@ -16599,11 +16599,12 @@ function btShape(): void {
   btClock.t0 = performance.now();
   // Criteria 1 and 2: one shortcut each, a narrow one with a pit on Slag Harbour and a jump on Breaker's Mile (user decision 1);
   // no wider than its main road (a wider one bakes its gap too narrow, client/gfx/world.ts); its hazards > 240 from the other road
-  // (client/gfx/world.ts predict(): 2 x wall); no gap over the main road; validateTrack passes.
-  const sh = btTrackById("slag-harbour"), bm = btTrackById("breakers-mile");
+  // (client/gfx/world.ts predict(): 2 x wall); no gap over the main road; validateTrack passes. TRACK3: Rootwater Run's shortcut
+  // (its pit, the main road's gap) is held to the same clearance, shape and validity in the loop.
+  const sh = btTrackById("slag-harbour"), bm = btTrackById("breakers-mile"), rw = btTrackById("rootwater-run");
   const rows: string[] = [];
-  let ok = sh.branches.length === 1 && bm.branches.length === 1;
-  for (const t of [sh, bm]) {
+  let ok = sh.branches.length === 1 && bm.branches.length === 1 && rw.branches.length === 1;
+  for (const t of [sh, bm, rw]) {
     const b = t.branches[0], r = b.road;
     const clear = btClearance(t);
     const errs = btValidateTrack(t);
@@ -16613,7 +16614,7 @@ function btShape(): void {
   const s0 = sh.branches[0].road, b0 = bm.branches[0].road;
   ok &&= s0.def.halfWidth < sh.def.halfWidth && s0.holes.length >= 1 && s0.ramps.length === 0 && s0.gaps.length === 0 && b0.ramps.length === 1 && b0.gaps.length === 1 && b0.holes.length === 0;
   check(
-    "br tracks shape: one shortcut on each long track, Slag Harbour's narrow (narrower than its main road) with a pit, Breaker's Mile's a jump (a ramp and a chasm); each shorter than the main road it cuts, no wider than it, its hazards (and the main road's) more than 240 from the other road's centreline, validateTrack passes",
+    "br tracks shape: one shortcut on each long track, Slag Harbour's narrow (narrower than its main road) with a pit, Breaker's Mile's a jump (a ramp and a chasm); each (Rootwater Run's too) shorter than the main road it cuts, no wider than it, its hazards (and the main road's) more than 240 from the other road's centreline, validateTrack passes",
     ok,
     rows.join("; "),
   );

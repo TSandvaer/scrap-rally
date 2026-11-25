@@ -600,11 +600,13 @@ export function trackFords(t: Track): { road: number; r: Track; f: Track["fords"
   return out;
 }
 
-/** `def` with ford `n` of road `road` (trackFords' order on that road) drifting at vx. */
+/** `def` with ford `n` of road `road` (trackFords' order on that road: sorted by s0, as placeFeatures sorts a road's fords,
+ *  a stable sort, so equal s0 keep their declared order) drifting at vx. */
 function fordVariant(def: TrackDef, road: number, n: number, vx: number, id: string): TrackDef {
   const swap = <F extends Feature>(fs: readonly F[]): F[] => {
-    let k = -1;
-    return fs.map((f) => (f.k === "ford" && ++k === n ? { ...f, vx } : f));
+    const s0 = (i: number) => { const f = fs[i]; return f.k === "ford" ? f.s0 : 0; };
+    const at = fs.map((_, i) => i).filter((i) => fs[i].k === "ford").sort((a, b) => s0(a) - s0(b))[n];
+    return fs.map((f, i) => (i === at ? { ...f, vx } : f));
   };
   let b = 0;
   const features = road === 0 ? swap(def.features ?? []) : (def.features ?? []).map((f) => (f.k === "branch" && ++b === road ? { ...f, features: swap(f.features ?? []) } : f));
