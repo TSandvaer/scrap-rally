@@ -920,7 +920,11 @@ Nits for a short round with the Fable notes: sim-test.ts:16606 btShape loop lack
 theme-tune.ts:604-607 fordVariant counts in declaration order vs t.fords sorted by s0. Waiting for the Fable review (ctx_11f4e7ae24a8).
 TRACK3 Fable review APPROVE (ctx_11f4e7ae24a8; tmp/track3/REVIEW-TRACK3-LOOK.md): Renderer 39.1 ms confirmed one-off (canopy 17.6 ms);
 shortcut frame-time mean edge accepted (DECISIONS). Nit round (the 2 Opus nits): new worker ctx_7037c981a904 in the track3 workspace
-(tmp/fix-track3-r1.md). Merge after it; then stop the :3012 copy and ask about the push (Rootwater Run + TH-LOOK-3). TH-LOOK-2 waits for
+(tmp/fix-track3-r1.md). Merge after it; then stop the :3012 copy and ask about the push (Rootwater Run + TH-LOOK-3).
+TRACK3 nits done b3e6285. MERGED 424611e. Gate run 1: 1143/1144 (hard2 CPU 108.7 s > 101 at load ~8, BTLEServer 99 % CPU); run 2 on the
+identical tree GREEN (hard2 CPU 93.2 s; 1144/1144, 190/190, build index-D3omci8J.js, schema-hash all match) -> load-sensitive, parked.
+ClickUp ready for qa test; workers released; workspace removed; :3012 copy stopped (pid 86293) + removed.
+NEXT: push question (Rootwater Run + TH-LOOK-3). Board otherwise empty (HARD-3 postponed). TH-LOOK-2 waits for
 MARSHALS-1 (shares render.ts + canvas-census.ts). Ford direction cue moved from THEME-SURF to TH-LOOK-3 (drawing = world.ts, Fable).
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
