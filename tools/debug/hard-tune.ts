@@ -450,11 +450,11 @@ export function runRaces(o: RaceOpts): CarRow[] {
 
 /**
  * The tracks HARD-2's falls-0 gate drives: every shipped one (the first three, and M4-TRACKS' Slag Harbour
- * and Breaker's Mile: advisor change 9, the second to merge re-runs it on the new tracks) and the three
- * test tracks (advisor change 10).
+ * and Breaker's Mile: advisor change 9, the second to merge re-runs it on the new tracks; TRACK3's Rootwater Run)
+ * and the three test tracks (advisor change 10).
  */
 export const TEST_TRACK_IDS = new Set(["surf-yard", "split-yard", "move-yard"]);
-export const MISTAKE_TRACKS = [...HARD_TRACKS, "slag-harbour", "breakers-mile", ...TEST_TRACK_IDS];
+export const MISTAKE_TRACKS = [...HARD_TRACKS, "slag-harbour", "breakers-mile", "rootwater-run", ...TEST_TRACK_IDS];
 
 /** Run fn with env `name` set to `value` (undefined = unset), then put it back. */
 export function withEnv<T>(name: string, value: string | undefined, fn: () => T): T {

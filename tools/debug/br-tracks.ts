@@ -24,7 +24,7 @@
 //                                                stored mute (localStorage) is off, and each shot checks the speaker
 //                                                icon's "muted" class and its rust ink; icons-<size>.png shows the icon
 //                                                of every shot side by side.
-//   --track slag-harbour|breakers-mile          one track only (default both)
+//   --track slag-harbour|breakers-mile|rootwater-run   one track only (default all three; TRACK3 added Rootwater Run)
 //
 // Its fallCost and hazardClearance are used by scripts/sim-test.ts (section BR-TRACKS).
 
@@ -44,8 +44,8 @@ import { trackById } from "../../shared/tracks";
 import { branchRace } from "./branch-tune";
 import { blank, decodePng, paste, savePng, type Picture } from "./png";
 
-/** The two tracks with a shortcut (BR-TRACKS). */
-export const BR_TRACK_IDS = ["slag-harbour", "breakers-mile"];
+/** The tracks with a shortcut (BR-TRACKS; TRACK3 added Rootwater Run's, a ford and a pit). */
+export const BR_TRACK_IDS = ["slag-harbour", "breakers-mile", "rootwater-run"];
 const LEVELS: BotLevel[] = ["easy", "normal", "hard"];
 const f2 = (v: number) => v.toFixed(2);
 const median = (a: number[]) => [...a].sort((x, y) => x - y)[a.length >> 1];

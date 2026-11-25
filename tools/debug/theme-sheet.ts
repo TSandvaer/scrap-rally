@@ -1165,6 +1165,7 @@ function check(): boolean {
   harbourRules(say);
   jungleRules(say);
   fordCue(say);
+  fordCue(say, "rootwater-run"); // TRACK3: the long jungle track's two fords, the shortcut's on its own road
   return ok;
 }
 
@@ -1695,21 +1696,24 @@ function jungleRules(say: (good: boolean, what: string) => void): void {
 
 /**
  * The ford's direction cue (PLAN-THEMES.md advisor change 6: a ford needs a baked cue that says
- * which way its current pushes): on every ford of Canopy Yard, the foam chevrons are found on
+ * which way its current pushes): on every ford of Canopy Yard (TRACK3: and of Rootwater Run, its
+ * shortcut's ford read along the shortcut's own road), the foam chevrons are found on
  * the baked tiles (each a connected run of foam pixels) and every one must point the way the
  * ford's drift goes, its tip downstream of its two arms: toward the right of travel where vx is
  * over 0, toward the left where it is under. And each must be large and bright enough to read
  * on a phone: its size at 390x844@3 in device pixels, its foam against the stream's plain tone.
  */
-function fordCue(say: (good: boolean, what: string) => void): void {
+function fordCue(say: (good: boolean, what: string) => void, id = "canopy-yard"): void {
   const theme: Theme = "jungle";
   if (!hasArt(theme)) return;
-  const sc = sceneryOf(theme), track = testTrack("canopy-yard")!;
+  const sc = sceneryOf(theme), track = testTrack(id) ?? trackById(id);
   const FOAM = sc.index.foam;
   const parts: string[] = [];
-  let good = track.fords.length > 0;
-  for (const f of track.fords) {
-    const mid = at(track, (f.s0 + f.s1) / 2, (f.lat0 + f.lat1) / 2);
+  // TRACK3: every road's fords (a shortcut's own, Rootwater Run's, read along its road); Canopy Yard has the main road's only.
+  const fords = [...track.fords.map((f) => ({ road: track, f, at: "" })), ...track.branches.flatMap((b, k) => b.road.fords.map((f) => ({ road: b.road, f, at: `shortcut ${k + 1} ` })))];
+  let good = fords.length > 0;
+  for (const { road, f, at: where } of fords) {
+    const mid = at(road, (f.s0 + f.s1) / 2, (f.lat0 + f.lat1) / 2);
     const w = Math.ceil((f.s1 - f.s0 + f.lat1 - f.lat0) * ZOOM) + 40, h = w;
     const idx = windowOf(track, mid.x, mid.y, w, h), cls = windowOf(track, mid.x, mid.y, w, h, false, true);
     const x0 = Math.round(mid.x * ZOOM - w / 2), y0 = Math.round(mid.y * ZOOM - h / 2);
@@ -1735,7 +1739,7 @@ function fordCue(say: (good: boolean, what: string) => void): void {
       if (run.length < 12) continue;
       chevrons++;
       // Where each pixel lies on the track; the chevron points toward the side its tip is on: the pixels nearest its middle along the road are the furthest across it.
-      const pts = run.map((q) => queryTrack(track, (x0 + (q % w) + 0.5) / ZOOM, (y0 + Math.floor(q / w) + 0.5) / ZOOM));
+      const pts = run.map((q) => queryTrack(road, (x0 + (q % w) + 0.5) / ZOOM, (y0 + Math.floor(q / w) + 0.5) / ZOOM));
       const sMid = pts.reduce((a, q) => a + q.s, 0) / pts.length, lMid = pts.reduce((a, q) => a + q.lat, 0) / pts.length;
       const aMid = pts.reduce((a, q) => a + Math.abs(q.s - sMid), 0) / pts.length;
       const cov = pts.reduce((a, q) => a + (q.lat - lMid) * (Math.abs(q.s - sMid) - aMid), 0);
@@ -1749,7 +1753,7 @@ function fordCue(say: (good: boolean, what: string) => void): void {
     const way = f.vx > 0 ? "right" : "left", wrong = f.vx > 0 ? left : right;
     const c = contrast(sc.hex[FOAM], plain);
     if (!(chevrons >= 4 && wrong === 0 && c >= CUE_CONTRAST && least * PHONE >= CUE_DEVICE)) good = false;
-    parts.push(`ford ${f.s0}..${f.s1} (vx ${f.vx > 0 ? "+" : ""}${f.vx}: it pushes to the ${way} of travel): ${chevrons} chevrons, ${f.vx > 0 ? right : left} point to the ${way} and ${wrong} the other way; each ${least} to ${most} view pixels across, ${(least * PHONE).toFixed(0)} to ${(most * PHONE).toFixed(0)} device pixels at 390x844@3 (at least ${CUE_DEVICE}); foam ${sc.hex[FOAM]} on the stream ${plain}: ${c.toFixed(2)}:1 (at least ${CUE_CONTRAST}:1)`);
+    parts.push(`${where}ford ${f.s0}..${f.s1} (vx ${f.vx > 0 ? "+" : ""}${f.vx}: it pushes to the ${way} of travel): ${chevrons} chevrons, ${f.vx > 0 ? right : left} point to the ${way} and ${wrong} the other way; each ${least} to ${most} view pixels across, ${(least * PHONE).toFixed(0)} to ${(most * PHONE).toFixed(0)} device pixels at 390x844@3 (at least ${CUE_DEVICE}); foam ${sc.hex[FOAM]} on the stream ${plain}: ${c.toFixed(2)}:1 (at least ${CUE_CONTRAST}:1)`);
   }
   say(good, `${theme}: a ford's baked direction cue on ${track.def.name}: foam chevrons that point the way its current pushes. ${parts.join("; ")}`);
 }
