@@ -908,7 +908,12 @@ NEXT (user): a third long track for the jungle. Draft tmp/plan-track3-draft.md a
 (approval + name + lap length + build hitch); then ticket TRACK3 (Opus) + reviews.
 PLAN-TRACK3 APPROVED (advisor "sound with changes"; user: Rootwater Run, 50-60 s, mud-cut fallback allowed, hitch asked later).
 TRACK3 123jpnbfp0e in flight: ctx_9aedec3e30a2 (Opus, ~/orca/workspaces/scrap-rally/track3, :3010, tmp/spec-track3.md; step 1 = the
-branch-ford spike). Reviews after: Opus (data/bots) + Fable (drawing on a long jungle track). Active authors: TRACK3. TH-LOOK-2 waits for
+branch-ford spike). Reviews after: Opus (data/bots) + Fable (drawing on a long jungle track). Active authors: TRACK3.
+TRACK3 DONE 0be7d43 (spike passed: the shortcut fords, vx -70, pit 340 past, recovery between; gain 1.53-2.05 s; Normal 51.5-57.8 s;
+density 93.7 %; census +46,656 B; new Renderer() 38.2 ms vs 0.8 ms Rust Bowl; report tmp/track3/TRACK3-report.md; bots run 1 had a
+contact-section fail, then 3/3 green). Reviewers: Opus ctx_fa3aaf979762 (:3018, tmp/review-track3-opus.md), Fable ctx_11f4e7ae24a8 (:3007,
+tmp/review-track3-fable.md). TASTE COPY ~/orca/workspaces/scrap-rally/track3-taste at 0be7d43 on :3012 (SCRAP_DEV_BOTS=1, pid 86293);
+inline preview shown. Ask the user: the drive + the 38 ms one-off art build (user decision 4). TH-LOOK-2 waits for
 MARSHALS-1 (shares render.ts + canvas-census.ts). Ford direction cue moved from THEME-SURF to TH-LOOK-3 (drawing = world.ts, Fable).
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
