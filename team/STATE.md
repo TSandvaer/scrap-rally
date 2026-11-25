@@ -905,7 +905,10 @@ suspended). ClickUp -> complete (live-verified by QA15/QA16): BR-PHYS, BR-BAKE, 
 THEME-SURF, TH-LOOK-2, THEME-TRACKS, HARBOUR-SCHEMA, TH-LOOK-H, GRACE-1. Left at ready for qa test: THEME-SND (heard by the user locally,
 not live-checked), TH-LOOK-3 (not pushed). HARD-3 postponed. Board otherwise empty; slots idle until the user picks the next direction.
 NEXT (user): a third long track for the jungle. Draft tmp/plan-track3-draft.md at the Fable advisor (background); then user popups
-(approval + name + lap length + build hitch); then ticket TRACK3 (Opus) + reviews. TH-LOOK-2 waits for
+(approval + name + lap length + build hitch); then ticket TRACK3 (Opus) + reviews.
+PLAN-TRACK3 APPROVED (advisor "sound with changes"; user: Rootwater Run, 50-60 s, mud-cut fallback allowed, hitch asked later).
+TRACK3 123jpnbfp0e in flight: ctx_9aedec3e30a2 (Opus, ~/orca/workspaces/scrap-rally/track3, :3010, tmp/spec-track3.md; step 1 = the
+branch-ford spike). Reviews after: Opus (data/bots) + Fable (drawing on a long jungle track). Active authors: TRACK3. TH-LOOK-2 waits for
 MARSHALS-1 (shares render.ts + canvas-census.ts). Ford direction cue moved from THEME-SURF to TH-LOOK-3 (drawing = world.ts, Fable).
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
