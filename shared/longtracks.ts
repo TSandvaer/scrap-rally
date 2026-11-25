@@ -1,5 +1,5 @@
-// The two long tracks (M4-TRACKS, ClickUp 123jpnbffz6; PLAN-M4.md 2.7): Slag Harbour and Breaker's
-// Mile. Original layouts and names. A lap is about twice a shipped track's (server bot laps of 50-60 s
+// The long tracks (M4-TRACKS, ClickUp 123jpnbffz6; PLAN-M4.md 2.7): Slag Harbour and Breaker's Mile, and
+// (TRACK3, PLAN-TRACK3.md) Rootwater Run. Original layouts and names. A lap is about twice a shipped track's (server bot laps of 50-60 s
 // at Normal), and the M4 features come in spaced groups with plain racing road between them, never
 // two obstacle kinds back to back (user feedback for M4-TRACKS: "I like the obstacles but the surf
 // yard have way to many to closely packed"); no dirt stretch is longer than ~350 units (user,
@@ -150,4 +150,72 @@ export const BREAKERS_MILE: TrackDef = {
     { k: "sand", s0: 18100, s1: 18400, lat0: 0, lat1: 64 },
   ],
   recovery: [0, 4900, 5600, 10200, 13950, 17000],
+};
+
+// TRACK3 (ClickUp 123jpnbfp0e; PLAN-TRACK3.md, user-approved 2026-11-25 with the advisor's changes): a third
+// long track, the jungle's own. A river valley, run anticlockwise on the map (left-handers), about Breaker's
+// Mile's length; the road meets the river three ways. From the grid on the valley floor, a start straight of
+// about 3500 units of plain road (the lap's longest plain run, 6248 from the last mud to the first ford) to
+// turn 1, the bottom-right corner; up the right side: the first ford right out of the corner (kerb to kerb,
+// 140 long, drifting cars to the right, the corner's outside, at 60 u/s), a bamboo-bale chicane (three tyre
+// mounds, 200 apart), then the gorge jump on the long run north (a ramp and a gap of 200, an air cell over it
+// right of centre); the top-right corner onto the back straight, three lightning cells on its kerbs; the
+// top-left corner, black mud on its inside half at the apex (the outside half the dry line); down the left
+// side, a log stamper over the left two thirds of the road (the right third open), rolling log sections
+// (three, 240 apart) and the logging truck right of centre with an air cell over its flight; the bottom-left
+// corner, black mud on its inside half again, onto the grid.
+// The shortcut: a jungle cut that fords the river instead of jumping it (half-width 48, the main road's 64),
+// off the left of the right side at s 7500 (before the gorge) and onto the back straight at s 11990,
+// across the inside of the top-right corner on a long diagonal: a second ford on that diagonal (u 1500-1640,
+// kerb to kerb at its own half-width, drifting cars to the left at 70 u/s, tuned on this road with
+// tools/debug/theme-tune.ts --ford rootwater-run), then a pit on its right half 360 past the ford's end (u
+// 2000, lat 24, r 20: off the drift's side, so the drift never carries a car into it; the branch classes as
+// risky, so Easy bots keep the main road). 3506 long against the main road's 4490; a clean run on it about
+// 1.5-1.9 s a lap quicker (tools/debug/br-tracks.ts --gain). Its recovery point between the ford and the pit
+// (u 1740: a car put back before the ford would cross it from rest, the most drift, and meet the pit), the
+// main road's at s 7100, 400 before the fork (PLAN-BRANCH user decision 6). The groups are spaced as the user's
+// density rule asks (tools/debug/track-density.ts --track rootwater-run): eight on the main road, >= 1036 of
+// clear road between any two, 93.7 % of the lap obstacle-free, no mud stretch over 300.
+export const ROOTWATER_RUN: TrackDef = {
+  id: "rootwater-run",
+  name: "Rootwater Run",
+  // The jungle (PLAN-THEMES 2.2): loam, the moss verge, the log rail, the canopy, the gorge, black wet mud; its fords drawn by TH-LOOK-3.
+  theme: "jungle",
+  control: [
+    [3000, 6500], [3700, 6500], [4400, 6500], [5100, 6500], [5800, 6500], [6500, 6500],
+    [7100, 6400], [7500, 6050], [7600, 5500],
+    [7600, 4700], [7600, 4100], [7600, 3500], [7600, 2900], [7600, 2300], [7600, 1700], [7550, 1250],
+    [7330, 920], [6950, 730],
+    [6450, 700], [5900, 700], [5300, 700], [4700, 700], [4100, 700], [3500, 700], [2900, 700],
+    [2400, 800], [2100, 1150], [2000, 1700],
+    [2000, 2300], [2000, 2900], [2000, 3500], [2000, 4100], [2000, 4700], [2000, 5300], [2000, 5700],
+    [2100, 6050], [2450, 6400],
+  ],
+  halfWidth: 64,
+  verge: 44,
+  features: [
+    { k: "ford", s0: 5360, s1: 5500, lat0: -64, lat1: 64, vx: 60 },
+    { k: "tyres", s: 6560, lat: -30, r: 24 },
+    { k: "tyres", s: 6760, lat: 30, r: 24 },
+    { k: "tyres", s: 6960, lat: -26, r: 22 },
+    {
+      k: "branch", s0: 7500, s1: 11990, side: -1, halfWidth: 48,
+      control: [[7380, 2800], [7050, 2350], [6650, 1900], [6300, 1450], [6000, 1100], [5700, 900]],
+      features: [{ k: "ford", s0: 1500, s1: 1640, lat0: -48, lat1: 48, vx: -70 }, { k: "hole", s: 2000, lat: 24, r: 20 }],
+      recovery: [1740],
+    },
+    { k: "ramp", s: 8550, len: 80 },
+    { k: "gap", s0: 8630, s1: 8830 },
+    { k: "cell", s: 8760, lat: 34, air: true },
+    { k: "cell", s: 12640, lat: 58 },
+    { k: "cell", s: 13040, lat: -58 },
+    { k: "cell", s: 13440, lat: 58 },
+    { k: "dirt", s0: 15090, s1: 15390, lat0: -64, lat1: 0 },
+    { k: "press", s: 16540, lat0: -108, lat1: 30, period: 180, down: 60 },
+    { k: "barrels", s: 17740, n: 3, period: 240, speed: 110 },
+    { k: "truck", s: 18850, lat: 30, len: 110 },
+    { k: "cell", s: 19090, lat: 34, air: true },
+    { k: "dirt", s0: 20140, s1: 20440, lat0: -64, lat1: 0 },
+  ],
+  recovery: [0, 4700, 7100, 10040, 12840, 16040, 18500],
 };

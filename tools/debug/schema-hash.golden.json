@@ -34,6 +34,13 @@
     "room": "0cc185462a3947e0aad3bbb6c2dcd1db1486d2f8f5360b453b90ac9afec6fb34",
     "walls": "6e2e7de95ccb9c9dabed40cc4b0f8500cb76ab3a18f0f63b9225133ff90780fb"
   },
+  "rootwater-run": {
+    "built": "f013f42db60e76de49abb3d5353cf6097cf9829db9b78a4daf5a4f56f857a80c",
+    "queries": "ad34692bfb2e3a8e4defc053b77e51b1f86c8dd59e783a01105e259151e312fa",
+    "botsDirect": "a4f4781edf140ceaf39c949a004795dd4be1ec86327c23c3d253c09def28a949",
+    "room": "8a090de1d005c6849e7d8f0bab3e93d087f8ec3074d9269f9bd197869e1225f6",
+    "walls": "74210041351f40248fb7882b2bb9ae671d31d262ce59abb649b74a348a53d582"
+  },
   "branch-yard": {
     "built": "d0a9016e237b1cb029b12bd3115e6a326190efa145bd9c07e125984f6d62fa39",
     "queries": "2ea184649c6bbca2768a2bd5ce28c3e086bd55a449e4f54e876d00c876790cbd",
