@@ -914,7 +914,13 @@ density 93.7 %; census +46,656 B; new Renderer() 38.2 ms vs 0.8 ms Rust Bowl; re
 contact-section fail, then 3/3 green). Reviewers: Opus ctx_fa3aaf979762 (:3018, tmp/review-track3-opus.md), Fable ctx_11f4e7ae24a8 (:3007,
 tmp/review-track3-fable.md). TASTE COPY ~/orca/workspaces/scrap-rally/track3-taste at 0be7d43 on :3012 (SCRAP_DEV_BOTS=1, pid 86293);
 inline preview shown. Ask the user: the drive + the 38 ms one-off art build (user decision 4).
-USER APPROVED Rootwater Run + the 38 ms one-off build. Merge on both reviews' APPROVE; then the push question. TH-LOOK-2 waits for
+USER APPROVED Rootwater Run + the 38 ms one-off build. Merge on both reviews' APPROVE; then the push question.
+TRACK3 Opus review APPROVE (ctx_fa3aaf979762; tmp/track3/TRACK3-review-opus.md): bots contact fail = flake (parked); premise edits forced.
+Nits for a short round with the Fable notes: sim-test.ts:16606 btShape loop lacks Rootwater (hazards > 240 holds: pit 874.5, gap 596.4);
+theme-tune.ts:604-607 fordVariant counts in declaration order vs t.fords sorted by s0. Waiting for the Fable review (ctx_11f4e7ae24a8).
+TRACK3 Fable review APPROVE (ctx_11f4e7ae24a8; tmp/track3/REVIEW-TRACK3-LOOK.md): Renderer 39.1 ms confirmed one-off (canopy 17.6 ms);
+shortcut frame-time mean edge accepted (DECISIONS). Nit round (the 2 Opus nits): new worker ctx_7037c981a904 in the track3 workspace
+(tmp/fix-track3-r1.md). Merge after it; then stop the :3012 copy and ask about the push (Rootwater Run + TH-LOOK-3). TH-LOOK-2 waits for
 MARSHALS-1 (shares render.ts + canvas-census.ts). Ford direction cue moved from THEME-SURF to TH-LOOK-3 (drawing = world.ts, Fable).
 GFX-1 in flight: ctx_b5075af01fdf (Fable, ~/orca/workspaces/scrap-rally/gfx1, TSandvaer/gfx1, :3008; base main 9fdf041). Tell it
 when the safeguards merge (it merges main before its final gate run).
