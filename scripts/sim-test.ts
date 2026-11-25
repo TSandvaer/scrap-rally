@@ -1532,8 +1532,8 @@ function roomTrack(): void {
   const rust = trackById(DEFAULT_TRACK_ID);
   check("track: the test loop is nowhere near Rust Bowl", loop.pts.every((q) => queryTrack(rust, q.x, q.y).dist > 4 * rust.wall));
   check(
-    "track: the registry ships rust-bowl (first, the default), crusher-run, overpass-knot, slag-harbour and breakers-mile, keyed by TrackDef.id",
-    trackList().map((e) => e.id).join() === `${DEFAULT_TRACK_ID},crusher-run,overpass-knot,slag-harbour,breakers-mile,${LOOP}` &&
+    "track: the registry ships rust-bowl (first, the default), crusher-run, overpass-knot, slag-harbour, breakers-mile and rootwater-run, keyed by TrackDef.id",
+    trackList().map((e) => e.id).join() === `${DEFAULT_TRACK_ID},crusher-run,overpass-knot,slag-harbour,breakers-mile,rootwater-run,${LOOP}` &&
       rust.def === RUST_BOWL && trackList()[0].name === RUST_BOWL.name &&
       trackById("crusher-run").def === CRUSHER_RUN && trackById("overpass-knot").def === OVERPASS_KNOT,
     trackList().map((e) => e.id).join(),
@@ -13461,8 +13461,8 @@ import { unionProbe as brUnion } from "../tools/debug/branch-yard";
 
 const brClock = { t0: 0 };
 const brYard = () => testTrack(BRANCH_YARD.id)!;
-const brShippedIds = ["rust-bowl", "crusher-run", "overpass-knot", "slag-harbour", "breakers-mile"]; // M4-TRACKS added the last two
-/** BR-TRACKS: the shipped tracks without a shortcut (Rust Bowl, Crusher Run, Overpass Knot; Slag Harbour and Breaker's Mile have one each). */
+const brShippedIds = ["rust-bowl", "crusher-run", "overpass-knot", "slag-harbour", "breakers-mile", "rootwater-run"]; // M4-TRACKS added slag-harbour and breakers-mile, TRACK3 rootwater-run
+/** BR-TRACKS: the shipped tracks without a shortcut (Rust Bowl, Crusher Run, Overpass Knot; Slag Harbour, Breaker's Mile and Rootwater Run have one each). */
 const brPlainShippedIds = brShippedIds.filter((id) => trackById(id).branches.length === 0);
 /** Branch Yard's three branches as declared: the dirt cut, the jump cut, the narrow cut. */
 const brDefs = () => BRANCH_YARD.features!.filter((f): f is brT.Branch => f.k === "branch");
@@ -13800,7 +13800,7 @@ for (const t of [brTypes, brBuild, brMaps, brRules, brYardCheck]) {
 
 // ---- M4-TRACKS (ClickUp 123jpnbffz6): the two long tracks, Slag Harbour and Breaker's Mile ----------
 // This section's imports (hoisted like the ones at the top).
-import { BREAKERS_MILE, SLAG_HARBOUR } from "../shared/longtracks";
+import { BREAKERS_MILE, ROOTWATER_RUN, SLAG_HARBOUR } from "../shared/longtracks";
 import * as longW from "../shared/weapons";
 import * as longDensity from "../tools/debug/track-density";
 import * as longBot from "../shared/botdrive";
@@ -13809,7 +13809,7 @@ import { statsFor as longStatsFor } from "../shared/shop";
 import { isTrackId as longIsTrackId, trackName as longTrackName } from "../shared/tracks";
 import { draftTopSpeed as longDraftTop, boostTopSpeed as longBoostTop } from "../shared/catchup";
 
-const LONG_IDS = ["slag-harbour", "breakers-mile"];
+const LONG_IDS = ["slag-harbour", "breakers-mile", "rootwater-run"]; // TRACK3 added Rootwater Run
 const longClock = { t0: 0 };
 
 function longRegistry(): void {
@@ -13818,9 +13818,9 @@ function longRegistry(): void {
   // (the lobby lists trackList()'s names), and a host can pick them with no dev flag.
   const list = trackList();
   const ids = list.map((e) => e.id);
-  const okOrder = ids.indexOf("slag-harbour") === 3 && ids.indexOf("breakers-mile") === 4 && ids.slice(0, 3).join() === "rust-bowl,crusher-run,overpass-knot";
-  const named = list[3]?.name === "Slag Harbour" && list[4]?.name === "Breaker's Mile" && longTrackName("slag-harbour") === "Slag Harbour" && longTrackName("breakers-mile") === "Breaker's Mile";
-  const defs = trackById("slag-harbour").def === SLAG_HARBOUR && trackById("breakers-mile").def === BREAKERS_MILE;
+  const okOrder = ids.indexOf("slag-harbour") === 3 && ids.indexOf("breakers-mile") === 4 && ids.indexOf("rootwater-run") === 5 && ids.slice(0, 3).join() === "rust-bowl,crusher-run,overpass-knot";
+  const named = list[3]?.name === "Slag Harbour" && list[4]?.name === "Breaker's Mile" && list[5]?.name === "Rootwater Run" && longTrackName("slag-harbour") === "Slag Harbour" && longTrackName("breakers-mile") === "Breaker's Mile" && longTrackName("rootwater-run") === "Rootwater Run";
+  const defs = trackById("slag-harbour").def === SLAG_HARBOUR && trackById("breakers-mile").def === BREAKERS_MILE && trackById("rootwater-run").def === ROOTWATER_RUN;
   const picked = withDevTrack(undefined, () => {
     const sim = new Sim(1);
     const host = sim.add("Host");
@@ -13831,7 +13831,7 @@ function longRegistry(): void {
     return out;
   });
   check(
-    "long tracks: Slag Harbour and Breaker's Mile are in the registry after the three shipped tracks (order and ids kept), named in the lobby's list, and a host picks them with no dev flag",
+    "long tracks: Slag Harbour and Breaker's Mile are in the registry after the three shipped tracks (order and ids kept), Rootwater Run last (TRACK3), named in the lobby's list, and a host picks them with no dev flag",
     okOrder && named && defs && LONG_IDS.every(longIsTrackId) && picked.every((m, i) => m === `${LONG_IDS[i]}: room on ${LONG_IDS[i]}`),
     `${ids.join(", ")}; ${list.map((e) => e.name).join(", ")}; ${picked.join("; ")}`,
   );
@@ -14605,7 +14605,10 @@ function hard2Cpu(): void {
   );
   const added = (performance.now() - h2Clock.t0) / 1000;
   console.log(`  HARD-2 sections' runtime (hard2Params .. hard2Cpu): ${added.toFixed(1)} s`);
-  check("hard2 CPU: the HARD-2 sim-test sections add at most 90 s (printed)", added <= 90, `${added.toFixed(1)} s`);
+  // The budget was 90 s for the 8 tracks HARD-2 drives (MISTAKE_TRACKS; 73.6-78.0 s measured); TRACK3's Rootwater Run, a ninth (and a
+  // long one), adds about 14 s: the budget scales with the number of tracks (9: 101 s).
+  const budget = (90 * h2Tune.MISTAKE_TRACKS.length) / 8;
+  check(`hard2 CPU: the HARD-2 sim-test sections add at most ${budget.toFixed(0)} s (90 s per 8 tracks of MISTAKE_TRACKS; printed)`, added <= budget, `${added.toFixed(1)} s`);
 }
 
 for (const t of [hard2Params, hard2Identity, hard2Mistakes, hard2Latch, hard2Table, hard2Knob, hard2Cpu]) {
@@ -14945,11 +14948,11 @@ function thShipped(): void {
     out = String((e as { stdout?: string }).stdout ?? e);
   }
   const lines = out.split("\n").filter((l) => /^(SAME|DIFF|NEW |GONE) /.test(l));
-  const shipped = ["rust-bowl", "crusher-run", "overpass-knot", "slag-harbour", "breakers-mile"].flatMap((id) => ["built", "queries", "botsDirect", "room", "walls"].map((p) => `SAME  ${id} ${p}`));
+  const shipped = ["rust-bowl", "crusher-run", "overpass-knot", "slag-harbour", "breakers-mile", "rootwater-run"].flatMap((id) => ["built", "queries", "botsDirect", "room", "walls"].map((p) => `SAME  ${id} ${p}`)); // TRACK3 added rootwater-run
   const branch = ["built", "queries", "branches"].map((p) => `SAME  branch-yard ${p}`);
   const yards = THEME_YARDS.flatMap((d) => ["built", "queries", "features"].map((p) => `${d.id} ${p}`));
   check(
-    "theme shipped: schema-hash --check: every part of the five shipped tracks (Breaker's Mile desert, Slag Harbour harbour: a theme is not in a shipped track's hash) and of Branch Yard SAME; the theme yards hashed on lines of their own (built, queries, features), none DIFF or GONE",
+    "theme shipped: schema-hash --check: every part of the six shipped tracks (Breaker's Mile desert, Slag Harbour harbour, Rootwater Run jungle: a theme is not in a shipped track's hash) and of Branch Yard SAME; the theme yards hashed on lines of their own (built, queries, features), none DIFF or GONE",
     ok && [...shipped, ...branch].every((l) => lines.includes(l)) && yards.every((y) => lines.some((l) => l.endsWith(` ${y}`) && (l.startsWith("SAME") || l.startsWith("NEW ")))) && !lines.some((l) => /^(DIFF|GONE)/.test(l)),
     lines.filter((l) => !l.startsWith("SAME")).join("; ") || `${lines.length} parts SAME`,
   );
@@ -15727,7 +15730,7 @@ function bpShipped(): void {
   const lines = out.split("\n").filter((l) => /^(SAME|DIFF|NEW |GONE) /.test(l));
   const shipped = brShippedIds.flatMap((id) => ["built", "queries", "botsDirect", "room", "walls"].map((p) => `SAME  ${id} ${p}`));
   check(
-    "branch shipped: schema-hash --check: every part of the five shipped tracks SAME (built arrays, queries and validators, server bots, a room race, wall contacts) and every other line SAME",
+    "branch shipped: schema-hash --check: every part of the six shipped tracks SAME (built arrays, queries and validators, server bots, a room race, wall contacts) and every other line SAME",
     ok && shipped.every((l) => lines.includes(l)) && lines.every((l) => l.startsWith("SAME")) && lines.length >= shipped.length + 3,
     lines.filter((l) => !l.startsWith("SAME")).join("; ") || `${lines.length} parts SAME`,
   );
@@ -16459,17 +16462,17 @@ function tsBots(): void {
     costs.push(`${car}: sand ${tsF(want.sand, 3)}, ford ${tsF(want.ford, 3)}, oil ${tsF(want.oil, 3)} (water ${tsF(want.water, 3)}, dirt ${tsF(want.dirt, 3)})`);
   }
   check("theme surf bots: laneCost: sand and a ford their drag factor - 1, oil 1.8 x sqrt(Sport's dirt grip / the type's); water, dirt and belts as before", costOk, costs.join("; "));
-  // fordAim: 0 with no ford (every shipped track), 0 for a lane round a ford (its dry edge), upstream otherwise.
+  // fordAim: 0 with no ford (every shipped track without one: TRACK3's Rootwater Run has two), 0 for a lane round a ford (its dry edge), upstream otherwise.
   const canopy = testTrack("canopy-yard")!;
   const at = (t: Track, s: number, lane: number) => tsBd.fordAim(t, s, pointAt(t, s).seg, 150, 300, lane);
-  const shipped = trackList().every((e) => {
+  const shipped = trackList().filter((e) => trackById(e.id).fords.length === 0 && trackById(e.id).branches.every((b) => b.road.fords.length === 0)).every((e) => {
     const t = trackById(e.id);
     for (let s = 0; s < t.length; s += 97) if (at(t, s, 0) !== 0) return false;
     return true;
   });
   const up1 = at(canopy, 760, 0), edge = at(canopy, 760, -56), up2 = at(canopy, 7110, 0);
   check(
-    "theme surf bots: fordAim is 0 on every shipped track and for a lane on a ford's dry edge (-56: it goes round), and upstream for a lane through it (Canopy Yard's ford drifting right: aim left; drifting left: aim right)",
+    "theme surf bots: fordAim is 0 on every shipped track without a ford and for a lane on a ford's dry edge (-56: it goes round), and upstream for a lane through it (Canopy Yard's ford drifting right: aim left; drifting left: aim right)",
     shipped && edge === 0 && up1 < -5 && up2 > 5,
     `shipped all 0: ${shipped}; at s 760 lane 0 ${tsF(up1)}, lane -56 ${edge}; at s 7110 lane 0 ${tsF(up2)}`,
   );
@@ -17786,6 +17789,251 @@ function ttParity(): void {
 }
 
 for (const t of [ttPatches, ttDensity, ttValidate, ttBots, ttCost, ttParity]) {
+  console.log(`\n# ${t.name}`);
+  try {
+    t();
+  } catch (e) {
+    check(`${t.name} threw`, false, String((e as Error).stack ?? e));
+  }
+}
+
+// ---- TRACK3: Rootwater Run, the third long track (ClickUp 123jpnbfp0e; PLAN-TRACK3.md, user-approved 2026-11-25) ----
+// The long-track sections above (LONG_IDS), BR-TRACKS' (BR_TRACK_IDS) and THEME-TRACKS' (THEME_TRACK_IDS) run on it too: the
+// registry, validation for every type at L0/L3 with the jump sweeps and cells, recovery points, the density gate, the races
+// (Normal laps 50-60, <= 1 fall, contacts, reruns), parity, CPU, the shortcut's gain, fall cost, plans, density and races, the
+// ford's patch checks. This section adds what is the track's own: its layout as the plan asks, the ford rules on both roads
+// (kerb to kerb at the road's own half-width, clear of every widen and taper: advisor change 6), the shortcut's (its pit past
+// and off its ford, its recovery point between them: advisor changes 2, 3 and 5), the ford on a shortcut road end to end
+// (physics, the route ring and fordAim, the bots, the bake: advisor change 1), its density with the fords counted, the mixed
+// race inside GRACE-1's grace, and the lists that name it (advisor change 8).
+// This section's imports (hoisted like the ones at the top).
+import { execFileSync as tr3Exec } from "node:child_process";
+import { ROOTWATER_RUN as TR3_DEF } from "../shared/longtracks";
+import { fordAim as tr3FordAim, routeOf as tr3RouteOf, routePlan as tr3RoutePlan } from "../shared/botdrive";
+import { CAR_TYPES as TR3_CARS } from "../shared/cars";
+import { statsFor as tr3StatsFor } from "../shared/shop";
+import * as tr3T from "../shared/track";
+import { trackById as tr3TrackById, trackList as tr3TrackList } from "../shared/tracks";
+import { densityOf as tr3DensityOf, densityReport as tr3DensityReport, footprints as tr3Footprints, LONG_TRACK_IDS as TR3_DENSITY_IDS, longRace as tr3LongRace, STRAIGHT_TOL as TR3_STRAIGHT_TOL } from "../tools/debug/track-density";
+import { BR_TRACK_IDS as TR3_BR_IDS } from "../tools/debug/br-tracks";
+import { loopWith as tr3LoopWith, roadFordCross as tr3FordCross, THEME_TRACK_IDS as TR3_THEME_IDS } from "../tools/debug/theme-tune";
+import { MISTAKE_TRACKS as TR3_MISTAKE_TRACKS } from "../tools/debug/hard-tune";
+import { branchRace as tr3Race } from "../tools/debug/branch-tune";
+
+const tr3Clock = { t0: 0 };
+const TR3 = "rootwater-run";
+const tr3F = (v: number, d = 1) => v.toFixed(d);
+/** How far the heading turns over s0..s1 of road t (radians, the most from where it starts). */
+const tr3Turn = (t: tr3T.Track, s0: number, s1: number) => {
+  const h0 = tr3T.pointAt(t, s0).h;
+  let most = 0;
+  for (let s = s0; s <= s1; s += 5) {
+    const d = tr3T.pointAt(t, s).h - h0;
+    most = Math.max(most, Math.abs(Math.atan2(Math.sin(d), Math.cos(d))));
+  }
+  return most;
+};
+/** The fords of road t that lie on or within WIDEN_TAPER of a widen (a mouth's included), or where the asphalt is not its def.halfWidth. */
+const tr3FordsOnWidens = (t: tr3T.Track): string[] => {
+  const out: string[] = [];
+  for (const f of t.fords) {
+    for (const w of t.widens) if (f.s0 < w.s1 + tr3T.WIDEN_TAPER && f.s1 > w.s0 - tr3T.WIDEN_TAPER) out.push(`ford ${f.s0}..${f.s1} on the widen ${tr3F(w.s0)}..${tr3F(w.s1)} or its taper`);
+    for (let i = 0; i < t.pts.length; i++) {
+      if (t.cum[i] < f.s0 - 1 || t.cum[i] > f.s1 + 1) continue;
+      if (t.halfL[i] !== t.def.halfWidth || t.halfR[i] !== t.def.halfWidth) {
+        out.push(`ford ${f.s0}..${f.s1}: the asphalt is ${tr3F(t.halfL[i])} / ${tr3F(t.halfR[i])} at s ${tr3F(t.cum[i])}, not ${t.def.halfWidth}`);
+        break;
+      }
+    }
+  }
+  return out;
+};
+
+function tr3Layout(): void {
+  tr3Clock.t0 = performance.now();
+  // Criterion 2 and PLAN-TRACK3 2.1: the layout. A jungle track, named no longer than "Breaker's Mile", last in the registry. From the
+  // start: a straight of >= 1500 of plain road (nothing on it from s 0, the heading within STRAIGHT_TOL); turn 1 (a left-hander, ~90
+  // degrees) and the first ford right after it on a straight, drifting to the corner's outside (the right: vx > 0); a chicane of tyre
+  // mounds on alternate sides; the gorge jump (a ramp and a gap of ~200 with an air cell over the gap); lightning cells on the kerb of
+  // the back straight (one straight holds them all, not the start's); two black-mud patches (dirt), each on a bend (the road turns
+  // more than 10 degrees over it), half the road wide (the other half its dry line), <= 350 long; a press, a row of rolling logs, and
+  // the logging truck with an air cell over its flight; one shortcut.
+  const t = tr3TrackById(TR3), L = t.length, half = t.def.halfWidth;
+  const list = tr3Footprints(t, true);
+  const firstFoot = Math.min(...list.map((f) => f.s0));
+  const startTurn = tr3Turn(t, 0, 1500);
+  const ford = t.fords[0];
+  const hStart = tr3T.pointAt(t, 0).h, hFord = tr3T.pointAt(t, ford.s0).h;
+  const t1 = Math.atan2(Math.sin(hFord - hStart), Math.cos(hFord - hStart)); // < 0: a left-hander (anticlockwise)
+  const fordFirst = list.filter((f) => f.obstacle)[0]?.what.startsWith("ford");
+  const chicane = t.tyres.length === 3 && t.tyres.every((m, k) => k === 0 || Math.sign(m.lat) !== Math.sign(t.tyres[k - 1].lat)) && t.tyres[0].s > ford.s1;
+  const gap = t.gaps[0], ramp = t.ramps[0];
+  const gorge = t.ramps.length === 1 && t.gaps.length === 1 && gap.s1 - gap.s0 >= 180 && gap.s1 - gap.s0 <= 220 && t.cells.some((c) => c.air && c.road === undefined && c.s > gap.s0 && c.s < gap.s1) && ramp.s > t.tyres[2].s;
+  const ground = t.cells.filter((c) => !c.air && c.road === undefined);
+  // The back straight: the cells and 300 either side of them on one straight (the heading within STRAIGHT_TOL), running opposite the start's.
+  const c0 = Math.min(...ground.map((c) => c.s)) - 300, c1 = Math.max(...ground.map((c) => c.s)) + 300;
+  const hBack = tr3T.pointAt(t, c0).h, back = Math.abs(Math.atan2(Math.sin(hBack - hStart), Math.cos(hBack - hStart)));
+  const backStraight = c0 > 0 && c1 < L && tr3Turn(t, c0, c1) <= TR3_STRAIGHT_TOL && back > 3;
+  const cells = ground.length >= 2 && ground.every((c) => Math.abs(c.lat) >= 56) && backStraight;
+  const muds = t.dirt.map((d) => ({ d, turn: (tr3Turn(t, d.s0, d.s1) * 180) / Math.PI, halfRoad: (d.lat0 === -half && d.lat1 === 0) || (d.lat0 === 0 && d.lat1 === half) }));
+  const mud = muds.length === 2 && muds.every((m) => m.turn > 10 && m.halfRoad && m.d.s1 - m.d.s0 <= 350);
+  const tk = t.trucks[0];
+  const movers = t.presses.length === 1 && t.barrels.length === 1 && t.trucks.length === 1 && t.cells.some((c) => c.air && c.road === undefined && c.s > tk.lip && c.s - tk.lip < 600);
+  const ids = tr3TrackList().map((e) => e.id);
+  const named = t.def.name === "Rootwater Run" && t.def.name.length <= "Breaker's Mile".length && t.def.theme === "jungle" && t.def === TR3_DEF && ids.indexOf(TR3) === 5;
+  check(
+    "track3 layout: Rootwater Run, jungle, last of the six shipped tracks; a start straight of >= 1500 plain road; turn 1 a left-hander, the first ford right after it on the straight drifting to its outside; a tyre-mound chicane; the gorge jump (gap ~200, an air cell over it); kerb lightning cells on the back straight; two half-road mud patches on bends (<= 350); a press, rolling logs and the logging truck with its air cell; one shortcut",
+    named && firstFoot >= 1500 && startTurn <= TR3_STRAIGHT_TOL && t1 < -1.4 && t1 > -1.75 && fordFirst && ford.vx > 0 && chicane && gorge && cells && mud && movers && t.branches.length === 1,
+    `lap ${tr3F(L, 0)}; first footprint at s ${tr3F(firstFoot, 0)} (the start straight turns ${tr3F((startTurn * 180) / Math.PI)} deg over 0..1500); turn 1 ${tr3F((t1 * 180) / Math.PI)} deg; ford ${ford.s0}..${ford.s1} vx ${ford.vx}; mounds ${t.tyres.map((m) => `${m.s}/${m.lat}`).join(", ")}; gorge ramp ${ramp?.s}, gap ${gap?.s0}..${gap?.s1}; cells on the kerb ${ground.map((c) => `${c.s}/${c.lat}`).join(", ")}, s ${tr3F(c0, 0)}..${tr3F(c1, 0)} turns ${tr3F((tr3Turn(t, c0, c1) * 180) / Math.PI)} deg, heading ${tr3F((back * 180) / Math.PI)} deg off the start's; mud ${muds.map((m) => `${m.d.s0}..${m.d.s1} lat ${m.d.lat0}..${m.d.lat1}, turns ${tr3F(m.turn)} deg`).join("; ")}; press ${t.presses.length}, barrels ${t.barrels.length}, truck ${t.trucks.length}; ${ids.join(", ")}`,
+  );
+}
+
+function tr3Fords(): void {
+  // Criterion 2, the ford rules, on both roads: 40-160 long, 20 <= |vx| <= 100, on a straight (validateTrack's tolerance), and kerb to
+  // kerb at its road's own def.halfWidth, clear of every widen and its taper (a mouth's too) and on asphalt of exactly that half-width
+  // (advisor change 6: the ford's flanks are drawn from the nominal half-width; validation does not stop a ford on a widened stretch).
+  // Controls: a ford on a widen of a measuring loop, and one in its taper, are caught; one past the taper is not.
+  const t = tr3TrackById(TR3), b = t.branches[0], r = b.road;
+  const rows: string[] = [];
+  let ok = t.fords.length === 1 && r.fords.length === 1;
+  for (const [road, label] of [[t, "main"], [r, "shortcut"]] as const) {
+    for (const f of road.fords) {
+      const len = f.s1 - f.s0, turn = tr3Turn(road, f.s0, f.s1);
+      const good = len >= tr3T.FORD_LEN_MIN && len <= tr3T.FORD_LEN_MAX && Math.abs(f.vx) >= tr3T.FORD_VX_MIN && Math.abs(f.vx) <= tr3T.FORD_VX_MAX && turn <= tr3T.POOL_STRAIGHT_TOLERANCE &&
+        f.lat0 === -road.def.halfWidth && f.lat1 === road.def.halfWidth;
+      ok &&= good;
+      rows.push(`${label} ford ${f.s0}..${f.s1} (${len} long) lat ${f.lat0}..${f.lat1} (half-width ${road.def.halfWidth}) vx ${f.vx}, turns ${tr3F(turn, 3)} rad${good ? "" : " OUT"}`);
+    }
+  }
+  const wid = tr3TrackList().flatMap((e) => [tr3TrackById(e.id), ...tr3TrackById(e.id).branches.map((x) => x.road)]).flatMap((x) => tr3FordsOnWidens(x).map((m) => `${x.def.id}: ${m}`));
+  const widen: tr3T.Feature = { k: "widen", s0: 2000, s1: 2600, left: 60, right: 60 };
+  const ctl = (s0: number) => tr3FordsOnWidens(tr3LoopWith("jungle", [widen, { k: "ford", s0, s1: s0 + 140, lat0: -64, lat1: 64, vx: 60 }]));
+  const on = ctl(2200), taper = ctl(2650), clear = ctl(2800);
+  ok &&= wid.length === 0 && on.length > 0 && taper.length > 0 && clear.length === 0;
+  check(
+    "track3 fords: both fords (the main road's and the shortcut's) 40-160 long, 20 <= |vx| <= 100, on a straight, kerb to kerb at their road's own half-width, clear of every widen and taper with the asphalt at that half-width all along (every shipped road); a ford on a widen, or in its taper, is caught, one past the taper is not",
+    ok,
+    `${rows.join("; ")}; shipped roads: ${wid.join(" | ") || "none on a widen"}; control on the widen: ${on.length}, in its taper: ${taper.length}, past it: ${clear.length}`,
+  );
+}
+
+function tr3Shortcut(): void {
+  // Criterion 2 and advisor changes 2, 3 and 5: the shortcut no wider than the main road; its pit >= FORD_CLEAR past its ford's end and
+  // off the ford's downstream side (its whole circle on the upstream half: vx < 0 drifts to the left, the pit on the right); its recovery
+  // point between the ford and the pit (off the ford, before the first hazard); the main road's 400 before the fork; a fall before
+  // the shortcut's point goes back there, one past it to it; it classes as risky (the pit): Easy never takes it.
+  const t = tr3TrackById(TR3), b = t.branches[0], r = b.road, f = r.fords[0], h = r.holes[0], rp = r.recovery[0];
+  const pastFord = h.s - h.r - f.s1;
+  const offDown = f.vx < 0 ? h.lat - h.r >= 0 : h.lat + h.r <= 0;
+  const recBetween = r.recovery.length === 1 && rp > f.s1 && rp < h.s - h.r;
+  const mainBefore = Math.max(...t.recovery.filter((x) => x <= b.s0));
+  const early = tr3T.recoveryFor(t, 1, rp - 100), late = tr3T.recoveryFor(t, 1, h.s);
+  const easy = TR3_CARS.every((car) => [0, 3].every((lv) => [0, 1, 2, 3, 4, 5].every((seat) => !tr3RoutePlan(t, "easy", seat, car, tr3StatsFor(car, { engine: lv, tyres: lv, welder: lv })).rows[0].take)));
+  const kind = tr3RoutePlan(t, "hard", 0, "sport", tr3StatsFor("sport", { engine: 0, tyres: 0, welder: 0 })).rows[0].kind;
+  const ok = r.def.halfWidth <= t.def.halfWidth && r.holes.length === 1 && pastFord >= tr3T.FORD_CLEAR && offDown && recBetween && b.s0 - mainBefore === 400 &&
+    early.road === 0 && early.s === mainBefore && late.road === 1 && late.s === rp && easy && kind === "holes" && r.gaps.length === 0 && r.ramps.length === 0;
+  check(
+    "track3 shortcut: half-width <= the main road's; its pit >= 80 past its ford and off the ford's downstream side; its recovery point between the ford and the pit; the main road's 400 before the fork (a fall before the shortcut's point goes back there, past it to it); risky (the pit): Easy never takes it",
+    ok,
+    `half-width ${r.def.halfWidth} (main ${t.def.halfWidth}); ford u ${f.s0}..${f.s1} vx ${f.vx}, pit u ${h.s} lat ${h.lat} r ${h.r}: ${tr3F(pastFord, 0)} past the ford, lat ${h.lat - h.r}..${h.lat + h.r} (${offDown ? "the upstream half" : "ON THE DOWNSTREAM SIDE"}); recovery u ${r.recovery.join(",")}; main before the fork s ${mainBefore} (fork ${b.s0}); a fall at u ${rp - 100} -> road ${early.road} s ${early.s}, at the pit -> road ${late.road} u ${late.s}; kind ${kind}; Easy takes it: ${!easy}`,
+  );
+}
+
+function tr3FordOnBranch(): void {
+  // Advisor change 1, the ford on a shortcut road end to end (the spike, kept): physics (a car driven by pursuit alone on lane 0 across
+  // the shortcut's ford is carried toward its drift's side; the same car on the track without that ford is not; with fordAim on that
+  // road it comes out near its lane); the bots' route ring through the shortcut carries the ford (felt, its vx) and fordAim aims
+  // upstream before it, the main road's ring has only the main road's ford; Hard bots in a race cross it (track-density counts the
+  // shortcut's theme surfaces) with no fall; and the bake: tools/debug/puddle-probe.ts finds all of its traction rectangle the ford's
+  // own pixels and none outside it, read along the shortcut's road. And the drift chosen with theme-tune --ford: at the shipped vx
+  // a car with no aim keeps every wheel on the shortcut's asphalt (the widest |lat| < half-width - half a car) for every type.
+  const t = tr3TrackById(TR3), r = t.branches[0].road, f = r.fords[0];
+  const bare = tr3T.buildTrack({ ...TR3_DEF, id: "tr3-bare", features: (TR3_DEF.features ?? []).map((x) => (x.k === "branch" ? { ...x, features: (x.features ?? []).filter((y) => y.k !== "ford") } : x)) });
+  const rows: string[] = [];
+  let ok = true;
+  for (const car of TR3_CARS) {
+    const drift = tr3FordCross(t, 1, r, f, car, false), aim = tr3FordCross(t, 1, r, f, car, true), dry = tr3FordCross(bare, 1, bare.branches[0].road, f, car, false);
+    const good = Math.sign(drift.exit) === Math.sign(f.vx) && Math.abs(drift.exit) >= 10 && Math.abs(dry.exit) < 4 && Math.abs(aim.exit) < Math.abs(drift.exit) / 2 && drift.margin > 0;
+    ok &&= good;
+    rows.push(`${car}: no aim lat ${tr3F(drift.exit)} at its end (widest ${tr3F(drift.widest)}, margin ${tr3F(drift.margin)}), with the aim ${tr3F(aim.exit)}, no ford ${tr3F(dry.exit)}${good ? "" : " OUT"}`);
+  }
+  const ring1 = tr3RouteOf(t, 1).ring, ring0 = tr3RouteOf(t, 0).ring;
+  const fords1 = ring1.surfaces.filter((x) => x.kind === tr3T.SURF_FORD), fords0 = ring0.surfaces.filter((x) => x.kind === tr3T.SURF_FORD);
+  const rf = fords1.find((x) => x.vx === f.vx);
+  const aimAt = (s: number) => tr3FordAim(ring1, s, tr3T.pointAt(ring1, s).seg, 120, 300, 0);
+  const before = rf ? aimAt(rf.s0 - 60) : 0, mid = rf ? aimAt((rf.s0 + rf.s1) / 2) : 0;
+  const ringOk = fords1.length === 2 && !!rf && fords0.length === 1 && fords0[0].vx === t.fords[0].vx && Math.sign(before) === -Math.sign(f.vx) && Math.sign(mid) === -Math.sign(f.vx);
+  const race = tr3LongRace(TR3, ["hard", "hard", "hard"], 3, false);
+  const crossed = race.branchThemes.filter((x) => x[0] > 0).length;
+  const botsOk = race.phase === "results" && race.falls.every((x) => x === 0) && crossed >= 2 && race.shortcuts.every((x) => x[0] > 600);
+  let probe = "", probeOk = false;
+  try {
+    probe = tr3Exec(process.execPath, ["--import", "tsx", "tools/debug/puddle-probe.ts"], { encoding: "utf8" });
+    const at = probe.indexOf("## Rootwater Run, shortcut 1");
+    const row = at >= 0 ? probe.slice(at).split("\n").find((l) => l.startsWith(`| ford ${f.s0}..${f.s1}`)) : undefined;
+    const cols = row?.split("|").map((x) => x.trim()) ?? [];
+    probeOk = !!row && cols[7] === "0" && cols[9] === "0";
+    probe = row ?? "no row";
+  } catch (e) {
+    probe = String((e as { stdout?: string }).stdout ?? e).split("\n").filter((l) => l.includes("FAIL")).join(" ") || "exit 1";
+  }
+  ok &&= ringOk && botsOk && probeOk;
+  check(
+    "track3 ford on a shortcut: it drifts a car on the shortcut's road toward its drift's side (none without it; the aim brings it back), every wheel kept on the asphalt; the route ring through the shortcut carries it and fordAim aims upstream before it (the main road's ring only the main ford); Hard bots cross it with no fall; puddle-probe: its traction rectangle all ford pixels, none outside",
+    ok,
+    `${rows.join("; ")}; ring fords ${fords1.map((x) => `${tr3F(x.s0, 0)}..${tr3F(x.s1, 0)} vx ${x.vx}`).join(", ")} (main ring ${fords0.length}); fordAim 60 before it ${tr3F(before)}, in its middle ${tr3F(mid)}; Hard race ${race.phase}, falls ${race.falls.join("/")}, on the shortcut ${race.shortcuts.map((x) => x[0]).join("/")} ticks, in its ford ${race.branchThemes.map((x) => x[0]).join("/")}; probe ${probe}`,
+  );
+}
+
+function tr3Density(): void {
+  // Criterion 4 with the fords counted (as track-density prints a shipped track): the main road's gate (no mixed group, >= 1000 of
+  // clear road between groups and between kinds, >= 85 % obstacle-free, every dirt and every sand-and-dirt stretch <= 350); and the
+  // shortcut's section: its ford and its pit two groups of one kind each (>= GROUP_JOIN apart: no mixed group), >= MOUTH_CLEAR of
+  // plain road from each gore, >= 1000 of clear road along the route to the main road's groups either side, no dirt; the report
+  // prints the shortcut's groups.
+  const t = tr3TrackById(TR3), d = tr3DensityOf(t, true), c = d.shortcuts?.[0];
+  const main = d.mixed.length === 0 && d.shortestGap >= 1000 && d.breather.gap >= 1000 && d.clear >= 0.85 && d.mud.every((m) => m.length <= 350) && (d.themes?.loose ?? []).every((x) => x.length <= 350);
+  const cut = !!c && c.groups.length === 2 && c.groups.every((g) => g.kinds.length === 1) && c.groups[0].kinds[0] === "ford" && c.groups[1].kinds[0] === "pits" &&
+    c.groups[1].s0 - c.groups[0].s1 >= 300 && c.plainIn >= tr3T.MOUTH_CLEAR && c.plainOut >= tr3T.MOUTH_CLEAR && c.routeIn.gap >= 1000 && c.routeOut.gap >= 1000 && c.mud.length === 0;
+  const report = tr3DensityReport(d);
+  const printed = report.some((l) => l.startsWith("  shortcut 1 group 1: u") && l.includes("ford")) && report.some((l) => l.startsWith("  shortcut 1 group 2: u") && l.includes("pits"));
+  check(
+    "track3 density (fords counted): the main road no mixed group, >= 1000 clear between groups and kinds, >= 85 % obstacle-free, mud <= 350; the shortcut's ford and pit two groups of one kind >= 300 apart, >= 300 plain from each gore, >= 1000 clear along the route either side, no dirt; the report prints the shortcut",
+    main && cut && printed,
+    `${d.groups.length} groups, shortest gap ${tr3F(d.shortestGap, 0)}, breather ${tr3F(d.breather.gap, 0)}, obstacle-free ${tr3F(d.clear * 100)} %, mixed ${d.mixed.length}, dirt ${d.mud.map((m) => tr3F(m.length, 0)).join("/")}; shortcut ${c ? `${c.groups.map((g) => `${g.kinds.join("+")} u ${tr3F(g.s0, 0)}..${tr3F(g.s1, 0)}`).join(", ")}, plain ${tr3F(c.plainIn, 0)} in / ${tr3F(c.plainOut, 0)} out, route ${tr3F(c.routeIn.gap, 0)} / ${tr3F(c.routeOut.gap, 0)}` : "none"}`,
+  );
+}
+
+function tr3Grace(): void {
+  // Criterion 5: every bot finishes inside GRACE-1's scaled grace in the mixed races under the game's deadline (branchRace with the
+  // grace on: the room's own): track-density's mixed five (Hard, Normal, Easy, Hard, Normal; weapons on) and QA15's field (Easy,
+  // Normal, Hard, Hard); each run twice, identically. Easy's laps printed (no bound: the report's).
+  const rows: string[] = [];
+  let ok = true;
+  for (const levels of [["hard", "normal", "easy", "hard", "normal"], ["easy", "normal", "hard", "hard"]] as const) {
+    const a = tr3Race({ track: TR3, levels: [...levels] }), b = tr3Race({ track: TR3, levels: [...levels] });
+    const fins = a.rows.map((x) => x.finish), first = Math.min(...fins);
+    const good = a.hash === b.hash && a.rows.every((x) => x.finish > 0 && x.inGrace) && a.graceTicks > 1800;
+    ok &&= good;
+    rows.push(`${levels.join("/")}: winner ${tr3F(first / 60, 2)} s, grace ${tr3F(a.graceTicks / 60, 2)} s; ${a.rows.map((x) => `${x.level} ${x.car} +${tr3F((x.finish - first) / 60, 2)} s (laps ${x.lapTicks.map((l) => tr3F(l / 60, 2)).join(",")})${x.inGrace ? "" : " DNF"}`).join(", ")}${a.hash === b.hash ? "" : "; rerun DIFFERS"}${good ? "" : " OUT"}`);
+  }
+  console.log(`  ${rows.join("\n  ")}`);
+  check("track3 grace: in the mixed races on Rootwater Run (the density report's five; QA15's four) under the game's deadline every bot finishes inside GRACE-1's grace, identically on a rerun", ok, rows.join("; "));
+}
+
+function tr3Lists(): void {
+  // Advisor change 8: the hard-coded lists name it (track-density's long tracks, br-tracks', theme-tune's, hard-tune's HARD-2 tracks,
+  // this file's LONG_IDS and the shipped lists above); the registry-following tools pick it up from trackList() by themselves.
+  const lists: [string, readonly string[]][] = [["track-density LONG_TRACK_IDS", TR3_DENSITY_IDS], ["br-tracks BR_TRACK_IDS", TR3_BR_IDS], ["theme-tune THEME_TRACK_IDS", TR3_THEME_IDS], ["hard-tune MISTAKE_TRACKS", TR3_MISTAKE_TRACKS], ["sim-test LONG_IDS", LONG_IDS], ["sim-test brShippedIds", brShippedIds]];
+  check(
+    "track3 lists: the hard-coded track lists name rootwater-run (track-density, br-tracks, theme-tune, hard-tune, LONG_IDS, the BR shipped list)",
+    lists.every(([, l]) => l.includes(TR3)),
+    lists.map(([n, l]) => `${n}: ${l.join(",")}`).join("; "),
+  );
+  console.log(`  TRACK3 sim-test sections' runtime (tr3Layout .. tr3Lists): ${((performance.now() - tr3Clock.t0) / 1000).toFixed(1)} s`);
+}
+
+for (const t of [tr3Layout, tr3Fords, tr3Shortcut, tr3FordOnBranch, tr3Density, tr3Grace, tr3Lists]) {
   console.log(`\n# ${t.name}`);
   try {
     t();

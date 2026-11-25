@@ -155,9 +155,9 @@ export const BREAKERS_MILE: TrackDef = {
 // TRACK3 (ClickUp 123jpnbfp0e; PLAN-TRACK3.md, user-approved 2026-11-25 with the advisor's changes): a third
 // long track, the jungle's own. A river valley, run anticlockwise on the map (left-handers), about Breaker's
 // Mile's length; the road meets the river three ways. From the grid on the valley floor, a start straight of
-// about 3500 units of plain road (the lap's longest plain run, 6248 from the last mud to the first ford) to
-// turn 1, the bottom-right corner; up the right side: the first ford right out of the corner (kerb to kerb,
-// 140 long, drifting cars to the right, the corner's outside, at 60 u/s), a bamboo-bale chicane (three tyre
+// 4000 units of straight plain road (from 220 before the line; the lap's longest plain run, 6277 from the last
+// mud to the first ford) to turn 1, the bottom-right corner; up the right side: the first ford right out of the
+// corner (kerb to kerb, 140 long, drifting cars to the right, the corner's outside, at 60 u/s), a bamboo-bale chicane (three tyre
 // mounds, 200 apart), then the gorge jump on the long run north (a ramp and a gap of 200, an air cell over it
 // right of centre); the top-right corner onto the back straight, three lightning cells on its kerbs; the
 // top-left corner, black mud on its inside half at the apex (the outside half the dry line); down the left
@@ -168,7 +168,7 @@ export const BREAKERS_MILE: TrackDef = {
 // off the left of the right side at s 7500 (before the gorge) and onto the back straight at s 11990,
 // across the inside of the top-right corner on a long diagonal: a second ford on that diagonal (u 1500-1640,
 // kerb to kerb at its own half-width, drifting cars to the left at 70 u/s, tuned on this road with
-// tools/debug/theme-tune.ts --ford rootwater-run), then a pit on its right half 360 past the ford's end (u
+// tools/debug/theme-tune.ts --ford rootwater-run), then a pit on its right half, its edge 340 past the ford's end (u
 // 2000, lat 24, r 20: off the drift's side, so the drift never carries a car into it; the branch classes as
 // risky, so Easy bots keep the main road). 3506 long against the main road's 4490; a clean run on it about
 // 1.5-1.9 s a lap quicker (tools/debug/br-tracks.ts --gain). Its recovery point between the ford and the pit
@@ -189,7 +189,7 @@ export const ROOTWATER_RUN: TrackDef = {
     [6450, 700], [5900, 700], [5300, 700], [4700, 700], [4100, 700], [3500, 700], [2900, 700],
     [2400, 800], [2100, 1150], [2000, 1700],
     [2000, 2300], [2000, 2900], [2000, 3500], [2000, 4100], [2000, 4700], [2000, 5300], [2000, 5700],
-    [2100, 6050], [2450, 6400],
+    [2100, 6050], [2350, 6380], [2650, 6500],
   ],
   halfWidth: 64,
   verge: 44,
